@@ -227,6 +227,28 @@ defmodule HydraXWeb.HealthLive do
             </div>
             <pre class="mt-3 overflow-x-auto text-xs text-[var(--hx-mute)]">{inspect(@observability_status.telemetry.scheduler, pretty: true)}</pre>
           </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4 lg:col-span-2">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              System alarms
+            </div>
+            <p class="mt-3 text-sm text-[var(--hx-mute)]">
+              Database path: {@observability_status.system.database_path}
+            </p>
+            <div class="mt-3 space-y-2">
+              <p
+                :if={@observability_status.system.alarms == []}
+                class="text-sm text-[var(--hx-mute)]"
+              >
+                No active OTP alarms.
+              </p>
+              <p
+                :for={alarm <- @observability_status.system.alarms}
+                class="text-sm text-amber-200"
+              >
+                {alarm}
+              </p>
+            </div>
+          </article>
         </div>
       </section>
 

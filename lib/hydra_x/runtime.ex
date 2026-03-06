@@ -637,6 +637,7 @@ defmodule HydraX.Runtime do
     default_agent = get_default_agent()
     budget_policy = default_agent && HydraX.Budget.ensure_policy!(default_agent.id)
     safety_counts = HydraX.Safety.recent_counts()
+    system = system_status()
     safety_errors = Map.get(safety_counts, "error", 0)
     safety_warnings = Map.get(safety_counts, "warn", 0)
 
@@ -719,6 +720,15 @@ defmodule HydraX.Runtime do
           case list_scheduled_jobs(limit: 5) do
             [] -> "no scheduled jobs configured"
             jobs -> "#{length(jobs)} jobs configured"
+          end
+      },
+      %{
+        name: "system",
+        status: if(system.alarms == [], do: :ok, else: :warn),
+        detail:
+          case system.alarms do
+            [] -> "no active OTP alarms"
+            alarms -> Enum.join(alarms, "; ")
           end
       },
       %{
@@ -825,7 +835,19 @@ defmodule HydraX.Runtime do
       scheduler: %{
         total_jobs: length(list_scheduled_jobs(limit: 100)),
         recent_runs: recent_job_runs(10)
-      }
+      },
+      system: system_status()
+    }
+  end
+
+  def system_status do
+    alarms =
+      :alarm_handler.get_alarms()
+      |> Enum.map(&format_alarm/1)
+
+    %{
+      alarms: alarms,
+      database_path: Config.repo_database_path()
     }
   end
 
@@ -940,6 +962,14 @@ defmodule HydraX.Runtime do
   defp blank_to_nil(nil), do: nil
   defp blank_to_nil(""), do: nil
   defp blank_to_nil(value), do: value
+
+  defp format_alarm({:system_memory_high_watermark, _details}), do: "system memory high watermark"
+
+  defp format_alarm({{:disk_almost_full, path}, _details}),
+    do: "disk almost full at #{List.to_string(path)}"
+
+  defp format_alarm({alarm, _details}), do: inspect(alarm)
+  defp format_alarm(alarm), do: inspect(alarm)
 
   defp normalize_integer(nil), do: nil
   defp normalize_integer(value) when is_integer(value), do: value

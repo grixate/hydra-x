@@ -29,7 +29,7 @@ Hydra-X is a self-hosted Elixir agent runtime with a Phoenix control plane. This
 - Observability:
   telemetry counters for provider, tool, gateway, and scheduler activity surfaced in `/health`
 - Operator commands:
-  `mix hydra_x.new`, `mix hydra_x.serve`, `mix hydra_x.chat`, `mix hydra_x.migrate`, `mix hydra_x.healthcheck`, `mix hydra_x.telegram.webhook`, `mix hydra_x.providers.test`, `mix hydra_x.jobs`
+  `mix hydra_x.new`, `mix hydra_x.serve`, `mix hydra_x.chat`, `mix hydra_x.migrate`, `mix hydra_x.healthcheck`, `mix hydra_x.telegram.webhook`, `mix hydra_x.providers.test`, `mix hydra_x.jobs`, `mix hydra_x.backup`
 
 ## Quick start
 
@@ -68,6 +68,7 @@ The repository also includes a thin command wrapper:
 ./hydra_x chat -m "Hello"
 ./hydra_x provider-test
 ./hydra_x jobs
+./hydra_x backup
 ```
 
 If you want to lock the management UI, set an operator password on `/setup`. After that, browser access requires signing in at `/login`.
@@ -77,6 +78,13 @@ Recurring heartbeat and prompt jobs are managed from `/jobs` or the CLI:
 ```bash
 mix hydra_x.jobs
 mix hydra_x.jobs run 1
+```
+
+Backup archives can be produced with:
+
+```bash
+mix hydra_x.backup
+mix hydra_x.backup --output /var/backups/hydra-x
 ```
 
 ## Project shape

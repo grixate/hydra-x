@@ -253,6 +253,14 @@ defmodule HydraX.RuntimeTest do
     assert auth_check.detail =~ "operator password set"
   end
 
+  test "system status exposes the repo database path" do
+    system = Runtime.system_status()
+
+    assert is_binary(system.database_path)
+    assert String.ends_with?(system.database_path, ".db")
+    assert is_list(system.alarms)
+  end
+
   test "heartbeat jobs are ensured once and create persisted job runs" do
     agent = create_agent()
     {:ok, pid} = HydraX.Agent.ensure_started(agent)

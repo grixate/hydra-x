@@ -41,6 +41,7 @@ This repository is now beyond the initial skeleton. Use this checklist before ex
 ## Recovery
 
 1. Back up `hydra_x_dev.db` and the agent workspace root together.
-2. On restart, run `mix hydra_x.migrate` before bringing the node back online.
-3. Re-run `./hydra_x healthcheck` after deploys or crashes.
-4. Use `/conversations`, `/memory`, and `/jobs` to verify persisted state after recovery.
+2. Prefer using `mix hydra_x.backup` or `./hydra_x backup` to create a timestamped archive.
+3. On restart, run `mix hydra_x.migrate` before bringing the node back online.
+4. Re-run `./hydra_x healthcheck` after deploys or crashes.
+5. Use `/conversations`, `/memory`, and `/jobs` to verify persisted state after recovery.

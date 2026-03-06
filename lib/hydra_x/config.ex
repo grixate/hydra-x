@@ -11,6 +11,13 @@ defmodule HydraX.Config do
       Path.expand(@default_workspace_root, File.cwd!())
   end
 
+  @spec repo_database_path() :: String.t()
+  def repo_database_path do
+    Application.get_env(:hydra_x, HydraX.Repo, [])
+    |> Keyword.fetch!(:database)
+    |> Path.expand()
+  end
+
   @spec default_workspace(String.t()) :: String.t()
   def default_workspace(agent_slug) do
     Path.join(workspace_root(), agent_slug)
