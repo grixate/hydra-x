@@ -10,6 +10,10 @@ defmodule HydraXWeb.Router do
     plug :put_secure_browser_headers
   end
 
+  pipeline :browser_authenticated do
+    plug HydraXWeb.OperatorAuth, :require_authenticated_operator
+  end
+
   pipeline :api do
     plug :accepts, ["json"]
   end
@@ -17,14 +21,25 @@ defmodule HydraXWeb.Router do
   scope "/", HydraXWeb do
     pipe_through :browser
 
-    live "/", HomeLive
-    live "/setup", SetupLive
-    live "/agents", AgentsLive
-    live "/conversations", ConversationsLive
-    live "/memory", MemoryLive
-    live "/budget", BudgetLive
-    live "/settings/providers", ProviderSettingsLive
-    live "/health", HealthLive
+    get "/login", SessionController, :new
+    post "/login", SessionController, :create
+    delete "/logout", SessionController, :delete
+  end
+
+  scope "/", HydraXWeb do
+    pipe_through [:browser, :browser_authenticated]
+
+    live_session :authenticated,
+      on_mount: [{HydraXWeb.OperatorAuth, :require_authenticated_operator}] do
+      live "/", HomeLive
+      live "/setup", SetupLive
+      live "/agents", AgentsLive
+      live "/conversations", ConversationsLive
+      live "/memory", MemoryLive
+      live "/budget", BudgetLive
+      live "/settings/providers", ProviderSettingsLive
+      live "/health", HealthLive
+    end
   end
 
   scope "/api", HydraXWeb do

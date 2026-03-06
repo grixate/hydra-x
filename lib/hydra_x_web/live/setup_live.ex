@@ -21,10 +21,12 @@ defmodule HydraXWeb.SetupLive do
      socket
      |> assign(:page_title, "Setup")
      |> assign(:current, "setup")
+     |> assign(:operator_secret, Runtime.get_operator_secret())
      |> assign(:stats, stats())
      |> assign(:agent, agent)
      |> assign(:provider, provider)
      |> assign(:telegram, telegram)
+     |> assign_form(:operator_form, Runtime.change_operator_secret())
      |> assign_form(:agent_form, Runtime.change_agent(agent))
      |> assign_form(:provider_form, Runtime.change_provider_config(provider))
      |> assign_form(:telegram_form, Runtime.change_telegram_config(telegram))}
@@ -102,10 +104,66 @@ defmodule HydraXWeb.SetupLive do
     {:noreply, assign_form(socket, :telegram_form, changeset)}
   end
 
+  def handle_event("save_operator_password", %{"operator_secret" => params}, socket) do
+    case Runtime.save_operator_secret_password(params) do
+      {:ok, secret} ->
+        {:noreply,
+         socket
+         |> put_flash(:info, "Operator password updated")
+         |> assign(:operator_secret, secret)
+         |> assign_form(:operator_form, Runtime.change_operator_secret(secret))}
+
+      {:error, changeset} ->
+        {:noreply, assign_form(socket, :operator_form, changeset)}
+    end
+  end
+
   @impl true
   def render(assigns) do
     ~H"""
-    <AppShell.shell current={@current} stats={@stats} flash={@flash}>
+    <AppShell.shell
+      current={@current}
+      stats={@stats}
+      flash={@flash}
+      operator_authenticated={@operator_authenticated}
+    >
+      <section class="mb-6">
+        <article class="glass-panel p-6">
+          <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">
+            Control plane auth
+          </div>
+          <h2 class="mt-3 font-display text-4xl">Operator password</h2>
+          <p class="mt-3 max-w-3xl text-sm text-[var(--hx-mute)]">
+            The management UI stays open until you set an operator password. After that, all browser routes require a signed session.
+          </p>
+          <div
+            :if={@operator_secret}
+            class="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-4 text-sm text-[var(--hx-mute)]"
+          >
+            Password active. Last rotated at {Calendar.strftime(
+              @operator_secret.last_rotated_at,
+              "%Y-%m-%d %H:%M:%S UTC"
+            )}.
+          </div>
+          <.form
+            for={@operator_form}
+            id="operator-form"
+            phx-submit="save_operator_password"
+            class="mt-6 grid gap-4 xl:grid-cols-2"
+          >
+            <.input field={@operator_form[:password]} type="password" label="Password" />
+            <.input
+              field={@operator_form[:password_confirmation]}
+              type="password"
+              label="Confirm password"
+            />
+            <div class="xl:col-span-2 pt-2">
+              <.button>Save operator password</.button>
+            </div>
+          </.form>
+        </article>
+      </section>
+
       <section class="grid gap-6 xl:grid-cols-2">
         <article class="glass-panel p-6">
           <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">Agent bootstrap</div>

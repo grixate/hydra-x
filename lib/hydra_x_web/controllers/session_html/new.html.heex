@@ -1,0 +1,41 @@
+<div class="min-h-screen bg-[var(--hx-bg)] px-4 py-10 text-[var(--hx-ink)] sm:px-6 lg:px-8">
+  <div class="mx-auto max-w-md">
+    <div class="glass-panel p-6 sm:p-8">
+      <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">Hydra-X</div>
+      <h1 class="mt-3 font-display text-4xl">Operator sign-in</h1>
+      <p class="mt-3 text-sm text-[var(--hx-mute)]">
+        <%= if @password_configured? do %>
+          Sign in to access the management UI and operator controls.
+        <% else %>
+          No operator password is configured yet. The control plane remains open until you set one on setup.
+        <% end %>
+      </p>
+
+      <.form
+        :if={@password_configured?}
+        for={to_form(@changeset, as: :operator_secret)}
+        action={~p"/login"}
+        method="post"
+        class="mt-6 space-y-4"
+      >
+        <.input
+          field={to_form(@changeset, as: :operator_secret)[:password]}
+          type="password"
+          label="Password"
+        />
+        <div class="pt-2">
+          <.button class="w-full justify-center">Sign in</.button>
+        </div>
+      </.form>
+
+      <div :if={!@password_configured?} class="mt-6">
+        <.link
+          navigate={~p"/setup"}
+          class="inline-flex items-center rounded-2xl border border-white/10 bg-white/5 px-4 py-3 font-mono text-xs uppercase tracking-[0.18em] text-white transition hover:bg-white/10"
+        >
+          Open setup
+        </.link>
+      </div>
+    </div>
+  </div>
+</div>

@@ -4,6 +4,7 @@ defmodule HydraXWeb.AppShell do
   attr :current, :string, required: true
   attr :stats, :map, default: %{}
   attr :flash, :map, default: %{}
+  attr :operator_authenticated, :boolean, default: false
   slot :inner_block, required: true
 
   def shell(assigns) do
@@ -25,6 +26,17 @@ defmodule HydraXWeb.AppShell do
               <div class="grid h-14 w-14 place-items-center rounded-2xl border border-white/10 bg-[rgba(255,255,255,0.04)] font-mono text-sm">
                 HX
               </div>
+            </div>
+            <div :if={@operator_authenticated} class="mt-4">
+              <form action={~p"/logout"} method="post">
+                <input type="hidden" name="_method" value="delete" />
+                <button
+                  type="submit"
+                  class="inline-flex items-center rounded-2xl border border-white/10 bg-white/5 px-4 py-2 font-mono text-[10px] uppercase tracking-[0.18em] text-white transition hover:bg-white/10"
+                >
+                  Sign out
+                </button>
+              </form>
             </div>
           </div>
 

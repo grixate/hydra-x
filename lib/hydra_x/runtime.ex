@@ -12,6 +12,7 @@ defmodule HydraX.Runtime do
     AgentProfile,
     Checkpoint,
     Conversation,
+    OperatorSecret,
     ProviderConfig,
     TelegramConfig,
     Turn
@@ -204,6 +205,41 @@ defmodule HydraX.Runtime do
     else
       false -> {:error, :missing_bot_token}
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def get_operator_secret do
+    Repo.get_by(OperatorSecret, scope: "control_plane")
+  end
+
+  def operator_password_configured? do
+    not is_nil(get_operator_secret())
+  end
+
+  def change_operator_secret(secret \\ nil, attrs \\ %{}) do
+    (secret || get_operator_secret() || %OperatorSecret{})
+    |> OperatorSecret.changeset(attrs)
+  end
+
+  def save_operator_secret_password(attrs) when is_map(attrs) do
+    secret = get_operator_secret() || %OperatorSecret{}
+
+    secret
+    |> OperatorSecret.changeset(Map.put_new(attrs, "scope", "control_plane"))
+    |> Repo.insert_or_update()
+  end
+
+  def authenticate_operator(password) when is_binary(password) do
+    case get_operator_secret() do
+      nil ->
+        {:error, :not_configured}
+
+      %OperatorSecret{} = secret ->
+        if OperatorSecret.verify_password(secret, password) do
+          :ok
+        else
+          {:error, :unauthorized}
+        end
     end
   end
 

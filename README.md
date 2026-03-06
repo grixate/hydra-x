@@ -20,6 +20,8 @@ Hydra-X is a self-hosted Elixir agent runtime with a Phoenix control plane. This
   `/api/telegram/webhook` routes inbound updates into persisted channel conversations
 - Budget guardrails:
   persisted token policies, preflight enforcement, usage accounting, and safety event logging
+- Control-plane auth:
+  session-based browser login once an operator password is configured on `/setup`
 - Operator commands:
   `mix hydra_x.new`, `mix hydra_x.serve`, `mix hydra_x.chat`, `mix hydra_x.migrate`, `mix hydra_x.healthcheck`, `mix hydra_x.telegram.webhook`
 
@@ -57,6 +59,8 @@ The repository also includes a thin command wrapper:
 ./hydra_x healthcheck
 ./hydra_x chat -m "Hello"
 ```
+
+If you want to lock the management UI, set an operator password on `/setup`. After that, browser access requires signing in at `/login`.
 
 ## Project shape
 
