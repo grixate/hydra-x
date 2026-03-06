@@ -15,6 +15,7 @@ defmodule HydraXWeb.HomeLive do
      |> assign(:current, "home")
      |> assign(:stats, stats())
      |> assign(:health, Runtime.health_snapshot())
+     |> assign(:safety_status, Runtime.safety_status())
      |> assign(:conversations, conversations)}
   end
 
@@ -128,6 +129,43 @@ defmodule HydraXWeb.HomeLive do
               </span>
             </div>
           </div>
+        </div>
+      </section>
+
+      <section class="glass-panel mt-6 p-6">
+        <div class="flex items-end justify-between gap-4">
+          <div>
+            <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">
+              Safety events
+            </div>
+            <h3 class="mt-2 font-display text-3xl">Recent guardrail activity</h3>
+          </div>
+          <.link
+            navigate={~p"/health"}
+            class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--hx-accent)]"
+          >
+            Open health
+          </.link>
+        </div>
+
+        <div class="mt-6 grid gap-3 md:grid-cols-3">
+          <article class="metric-card">
+            <div class="metric-label">Errors</div>
+            <div class="metric-value">{@safety_status.counts.error}</div>
+            <p>Hard rejects, delivery failures, or blocked operations that need review.</p>
+          </article>
+          <article class="metric-card">
+            <div class="metric-label">Warnings</div>
+            <div class="metric-value">{@safety_status.counts.warn}</div>
+            <p>Budget soft-limit notices and blocked tool attempts from the last 24 hours.</p>
+          </article>
+          <article class="metric-card">
+            <div class="metric-label">Latest</div>
+            <div class="metric-value">
+              {@safety_status.recent_events |> List.first() |> then(&(&1 && &1.category)) || "clear"}
+            </div>
+            <p>Most recent safety category seen by the runtime.</p>
+          </article>
         </div>
       </section>
     </AppShell.shell>

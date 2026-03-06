@@ -213,6 +213,25 @@ defmodule HydraX.RuntimeTest do
     assert event.message =~ "shell_command"
   end
 
+  test "health snapshot warns when recent safety events exist" do
+    agent = create_agent()
+
+    assert {:ok, _event} =
+             Safety.log_event(%{
+               agent_id: agent.id,
+               category: "tool",
+               level: "warn",
+               message: "blocked tool test"
+             })
+
+    safety_check =
+      Runtime.health_snapshot()
+      |> Enum.find(&(&1.name == "safety"))
+
+    assert safety_check.status == :warn
+    assert safety_check.detail =~ "warnings"
+  end
+
   defp create_agent do
     unique = System.unique_integer([:positive])
 

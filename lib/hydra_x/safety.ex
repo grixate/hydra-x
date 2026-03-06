@@ -22,4 +22,23 @@ defmodule HydraX.Safety do
     |> preload([:conversation])
     |> Repo.all()
   end
+
+  def recent_events_global(limit \\ 20) do
+    Event
+    |> order_by([event], desc: event.inserted_at)
+    |> limit(^limit)
+    |> preload([:conversation, :agent])
+    |> Repo.all()
+  end
+
+  def recent_counts(hours_back \\ 24) do
+    cutoff = DateTime.add(DateTime.utc_now(), -hours_back * 3600, :second)
+
+    Event
+    |> where([event], event.inserted_at >= ^cutoff)
+    |> group_by([event], event.level)
+    |> select([event], {event.level, count(event.id)})
+    |> Repo.all()
+    |> Enum.into(%{}, fn {level, count} -> {level, count} end)
+  end
 end

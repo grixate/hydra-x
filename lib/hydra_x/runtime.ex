@@ -350,6 +350,9 @@ defmodule HydraX.Runtime do
     provider = enabled_provider()
     default_agent = get_default_agent()
     budget_policy = default_agent && HydraX.Budget.ensure_policy!(default_agent.id)
+    safety_counts = HydraX.Safety.recent_counts()
+    safety_errors = Map.get(safety_counts, "error", 0)
+    safety_warnings = Map.get(safety_counts, "warn", 0)
 
     [
       %{name: "database", status: :ok, detail: "SQLite repo online"},
@@ -386,6 +389,21 @@ defmodule HydraX.Runtime do
           case budget_policy do
             nil -> "no policy configured"
             policy -> "daily #{policy.daily_limit} · conversation #{policy.conversation_limit}"
+          end
+      },
+      %{
+        name: "safety",
+        status: if(safety_errors > 0 or safety_warnings > 0, do: :warn, else: :ok),
+        detail:
+          cond do
+            safety_errors > 0 ->
+              "#{safety_errors} errors · #{safety_warnings} warnings in the last 24h"
+
+            safety_warnings > 0 ->
+              "#{safety_warnings} warnings in the last 24h"
+
+            true ->
+              "no recent safety events"
           end
       },
       %{
@@ -436,6 +454,19 @@ defmodule HydraX.Runtime do
     else
       %{agent_name: nil, policy: nil, usage: nil, safety_events: []}
     end
+  end
+
+  def safety_status do
+    counts = HydraX.Safety.recent_counts()
+
+    %{
+      counts: %{
+        info: Map.get(counts, "info", 0),
+        warn: Map.get(counts, "warn", 0),
+        error: Map.get(counts, "error", 0)
+      },
+      recent_events: HydraX.Safety.recent_events_global(12)
+    }
   end
 
   defp maybe_filter_agent(query, nil), do: query
