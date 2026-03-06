@@ -261,6 +261,30 @@ defmodule HydraX.RuntimeTest do
     assert is_list(system.alarms)
   end
 
+  test "backup status reports recent backup manifests" do
+    backup_root = HydraX.Config.backup_root()
+    File.mkdir_p!(backup_root)
+
+    manifest_path = Path.join(backup_root, "hydra-x-backup-test.json")
+
+    File.write!(
+      manifest_path,
+      Jason.encode_to_iodata!(%{
+        created_at: "2026-03-07T00:00:00Z",
+        archive_path: "/tmp/hydra-x-backup-test.tar.gz",
+        entry_count: 2,
+        entries: ["/tmp/db", "/tmp/workspace"]
+      })
+    )
+
+    on_exit(fn -> File.rm_rf(manifest_path) end)
+
+    backups = Runtime.backup_status()
+
+    assert backups.latest_backup["archive_path"] == "/tmp/hydra-x-backup-test.tar.gz"
+    assert backups.root == backup_root
+  end
+
   test "heartbeat jobs are ensured once and create persisted job runs" do
     agent = create_agent()
     {:ok, pid} = HydraX.Agent.ensure_started(agent)

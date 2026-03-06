@@ -638,6 +638,7 @@ defmodule HydraX.Runtime do
     budget_policy = default_agent && HydraX.Budget.ensure_policy!(default_agent.id)
     safety_counts = HydraX.Safety.recent_counts()
     system = system_status()
+    backups = backup_status()
     safety_errors = Map.get(safety_counts, "error", 0)
     safety_warnings = Map.get(safety_counts, "warn", 0)
 
@@ -729,6 +730,15 @@ defmodule HydraX.Runtime do
           case system.alarms do
             [] -> "no active OTP alarms"
             alarms -> Enum.join(alarms, "; ")
+          end
+      },
+      %{
+        name: "backups",
+        status: if(backups.latest_backup, do: :ok, else: :warn),
+        detail:
+          case backups.latest_backup do
+            nil -> "no backup manifests found in #{backups.root}"
+            backup -> "latest backup #{backup["archive_path"]}"
           end
       },
       %{
@@ -836,7 +846,8 @@ defmodule HydraX.Runtime do
         total_jobs: length(list_scheduled_jobs(limit: 100)),
         recent_runs: recent_job_runs(10)
       },
-      system: system_status()
+      system: system_status(),
+      backups: backup_status()
     }
   end
 
@@ -848,6 +859,24 @@ defmodule HydraX.Runtime do
     %{
       alarms: alarms,
       database_path: Config.repo_database_path()
+    }
+  end
+
+  def backup_status do
+    root = Config.backup_root()
+
+    manifests =
+      root
+      |> Path.join("hydra-x-backup-*.json")
+      |> Path.wildcard()
+      |> Enum.sort(:desc)
+      |> Enum.map(&read_backup_manifest/1)
+      |> Enum.reject(&is_nil/1)
+
+    %{
+      root: root,
+      latest_backup: List.first(manifests),
+      recent_backups: Enum.take(manifests, 5)
     }
   end
 
@@ -970,6 +999,15 @@ defmodule HydraX.Runtime do
 
   defp format_alarm({alarm, _details}), do: inspect(alarm)
   defp format_alarm(alarm), do: inspect(alarm)
+
+  defp read_backup_manifest(path) do
+    with {:ok, body} <- File.read(path),
+         {:ok, manifest} <- Jason.decode(body) do
+      Map.put(manifest, "manifest_path", path)
+    else
+      _ -> nil
+    end
+  end
 
   defp normalize_integer(nil), do: nil
   defp normalize_integer(value) when is_integer(value), do: value

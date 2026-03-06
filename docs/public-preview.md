@@ -34,7 +34,7 @@ This repository is now beyond the initial skeleton. Use this checklist before ex
 ## Safety And Observability
 
 1. Check `/health` for provider, Telegram, tool policy, scheduler, and recent safety events.
-2. Review the runtime counters section to confirm provider requests, tool executions, gateway deliveries, and scheduler jobs are incrementing.
+2. Review the runtime counters section to confirm provider requests, tool executions, gateway deliveries, scheduler jobs, OTP alarms, and backup manifests are visible.
 3. If outbound fetches should be restricted, set `HYDRA_X_HTTP_ALLOWLIST` or configure the persisted tool policy in `/setup`.
 4. If shell access is not needed, disable it in `/setup`.
 

@@ -249,6 +249,31 @@ defmodule HydraXWeb.HealthLive do
               </p>
             </div>
           </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4 lg:col-span-2">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Backup inventory
+            </div>
+            <p class="mt-3 text-sm text-[var(--hx-mute)]">
+              Root: {@observability_status.backups.root}
+            </p>
+            <div class="mt-3 space-y-2">
+              <p
+                :if={@observability_status.backups.recent_backups == []}
+                class="text-sm text-[var(--hx-mute)]"
+              >
+                No backup manifests found.
+              </p>
+              <div
+                :for={backup <- @observability_status.backups.recent_backups}
+                class="rounded-xl border border-white/10 bg-black/10 px-3 py-3"
+              >
+                <div class="text-sm text-[var(--hx-accent)]">{backup["archive_path"]}</div>
+                <div class="mt-1 text-xs text-[var(--hx-mute)]">
+                  entries: {backup["entry_count"]} · created {backup["created_at"]}
+                </div>
+              </div>
+            </div>
+          </article>
         </div>
       </section>
 

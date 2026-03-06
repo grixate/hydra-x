@@ -87,6 +87,8 @@ mix hydra_x.backup
 mix hydra_x.backup --output /var/backups/hydra-x
 ```
 
+The health page also shows active OTP alarms and the latest backup manifests so recovery state is visible without shell access.
+
 ## Project shape
 
 Key runtime areas:
