@@ -125,22 +125,43 @@ defmodule HydraX.Agent.Channel do
         {:ok, result} ->
           maybe_log_budget_warning(data, result)
 
-          {:ok, response} = Router.complete(prompt)
-          output_tokens = Budget.estimate_tokens(response.content)
+          case Router.complete(prompt) do
+            {:ok, response} ->
+              output_tokens = Budget.estimate_tokens(response.content)
 
-          Budget.record_usage(data.agent_id, data.conversation.id,
-            tokens_in: estimated_input_tokens,
-            tokens_out: output_tokens,
-            metadata: %{provider: response.provider}
-          )
+              Budget.record_usage(data.agent_id, data.conversation.id,
+                tokens_in: estimated_input_tokens,
+                tokens_out: output_tokens,
+                metadata: %{provider: response.provider}
+              )
 
-          {response.content,
-           %{
-             provider: response.provider,
-             analysis: analysis,
-             tools: tool_results,
-             budget: %{tokens_in: estimated_input_tokens, tokens_out: output_tokens}
-           }}
+              {response.content,
+               %{
+                 provider: response.provider,
+                 analysis: analysis,
+                 tools: tool_results,
+                 budget: %{tokens_in: estimated_input_tokens, tokens_out: output_tokens}
+               }}
+
+            {:error, reason} ->
+              Safety.log_event(%{
+                agent_id: data.agent_id,
+                conversation_id: data.conversation.id,
+                category: "provider",
+                level: "error",
+                message: "LLM provider request failed",
+                metadata: %{reason: inspect(reason)}
+              })
+
+              {"Provider request failed. Check /health and provider settings before retrying.",
+               %{
+                 provider: "provider-error",
+                 analysis: analysis,
+                 tools: tool_results,
+                 budget: %{tokens_in: estimated_input_tokens, failed: true},
+                 provider_error: inspect(reason)
+               }}
+          end
 
         {:error, details} ->
           Safety.log_event(%{

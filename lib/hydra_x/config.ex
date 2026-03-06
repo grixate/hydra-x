@@ -56,6 +56,12 @@ defmodule HydraX.Config do
     |> String.split(",", trim: true)
   end
 
+  @spec http_allowlist() :: [String.t()]
+  def http_allowlist do
+    System.get_env("HYDRA_X_HTTP_ALLOWLIST", "")
+    |> String.split(",", trim: true)
+  end
+
   defp endpoint_base_url do
     endpoint = Application.get_env(:hydra_x, HydraXWeb.Endpoint, [])
     url = Keyword.get(endpoint, :url, [])

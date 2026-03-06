@@ -113,6 +113,8 @@ defmodule HydraX.Runtime do
     |> Repo.all()
   end
 
+  def get_provider_config!(id), do: Repo.get!(ProviderConfig, id)
+
   def enabled_provider do
     Repo.one(from provider in ProviderConfig, where: provider.enabled == true, limit: 1)
   end
@@ -143,6 +145,27 @@ defmodule HydraX.Runtime do
       record
     end)
     |> unwrap_transaction()
+  end
+
+  def test_provider_config(%ProviderConfig{} = provider, opts \\ []) do
+    request =
+      %{
+        provider_config: provider,
+        messages: [
+          %{role: "system", content: "You are a terse provider connectivity probe."},
+          %{role: "user", content: "Reply with OK if you can read this request."}
+        ],
+        tool_results: [],
+        bulletin: nil,
+        request_options:
+          Keyword.get(opts, :request_options, receive_timeout: 10_000, retry: false)
+      }
+      |> maybe_put_request_fn_from_config()
+      |> maybe_put_request_fn(opts)
+
+    provider
+    |> provider_module()
+    |> apply(:complete, [request])
   end
 
   def enabled_telegram_config do
@@ -367,6 +390,21 @@ defmodule HydraX.Runtime do
         detail: (provider && "#{provider.kind}: #{provider.model}") || "mock fallback"
       },
       %{
+        name: "auth",
+        status: if(operator_password_configured?(), do: :ok, else: :warn),
+        detail:
+          case operator_status() do
+            %{configured: true, last_rotated_at: rotated_at} when not is_nil(rotated_at) ->
+              "operator password set · rotated #{Calendar.strftime(rotated_at, "%Y-%m-%d %H:%M UTC")}"
+
+            %{configured: true} ->
+              "operator password set"
+
+            _ ->
+              "control plane open until operator password is set"
+          end
+      },
+      %{
         name: "telegram",
         status: if(enabled_telegram_config(), do: :ok, else: :warn),
         detail:
@@ -405,6 +443,11 @@ defmodule HydraX.Runtime do
             true ->
               "no recent safety events"
           end
+      },
+      %{
+        name: "tools",
+        status: :ok,
+        detail: tool_detail(tool_status())
       },
       %{
         name: "workspace",
@@ -467,6 +510,56 @@ defmodule HydraX.Runtime do
       },
       recent_events: HydraX.Safety.recent_events_global(12)
     }
+  end
+
+  def operator_status do
+    case get_operator_secret() do
+      nil ->
+        %{configured: false, last_rotated_at: nil}
+
+      secret ->
+        %{configured: true, last_rotated_at: secret.last_rotated_at}
+    end
+  end
+
+  def tool_status do
+    %{
+      workspace_guard: true,
+      url_guard: true,
+      shell_allowlist: Config.shell_allowlist(),
+      http_allowlist: Config.http_allowlist()
+    }
+  end
+
+  defp tool_detail(tool_status) do
+    shell = Enum.join(tool_status.shell_allowlist, ", ")
+
+    http =
+      case tool_status.http_allowlist do
+        [] -> "public hosts"
+        hosts -> Enum.join(hosts, ", ")
+      end
+
+    "workspace/http guards active · shell allowlist: #{shell} · http allowlist: #{http}"
+  end
+
+  defp provider_module(%ProviderConfig{kind: "openai_compatible"}),
+    do: HydraX.LLM.Providers.OpenAICompatible
+
+  defp provider_module(%ProviderConfig{kind: "anthropic"}), do: HydraX.LLM.Providers.Anthropic
+
+  defp maybe_put_request_fn(request, opts) do
+    case Keyword.get(opts, :request_fn) do
+      nil -> request
+      request_fn -> Map.put(request, :request_fn, request_fn)
+    end
+  end
+
+  defp maybe_put_request_fn_from_config(request) do
+    case Application.get_env(:hydra_x, :provider_test_request_fn) do
+      nil -> request
+      request_fn -> Map.put(request, :request_fn, request_fn)
+    end
   end
 
   defp maybe_filter_agent(query, nil), do: query

@@ -22,6 +22,7 @@ defmodule HydraXWeb.SetupLive do
      |> assign(:page_title, "Setup")
      |> assign(:current, "setup")
      |> assign(:operator_secret, Runtime.get_operator_secret())
+     |> assign(:provider_test_result, nil)
      |> assign(:stats, stats())
      |> assign(:agent, agent)
      |> assign(:provider, provider)
@@ -62,6 +63,28 @@ defmodule HydraXWeb.SetupLive do
 
       {:error, changeset} ->
         {:noreply, assign_form(socket, :provider_form, changeset)}
+    end
+  end
+
+  def handle_event("test_provider", _params, %{assigns: %{provider: %{id: nil}}} = socket) do
+    {:noreply, put_flash(socket, :error, "Save the provider before testing it.")}
+  end
+
+  def handle_event("test_provider", _params, socket) do
+    provider = Runtime.get_provider_config!(socket.assigns.provider.id)
+
+    case Runtime.test_provider_config(provider) do
+      {:ok, result} ->
+        {:noreply,
+         socket
+         |> assign(:provider_test_result, %{status: :ok, content: result.content})
+         |> put_flash(:info, "Provider test succeeded")}
+
+      {:error, reason} ->
+        {:noreply,
+         socket
+         |> assign(:provider_test_result, %{status: :error, content: inspect(reason)})
+         |> put_flash(:error, "Provider test failed")}
     end
   end
 
@@ -210,8 +233,22 @@ defmodule HydraXWeb.SetupLive do
               type="checkbox"
               label="Enable as active provider"
             />
+            <div
+              :if={@provider_test_result}
+              class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4 text-sm text-[var(--hx-mute)]"
+            >
+              {if @provider_test_result.status == :ok, do: "Test reply: ", else: "Failure: "}
+              {@provider_test_result.content}
+            </div>
             <div class="pt-2">
               <.button>Save provider</.button>
+              <button
+                type="button"
+                phx-click="test_provider"
+                class="btn btn-outline ml-3 border-white/10 bg-white/5 text-white hover:bg-white/10"
+              >
+                Test saved provider
+              </button>
             </div>
           </.form>
         </article>

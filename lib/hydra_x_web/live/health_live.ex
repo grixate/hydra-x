@@ -13,7 +13,9 @@ defmodule HydraXWeb.HealthLive do
      |> assign(:stats, stats())
      |> assign(:checks, Runtime.health_snapshot())
      |> assign(:telegram_status, Runtime.telegram_status())
-     |> assign(:safety_status, Runtime.safety_status())}
+     |> assign(:safety_status, Runtime.safety_status())
+     |> assign(:operator_status, Runtime.operator_status())
+     |> assign(:tool_status, Runtime.tool_status())}
   end
 
   @impl true
@@ -75,6 +77,74 @@ defmodule HydraXWeb.HealthLive do
                 @telegram_status.registered_at,
                 "%Y-%m-%d %H:%M:%S UTC"
               )}
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section class="glass-panel mt-6 p-6">
+        <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">Operator auth</div>
+        <h2 class="mt-3 font-display text-4xl">Control-plane lock state</h2>
+        <div class="mt-6 grid gap-3 lg:grid-cols-2">
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Status
+            </div>
+            <p class="mt-3 text-sm text-[var(--hx-mute)]">
+              {if @operator_status.configured,
+                do: "Operator password is configured",
+                else: "Control plane is open until a password is set"}
+            </p>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Rotation
+            </div>
+            <p class="mt-3 text-sm text-[var(--hx-mute)]">
+              {if @operator_status.last_rotated_at,
+                do: Calendar.strftime(@operator_status.last_rotated_at, "%Y-%m-%d %H:%M:%S UTC"),
+                else: "not set"}
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section class="glass-panel mt-6 p-6">
+        <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">Guarded tools</div>
+        <h2 class="mt-3 font-display text-4xl">Execution policy</h2>
+        <div class="mt-6 grid gap-3 lg:grid-cols-3">
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Workspace guard
+            </div>
+            <div class="mt-3 font-display text-4xl">
+              {if @tool_status.workspace_guard, do: "on", else: "off"}
+            </div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              URL guard
+            </div>
+            <div class="mt-3 font-display text-4xl">
+              {if @tool_status.url_guard, do: "on", else: "off"}
+            </div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Shell allowlist
+            </div>
+            <p class="mt-3 text-sm text-[var(--hx-mute)]">
+              {Enum.join(@tool_status.shell_allowlist, ", ")}
+            </p>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4 lg:col-span-3">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              HTTP allowlist
+            </div>
+            <p class="mt-3 text-sm text-[var(--hx-mute)]">
+              {if @tool_status.http_allowlist == [],
+                do: "all public hosts allowed",
+                else: Enum.join(@tool_status.http_allowlist, ", ")}
             </p>
           </article>
         </div>

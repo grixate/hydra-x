@@ -119,9 +119,15 @@ defmodule HydraX.RuntimeTest do
 
     checks = Runtime.health_snapshot()
     budget = Enum.find(checks, &(&1.name == "budget"))
+    auth = Enum.find(checks, &(&1.name == "auth"))
+    tools = Enum.find(checks, &(&1.name == "tools"))
 
     assert budget.status == :ok
     assert budget.detail =~ "daily"
+    assert auth.status == :warn
+    assert auth.detail =~ "control plane open"
+    assert tools.status == :ok
+    assert tools.detail =~ "shell allowlist"
     assert Budget.get_policy(agent.id)
   end
 
@@ -230,6 +236,72 @@ defmodule HydraX.RuntimeTest do
 
     assert safety_check.status == :warn
     assert safety_check.detail =~ "warnings"
+  end
+
+  test "health snapshot reports operator auth once configured" do
+    assert {:ok, _secret} =
+             Runtime.save_operator_secret_password(%{
+               "password" => "hydra-password-123",
+               "password_confirmation" => "hydra-password-123"
+             })
+
+    auth_check =
+      Runtime.health_snapshot()
+      |> Enum.find(&(&1.name == "auth"))
+
+    assert auth_check.status == :ok
+    assert auth_check.detail =~ "operator password set"
+  end
+
+  test "provider failures return an assistant error instead of crashing the channel" do
+    agent = create_agent()
+    {:ok, pid} = HydraX.Agent.ensure_started(agent)
+    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
+
+    {:ok, _provider} =
+      Runtime.save_provider_config(%{
+        name: "Broken Provider",
+        kind: "openai_compatible",
+        base_url: "http://127.0.0.1:1",
+        api_key: "secret",
+        model: "gpt-test",
+        enabled: true
+      })
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{channel: "cli", title: "provider-error"})
+
+    response =
+      Channel.submit(
+        agent,
+        conversation,
+        "Hello through a broken provider.",
+        %{source: "test"}
+      )
+
+    assert response =~ "Provider request failed"
+
+    [event | _] = Safety.recent_events(agent.id, 5)
+    assert event.category == "provider"
+    assert event.level == "error"
+  end
+
+  test "provider connectivity tests run through the selected adapter" do
+    provider = %Runtime.ProviderConfig{
+      name: "OpenAI Test",
+      kind: "openai_compatible",
+      base_url: "https://example.test",
+      api_key: "secret",
+      model: "gpt-test"
+    }
+
+    request_fn = fn opts ->
+      assert opts[:json][:model] == "gpt-test"
+      {:ok, %{status: 200, body: %{"choices" => [%{"message" => %{"content" => "OK"}}]}}}
+    end
+
+    assert {:ok, %{content: "OK", provider: "OpenAI Test"}} =
+             Runtime.test_provider_config(provider, request_fn: request_fn)
   end
 
   defp create_agent do

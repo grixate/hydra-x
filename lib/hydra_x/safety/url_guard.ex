@@ -3,6 +3,8 @@ defmodule HydraX.Safety.UrlGuard do
   Basic outbound URL validation to reduce SSRF risk.
   """
 
+  alias HydraX.Config
+
   @blocked_hosts ~w(localhost metadata.google.internal host.docker.internal)
 
   def validate_outbound_url(url) when is_binary(url) do
@@ -13,6 +15,7 @@ defmodule HydraX.Safety.UrlGuard do
       is_nil(uri.host) or uri.host == "" -> {:error, :missing_host}
       blocked_host?(uri.host) -> {:error, :blocked_host}
       private_ip_literal?(uri.host) -> {:error, :private_address}
+      not allowlisted?(uri.host) -> {:error, :host_not_allowlisted}
       true -> {:ok, uri}
     end
   end
@@ -34,6 +37,18 @@ defmodule HydraX.Safety.UrlGuard do
       {:ok, {0, _, _, _}} -> true
       {:ok, _ipv6} -> true
       {:error, _reason} -> false
+    end
+  end
+
+  defp allowlisted?(host) do
+    case Config.http_allowlist() do
+      [] ->
+        true
+
+      allowlist ->
+        Enum.any?(allowlist, fn allowed ->
+          host == allowed or String.ends_with?(host, "." <> allowed)
+        end)
     end
   end
 end

@@ -33,6 +33,29 @@ defmodule HydraX.Tools.ToolSafetyTest do
     refute_received :request_attempted
   end
 
+  test "http fetch enforces an optional host allowlist" do
+    previous = System.get_env("HYDRA_X_HTTP_ALLOWLIST")
+    System.put_env("HYDRA_X_HTTP_ALLOWLIST", "example.com")
+
+    on_exit(fn ->
+      if previous do
+        System.put_env("HYDRA_X_HTTP_ALLOWLIST", previous)
+      else
+        System.delete_env("HYDRA_X_HTTP_ALLOWLIST")
+      end
+    end)
+
+    request_fn = fn _opts ->
+      send(self(), :request_attempted)
+      {:ok, %{status: 200, body: "should not happen", headers: []}}
+    end
+
+    assert {:error, :host_not_allowlisted} =
+             HttpFetch.execute(%{url: "https://not-example.test/data"}, %{request_fn: request_fn})
+
+    refute_received :request_attempted
+  end
+
   test "shell commands run inside the workspace when allowlisted" do
     agent = create_agent()
 

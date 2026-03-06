@@ -25,7 +25,7 @@ Hydra-X is a self-hosted Elixir agent runtime with a Phoenix control plane. This
 - Guarded tools:
   workspace-confined file reads, outbound HTTP fetches with basic SSRF checks, and allowlisted shell commands
 - Operator commands:
-  `mix hydra_x.new`, `mix hydra_x.serve`, `mix hydra_x.chat`, `mix hydra_x.migrate`, `mix hydra_x.healthcheck`, `mix hydra_x.telegram.webhook`
+  `mix hydra_x.new`, `mix hydra_x.serve`, `mix hydra_x.chat`, `mix hydra_x.migrate`, `mix hydra_x.healthcheck`, `mix hydra_x.telegram.webhook`, `mix hydra_x.providers.test`
 
 ## Quick start
 
@@ -60,6 +60,7 @@ The repository also includes a thin command wrapper:
 ```bash
 ./hydra_x healthcheck
 ./hydra_x chat -m "Hello"
+./hydra_x provider-test
 ```
 
 If you want to lock the management UI, set an operator password on `/setup`. After that, browser access requires signing in at `/login`.

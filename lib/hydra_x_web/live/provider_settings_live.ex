@@ -13,6 +13,7 @@ defmodule HydraXWeb.ProviderSettingsLive do
      |> assign(:current, "providers")
      |> assign(:stats, stats())
      |> assign(:providers, Runtime.list_provider_configs())
+     |> assign(:test_result, nil)
      |> assign(:form, to_form(Runtime.change_provider_config(%ProviderConfig{})))}
   end
 
@@ -29,6 +30,28 @@ defmodule HydraXWeb.ProviderSettingsLive do
 
       {:error, changeset} ->
         {:noreply, assign(socket, :form, to_form(changeset))}
+    end
+  end
+
+  def handle_event("test", %{"id" => id}, socket) do
+    provider = Runtime.get_provider_config!(id)
+
+    case Runtime.test_provider_config(provider) do
+      {:ok, result} ->
+        {:noreply,
+         socket
+         |> assign(:test_result, %{provider: provider.name, status: :ok, content: result.content})
+         |> put_flash(:info, "Provider test succeeded")}
+
+      {:error, reason} ->
+        {:noreply,
+         socket
+         |> assign(:test_result, %{
+           provider: provider.name,
+           status: :error,
+           content: inspect(reason)
+         })
+         |> put_flash(:error, "Provider test failed")}
     end
   end
 
@@ -66,12 +89,32 @@ defmodule HydraXWeb.ProviderSettingsLive do
               <div class="mt-3 break-all text-sm text-[var(--hx-mute)]">
                 {provider.base_url || "default endpoint"}
               </div>
+              <button
+                type="button"
+                phx-click="test"
+                phx-value-id={provider.id}
+                class="btn btn-outline mt-4 border-white/10 bg-white/5 text-white hover:bg-white/10"
+              >
+                Test provider
+              </button>
             </div>
           </div>
         </article>
 
         <article class="glass-panel p-6">
           <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">Add provider</div>
+          <div
+            :if={@test_result}
+            class="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-4 text-sm text-[var(--hx-mute)]"
+          >
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-accent)]">
+              {@test_result.provider}
+            </div>
+            <p class="mt-2">
+              {if @test_result.status == :ok, do: "Test reply: ", else: "Failure: "}
+              {@test_result.content}
+            </p>
+          </div>
           <.form for={@form} phx-submit="create" class="mt-6 space-y-2">
             <.input field={@form[:name]} label="Label" />
             <.input
