@@ -261,6 +261,31 @@ defmodule HydraX.RuntimeTest do
     assert safety_check.detail =~ "warnings"
   end
 
+  test "safety status accepts level filters" do
+    agent = create_agent()
+
+    assert {:ok, _warn} =
+             Safety.log_event(%{
+               agent_id: agent.id,
+               category: "tool",
+               level: "warn",
+               message: "warn event"
+             })
+
+    assert {:ok, _error} =
+             Safety.log_event(%{
+               agent_id: agent.id,
+               category: "gateway",
+               level: "error",
+               message: "error event"
+             })
+
+    status = Runtime.safety_status(level: "error", limit: 10)
+
+    assert Enum.all?(status.recent_events, &(&1.level == "error"))
+    assert Enum.any?(status.categories, &(&1 == "gateway"))
+  end
+
   test "health snapshot reports operator auth once configured" do
     assert {:ok, _secret} =
              Runtime.save_operator_secret_password(%{

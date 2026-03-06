@@ -803,8 +803,11 @@ defmodule HydraX.Runtime do
     end
   end
 
-  def safety_status do
+  def safety_status(opts \\ []) do
     counts = HydraX.Safety.recent_counts()
+    limit = Keyword.get(opts, :limit, 12)
+    level = Keyword.get(opts, :level)
+    category = Keyword.get(opts, :category)
 
     %{
       counts: %{
@@ -812,7 +815,8 @@ defmodule HydraX.Runtime do
         warn: Map.get(counts, "warn", 0),
         error: Map.get(counts, "error", 0)
       },
-      recent_events: HydraX.Safety.recent_events_global(12)
+      recent_events: HydraX.Safety.list_events(limit: limit, level: level, category: category),
+      categories: HydraX.Safety.categories()
     }
   end
 

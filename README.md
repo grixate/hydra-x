@@ -15,7 +15,7 @@ Hydra-X is a self-hosted Elixir agent runtime with a Phoenix control plane. This
 - Provider adapters:
   OpenAI-compatible, Anthropic, and a built-in mock fallback
 - Management UI routes:
-  `/`, `/setup`, `/agents`, `/conversations`, `/memory`, `/jobs`, `/settings/providers`, `/health`
+  `/`, `/setup`, `/agents`, `/conversations`, `/memory`, `/jobs`, `/safety`, `/settings/providers`, `/health`
 - Telegram ingress:
   `/api/telegram/webhook` routes inbound updates into persisted channel conversations
 - Budget guardrails:
@@ -27,9 +27,9 @@ Hydra-X is a self-hosted Elixir agent runtime with a Phoenix control plane. This
 - Scheduler:
   recurring heartbeat/prompt jobs with persisted run history and CLI/UI controls
 - Observability:
-  telemetry counters for provider, tool, gateway, and scheduler activity surfaced in `/health`
+  telemetry counters for provider, tool, gateway, and scheduler activity surfaced in `/health`, plus a dedicated `/safety` ledger for operator review
 - Operator commands:
-  `mix hydra_x.new`, `mix hydra_x.serve`, `mix hydra_x.chat`, `mix hydra_x.migrate`, `mix hydra_x.healthcheck`, `mix hydra_x.telegram.webhook`, `mix hydra_x.providers.test`, `mix hydra_x.jobs`, `mix hydra_x.conversations`, `mix hydra_x.backup`, `mix hydra_x.restore`, `mix hydra_x.doctor`, `mix hydra_x.install`
+  `mix hydra_x.new`, `mix hydra_x.serve`, `mix hydra_x.chat`, `mix hydra_x.migrate`, `mix hydra_x.healthcheck`, `mix hydra_x.telegram.webhook`, `mix hydra_x.providers.test`, `mix hydra_x.jobs`, `mix hydra_x.conversations`, `mix hydra_x.safety`, `mix hydra_x.backup`, `mix hydra_x.restore`, `mix hydra_x.doctor`, `mix hydra_x.install`
 
 ## Quick start
 
@@ -69,6 +69,7 @@ The repository also includes a thin command wrapper:
 ./hydra_x provider-test
 ./hydra_x jobs
 ./hydra_x conversations
+./hydra_x safety
 ./hydra_x backup
 ./hydra_x restore /path/to/hydra-x-backup.tar.gz
 ./hydra_x doctor
@@ -89,6 +90,13 @@ Failed Telegram deliveries can be retried from `/conversations` or the CLI:
 ```bash
 mix hydra_x.conversations
 mix hydra_x.conversations retry-delivery 42
+```
+
+Recent safety events can be reviewed from `/safety` or the CLI:
+
+```bash
+mix hydra_x.safety
+mix hydra_x.safety --level error --category gateway --limit 20
 ```
 
 Backup archives can be produced with:

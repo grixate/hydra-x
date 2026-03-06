@@ -53,6 +53,7 @@ defmodule HydraXWeb.AppShell do
             <.nav_link current={@current} value="memory" href={~p"/memory"} label="Memory" />
             <.nav_link current={@current} value="jobs" href={~p"/jobs"} label="Jobs" />
             <.nav_link current={@current} value="budget" href={~p"/budget"} label="Budget" />
+            <.nav_link current={@current} value="safety" href={~p"/safety"} label="Safety" />
             <.nav_link
               current={@current}
               value="providers"
