@@ -1,0 +1,63 @@
+defmodule HydraX.Agent.Branch do
+  @moduledoc false
+  use GenServer
+
+  def start_link(args) do
+    GenServer.start_link(__MODULE__, args)
+  end
+
+  def run(agent_id, conversation_id, messages) do
+    {:ok, pid} =
+      DynamicSupervisor.start_child(
+        HydraX.Agent.branch_supervisor(agent_id),
+        {__MODULE__, %{agent_id: agent_id, conversation_id: conversation_id, messages: messages}}
+      )
+
+    GenServer.call(pid, :run, 15_000)
+  end
+
+  @impl true
+  def init(args), do: {:ok, args}
+
+  @impl true
+  def handle_call(:run, _from, %{messages: messages} = state) do
+    text = Enum.map_join(messages, "\n", & &1.content)
+
+    analysis = %{
+      intent: detect_intent(text),
+      should_save_memory: String.match?(text, ~r/\bremember\b/i),
+      should_recall_memory:
+        String.match?(text, ~r/\brecall\b|\bremember about\b|\bwhat do you remember\b/i),
+      memory_type: detect_memory_type(text),
+      query: extract_query(text),
+      summary: String.slice(String.trim(text), 0, 280)
+    }
+
+    {:stop, :normal, analysis, state}
+  end
+
+  defp detect_intent(text) do
+    cond do
+      String.match?(text, ~r/\bremember\b/i) -> "memory_write"
+      String.match?(text, ~r/\brecall\b|\bwhat do you remember\b/i) -> "memory_read"
+      true -> "conversation"
+    end
+  end
+
+  defp detect_memory_type(text) do
+    cond do
+      String.match?(text, ~r/\bprefer|preference\b/i) -> "Preference"
+      String.match?(text, ~r/\bdecide|decision\b/i) -> "Decision"
+      String.match?(text, ~r/\bgoal\b/i) -> "Goal"
+      String.match?(text, ~r/\btodo\b/i) -> "Todo"
+      true -> "Fact"
+    end
+  end
+
+  defp extract_query(text) do
+    text
+    |> String.replace(~r/\bremember\b/i, "")
+    |> String.replace(~r/\brecall\b/i, "")
+    |> String.trim()
+  end
+end
