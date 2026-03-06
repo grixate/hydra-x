@@ -27,7 +27,7 @@ This repository is now beyond the initial skeleton. Use this checklist before ex
 
 ## Scheduler
 
-1. Open `/jobs` and confirm the default heartbeat job exists.
+1. Open `/jobs` and confirm the default heartbeat and backup jobs exist.
 2. Add any additional prompt jobs needed for preview operations.
 3. Run each job once manually before relying on the recurring scheduler.
 4. Use `mix hydra_x.jobs` to inspect the current schedule and `mix hydra_x.jobs run <id>` for CLI execution.
@@ -47,3 +47,4 @@ This repository is now beyond the initial skeleton. Use this checklist before ex
 4. On restart, run `mix hydra_x.migrate` before bringing the node back online.
 5. Re-run `./hydra_x healthcheck` after deploys or crashes.
 6. Use `/conversations`, `/memory`, and `/jobs` to verify persisted state after recovery.
+7. Use `/conversations` or `mix hydra_x.conversations retry-delivery <id>` to retry any failed Telegram delivery before clearing the incident.

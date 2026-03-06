@@ -5,6 +5,7 @@ defmodule HydraX.Gateway do
 
   alias HydraX.Gateway.Adapters.Telegram
   alias HydraX.Runtime
+  alias HydraX.Runtime.Conversation
   alias HydraX.Safety
   alias HydraX.Telemetry
 
@@ -17,6 +18,32 @@ defmodule HydraX.Gateway do
     else
       nil -> {:error, :telegram_not_configured}
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def retry_conversation_delivery(%Conversation{} = conversation, opts \\ %{}) do
+    conversation = Runtime.get_conversation!(conversation.id)
+
+    with delivery when is_map(delivery) <- last_delivery(conversation),
+         :ok <- validate_delivery(delivery),
+         config when not is_nil(config) <- Runtime.enabled_telegram_config(),
+         {:ok, state} <- Telegram.connect(adapter_config(config, opts)),
+         %{content: content} <- latest_assistant_turn(conversation) do
+      external_ref = Map.get(delivery, "external_ref") || Map.get(delivery, :external_ref)
+      result = Telegram.send_response(%{content: content, external_ref: external_ref}, state)
+
+      record_delivery_result(
+        conversation.agent_id,
+        conversation,
+        delivery_message(delivery),
+        result,
+        retry: true
+      )
+    else
+      nil -> {:error, :missing_delivery}
+      :no_assistant_turn -> {:error, :no_assistant_turn}
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :telegram_not_configured}
     end
   end
 
@@ -59,30 +86,33 @@ defmodule HydraX.Gateway do
       "bot_token" => config.bot_token,
       "bot_username" => config.bot_username,
       "webhook_secret" => config.webhook_secret,
-      "deliver" => Map.get(opts, :deliver)
+      "deliver" => Map.get(opts, :deliver) || Application.get_env(:hydra_x, :telegram_deliver)
     }
   end
 
-  defp record_delivery_result(_agent_id, conversation, message, {:ok, metadata})
+  defp record_delivery_result(agent_id, conversation, message, result, opts \\ [])
+
+  defp record_delivery_result(_agent_id, conversation, message, {:ok, metadata}, opts)
        when is_map(metadata) do
     Telemetry.gateway_delivery(message.channel, :ok)
 
+    delivery = delivery_payload(conversation, message, opts)
+
     Runtime.update_conversation_metadata(conversation, %{
-      "last_delivery" => %{
-        "channel" => message.channel,
-        "status" => "delivered",
-        "external_ref" => message.external_ref,
-        "delivered_at" => DateTime.utc_now(),
-        "metadata" => stringify_keys(metadata)
-      }
+      "last_delivery" =>
+        delivery
+        |> Map.put("status", "delivered")
+        |> Map.put("delivered_at", DateTime.utc_now())
+        |> Map.put("metadata", stringify_keys(metadata))
+        |> Map.delete("reason")
     })
   end
 
-  defp record_delivery_result(agent_id, conversation, message, :ok) do
-    record_delivery_result(agent_id, conversation, message, {:ok, %{}})
+  defp record_delivery_result(agent_id, conversation, message, :ok, opts) do
+    record_delivery_result(agent_id, conversation, message, {:ok, %{}}, opts)
   end
 
-  defp record_delivery_result(agent_id, conversation, message, {:error, reason}) do
+  defp record_delivery_result(agent_id, conversation, message, {:error, reason}, opts) do
     reason_text = inspect(reason)
     Telemetry.gateway_delivery(message.channel, :error, %{reason: reason_text})
 
@@ -99,15 +129,14 @@ defmodule HydraX.Gateway do
       }
     })
 
-    Runtime.update_conversation_metadata(conversation, %{
-      "last_delivery" => %{
-        "channel" => message.channel,
-        "status" => "failed",
-        "external_ref" => message.external_ref,
-        "attempted_at" => DateTime.utc_now(),
-        "reason" => reason_text
-      }
-    })
+    delivery =
+      conversation
+      |> delivery_payload(message, opts)
+      |> Map.put("status", "failed")
+      |> Map.put("attempted_at", DateTime.utc_now())
+      |> Map.put("reason", reason_text)
+
+    Runtime.update_conversation_metadata(conversation, %{"last_delivery" => delivery})
   end
 
   defp stringify_keys(map) do
@@ -115,5 +144,51 @@ defmodule HydraX.Gateway do
       {key, value}, acc when is_atom(key) -> Map.put(acc, Atom.to_string(key), value)
       {key, value}, acc -> Map.put(acc, key, value)
     end)
+  end
+
+  defp last_delivery(conversation) do
+    metadata = conversation.metadata || %{}
+    metadata["last_delivery"] || metadata[:last_delivery]
+  end
+
+  defp latest_assistant_turn(conversation) do
+    conversation.turns
+    |> Enum.reverse()
+    |> Enum.find(:no_assistant_turn, &(&1.role == "assistant"))
+  end
+
+  defp delivery_message(delivery) do
+    %{
+      channel: Map.get(delivery, "channel") || Map.get(delivery, :channel) || "telegram",
+      external_ref: Map.get(delivery, "external_ref") || Map.get(delivery, :external_ref)
+    }
+  end
+
+  defp validate_delivery(delivery) do
+    channel = Map.get(delivery, "channel") || Map.get(delivery, :channel)
+    external_ref = Map.get(delivery, "external_ref") || Map.get(delivery, :external_ref)
+
+    cond do
+      channel != "telegram" -> {:error, {:unsupported_channel, channel}}
+      not (is_binary(external_ref) and external_ref != "") -> {:error, :missing_external_ref}
+      true -> :ok
+    end
+  end
+
+  defp delivery_payload(conversation, message, opts) do
+    retries =
+      case last_delivery(conversation) do
+        %{"retry_count" => count} when is_integer(count) -> count
+        %{retry_count: count} when is_integer(count) -> count
+        _ -> 0
+      end
+
+    retry_count = if Keyword.get(opts, :retry, false), do: retries + 1, else: retries
+
+    %{
+      "channel" => message.channel,
+      "external_ref" => message.external_ref,
+      "retry_count" => retry_count
+    }
   end
 end

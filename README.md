@@ -29,7 +29,7 @@ Hydra-X is a self-hosted Elixir agent runtime with a Phoenix control plane. This
 - Observability:
   telemetry counters for provider, tool, gateway, and scheduler activity surfaced in `/health`
 - Operator commands:
-  `mix hydra_x.new`, `mix hydra_x.serve`, `mix hydra_x.chat`, `mix hydra_x.migrate`, `mix hydra_x.healthcheck`, `mix hydra_x.telegram.webhook`, `mix hydra_x.providers.test`, `mix hydra_x.jobs`, `mix hydra_x.backup`, `mix hydra_x.restore`, `mix hydra_x.doctor`, `mix hydra_x.install`
+  `mix hydra_x.new`, `mix hydra_x.serve`, `mix hydra_x.chat`, `mix hydra_x.migrate`, `mix hydra_x.healthcheck`, `mix hydra_x.telegram.webhook`, `mix hydra_x.providers.test`, `mix hydra_x.jobs`, `mix hydra_x.conversations`, `mix hydra_x.backup`, `mix hydra_x.restore`, `mix hydra_x.doctor`, `mix hydra_x.install`
 
 ## Quick start
 
@@ -68,6 +68,7 @@ The repository also includes a thin command wrapper:
 ./hydra_x chat -m "Hello"
 ./hydra_x provider-test
 ./hydra_x jobs
+./hydra_x conversations
 ./hydra_x backup
 ./hydra_x restore /path/to/hydra-x-backup.tar.gz
 ./hydra_x doctor
@@ -81,6 +82,13 @@ Recurring heartbeat and prompt jobs are managed from `/jobs` or the CLI:
 ```bash
 mix hydra_x.jobs
 mix hydra_x.jobs run 1
+```
+
+Failed Telegram deliveries can be retried from `/conversations` or the CLI:
+
+```bash
+mix hydra_x.conversations
+mix hydra_x.conversations retry-delivery 42
 ```
 
 Backup archives can be produced with:

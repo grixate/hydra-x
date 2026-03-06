@@ -82,6 +82,58 @@ defmodule HydraX.GatewayTest do
     assert event.message == "Telegram delivery failed"
   end
 
+  test "failed Telegram deliveries can be retried later" do
+    agent = create_agent()
+    {:ok, pid} = HydraX.Agent.ensure_started(agent)
+    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
+
+    {:ok, _telegram} =
+      Runtime.save_telegram_config(%{
+        bot_token: "test-token",
+        bot_username: "hydrax_bot",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
+    assert :ok =
+             HydraX.Gateway.dispatch_telegram_update(
+               %{
+                 "message" => %{
+                   "chat" => %{"id" => 88},
+                   "text" => "Retry the Telegram delivery after failure."
+                 }
+               },
+               %{deliver: fn _payload -> {:error, :timeout} end}
+             )
+
+    [conversation] = Runtime.list_conversations(agent_id: agent.id, limit: 10)
+
+    previous = Application.get_env(:hydra_x, :telegram_deliver)
+
+    Application.put_env(:hydra_x, :telegram_deliver, fn payload ->
+      send(self(), {:telegram_retry, payload})
+      {:ok, %{provider_message_id: 99}}
+    end)
+
+    on_exit(fn ->
+      if previous do
+        Application.put_env(:hydra_x, :telegram_deliver, previous)
+      else
+        Application.delete_env(:hydra_x, :telegram_deliver)
+      end
+    end)
+
+    assert {:ok, _updated} = HydraX.Gateway.retry_conversation_delivery(conversation)
+    assert_receive {:telegram_retry, %{external_ref: "88", content: content}}
+    assert content =~ "Mock response:"
+    assert content =~ "Retry the Telegram delivery after failure."
+
+    refreshed = Runtime.get_conversation!(conversation.id)
+    assert refreshed.metadata["last_delivery"]["status"] == "delivered"
+    assert refreshed.metadata["last_delivery"]["retry_count"] == 1
+    assert refreshed.metadata["last_delivery"]["metadata"]["provider_message_id"] == 99
+  end
+
   defp create_agent do
     unique = System.unique_integer([:positive])
 

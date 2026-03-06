@@ -1,6 +1,7 @@
 defmodule HydraXWeb.ConversationsLive do
   use HydraXWeb, :live_view
 
+  alias HydraX.Gateway
   alias HydraX.Runtime
   alias HydraXWeb.AppShell
 
@@ -27,6 +28,26 @@ defmodule HydraXWeb.ConversationsLive do
       end
 
     {:noreply, assign(socket, :selected, selected)}
+  end
+
+  @impl true
+  def handle_event("retry_delivery", %{"id" => id}, socket) do
+    conversation = Runtime.get_conversation!(id)
+
+    case Gateway.retry_conversation_delivery(conversation) do
+      {:ok, _updated} ->
+        refreshed = Runtime.get_conversation!(conversation.id)
+
+        {:noreply,
+         socket
+         |> put_flash(:info, "Telegram delivery retried")
+         |> assign(:conversations, Runtime.list_conversations(limit: 50))
+         |> assign(:selected, refreshed)
+         |> assign(:stats, stats())}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Retry failed: #{inspect(reason)}")}
+    end
   end
 
   @impl true
@@ -94,6 +115,16 @@ defmodule HydraXWeb.ConversationsLive do
               <p :if={delivery_reason(@selected)} class="mt-3 text-sm text-[var(--hx-mute)]">
                 {delivery_reason(@selected)}
               </p>
+              <div :if={retryable_delivery?(@selected)} class="mt-4">
+                <button
+                  type="button"
+                  phx-click="retry_delivery"
+                  phx-value-id={@selected.id}
+                  class="btn btn-outline border-white/10 bg-white/5 text-white hover:bg-white/10"
+                >
+                  Retry Telegram delivery
+                </button>
+              </div>
             </div>
 
             <div class="space-y-3">
@@ -141,6 +172,14 @@ defmodule HydraXWeb.ConversationsLive do
 
   defp delivery_badge_class("failed"), do: "border-rose-400/30 bg-rose-400/10 text-rose-200"
   defp delivery_badge_class(_), do: "border-white/10 bg-black/10 text-[var(--hx-mute)]"
+
+  defp retryable_delivery?(conversation) do
+    case last_delivery(conversation) do
+      %{"status" => "failed", "channel" => "telegram"} -> true
+      %{status: "failed", channel: "telegram"} -> true
+      _ -> false
+    end
+  end
 
   defp stats do
     %{
