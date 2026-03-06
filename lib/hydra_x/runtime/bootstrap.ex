@@ -20,6 +20,7 @@ defmodule HydraX.Runtime.Bootstrap do
     agent = HydraX.Runtime.ensure_default_agent!()
     HydraX.Budget.ensure_policy!(agent.id)
     HydraX.Agent.ensure_started(agent)
+    HydraX.Runtime.ensure_heartbeat_job!(agent.id)
     {:noreply, Map.put(state, :bootstrapped_at, DateTime.utc_now())}
   end
 end

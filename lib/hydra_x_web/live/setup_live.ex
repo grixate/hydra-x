@@ -2,7 +2,7 @@ defmodule HydraXWeb.SetupLive do
   use HydraXWeb, :live_view
 
   alias HydraX.Runtime
-  alias HydraX.Runtime.{AgentProfile, ProviderConfig, TelegramConfig}
+  alias HydraX.Runtime.{AgentProfile, ProviderConfig, TelegramConfig, ToolPolicy}
   alias HydraXWeb.AppShell
 
   @impl true
@@ -17,6 +17,8 @@ defmodule HydraXWeb.SetupLive do
       Runtime.enabled_telegram_config() || List.first(Runtime.list_telegram_configs()) ||
         %TelegramConfig{default_agent_id: agent.id}
 
+    tool_policy = Runtime.get_tool_policy() || %ToolPolicy{}
+
     {:ok,
      socket
      |> assign(:page_title, "Setup")
@@ -27,10 +29,12 @@ defmodule HydraXWeb.SetupLive do
      |> assign(:agent, agent)
      |> assign(:provider, provider)
      |> assign(:telegram, telegram)
+     |> assign(:tool_policy, tool_policy)
      |> assign_form(:operator_form, Runtime.change_operator_secret())
      |> assign_form(:agent_form, Runtime.change_agent(agent))
      |> assign_form(:provider_form, Runtime.change_provider_config(provider))
-     |> assign_form(:telegram_form, Runtime.change_telegram_config(telegram))}
+     |> assign_form(:telegram_form, Runtime.change_telegram_config(telegram))
+     |> assign_form(:tool_policy_form, Runtime.change_tool_policy(tool_policy))}
   end
 
   @impl true
@@ -105,6 +109,20 @@ defmodule HydraXWeb.SetupLive do
     end
   end
 
+  def handle_event("save_tool_policy", %{"tool_policy" => params}, socket) do
+    case Runtime.save_tool_policy(socket.assigns.tool_policy, params) do
+      {:ok, tool_policy} ->
+        {:noreply,
+         socket
+         |> put_flash(:info, "Tool policy updated")
+         |> assign(:tool_policy, tool_policy)
+         |> assign_form(:tool_policy_form, Runtime.change_tool_policy(tool_policy))}
+
+      {:error, changeset} ->
+        {:noreply, assign_form(socket, :tool_policy_form, changeset)}
+    end
+  end
+
   def handle_event("register_webhook", _params, socket) do
     case Runtime.register_telegram_webhook(socket.assigns.telegram) do
       {:ok, telegram} ->
@@ -117,6 +135,34 @@ defmodule HydraXWeb.SetupLive do
 
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, "Webhook registration failed: #{inspect(reason)}")}
+    end
+  end
+
+  def handle_event("sync_webhook", _params, socket) do
+    case Runtime.sync_telegram_webhook_info(socket.assigns.telegram) do
+      {:ok, telegram} ->
+        {:noreply,
+         socket
+         |> put_flash(:info, "Telegram webhook status refreshed")
+         |> assign(:telegram, telegram)
+         |> assign_form(:telegram_form, Runtime.change_telegram_config(telegram))}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Webhook status refresh failed: #{inspect(reason)}")}
+    end
+  end
+
+  def handle_event("delete_webhook", _params, socket) do
+    case Runtime.delete_telegram_webhook(socket.assigns.telegram) do
+      {:ok, telegram} ->
+        {:noreply,
+         socket
+         |> put_flash(:info, "Telegram webhook removed")
+         |> assign(:telegram, telegram)
+         |> assign_form(:telegram_form, Runtime.change_telegram_config(telegram))}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Webhook removal failed: #{inspect(reason)}")}
     end
   end
 
@@ -256,6 +302,50 @@ defmodule HydraXWeb.SetupLive do
 
       <section class="mt-6">
         <article class="glass-panel p-6">
+          <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">Tool policy</div>
+          <h2 class="mt-3 font-display text-4xl">Guardrail defaults</h2>
+          <p class="mt-3 max-w-3xl text-sm text-[var(--hx-mute)]">
+            These settings define which guarded tools are available at runtime and which outbound hosts or shell commands are allowed by default.
+          </p>
+          <.form
+            for={@tool_policy_form}
+            id="tool-policy-form"
+            phx-submit="save_tool_policy"
+            class="mt-6 grid gap-4 xl:grid-cols-2"
+          >
+            <.input
+              field={@tool_policy_form[:workspace_read_enabled]}
+              type="checkbox"
+              label="Enable workspace file reads"
+            />
+            <.input
+              field={@tool_policy_form[:http_fetch_enabled]}
+              type="checkbox"
+              label="Enable outbound HTTP fetches"
+            />
+            <.input
+              field={@tool_policy_form[:shell_command_enabled]}
+              type="checkbox"
+              label="Enable shell commands"
+            />
+            <div></div>
+            <.input
+              field={@tool_policy_form[:shell_allowlist_csv]}
+              label="Shell allowlist (comma separated)"
+            />
+            <.input
+              field={@tool_policy_form[:http_allowlist_csv]}
+              label="HTTP allowlist (comma separated, blank = public hosts)"
+            />
+            <div class="xl:col-span-2 pt-2">
+              <.button>Save tool policy</.button>
+            </div>
+          </.form>
+        </article>
+      </section>
+
+      <section class="mt-6">
+        <article class="glass-panel p-6">
           <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">
             Telegram channel
           </div>
@@ -274,6 +364,18 @@ defmodule HydraXWeb.SetupLive do
                 @telegram.webhook_registered_at,
                 "%Y-%m-%d %H:%M:%S UTC"
               )}
+            </div>
+            <div :if={@telegram.webhook_last_checked_at} class="mt-2 text-xs">
+              Last checked at {Calendar.strftime(
+                @telegram.webhook_last_checked_at,
+                "%Y-%m-%d %H:%M:%S UTC"
+              )}
+            </div>
+            <div class="mt-2 text-xs">
+              Pending updates: {@telegram.webhook_pending_update_count || 0}
+            </div>
+            <div :if={@telegram.webhook_last_error} class="mt-2 text-xs text-amber-200">
+              Last Telegram error: {@telegram.webhook_last_error}
             </div>
           </div>
           <.form
@@ -301,6 +403,20 @@ defmodule HydraXWeb.SetupLive do
                 class="btn btn-outline ml-3 border-white/10 bg-white/5 text-white hover:bg-white/10"
               >
                 Register webhook
+              </button>
+              <button
+                type="button"
+                phx-click="sync_webhook"
+                class="btn btn-outline ml-3 border-white/10 bg-white/5 text-white hover:bg-white/10"
+              >
+                Refresh status
+              </button>
+              <button
+                type="button"
+                phx-click="delete_webhook"
+                class="btn btn-outline ml-3 border-white/10 bg-white/5 text-white hover:bg-white/10"
+              >
+                Remove webhook
               </button>
             </div>
           </.form>

@@ -16,6 +16,7 @@ defmodule HydraXWeb.HomeLive do
      |> assign(:stats, stats())
      |> assign(:health, Runtime.health_snapshot())
      |> assign(:safety_status, Runtime.safety_status())
+     |> assign(:observability_status, Runtime.observability_status())
      |> assign(:conversations, conversations)}
   end
 
@@ -84,6 +85,48 @@ defmodule HydraXWeb.HomeLive do
               <p class="mt-2 text-sm text-[var(--hx-mute)]">{check.detail}</p>
             </div>
           </div>
+        </div>
+      </section>
+
+      <section class="glass-panel mt-6 p-6">
+        <div class="flex items-end justify-between gap-4">
+          <div>
+            <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">
+              Scheduler + telemetry
+            </div>
+            <h3 class="mt-2 font-display text-3xl">Operational cadence</h3>
+          </div>
+          <.link
+            navigate={~p"/jobs"}
+            class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--hx-accent)]"
+          >
+            Open jobs
+          </.link>
+        </div>
+
+        <div class="mt-6 grid gap-3 md:grid-cols-4">
+          <article class="metric-card">
+            <div class="metric-label">Jobs</div>
+            <div class="metric-value">{@observability_status.scheduler.total_jobs}</div>
+            <p>Recurring heartbeat and prompt jobs configured in the control plane.</p>
+          </article>
+          <article class="metric-card">
+            <div class="metric-label">Provider</div>
+            <div class="metric-value">
+              {count_nested(@observability_status.telemetry.provider)}
+            </div>
+            <p>Provider request events captured since the current node booted.</p>
+          </article>
+          <article class="metric-card">
+            <div class="metric-label">Tools</div>
+            <div class="metric-value">{count_nested(@observability_status.telemetry.tool)}</div>
+            <p>Guarded tool executions and blocks seen by the runtime.</p>
+          </article>
+          <article class="metric-card">
+            <div class="metric-label">Gateway</div>
+            <div class="metric-value">{count_nested(@observability_status.telemetry.gateway)}</div>
+            <p>Telegram delivery attempts recorded during this node lifetime.</p>
+          </article>
         </div>
       </section>
 
@@ -191,4 +234,14 @@ defmodule HydraXWeb.HomeLive do
   defp status_class(:warn),
     do:
       "rounded-full border border-amber-400/20 bg-amber-400/10 px-3 py-1 font-mono text-xs uppercase tracking-[0.18em] text-amber-300"
+
+  defp count_nested(map) when map == %{}, do: 0
+
+  defp count_nested(map) do
+    Enum.reduce(map, 0, fn
+      {_key, value}, total when is_map(value) -> total + count_nested(value)
+      {_key, value}, total when is_integer(value) -> total + value
+      _, total -> total
+    end)
+  end
 end

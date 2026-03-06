@@ -76,6 +76,11 @@ defmodule HydraXWeb.Telemetry do
       ),
 
       # VM Metrics
+      counter("hydra_x.provider.request.count", tags: [:provider, :status]),
+      counter("hydra_x.budget.event.count", tags: [:status]),
+      counter("hydra_x.tool.execution.count", tags: [:tool, :status]),
+      counter("hydra_x.gateway.delivery.count", tags: [:channel, :status]),
+      counter("hydra_x.scheduler.job.count", tags: [:kind, :status]),
       summary("vm.memory.total", unit: {:byte, :kilobyte}),
       summary("vm.total_run_queue_lengths.total"),
       summary("vm.total_run_queue_lengths.cpu"),

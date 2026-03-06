@@ -9,6 +9,7 @@ defmodule HydraX.Application do
   def start(_type, _args) do
     children = [
       HydraXWeb.Telemetry,
+      HydraX.Telemetry.Store,
       HydraX.Repo,
       {Ecto.Migrator,
        repos: Application.fetch_env!(:hydra_x, :ecto_repos), skip: skip_migrations?()},
@@ -17,6 +18,7 @@ defmodule HydraX.Application do
       {Phoenix.PubSub, name: HydraX.PubSub},
       {Task.Supervisor, name: HydraX.TaskSupervisor},
       HydraX.AgentSupervisor,
+      HydraX.Scheduler,
       HydraX.Runtime.Bootstrap,
       HydraXWeb.Endpoint
     ]

@@ -14,9 +14,10 @@ defmodule HydraX.Tools.HttpFetch do
   @impl true
   def execute(params, context) do
     request_fn = context[:request_fn] || (&Req.get/1)
+    allowlist = Map.get(context, :http_allowlist, HydraX.Config.http_allowlist())
 
     with url when is_binary(url) <- params[:url] || params["url"],
-         {:ok, uri} <- UrlGuard.validate_outbound_url(url),
+         {:ok, uri} <- UrlGuard.validate_outbound_url(url, allowlist: allowlist),
          {:ok, response} <- request_fn.(url: URI.to_string(uri), max_redirects: 3) do
       {:ok,
        %{

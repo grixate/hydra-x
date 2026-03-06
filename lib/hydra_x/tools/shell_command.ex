@@ -15,11 +15,12 @@ defmodule HydraX.Tools.ShellCommand do
   @impl true
   def execute(params, context) do
     runner = context[:runner] || (&System.cmd/3)
+    allowlist = Map.get(context, :shell_allowlist, HydraX.Config.shell_allowlist())
 
     with workspace_root when is_binary(workspace_root) <- context[:workspace_root],
          command_text when is_binary(command_text) <- params[:command] || params["command"],
          {:ok, %{command: command, args: args}} <-
-           ShellGuard.validate(command_text, workspace_root),
+           ShellGuard.validate(command_text, workspace_root, allowlist: allowlist),
          {:ok, {output, exit_status}} <- run_command(runner, command, args, workspace_root) do
       {:ok,
        %{

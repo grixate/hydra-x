@@ -14,8 +14,10 @@ defmodule HydraXWeb.HealthLive do
      |> assign(:checks, Runtime.health_snapshot())
      |> assign(:telegram_status, Runtime.telegram_status())
      |> assign(:safety_status, Runtime.safety_status())
+     |> assign(:observability_status, Runtime.observability_status())
      |> assign(:operator_status, Runtime.operator_status())
-     |> assign(:tool_status, Runtime.tool_status())}
+     |> assign(:tool_status, Runtime.tool_status())
+     |> assign(:scheduler_status, Runtime.scheduler_status())}
   end
 
   @impl true
@@ -78,6 +80,18 @@ defmodule HydraXWeb.HealthLive do
                 "%Y-%m-%d %H:%M:%S UTC"
               )}
             </p>
+            <p :if={@telegram_status.last_checked_at} class="mt-2 text-xs text-[var(--hx-mute)]">
+              Last checked at {Calendar.strftime(
+                @telegram_status.last_checked_at,
+                "%Y-%m-%d %H:%M:%S UTC"
+              )}
+            </p>
+            <p class="mt-2 text-xs text-[var(--hx-mute)]">
+              Pending updates: {@telegram_status.pending_update_count}
+            </p>
+            <p :if={@telegram_status.last_error} class="mt-2 text-xs text-amber-200">
+              Last Telegram error: {@telegram_status.last_error}
+            </p>
           </article>
         </div>
       </section>
@@ -131,6 +145,14 @@ defmodule HydraXWeb.HealthLive do
           </article>
           <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
             <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Shell execution
+            </div>
+            <div class="mt-3 font-display text-4xl">
+              {if @tool_status.shell_command_enabled, do: "on", else: "off"}
+            </div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4 lg:col-span-3">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
               Shell allowlist
             </div>
             <p class="mt-3 text-sm text-[var(--hx-mute)]">
@@ -146,6 +168,64 @@ defmodule HydraXWeb.HealthLive do
                 do: "all public hosts allowed",
                 else: Enum.join(@tool_status.http_allowlist, ", ")}
             </p>
+          </article>
+        </div>
+      </section>
+
+      <section class="glass-panel mt-6 p-6">
+        <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">Scheduler</div>
+        <h2 class="mt-3 font-display text-4xl">Heartbeat and job execution</h2>
+        <div class="mt-6 grid gap-3 lg:grid-cols-3">
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Configured jobs
+            </div>
+            <div class="mt-3 font-display text-4xl">{length(@scheduler_status.jobs)}</div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Recent runs
+            </div>
+            <div class="mt-3 font-display text-4xl">{length(@scheduler_status.runs)}</div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Latest run
+            </div>
+            <p class="mt-3 text-sm text-[var(--hx-mute)]">
+              {@scheduler_status.runs |> List.first() |> then(&(&1 && &1.status)) || "none"}
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section class="glass-panel mt-6 p-6">
+        <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">Observability</div>
+        <h2 class="mt-3 font-display text-4xl">Runtime counters</h2>
+        <div class="mt-6 grid gap-3 lg:grid-cols-2">
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Provider requests
+            </div>
+            <pre class="mt-3 overflow-x-auto text-xs text-[var(--hx-mute)]">{inspect(@observability_status.telemetry.provider, pretty: true)}</pre>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Tool executions
+            </div>
+            <pre class="mt-3 overflow-x-auto text-xs text-[var(--hx-mute)]">{inspect(@observability_status.telemetry.tool, pretty: true)}</pre>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Gateway delivery
+            </div>
+            <pre class="mt-3 overflow-x-auto text-xs text-[var(--hx-mute)]">{inspect(@observability_status.telemetry.gateway, pretty: true)}</pre>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Scheduler counters
+            </div>
+            <pre class="mt-3 overflow-x-auto text-xs text-[var(--hx-mute)]">{inspect(@observability_status.telemetry.scheduler, pretty: true)}</pre>
           </article>
         </div>
       </section>

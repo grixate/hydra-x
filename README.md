@@ -15,7 +15,7 @@ Hydra-X is a self-hosted Elixir agent runtime with a Phoenix control plane. This
 - Provider adapters:
   OpenAI-compatible, Anthropic, and a built-in mock fallback
 - Management UI routes:
-  `/`, `/setup`, `/agents`, `/conversations`, `/memory`, `/settings/providers`, `/health`
+  `/`, `/setup`, `/agents`, `/conversations`, `/memory`, `/jobs`, `/settings/providers`, `/health`
 - Telegram ingress:
   `/api/telegram/webhook` routes inbound updates into persisted channel conversations
 - Budget guardrails:
@@ -23,9 +23,13 @@ Hydra-X is a self-hosted Elixir agent runtime with a Phoenix control plane. This
 - Control-plane auth:
   session-based browser login once an operator password is configured on `/setup`
 - Guarded tools:
-  workspace-confined file reads, outbound HTTP fetches with basic SSRF checks, and allowlisted shell commands
+  workspace-confined file reads, outbound HTTP fetches with basic SSRF checks, allowlisted shell commands, and a persisted tool policy surface
+- Scheduler:
+  recurring heartbeat/prompt jobs with persisted run history and CLI/UI controls
+- Observability:
+  telemetry counters for provider, tool, gateway, and scheduler activity surfaced in `/health`
 - Operator commands:
-  `mix hydra_x.new`, `mix hydra_x.serve`, `mix hydra_x.chat`, `mix hydra_x.migrate`, `mix hydra_x.healthcheck`, `mix hydra_x.telegram.webhook`, `mix hydra_x.providers.test`
+  `mix hydra_x.new`, `mix hydra_x.serve`, `mix hydra_x.chat`, `mix hydra_x.migrate`, `mix hydra_x.healthcheck`, `mix hydra_x.telegram.webhook`, `mix hydra_x.providers.test`, `mix hydra_x.jobs`
 
 ## Quick start
 
@@ -53,6 +57,8 @@ You can inspect or register the webhook from the CLI:
 ```bash
 mix hydra_x.telegram.webhook
 mix hydra_x.telegram.webhook register
+mix hydra_x.telegram.webhook sync
+mix hydra_x.telegram.webhook delete
 ```
 
 The repository also includes a thin command wrapper:
@@ -61,9 +67,17 @@ The repository also includes a thin command wrapper:
 ./hydra_x healthcheck
 ./hydra_x chat -m "Hello"
 ./hydra_x provider-test
+./hydra_x jobs
 ```
 
 If you want to lock the management UI, set an operator password on `/setup`. After that, browser access requires signing in at `/login`.
+
+Recurring heartbeat and prompt jobs are managed from `/jobs` or the CLI:
+
+```bash
+mix hydra_x.jobs
+mix hydra_x.jobs run 1
+```
 
 ## Project shape
 
@@ -74,9 +88,12 @@ Key runtime areas:
 - `lib/hydra_x/memory/`: typed memory and markdown rendering
 - `lib/hydra_x/budget/`: budget policy and usage accounting
 - `lib/hydra_x/safety/`: safety event logging
+- `lib/hydra_x/tools/`: guarded tool implementations
+- `lib/hydra_x/telemetry/`: in-process observability aggregation
 - `lib/hydra_x/llm/`: provider routing and adapters
 - `lib/hydra_x_web/live/`: management UI pages
 - `workspace_template/`: scaffolded workspace contract
+- `docs/public-preview.md`: preview deployment and recovery checklist
 
 ## Verification
 

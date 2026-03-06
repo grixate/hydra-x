@@ -43,6 +43,8 @@ defmodule HydraX.DataCase do
       shutdown_runtime_processes()
       Ecto.Adapters.SQL.Sandbox.stop_owner(pid)
     end)
+
+    pid
   end
 
   @doc """

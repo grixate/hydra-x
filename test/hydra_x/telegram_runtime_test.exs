@@ -36,4 +36,69 @@ defmodule HydraX.TelegramRuntimeTest do
     assert updated.webhook_url == HydraX.Config.telegram_webhook_url()
     assert updated.webhook_registered_at
   end
+
+  test "sync_telegram_webhook_info persists pending updates and last error" do
+    agent = create_agent()
+
+    {:ok, telegram} =
+      Runtime.save_telegram_config(%{
+        bot_token: "test-token",
+        bot_username: "hydrax_bot",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
+    request_fn = fn token, _opts ->
+      assert token == "test-token"
+
+      {:ok,
+       %{
+         "url" => HydraX.Config.telegram_webhook_url(),
+         "pending_update_count" => 3,
+         "last_error_message" => "conflict"
+       }}
+    end
+
+    assert {:ok, updated} = Runtime.sync_telegram_webhook_info(telegram, request_fn: request_fn)
+    assert updated.webhook_pending_update_count == 3
+    assert updated.webhook_last_error == "conflict"
+    assert updated.webhook_last_checked_at
+  end
+
+  test "delete_telegram_webhook disables ingress while keeping credentials" do
+    agent = create_agent()
+
+    {:ok, telegram} =
+      Runtime.save_telegram_config(%{
+        bot_token: "test-token",
+        bot_username: "hydrax_bot",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
+    request_fn = fn token, _opts ->
+      assert token == "test-token"
+      :ok
+    end
+
+    assert {:ok, updated} = Runtime.delete_telegram_webhook(telegram, request_fn: request_fn)
+    refute updated.enabled
+    assert updated.bot_token == "test-token"
+    assert updated.webhook_last_checked_at
+  end
+
+  defp create_agent do
+    unique = System.unique_integer([:positive])
+
+    {:ok, agent} =
+      Runtime.save_agent(%{
+        name: "Telegram Agent #{unique}",
+        slug: "telegram-agent-#{unique}",
+        workspace_root: Path.join(System.tmp_dir!(), "hydra-x-telegram-#{unique}"),
+        description: "telegram runtime test agent",
+        is_default: false
+      })
+
+    agent
+  end
 end

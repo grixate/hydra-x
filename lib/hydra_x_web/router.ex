@@ -36,6 +36,7 @@ defmodule HydraXWeb.Router do
       live "/agents", AgentsLive
       live "/conversations", ConversationsLive
       live "/memory", MemoryLive
+      live "/jobs", JobsLive
       live "/budget", BudgetLive
       live "/settings/providers", ProviderSettingsLive
       live "/health", HealthLive

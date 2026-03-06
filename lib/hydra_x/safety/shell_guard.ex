@@ -12,11 +12,14 @@ defmodule HydraX.Safety.ShellGuard do
     ["rev-parse", "--short", "HEAD"]
   ]
 
-  def validate(command_text, workspace_root) when is_binary(command_text) do
+  def validate(command_text, workspace_root, opts \\ [])
+
+  def validate(command_text, workspace_root, opts) when is_binary(command_text) do
     argv = OptionParser.split(command_text)
+    allowlist = Keyword.get(opts, :allowlist, Config.shell_allowlist())
 
     with [command | args] <- argv,
-         true <- command in Config.shell_allowlist() or {:error, :command_not_allowlisted},
+         true <- command in allowlist or {:error, :command_not_allowlisted},
          :ok <- validate_args(command, args, workspace_root) do
       {:ok, %{command: command, args: args}}
     else
@@ -26,7 +29,7 @@ defmodule HydraX.Safety.ShellGuard do
     end
   end
 
-  def validate(_command_text, _workspace_root), do: {:error, :invalid_command}
+  def validate(_command_text, _workspace_root, _opts), do: {:error, :invalid_command}
 
   defp validate_args("pwd", [], _workspace_root), do: :ok
 

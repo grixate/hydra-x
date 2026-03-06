@@ -7,18 +7,23 @@ defmodule HydraX.Runtime do
 
   alias HydraX.Config
   alias HydraX.Repo
+  alias HydraX.Workspace
 
   alias HydraX.Runtime.{
     AgentProfile,
     Checkpoint,
     Conversation,
+    JobRun,
     OperatorSecret,
     ProviderConfig,
+    ScheduledJob,
     TelegramConfig,
+    ToolPolicy,
     Turn
   }
 
   alias HydraX.Gateway.Adapters.Telegram
+  alias HydraX.Telemetry
 
   @default_agent_slug "hydra-primary"
 
@@ -147,6 +152,194 @@ defmodule HydraX.Runtime do
     |> unwrap_transaction()
   end
 
+  def get_tool_policy do
+    Repo.get_by(ToolPolicy, scope: "default")
+  end
+
+  def ensure_tool_policy! do
+    case get_tool_policy() do
+      nil ->
+        {:ok, policy} =
+          save_tool_policy(%{
+            scope: "default",
+            workspace_read_enabled: true,
+            http_fetch_enabled: true,
+            shell_command_enabled: true
+          })
+
+        policy
+
+      policy ->
+        policy
+    end
+  end
+
+  def change_tool_policy(policy \\ nil, attrs \\ %{}) do
+    (policy || get_tool_policy() || %ToolPolicy{scope: "default"})
+    |> ToolPolicy.changeset(attrs)
+  end
+
+  def save_tool_policy(attrs) when is_map(attrs) do
+    save_tool_policy(get_tool_policy() || %ToolPolicy{}, attrs)
+  end
+
+  def save_tool_policy(%ToolPolicy{} = policy, attrs) do
+    policy
+    |> ToolPolicy.changeset(normalize_string_keys(attrs) |> Map.put_new("scope", "default"))
+    |> Repo.insert_or_update()
+  end
+
+  def effective_tool_policy do
+    policy = get_tool_policy() || %ToolPolicy{}
+
+    %{
+      workspace_read_enabled: Map.get(policy, :workspace_read_enabled, true),
+      http_fetch_enabled: Map.get(policy, :http_fetch_enabled, true),
+      shell_command_enabled: Map.get(policy, :shell_command_enabled, true),
+      shell_allowlist: csv_values(policy.shell_allowlist_csv, Config.shell_allowlist()),
+      http_allowlist: csv_values(policy.http_allowlist_csv, Config.http_allowlist())
+    }
+  end
+
+  def list_scheduled_jobs(opts \\ []) do
+    limit = Keyword.get(opts, :limit, 50)
+
+    ScheduledJob
+    |> preload([:agent])
+    |> order_by([job], asc: job.next_run_at, asc: job.name)
+    |> limit(^limit)
+    |> Repo.all()
+  end
+
+  def get_scheduled_job!(id) do
+    ScheduledJob
+    |> Repo.get!(id)
+    |> Repo.preload([:agent])
+  end
+
+  def change_scheduled_job(job \\ %ScheduledJob{}, attrs \\ %{}) do
+    ScheduledJob.changeset(job, attrs)
+  end
+
+  def save_scheduled_job(attrs) when is_map(attrs), do: save_scheduled_job(%ScheduledJob{}, attrs)
+
+  def save_scheduled_job(%ScheduledJob{} = job, attrs) do
+    normalized_attrs = normalize_string_keys(attrs)
+    interval_minutes = normalize_integer(normalized_attrs["interval_minutes"])
+
+    attrs =
+      normalized_attrs
+      |> Map.put_new("interval_minutes", interval_minutes)
+      |> Map.put_new(
+        "next_run_at",
+        next_run_at(interval_minutes)
+      )
+
+    job
+    |> ScheduledJob.changeset(attrs)
+    |> Repo.insert_or_update()
+  end
+
+  def list_due_scheduled_jobs(now) do
+    ScheduledJob
+    |> where(
+      [job],
+      job.enabled == true and not is_nil(job.next_run_at) and job.next_run_at <= ^now
+    )
+    |> preload([:agent])
+    |> Repo.all()
+  end
+
+  def recent_job_runs(limit \\ 20) do
+    JobRun
+    |> order_by([run], desc: run.inserted_at)
+    |> limit(^limit)
+    |> preload([:scheduled_job, :agent])
+    |> Repo.all()
+  end
+
+  def list_job_runs(job_id, limit \\ 20) do
+    JobRun
+    |> where([run], run.scheduled_job_id == ^job_id)
+    |> order_by([run], desc: run.inserted_at)
+    |> limit(^limit)
+    |> preload([:scheduled_job, :agent])
+    |> Repo.all()
+  end
+
+  def ensure_heartbeat_job!(agent_id) do
+    case Repo.get_by(ScheduledJob,
+           agent_id: agent_id,
+           kind: "heartbeat",
+           name: "Workspace heartbeat"
+         ) do
+      nil ->
+        {:ok, job} =
+          save_scheduled_job(%{
+            agent_id: agent_id,
+            name: "Workspace heartbeat",
+            kind: "heartbeat",
+            interval_minutes: 60,
+            enabled: true
+          })
+
+        job
+
+      job ->
+        job
+    end
+  end
+
+  def run_scheduled_job(%ScheduledJob{} = job) do
+    started_at = DateTime.utc_now()
+
+    {:ok, %{job: job, run: run}} =
+      Ecto.Multi.new()
+      |> Ecto.Multi.update(
+        :job,
+        ScheduledJob.changeset(job, %{
+          last_run_at: started_at,
+          next_run_at: next_run_at(job.interval_minutes, started_at)
+        })
+      )
+      |> Ecto.Multi.insert(
+        :run,
+        JobRun.changeset(%JobRun{}, %{
+          scheduled_job_id: job.id,
+          agent_id: job.agent_id,
+          status: "running",
+          started_at: started_at
+        })
+      )
+      |> Repo.transaction()
+
+    case execute_scheduled_job(job) do
+      {:ok, output, metadata} ->
+        Telemetry.scheduler_job(job.kind, :ok)
+
+        run
+        |> JobRun.changeset(%{
+          status: "success",
+          finished_at: DateTime.utc_now(),
+          output: output,
+          metadata: metadata
+        })
+        |> Repo.update()
+
+      {:error, reason} ->
+        Telemetry.scheduler_job(job.kind, :error, %{reason: inspect(reason)})
+
+        run
+        |> JobRun.changeset(%{
+          status: "error",
+          finished_at: DateTime.utc_now(),
+          output: inspect(reason),
+          metadata: %{error: inspect(reason)}
+        })
+        |> Repo.update()
+    end
+  end
+
   def test_provider_config(%ProviderConfig{} = provider, opts \\ []) do
     request =
       %{
@@ -222,7 +415,56 @@ defmodule HydraX.Runtime do
            save_telegram_config(config, %{
              webhook_url: url,
              webhook_registered_at: DateTime.utc_now(),
+             webhook_last_checked_at: DateTime.utc_now(),
+             webhook_last_error: nil,
              enabled: true
+           }) do
+      {:ok, updated}
+    else
+      false -> {:error, :missing_bot_token}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def sync_telegram_webhook_info(%TelegramConfig{} = config, opts \\ []) do
+    request_fn = Keyword.get(opts, :request_fn, &Telegram.webhook_info/2)
+
+    with true <- config.bot_token not in [nil, ""],
+         {:ok, result} <- request_fn.(config.bot_token, opts),
+         {:ok, updated} <-
+           save_telegram_config(config, %{
+             webhook_last_checked_at: DateTime.utc_now(),
+             webhook_pending_update_count: result["pending_update_count"] || 0,
+             webhook_last_error: blank_to_nil(result["last_error_message"]),
+             webhook_url: blank_to_nil(result["url"]) || config.webhook_url
+           }) do
+      {:ok, updated}
+    else
+      false ->
+        {:error, :missing_bot_token}
+
+      {:error, reason} ->
+        save_telegram_config(config, %{
+          webhook_last_checked_at: DateTime.utc_now(),
+          webhook_last_error: inspect(reason)
+        })
+
+        {:error, reason}
+    end
+  end
+
+  def delete_telegram_webhook(%TelegramConfig{} = config, opts \\ []) do
+    request_fn = Keyword.get(opts, :request_fn, &Telegram.delete_webhook/2)
+
+    with true <- config.bot_token not in [nil, ""],
+         :ok <- request_fn.(config.bot_token, opts),
+         {:ok, updated} <-
+           save_telegram_config(config, %{
+             enabled: false,
+             webhook_registered_at: nil,
+             webhook_last_checked_at: DateTime.utc_now(),
+             webhook_pending_update_count: 0,
+             webhook_last_error: nil
            }) do
       {:ok, updated}
     else
@@ -245,11 +487,32 @@ defmodule HydraX.Runtime do
   end
 
   def save_operator_secret_password(attrs) when is_map(attrs) do
-    secret = get_operator_secret() || %OperatorSecret{}
+    attrs =
+      attrs
+      |> normalize_string_keys()
+      |> Map.put_new("scope", "control_plane")
 
-    secret
-    |> OperatorSecret.changeset(Map.put_new(attrs, "scope", "control_plane"))
-    |> Repo.insert_or_update()
+    changeset = OperatorSecret.changeset(%OperatorSecret{}, attrs)
+
+    if changeset.valid? do
+      secret = Ecto.Changeset.apply_changes(changeset)
+
+      Repo.insert(
+        changeset,
+        on_conflict: [
+          set: [
+            password_hash: secret.password_hash,
+            password_salt: secret.password_salt,
+            last_rotated_at: secret.last_rotated_at,
+            updated_at: DateTime.utc_now()
+          ]
+        ],
+        conflict_target: :scope,
+        returning: true
+      )
+    else
+      {:error, changeset}
+    end
   end
 
   def authenticate_operator(password) when is_binary(password) do
@@ -395,7 +658,7 @@ defmodule HydraX.Runtime do
         detail:
           case operator_status() do
             %{configured: true, last_rotated_at: rotated_at} when not is_nil(rotated_at) ->
-              "operator password set · rotated #{Calendar.strftime(rotated_at, "%Y-%m-%d %H:%M UTC")}"
+              "operator password set; rotated #{Calendar.strftime(rotated_at, "%Y-%m-%d %H:%M UTC")}"
 
             %{configured: true} ->
               "operator password set"
@@ -426,7 +689,7 @@ defmodule HydraX.Runtime do
         detail:
           case budget_policy do
             nil -> "no policy configured"
-            policy -> "daily #{policy.daily_limit} · conversation #{policy.conversation_limit}"
+            policy -> "daily #{policy.daily_limit}; conversation #{policy.conversation_limit}"
           end
       },
       %{
@@ -435,7 +698,7 @@ defmodule HydraX.Runtime do
         detail:
           cond do
             safety_errors > 0 ->
-              "#{safety_errors} errors · #{safety_warnings} warnings in the last 24h"
+              "#{safety_errors} errors; #{safety_warnings} warnings in the last 24h"
 
             safety_warnings > 0 ->
               "#{safety_warnings} warnings in the last 24h"
@@ -448,6 +711,15 @@ defmodule HydraX.Runtime do
         name: "tools",
         status: :ok,
         detail: tool_detail(tool_status())
+      },
+      %{
+        name: "scheduler",
+        status: if(list_scheduled_jobs(limit: 1) == [], do: :warn, else: :ok),
+        detail:
+          case list_scheduled_jobs(limit: 5) do
+            [] -> "no scheduled jobs configured"
+            jobs -> "#{length(jobs)} jobs configured"
+          end
       },
       %{
         name: "workspace",
@@ -466,6 +738,9 @@ defmodule HydraX.Runtime do
           bot_username: nil,
           webhook_url: Config.telegram_webhook_url(),
           registered_at: nil,
+          last_checked_at: nil,
+          pending_update_count: 0,
+          last_error: nil,
           default_agent_name: nil
         }
 
@@ -476,6 +751,9 @@ defmodule HydraX.Runtime do
           bot_username: config.bot_username,
           webhook_url: config.webhook_url || Config.telegram_webhook_url(),
           registered_at: config.webhook_registered_at,
+          last_checked_at: config.webhook_last_checked_at,
+          pending_update_count: config.webhook_pending_update_count || 0,
+          last_error: config.webhook_last_error,
           default_agent_name: config.default_agent && config.default_agent.name
         }
     end
@@ -523,11 +801,31 @@ defmodule HydraX.Runtime do
   end
 
   def tool_status do
+    policy = effective_tool_policy()
+
     %{
-      workspace_guard: true,
-      url_guard: true,
-      shell_allowlist: Config.shell_allowlist(),
-      http_allowlist: Config.http_allowlist()
+      workspace_guard: policy.workspace_read_enabled,
+      url_guard: policy.http_fetch_enabled,
+      shell_command_enabled: policy.shell_command_enabled,
+      shell_allowlist: policy.shell_allowlist,
+      http_allowlist: policy.http_allowlist
+    }
+  end
+
+  def scheduler_status do
+    %{
+      jobs: list_scheduled_jobs(limit: 50),
+      runs: recent_job_runs(20)
+    }
+  end
+
+  def observability_status do
+    %{
+      telemetry: HydraX.Telemetry.Store.snapshot(),
+      scheduler: %{
+        total_jobs: length(list_scheduled_jobs(limit: 100)),
+        recent_runs: recent_job_runs(10)
+      }
     }
   end
 
@@ -540,7 +838,7 @@ defmodule HydraX.Runtime do
         hosts -> Enum.join(hosts, ", ")
       end
 
-    "workspace/http guards active · shell allowlist: #{shell} · http allowlist: #{http}"
+    "workspace read #{enabled_text(tool_status.workspace_guard)}; http fetch #{enabled_text(tool_status.url_guard)}; shell #{enabled_text(tool_status.shell_command_enabled)}; shell allowlist: #{shell}; http allowlist: #{http}"
   end
 
   defp provider_module(%ProviderConfig{kind: "openai_compatible"}),
@@ -561,6 +859,91 @@ defmodule HydraX.Runtime do
       request_fn -> Map.put(request, :request_fn, request_fn)
     end
   end
+
+  defp execute_scheduled_job(%ScheduledJob{kind: "heartbeat"} = job) do
+    with {:ok, agent} <- fetch_job_agent(job),
+         heartbeat <- Workspace.load_context(agent.workspace_root)["HEARTBEAT.md"] || "" do
+      prompt =
+        [
+          job.prompt ||
+            "Run the heartbeat routine for this workspace and report anything that needs operator attention.",
+          heartbeat
+        ]
+        |> Enum.reject(&(&1 in [nil, ""]))
+        |> Enum.join("\n\n")
+
+      run_job_prompt(agent, job, prompt)
+    end
+  end
+
+  defp execute_scheduled_job(%ScheduledJob{kind: "prompt"} = job) do
+    with {:ok, agent} <- fetch_job_agent(job) do
+      run_job_prompt(agent, job, job.prompt || "Scheduled prompt job.")
+    end
+  end
+
+  defp run_job_prompt(agent, job, prompt) do
+    with {:ok, _pid} <- HydraX.Agent.ensure_started(agent),
+         {:ok, conversation} <-
+           start_conversation(agent, %{
+             channel: "scheduler",
+             title: "#{job.name} #{Calendar.strftime(DateTime.utc_now(), "%Y-%m-%d %H:%M")}",
+             metadata: %{"scheduled_job_id" => job.id, "kind" => job.kind}
+           }) do
+      output =
+        try do
+          HydraX.Agent.Channel.submit(
+            agent,
+            conversation,
+            prompt,
+            %{source: "scheduler", scheduled_job_id: job.id}
+          )
+        rescue
+          error -> {:error, Exception.message(error)}
+        catch
+          kind, reason -> {:error, "#{kind}: #{inspect(reason)}"}
+        end
+
+      case output do
+        {:error, reason} -> {:error, reason}
+        text -> {:ok, text, %{"conversation_id" => conversation.id}}
+      end
+    end
+  end
+
+  defp fetch_job_agent(job) do
+    case Repo.get(AgentProfile, job.agent_id) do
+      nil -> {:error, :agent_not_found}
+      agent -> {:ok, agent}
+    end
+  end
+
+  defp next_run_at(nil), do: DateTime.utc_now()
+  defp next_run_at(interval_minutes), do: next_run_at(interval_minutes, DateTime.utc_now())
+
+  defp next_run_at(interval_minutes, from) do
+    DateTime.add(from, interval_minutes * 60, :second)
+  end
+
+  defp enabled_text(true), do: "enabled"
+  defp enabled_text(false), do: "disabled"
+
+  defp csv_values(nil, fallback), do: fallback
+  defp csv_values("", fallback), do: fallback
+
+  defp csv_values(csv, _fallback) do
+    csv
+    |> String.split(",", trim: true)
+    |> Enum.map(&String.trim/1)
+  end
+
+  defp blank_to_nil(nil), do: nil
+  defp blank_to_nil(""), do: nil
+  defp blank_to_nil(value), do: value
+
+  defp normalize_integer(nil), do: nil
+  defp normalize_integer(value) when is_integer(value), do: value
+  defp normalize_integer(value) when is_binary(value), do: String.to_integer(value)
 
   defp maybe_filter_agent(query, nil), do: query
 

@@ -33,7 +33,17 @@ defmodule HydraXWeb.ConnCase do
   end
 
   setup tags do
-    HydraX.DataCase.setup_sandbox(tags)
-    {:ok, conn: Phoenix.ConnTest.build_conn()}
+    pid = HydraX.DataCase.setup_sandbox(tags)
+
+    metadata =
+      HydraX.Repo
+      |> Phoenix.Ecto.SQL.Sandbox.metadata_for(pid)
+      |> Phoenix.Ecto.SQL.Sandbox.encode_metadata()
+
+    conn =
+      Phoenix.ConnTest.build_conn()
+      |> Plug.Conn.put_req_header("user-agent", metadata)
+
+    {:ok, conn: conn}
   end
 end

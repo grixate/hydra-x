@@ -1,0 +1,46 @@
+# Hydra-X Public Preview Checklist
+
+This repository is now beyond the initial skeleton. Use this checklist before exposing a node to external operators or Telegram traffic.
+
+## Boot
+
+1. Copy [.env.example](/Users/grigorymikhailov/Documents/hydra-x/.env.example) into your local environment and set `HYDRA_X_PUBLIC_URL` correctly.
+2. Run `mix deps.get`.
+3. Run `mix hydra_x.migrate`.
+4. Start the node with `mix hydra_x.serve`.
+
+## Control Plane
+
+1. Open [http://localhost:4000/setup](http://localhost:4000/setup).
+2. Save the default agent and confirm its workspace root.
+3. Set an operator password before exposing the app beyond localhost.
+4. Configure the primary provider or stay on the mock fallback for dry-runs.
+5. Review the tool policy section and decide whether HTTP fetches or shell commands should be enabled.
+
+## Telegram
+
+1. Save the Telegram bot token and optional webhook secret on `/setup`.
+2. Register the webhook from the UI or with `mix hydra_x.telegram.webhook register`.
+3. Refresh webhook status from the UI or with `mix hydra_x.telegram.webhook sync`.
+4. Confirm `/health` shows the expected webhook URL, pending update count, and no Telegram error.
+
+## Scheduler
+
+1. Open `/jobs` and confirm the default heartbeat job exists.
+2. Add any additional prompt jobs needed for preview operations.
+3. Run each job once manually before relying on the recurring scheduler.
+4. Use `mix hydra_x.jobs` to inspect the current schedule and `mix hydra_x.jobs run <id>` for CLI execution.
+
+## Safety And Observability
+
+1. Check `/health` for provider, Telegram, tool policy, scheduler, and recent safety events.
+2. Review the runtime counters section to confirm provider requests, tool executions, gateway deliveries, and scheduler jobs are incrementing.
+3. If outbound fetches should be restricted, set `HYDRA_X_HTTP_ALLOWLIST` or configure the persisted tool policy in `/setup`.
+4. If shell access is not needed, disable it in `/setup`.
+
+## Recovery
+
+1. Back up `hydra_x_dev.db` and the agent workspace root together.
+2. On restart, run `mix hydra_x.migrate` before bringing the node back online.
+3. Re-run `./hydra_x healthcheck` after deploys or crashes.
+4. Use `/conversations`, `/memory`, and `/jobs` to verify persisted state after recovery.

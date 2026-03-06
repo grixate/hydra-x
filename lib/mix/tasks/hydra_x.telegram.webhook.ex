@@ -9,8 +9,14 @@ defmodule Mix.Tasks.HydraX.Telegram.Webhook do
     HydraX.Runtime.ensure_default_agent!()
 
     case args do
+      ["delete"] ->
+        delete()
+
       ["register"] ->
         register()
+
+      ["sync"] ->
+        sync()
 
       _ ->
         show()
@@ -37,6 +43,18 @@ defmodule Mix.Tasks.HydraX.Telegram.Webhook do
         "Registered at: #{Calendar.strftime(status.registered_at, "%Y-%m-%d %H:%M:%S UTC")}"
       )
     end
+
+    if status.last_checked_at do
+      Mix.shell().info(
+        "Last checked at: #{Calendar.strftime(status.last_checked_at, "%Y-%m-%d %H:%M:%S UTC")}"
+      )
+    end
+
+    Mix.shell().info("Pending updates: #{status.pending_update_count}")
+
+    if status.last_error do
+      Mix.shell().info("Last error: #{status.last_error}")
+    end
   end
 
   defp register do
@@ -52,6 +70,40 @@ defmodule Mix.Tasks.HydraX.Telegram.Webhook do
 
           {:error, reason} ->
             Mix.raise("Telegram webhook registration failed: #{inspect(reason)}")
+        end
+    end
+  end
+
+  defp sync do
+    case HydraX.Runtime.enabled_telegram_config() ||
+           List.first(HydraX.Runtime.list_telegram_configs()) do
+      nil ->
+        Mix.raise("No Telegram config found. Configure it in /setup first.")
+
+      config ->
+        case HydraX.Runtime.sync_telegram_webhook_info(config) do
+          {:ok, updated} ->
+            Mix.shell().info("Webhook status refreshed for #{updated.webhook_url}")
+
+          {:error, reason} ->
+            Mix.raise("Telegram webhook sync failed: #{inspect(reason)}")
+        end
+    end
+  end
+
+  defp delete do
+    case HydraX.Runtime.enabled_telegram_config() ||
+           List.first(HydraX.Runtime.list_telegram_configs()) do
+      nil ->
+        Mix.raise("No Telegram config found. Configure it in /setup first.")
+
+      config ->
+        case HydraX.Runtime.delete_telegram_webhook(config) do
+          {:ok, _updated} ->
+            Mix.shell().info("Deleted Telegram webhook")
+
+          {:error, reason} ->
+            Mix.raise("Telegram webhook deletion failed: #{inspect(reason)}")
         end
     end
   end

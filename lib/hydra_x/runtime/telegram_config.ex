@@ -8,6 +8,9 @@ defmodule HydraX.Runtime.TelegramConfig do
     field :webhook_secret, :string
     field :webhook_url, :string
     field :webhook_registered_at, :utc_datetime_usec
+    field :webhook_last_checked_at, :utc_datetime_usec
+    field :webhook_pending_update_count, :integer, default: 0
+    field :webhook_last_error, :string
     field :enabled, :boolean, default: false
 
     belongs_to :default_agent, HydraX.Runtime.AgentProfile
@@ -23,6 +26,9 @@ defmodule HydraX.Runtime.TelegramConfig do
       :webhook_secret,
       :webhook_url,
       :webhook_registered_at,
+      :webhook_last_checked_at,
+      :webhook_pending_update_count,
+      :webhook_last_error,
       :enabled,
       :default_agent_id
     ])

@@ -26,6 +26,11 @@ defmodule HydraX.Config do
     env_integer("HYDRA_X_CORTEX_INTERVAL_MS", 60_000)
   end
 
+  @spec scheduler_poll_ms() :: non_neg_integer()
+  def scheduler_poll_ms do
+    env_integer("HYDRA_X_SCHEDULER_POLL_MS", 15_000)
+  end
+
   @spec compaction_thresholds() :: %{
           soft: pos_integer(),
           medium: pos_integer(),

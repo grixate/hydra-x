@@ -58,6 +58,28 @@ defmodule HydraX.Gateway.Adapters.Telegram do
     end
   end
 
+  def webhook_info(bot_token, opts \\ []) do
+    request_fn = Keyword.get(opts, :request_fn, &Req.get/1)
+
+    case request_fn.(url: "https://api.telegram.org/bot#{bot_token}/getWebhookInfo") do
+      {:ok, %{status: 200, body: %{"ok" => true, "result" => result}}} -> {:ok, result}
+      {:ok, %{status: 200, body: %{"ok" => false} = body}} -> {:error, {:telegram_error, body}}
+      {:ok, response} -> {:error, {:telegram_error, response.status}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def delete_webhook(bot_token, opts \\ []) do
+    request_fn = Keyword.get(opts, :request_fn, &Req.post/1)
+
+    case request_fn.(url: "https://api.telegram.org/bot#{bot_token}/deleteWebhook", json: %{}) do
+      {:ok, %{status: 200, body: %{"ok" => true}}} -> :ok
+      {:ok, %{status: 200, body: %{"ok" => false} = body}} -> {:error, {:telegram_error, body}}
+      {:ok, response} -> {:error, {:telegram_error, response.status}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   defp do_send_response(content, external_ref, _token, deliver) when is_function(deliver, 1) do
     case deliver.(%{content: content, external_ref: external_ref}) do
       :ok -> {:ok, %{channel: "telegram"}}

@@ -7,7 +7,9 @@ import Config
 # Run `mix help test` for more information.
 config :hydra_x, HydraX.Repo,
   database: Path.expand("../hydra_x_test.db", __DIR__),
-  pool_size: 5,
+  busy_timeout: 15_000,
+  journal_mode: :wal,
+  pool_size: 1,
   pool: Ecto.Adapters.SQL.Sandbox
 
 # We don't run a server during test. If one is required,
@@ -33,3 +35,5 @@ config :phoenix, :plug_init_mode, :runtime
 # Enable helpful, but potentially expensive runtime checks
 config :phoenix_live_view,
   enable_expensive_runtime_checks: true
+
+config :hydra_x, :sql_sandbox, true

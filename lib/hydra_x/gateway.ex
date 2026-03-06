@@ -6,6 +6,7 @@ defmodule HydraX.Gateway do
   alias HydraX.Gateway.Adapters.Telegram
   alias HydraX.Runtime
   alias HydraX.Safety
+  alias HydraX.Telemetry
 
   def dispatch_telegram_update(update, opts \\ %{}) do
     with config when not is_nil(config) <- Runtime.enabled_telegram_config(),
@@ -64,6 +65,8 @@ defmodule HydraX.Gateway do
 
   defp record_delivery_result(_agent_id, conversation, message, {:ok, metadata})
        when is_map(metadata) do
+    Telemetry.gateway_delivery(message.channel, :ok)
+
     Runtime.update_conversation_metadata(conversation, %{
       "last_delivery" => %{
         "channel" => message.channel,
@@ -81,6 +84,7 @@ defmodule HydraX.Gateway do
 
   defp record_delivery_result(agent_id, conversation, message, {:error, reason}) do
     reason_text = inspect(reason)
+    Telemetry.gateway_delivery(message.channel, :error, %{reason: reason_text})
 
     Safety.log_event(%{
       agent_id: agent_id,

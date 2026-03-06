@@ -7,20 +7,23 @@ defmodule HydraX.Safety.UrlGuard do
 
   @blocked_hosts ~w(localhost metadata.google.internal host.docker.internal)
 
-  def validate_outbound_url(url) when is_binary(url) do
+  def validate_outbound_url(url, opts \\ [])
+
+  def validate_outbound_url(url, opts) when is_binary(url) do
     uri = URI.parse(String.trim(url))
+    allowlist = Keyword.get(opts, :allowlist, Config.http_allowlist())
 
     cond do
       uri.scheme not in ["http", "https"] -> {:error, :unsupported_scheme}
       is_nil(uri.host) or uri.host == "" -> {:error, :missing_host}
       blocked_host?(uri.host) -> {:error, :blocked_host}
       private_ip_literal?(uri.host) -> {:error, :private_address}
-      not allowlisted?(uri.host) -> {:error, :host_not_allowlisted}
+      not allowlisted?(uri.host, allowlist) -> {:error, :host_not_allowlisted}
       true -> {:ok, uri}
     end
   end
 
-  def validate_outbound_url(_url), do: {:error, :invalid_url}
+  def validate_outbound_url(_url, _opts), do: {:error, :invalid_url}
 
   defp blocked_host?(host) do
     host in @blocked_hosts or String.ends_with?(host, ".local") or
@@ -40,8 +43,8 @@ defmodule HydraX.Safety.UrlGuard do
     end
   end
 
-  defp allowlisted?(host) do
-    case Config.http_allowlist() do
+  defp allowlisted?(host, allowlist) do
+    case allowlist do
       [] ->
         true
 

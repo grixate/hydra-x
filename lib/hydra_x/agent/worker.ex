@@ -4,6 +4,7 @@ defmodule HydraX.Agent.Worker do
 
   alias HydraX.Runtime
   alias HydraX.Safety
+  alias HydraX.Telemetry
   alias HydraX.Tools.{HttpFetch, MemoryRecall, MemorySave, ShellCommand, WorkspaceRead}
 
   def start_link(args) do
@@ -45,15 +46,21 @@ defmodule HydraX.Agent.Worker do
       ) do
     full_text = Enum.map_join(messages, "\n", & &1.content)
     agent = Runtime.get_agent!(conversation.agent_id)
-    context = %{workspace_root: agent.workspace_root}
+    tool_policy = Runtime.effective_tool_policy()
+
+    context = %{
+      workspace_root: agent.workspace_root,
+      http_allowlist: tool_policy.http_allowlist,
+      shell_allowlist: tool_policy.shell_allowlist
+    }
 
     results =
       []
       |> maybe_save_memory(analysis, conversation, full_text)
       |> maybe_recall_memory(analysis, conversation)
-      |> maybe_read_workspace(analysis, conversation, context)
-      |> maybe_fetch_url(analysis, conversation, context)
-      |> maybe_run_shell(analysis, conversation, context)
+      |> maybe_read_workspace(analysis, conversation, context, tool_policy)
+      |> maybe_fetch_url(analysis, conversation, context, tool_policy)
+      |> maybe_run_shell(analysis, conversation, context, tool_policy)
 
     {:stop_and_reply, :normal, [{:reply, from, results}], data}
   end
@@ -92,85 +99,145 @@ defmodule HydraX.Agent.Worker do
     [%{tool: MemoryRecall.name(), results: memories} | results]
   end
 
-  defp maybe_read_workspace(results, %{should_read_workspace: false}, _conversation, _context),
+  defp maybe_read_workspace(
+         results,
+         %{should_read_workspace: false},
+         _conversation,
+         _context,
+         _policy
+       ),
+       do: results
+
+  defp maybe_read_workspace(results, %{workspace_path: nil}, _conversation, _context, _policy),
     do: results
 
-  defp maybe_read_workspace(results, %{workspace_path: nil}, _conversation, _context), do: results
+  defp maybe_read_workspace(results, analysis, conversation, context, policy) do
+    if policy.workspace_read_enabled do
+      case WorkspaceRead.execute(%{path: analysis.workspace_path}, context) do
+        {:ok, result} ->
+          Telemetry.tool_execution(WorkspaceRead.name(), :ok)
+          [%{tool: WorkspaceRead.name(), path: result.path, excerpt: result.excerpt} | results]
 
-  defp maybe_read_workspace(results, analysis, conversation, context) do
-    case WorkspaceRead.execute(%{path: analysis.workspace_path}, context) do
-      {:ok, result} ->
-        [%{tool: WorkspaceRead.name(), path: result.path, excerpt: result.excerpt} | results]
+        {:error, reason} ->
+          log_tool_warning(
+            conversation,
+            WorkspaceRead.name(),
+            %{path: analysis.workspace_path},
+            reason
+          )
 
-      {:error, reason} ->
-        log_tool_warning(
-          conversation,
-          WorkspaceRead.name(),
-          %{path: analysis.workspace_path},
-          reason
-        )
+          [
+            %{tool: WorkspaceRead.name(), path: analysis.workspace_path, error: inspect(reason)}
+            | results
+          ]
+      end
+    else
+      log_tool_warning(
+        conversation,
+        WorkspaceRead.name(),
+        %{path: analysis.workspace_path},
+        :tool_disabled
+      )
 
-        [
-          %{tool: WorkspaceRead.name(), path: analysis.workspace_path, error: inspect(reason)}
-          | results
-        ]
+      [
+        %{
+          tool: WorkspaceRead.name(),
+          path: analysis.workspace_path,
+          error: inspect(:tool_disabled)
+        }
+        | results
+      ]
     end
   end
 
-  defp maybe_fetch_url(results, %{should_fetch_url: false}, _conversation, _context), do: results
-  defp maybe_fetch_url(results, %{url: nil}, _conversation, _context), do: results
+  defp maybe_fetch_url(results, %{should_fetch_url: false}, _conversation, _context, _policy),
+    do: results
 
-  defp maybe_fetch_url(results, analysis, conversation, context) do
-    case HttpFetch.execute(%{url: analysis.url}, context) do
-      {:ok, result} ->
-        [
-          %{
-            tool: HttpFetch.name(),
-            url: result.url,
-            excerpt: result.excerpt,
-            status: result.status
-          }
-          | results
-        ]
+  defp maybe_fetch_url(results, %{url: nil}, _conversation, _context, _policy), do: results
 
-      {:error, reason} ->
-        log_tool_warning(conversation, HttpFetch.name(), %{url: analysis.url}, reason)
-        [%{tool: HttpFetch.name(), url: analysis.url, error: inspect(reason)} | results]
+  defp maybe_fetch_url(results, analysis, conversation, context, policy) do
+    if policy.http_fetch_enabled do
+      case HttpFetch.execute(%{url: analysis.url}, context) do
+        {:ok, result} ->
+          Telemetry.tool_execution(HttpFetch.name(), :ok, %{url: result.url})
+
+          [
+            %{
+              tool: HttpFetch.name(),
+              url: result.url,
+              excerpt: result.excerpt,
+              status: result.status
+            }
+            | results
+          ]
+
+        {:error, reason} ->
+          log_tool_warning(conversation, HttpFetch.name(), %{url: analysis.url}, reason)
+          [%{tool: HttpFetch.name(), url: analysis.url, error: inspect(reason)} | results]
+      end
+    else
+      log_tool_warning(conversation, HttpFetch.name(), %{url: analysis.url}, :tool_disabled)
+      [%{tool: HttpFetch.name(), url: analysis.url, error: inspect(:tool_disabled)} | results]
     end
   end
 
-  defp maybe_run_shell(results, %{should_run_shell: false}, _conversation, _context), do: results
-  defp maybe_run_shell(results, %{shell_command: nil}, _conversation, _context), do: results
+  defp maybe_run_shell(results, %{should_run_shell: false}, _conversation, _context, _policy),
+    do: results
 
-  defp maybe_run_shell(results, analysis, conversation, context) do
-    case ShellCommand.execute(%{command: analysis.shell_command}, context) do
-      {:ok, result} ->
-        [
-          %{
-            tool: ShellCommand.name(),
-            command: result.command,
-            output: result.output,
-            exit_status: result.exit_status
-          }
-          | results
-        ]
+  defp maybe_run_shell(results, %{shell_command: nil}, _conversation, _context, _policy),
+    do: results
 
-      {:error, reason} ->
-        log_tool_warning(
-          conversation,
-          ShellCommand.name(),
-          %{command: analysis.shell_command},
-          reason
-        )
+  defp maybe_run_shell(results, analysis, conversation, context, policy) do
+    if policy.shell_command_enabled do
+      case ShellCommand.execute(%{command: analysis.shell_command}, context) do
+        {:ok, result} ->
+          Telemetry.tool_execution(ShellCommand.name(), :ok, %{command: result.command})
 
-        [
-          %{tool: ShellCommand.name(), command: analysis.shell_command, error: inspect(reason)}
-          | results
-        ]
+          [
+            %{
+              tool: ShellCommand.name(),
+              command: result.command,
+              output: result.output,
+              exit_status: result.exit_status
+            }
+            | results
+          ]
+
+        {:error, reason} ->
+          log_tool_warning(
+            conversation,
+            ShellCommand.name(),
+            %{command: analysis.shell_command},
+            reason
+          )
+
+          [
+            %{tool: ShellCommand.name(), command: analysis.shell_command, error: inspect(reason)}
+            | results
+          ]
+      end
+    else
+      log_tool_warning(
+        conversation,
+        ShellCommand.name(),
+        %{command: analysis.shell_command},
+        :tool_disabled
+      )
+
+      [
+        %{
+          tool: ShellCommand.name(),
+          command: analysis.shell_command,
+          error: inspect(:tool_disabled)
+        }
+        | results
+      ]
     end
   end
 
   defp log_tool_warning(conversation, tool_name, params, reason) do
+    Telemetry.tool_execution(tool_name, :error, %{reason: inspect(reason)})
+
     Safety.log_event(%{
       agent_id: conversation.agent_id,
       conversation_id: conversation.id,

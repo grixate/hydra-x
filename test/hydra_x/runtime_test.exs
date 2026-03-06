@@ -253,6 +253,57 @@ defmodule HydraX.RuntimeTest do
     assert auth_check.detail =~ "operator password set"
   end
 
+  test "heartbeat jobs are ensured once and create persisted job runs" do
+    agent = create_agent()
+    {:ok, pid} = HydraX.Agent.ensure_started(agent)
+    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
+
+    File.write!(
+      Path.join(agent.workspace_root, "HEARTBEAT.md"),
+      "Review the workspace heartbeat."
+    )
+
+    job = Runtime.ensure_heartbeat_job!(agent.id)
+    same_job = Runtime.ensure_heartbeat_job!(agent.id)
+
+    assert job.id == same_job.id
+
+    assert {:ok, run} = Runtime.run_scheduled_job(job)
+    assert run.status == "success"
+    assert run.metadata["conversation_id"]
+
+    conversation = Runtime.get_conversation!(run.metadata["conversation_id"])
+    assert conversation.channel == "scheduler"
+
+    [job_run | _] = Runtime.list_job_runs(job.id, 5)
+    assert job_run.id == run.id
+  end
+
+  test "tool policy can disable shell execution at runtime" do
+    agent = create_agent()
+    {:ok, pid} = HydraX.Agent.ensure_started(agent)
+    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
+
+    {:ok, _policy} =
+      Runtime.save_tool_policy(%{
+        shell_command_enabled: false
+      })
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{channel: "cli", title: "shell-disabled"})
+
+    response =
+      Channel.submit(
+        agent,
+        conversation,
+        "Run pwd",
+        %{source: "test"}
+      )
+
+    assert response =~ "shell_command error"
+    assert response =~ ":tool_disabled"
+  end
+
   test "provider failures return an assistant error instead of crashing the channel" do
     agent = create_agent()
     {:ok, pid} = HydraX.Agent.ensure_started(agent)

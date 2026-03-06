@@ -8,6 +8,7 @@ defmodule HydraX.Agent.Channel do
   alias HydraX.LLM.Router
   alias HydraX.Runtime
   alias HydraX.Safety
+  alias HydraX.Telemetry
 
   def start_link(opts) do
     conversation = Keyword.fetch!(opts, :conversation)
@@ -127,6 +128,7 @@ defmodule HydraX.Agent.Channel do
 
           case Router.complete(prompt) do
             {:ok, response} ->
+              Telemetry.provider_request(:ok, response.provider)
               output_tokens = Budget.estimate_tokens(response.content)
 
               Budget.record_usage(data.agent_id, data.conversation.id,
@@ -144,6 +146,10 @@ defmodule HydraX.Agent.Channel do
                }}
 
             {:error, reason} ->
+              Telemetry.provider_request(:error, provider_name(data.agent_id), %{
+                reason: inspect(reason)
+              })
+
               Safety.log_event(%{
                 agent_id: data.agent_id,
                 conversation_id: data.conversation.id,
@@ -164,6 +170,8 @@ defmodule HydraX.Agent.Channel do
           end
 
         {:error, details} ->
+          Telemetry.budget_event(:rejected, %{agent_id: data.agent_id})
+
           Safety.log_event(%{
             agent_id: data.agent_id,
             conversation_id: data.conversation.id,
@@ -217,6 +225,15 @@ defmodule HydraX.Agent.Channel do
   defp maybe_log_budget_warning(_data, %{warnings: []}), do: :ok
 
   defp maybe_log_budget_warning(data, %{warnings: warnings, usage: usage}) do
+    status =
+      cond do
+        :hard_limit_reached in warnings -> :hard_warning
+        :soft_limit_reached in warnings -> :soft_warning
+        true -> :warning
+      end
+
+    Telemetry.budget_event(status, %{agent_id: data.agent_id, usage: usage})
+
     {level, message} =
       cond do
         :hard_limit_reached in warnings ->
@@ -237,5 +254,12 @@ defmodule HydraX.Agent.Channel do
       message: message,
       metadata: %{warnings: warnings, usage: usage}
     })
+  end
+
+  defp provider_name(_agent_id) do
+    case Runtime.enabled_provider() do
+      nil -> "mock"
+      provider -> provider.name || provider.kind || "configured"
+    end
   end
 end
