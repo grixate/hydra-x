@@ -6,6 +6,8 @@ defmodule HydraX.Runtime.TelegramConfig do
     field :bot_token, :string
     field :bot_username, :string
     field :webhook_secret, :string
+    field :webhook_url, :string
+    field :webhook_registered_at, :utc_datetime_usec
     field :enabled, :boolean, default: false
 
     belongs_to :default_agent, HydraX.Runtime.AgentProfile
@@ -15,7 +17,15 @@ defmodule HydraX.Runtime.TelegramConfig do
 
   def changeset(config, attrs) do
     config
-    |> cast(attrs, [:bot_token, :bot_username, :webhook_secret, :enabled, :default_agent_id])
+    |> cast(attrs, [
+      :bot_token,
+      :bot_username,
+      :webhook_secret,
+      :webhook_url,
+      :webhook_registered_at,
+      :enabled,
+      :default_agent_id
+    ])
     |> validate_required([:bot_token])
     |> assoc_constraint(:default_agent)
   end

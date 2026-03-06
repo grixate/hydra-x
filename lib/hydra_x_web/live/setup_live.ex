@@ -80,6 +80,28 @@ defmodule HydraXWeb.SetupLive do
     end
   end
 
+  def handle_event("register_webhook", _params, socket) do
+    case Runtime.register_telegram_webhook(socket.assigns.telegram) do
+      {:ok, telegram} ->
+        {:noreply,
+         socket
+         |> put_flash(:info, "Telegram webhook registered")
+         |> assign(:telegram, telegram)
+         |> assign(:stats, stats())
+         |> assign_form(:telegram_form, Runtime.change_telegram_config(telegram))}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Webhook registration failed: #{inspect(reason)}")}
+    end
+  end
+
+  def handle_event("generate_telegram_secret", _params, socket) do
+    secret = Base.url_encode64(:crypto.strong_rand_bytes(24), padding: false)
+    changeset = Runtime.change_telegram_config(socket.assigns.telegram, %{webhook_secret: secret})
+
+    {:noreply, assign_form(socket, :telegram_form, changeset)}
+  end
+
   @impl true
   def render(assigns) do
     ~H"""
@@ -147,6 +169,18 @@ defmodule HydraXWeb.SetupLive do
             Configure a Telegram bot and point its webhook at <span class="font-mono text-[var(--hx-accent)]">/api/telegram/webhook</span>.
             Inbound messages are routed into the default agent and persisted as channel conversations.
           </p>
+          <div class="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-4 text-sm text-[var(--hx-mute)]">
+            <div>Webhook URL</div>
+            <div class="mt-2 break-all font-mono text-xs text-[var(--hx-accent)]">
+              {HydraX.Config.telegram_webhook_url()}
+            </div>
+            <div :if={@telegram.webhook_registered_at} class="mt-2 text-xs">
+              Registered at {Calendar.strftime(
+                @telegram.webhook_registered_at,
+                "%Y-%m-%d %H:%M:%S UTC"
+              )}
+            </div>
+          </div>
           <.form
             for={@telegram_form}
             id="telegram-form"
@@ -159,6 +193,20 @@ defmodule HydraXWeb.SetupLive do
             <.input field={@telegram_form[:enabled]} type="checkbox" label="Enable Telegram ingress" />
             <div class="xl:col-span-2 pt-2">
               <.button>Save Telegram settings</.button>
+              <button
+                type="button"
+                phx-click="generate_telegram_secret"
+                class="btn btn-outline ml-3 border-white/10 bg-white/5 text-white hover:bg-white/10"
+              >
+                Generate secret
+              </button>
+              <button
+                type="button"
+                phx-click="register_webhook"
+                class="btn btn-outline ml-3 border-white/10 bg-white/5 text-white hover:bg-white/10"
+              >
+                Register webhook
+              </button>
             </div>
           </.form>
         </article>

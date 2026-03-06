@@ -39,6 +39,31 @@ defmodule HydraX.Config do
     }
   end
 
+  @spec public_base_url() :: String.t()
+  def public_base_url do
+    System.get_env("HYDRA_X_PUBLIC_URL") ||
+      endpoint_base_url()
+  end
+
+  @spec telegram_webhook_url() :: String.t()
+  def telegram_webhook_url do
+    String.trim_trailing(public_base_url(), "/") <> "/api/telegram/webhook"
+  end
+
+  defp endpoint_base_url do
+    endpoint = Application.get_env(:hydra_x, HydraXWeb.Endpoint, [])
+    url = Keyword.get(endpoint, :url, [])
+    host = Keyword.get(url, :host, "localhost")
+    scheme = Keyword.get(url, :scheme, "http")
+    port = Keyword.get(url, :port, 4000)
+
+    case {scheme, port} do
+      {"http", 80} -> "#{scheme}://#{host}"
+      {"https", 443} -> "#{scheme}://#{host}"
+      _ -> "#{scheme}://#{host}:#{port}"
+    end
+  end
+
   defp env_integer(name, default) do
     case System.get_env(name) do
       nil -> default

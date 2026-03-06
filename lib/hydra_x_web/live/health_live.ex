@@ -11,7 +11,8 @@ defmodule HydraXWeb.HealthLive do
      |> assign(:page_title, "Health")
      |> assign(:current, "health")
      |> assign(:stats, stats())
-     |> assign(:checks, Runtime.health_snapshot())}
+     |> assign(:checks, Runtime.health_snapshot())
+     |> assign(:telegram_status, Runtime.telegram_status())}
   end
 
   @impl true
@@ -41,6 +42,39 @@ defmodule HydraXWeb.HealthLive do
               </span>
             </div>
             <p class="mt-3 text-sm text-[var(--hx-mute)]">{check.detail}</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="glass-panel mt-6 p-6">
+        <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">Telegram</div>
+        <h2 class="mt-3 font-display text-4xl">Channel readiness</h2>
+        <div class="mt-6 grid gap-3 lg:grid-cols-2">
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Webhook URL
+            </div>
+            <p class="mt-3 break-all text-sm text-[var(--hx-accent)]">
+              {@telegram_status.webhook_url}
+            </p>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Binding
+            </div>
+            <p class="mt-3 text-sm text-[var(--hx-mute)]">
+              {(@telegram_status.bot_username && "@#{@telegram_status.bot_username}") ||
+                "unconfigured"}
+              {if @telegram_status.default_agent_name,
+                do: " -> #{@telegram_status.default_agent_name}",
+                else: ""}
+            </p>
+            <p :if={@telegram_status.registered_at} class="mt-2 text-xs text-[var(--hx-mute)]">
+              Registered at {Calendar.strftime(
+                @telegram_status.registered_at,
+                "%Y-%m-%d %H:%M:%S UTC"
+              )}
+            </p>
           </article>
         </div>
       </section>

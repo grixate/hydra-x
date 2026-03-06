@@ -17,6 +17,8 @@ defmodule HydraX.Runtime do
     Turn
   }
 
+  alias HydraX.Gateway.Adapters.Telegram
+
   @default_agent_slug "hydra-primary"
 
   def list_agents do
@@ -186,6 +188,25 @@ defmodule HydraX.Runtime do
     |> unwrap_transaction()
   end
 
+  def register_telegram_webhook(%TelegramConfig{} = config, opts \\ []) do
+    url = Keyword.get(opts, :url, Config.telegram_webhook_url())
+    request_fn = Keyword.get(opts, :request_fn, &Telegram.register_webhook/4)
+
+    with true <- config.bot_token not in [nil, ""],
+         :ok <- request_fn.(config.bot_token, url, config.webhook_secret, opts),
+         {:ok, updated} <-
+           save_telegram_config(config, %{
+             webhook_url: url,
+             webhook_registered_at: DateTime.utc_now(),
+             enabled: true
+           }) do
+      {:ok, updated}
+    else
+      false -> {:error, :missing_bot_token}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   def list_conversations(opts \\ []) do
     agent_id = Keyword.get(opts, :agent_id)
     limit = Keyword.get(opts, :limit, 25)
@@ -318,6 +339,30 @@ defmodule HydraX.Runtime do
         detail: Config.workspace_root()
       }
     ]
+  end
+
+  def telegram_status do
+    case enabled_telegram_config() || List.first(list_telegram_configs()) do
+      nil ->
+        %{
+          configured: false,
+          enabled: false,
+          bot_username: nil,
+          webhook_url: Config.telegram_webhook_url(),
+          registered_at: nil,
+          default_agent_name: nil
+        }
+
+      config ->
+        %{
+          configured: true,
+          enabled: config.enabled,
+          bot_username: config.bot_username,
+          webhook_url: config.webhook_url || Config.telegram_webhook_url(),
+          registered_at: config.webhook_registered_at,
+          default_agent_name: config.default_agent && config.default_agent.name
+        }
+    end
   end
 
   defp maybe_filter_agent(query, nil), do: query

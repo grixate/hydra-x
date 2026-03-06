@@ -40,6 +40,24 @@ defmodule HydraX.Gateway.Adapters.Telegram do
     do_send_response(content, external_ref, token, deliver)
   end
 
+  def register_webhook(bot_token, url, secret, opts \\ []) do
+    request_fn = Keyword.get(opts, :request_fn, &Req.post/1)
+
+    body =
+      %{url: url, drop_pending_updates: false}
+      |> maybe_put_secret(secret)
+
+    case request_fn.(
+           url: "https://api.telegram.org/bot#{bot_token}/setWebhook",
+           json: body
+         ) do
+      {:ok, %{status: 200, body: %{"ok" => true}}} -> :ok
+      {:ok, %{status: 200, body: %{"ok" => false} = body}} -> {:error, {:telegram_error, body}}
+      {:ok, response} -> {:error, {:telegram_error, response.status}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   defp do_send_response(content, external_ref, _token, deliver) when is_function(deliver, 1) do
     deliver.(%{content: content, external_ref: external_ref})
   end
@@ -54,4 +72,8 @@ defmodule HydraX.Gateway.Adapters.Telegram do
       {:error, reason} -> {:error, reason}
     end
   end
+
+  defp maybe_put_secret(body, nil), do: body
+  defp maybe_put_secret(body, ""), do: body
+  defp maybe_put_secret(body, secret), do: Map.put(body, :secret_token, secret)
 end
