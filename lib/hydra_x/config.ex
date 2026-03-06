@@ -50,6 +50,12 @@ defmodule HydraX.Config do
     String.trim_trailing(public_base_url(), "/") <> "/api/telegram/webhook"
   end
 
+  @spec shell_allowlist() :: [String.t()]
+  def shell_allowlist do
+    System.get_env("HYDRA_X_SHELL_ALLOWLIST", "pwd,ls,cat,head,rg,git")
+    |> String.split(",", trim: true)
+  end
+
   defp endpoint_base_url do
     endpoint = Application.get_env(:hydra_x, HydraXWeb.Endpoint, [])
     url = Keyword.get(endpoint, :url, [])

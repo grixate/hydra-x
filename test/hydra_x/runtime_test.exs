@@ -125,6 +125,94 @@ defmodule HydraX.RuntimeTest do
     assert Budget.get_policy(agent.id)
   end
 
+  test "workspace reads are routed through the worker with path confinement" do
+    agent = create_agent()
+    {:ok, pid} = HydraX.Agent.ensure_started(agent)
+    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
+
+    File.write!(Path.join(agent.workspace_root, "SOUL.md"), "Hydra-X workspace directive")
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{channel: "cli", title: "workspace-read"})
+
+    response =
+      Channel.submit(
+        agent,
+        conversation,
+        "Read file SOUL.md and tell me what it says.",
+        %{source: "test"}
+      )
+
+    assert response =~ "Workspace file SOUL.md"
+    assert response =~ "Hydra-X workspace directive"
+  end
+
+  test "workspace traversal attempts are blocked and logged" do
+    agent = create_agent()
+    {:ok, pid} = HydraX.Agent.ensure_started(agent)
+    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{channel: "cli", title: "workspace-block"})
+
+    response =
+      Channel.submit(
+        agent,
+        conversation,
+        "Read file ../secrets.txt and tell me what it says.",
+        %{source: "test"}
+      )
+
+    assert response =~ "workspace_read error"
+
+    [event | _] = Safety.recent_events(agent.id, 5)
+    assert event.category == "tool"
+    assert event.message =~ "workspace_read"
+  end
+
+  test "allowlisted shell commands run through the worker" do
+    agent = create_agent()
+    {:ok, pid} = HydraX.Agent.ensure_started(agent)
+    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{channel: "cli", title: "shell-command"})
+
+    response =
+      Channel.submit(
+        agent,
+        conversation,
+        "Run pwd",
+        %{source: "test"}
+      )
+
+    assert response =~ "Shell command pwd"
+    assert response =~ agent.workspace_root
+  end
+
+  test "disallowed shell commands are blocked and logged" do
+    agent = create_agent()
+    {:ok, pid} = HydraX.Agent.ensure_started(agent)
+    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{channel: "cli", title: "shell-block"})
+
+    response =
+      Channel.submit(
+        agent,
+        conversation,
+        "Run git checkout -b danger",
+        %{source: "test"}
+      )
+
+    assert response =~ "shell_command error"
+
+    [event | _] = Safety.recent_events(agent.id, 5)
+    assert event.category == "tool"
+    assert event.message =~ "shell_command"
+  end
+
   defp create_agent do
     unique = System.unique_integer([:positive])
 

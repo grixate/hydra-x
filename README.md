@@ -22,6 +22,8 @@ Hydra-X is a self-hosted Elixir agent runtime with a Phoenix control plane. This
   persisted token policies, preflight enforcement, usage accounting, and safety event logging
 - Control-plane auth:
   session-based browser login once an operator password is configured on `/setup`
+- Guarded tools:
+  workspace-confined file reads, outbound HTTP fetches with basic SSRF checks, and allowlisted shell commands
 - Operator commands:
   `mix hydra_x.new`, `mix hydra_x.serve`, `mix hydra_x.chat`, `mix hydra_x.migrate`, `mix hydra_x.healthcheck`, `mix hydra_x.telegram.webhook`
 
@@ -89,4 +91,4 @@ mix hydra_x.serve
 
 ## Current scope
 
-This is not the full roadmap yet. The repo now has the bootable foundation and a working end-to-end mock/runtime flow. Dangerous tools, auth, Telegram polling, richer UI workflows, budgets, cron, and clustering are still future stages.
+This is not the full roadmap yet. The repo now has the bootable foundation and a working end-to-end mock/runtime flow. Telegram polling, richer UI workflows, cron, and clustering are still future stages.
