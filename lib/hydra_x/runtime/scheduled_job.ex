@@ -2,7 +2,7 @@ defmodule HydraX.Runtime.ScheduledJob do
   use Ecto.Schema
   import Ecto.Changeset
 
-  @kinds ~w(heartbeat prompt)
+  @kinds ~w(heartbeat prompt backup)
 
   schema "scheduled_jobs" do
     field :name, :string

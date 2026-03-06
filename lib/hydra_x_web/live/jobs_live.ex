@@ -8,6 +8,7 @@ defmodule HydraXWeb.JobsLive do
   @impl true
   def mount(_params, _session, socket) do
     agent = Runtime.ensure_default_agent!()
+    Runtime.ensure_default_jobs!()
 
     {:ok,
      socket
@@ -148,7 +149,7 @@ defmodule HydraXWeb.JobsLive do
               field={@form[:kind]}
               type="select"
               label="Kind"
-              options={[{"Heartbeat", "heartbeat"}, {"Prompt", "prompt"}]}
+              options={[{"Heartbeat", "heartbeat"}, {"Prompt", "prompt"}, {"Backup", "backup"}]}
             />
             <.input field={@form[:interval_minutes]} type="number" label="Interval minutes" />
             <.input field={@form[:prompt]} type="textarea" label="Prompt override" />

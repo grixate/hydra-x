@@ -24,6 +24,12 @@ defmodule HydraX.Config do
       Path.expand("backups", File.cwd!())
   end
 
+  @spec install_root() :: String.t()
+  def install_root do
+    System.get_env("HYDRA_X_INSTALL_ROOT") ||
+      Path.expand("install", File.cwd!())
+  end
+
   @spec default_workspace(String.t()) :: String.t()
   def default_workspace(agent_slug) do
     Path.join(workspace_root(), agent_slug)

@@ -7,6 +7,7 @@ defmodule Mix.Tasks.HydraX.Doctor do
   def run(_args) do
     Mix.Task.run("app.start")
     HydraX.Runtime.ensure_default_agent!()
+    HydraX.Runtime.ensure_default_jobs!()
 
     report = HydraX.Runtime.readiness_report()
 

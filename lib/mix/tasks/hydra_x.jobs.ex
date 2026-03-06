@@ -7,6 +7,7 @@ defmodule Mix.Tasks.HydraX.Jobs do
   def run(args) do
     Mix.Task.run("app.start")
     HydraX.Runtime.ensure_default_agent!()
+    HydraX.Runtime.ensure_default_jobs!()
 
     {opts, positional, _invalid} =
       OptionParser.parse(args, strict: [run: :integer], aliases: [r: :run])

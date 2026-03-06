@@ -1,5 +1,6 @@
 defmodule HydraXWeb.ErrorHTMLTest do
   use HydraXWeb.ConnCase, async: true
+  @tag seed_default_agent: false
 
   # Bring render_to_string/4 for testing custom views
   import Phoenix.Template, only: [render_to_string: 4]

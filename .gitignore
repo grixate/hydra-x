@@ -41,3 +41,5 @@ npm-debug.log
 
 # Runtime workspace state
 /workspace/
+/backups/
+/install/

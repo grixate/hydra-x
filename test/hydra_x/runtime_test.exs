@@ -7,6 +7,29 @@ defmodule HydraX.RuntimeTest do
   alias HydraX.Runtime
   alias HydraX.Safety
 
+  setup do
+    backup_root =
+      Path.join(System.tmp_dir!(), "hydra-x-test-backups-#{System.unique_integer([:positive])}")
+
+    install_root =
+      Path.join(System.tmp_dir!(), "hydra-x-test-install-#{System.unique_integer([:positive])}")
+
+    previous_backup_root = System.get_env("HYDRA_X_BACKUP_ROOT")
+    previous_install_root = System.get_env("HYDRA_X_INSTALL_ROOT")
+
+    System.put_env("HYDRA_X_BACKUP_ROOT", backup_root)
+    System.put_env("HYDRA_X_INSTALL_ROOT", install_root)
+
+    on_exit(fn ->
+      restore_env("HYDRA_X_BACKUP_ROOT", previous_backup_root)
+      restore_env("HYDRA_X_INSTALL_ROOT", previous_install_root)
+      File.rm_rf(backup_root)
+      File.rm_rf(install_root)
+    end)
+
+    :ok
+  end
+
   test "chat flow persists turns and memory recall works" do
     agent = create_agent()
     {:ok, pid} = HydraX.Agent.ensure_started(agent)
@@ -334,6 +357,23 @@ defmodule HydraX.RuntimeTest do
     assert job_run.id == run.id
   end
 
+  test "backup jobs are ensured once and create portable backup artifacts" do
+    agent = create_agent()
+
+    job = Runtime.ensure_backup_job!(agent.id)
+    same_job = Runtime.ensure_backup_job!(agent.id)
+
+    assert job.id == same_job.id
+    assert job.kind == "backup"
+
+    assert {:ok, run} = Runtime.run_scheduled_job(job)
+    assert run.status == "success"
+    assert run.metadata["archive_path"]
+    assert run.metadata["manifest_path"]
+    assert File.exists?(run.metadata["archive_path"])
+    assert File.exists?(run.metadata["manifest_path"])
+  end
+
   test "tool policy can disable shell execution at runtime" do
     agent = create_agent()
     {:ok, pid} = HydraX.Agent.ensure_started(agent)
@@ -425,4 +465,7 @@ defmodule HydraX.RuntimeTest do
     HydraX.Budget.ensure_policy!(agent.id)
     agent
   end
+
+  defp restore_env(key, nil), do: System.delete_env(key)
+  defp restore_env(key, value), do: System.put_env(key, value)
 end

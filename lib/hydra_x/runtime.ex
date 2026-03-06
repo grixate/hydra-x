@@ -268,25 +268,29 @@ defmodule HydraX.Runtime do
   end
 
   def ensure_heartbeat_job!(agent_id) do
-    case Repo.get_by(ScheduledJob,
-           agent_id: agent_id,
-           kind: "heartbeat",
-           name: "Workspace heartbeat"
-         ) do
+    ensure_named_job!(agent_id, "heartbeat", "Workspace heartbeat", %{
+      interval_minutes: 60,
+      enabled: true
+    })
+  end
+
+  def ensure_backup_job!(agent_id) do
+    ensure_named_job!(agent_id, "backup", "Portable backup bundle", %{
+      interval_minutes: 1_440,
+      enabled: true
+    })
+  end
+
+  def ensure_default_jobs! do
+    case get_default_agent() do
       nil ->
-        {:ok, job} =
-          save_scheduled_job(%{
-            agent_id: agent_id,
-            name: "Workspace heartbeat",
-            kind: "heartbeat",
-            interval_minutes: 60,
-            enabled: true
-          })
+        []
 
-        job
-
-      job ->
-        job
+      agent ->
+        [
+          ensure_heartbeat_job!(agent.id),
+          ensure_backup_job!(agent.id)
+        ]
     end
   end
 
@@ -1057,6 +1061,17 @@ defmodule HydraX.Runtime do
     end
   end
 
+  defp execute_scheduled_job(%ScheduledJob{kind: "backup"} = _job) do
+    with {:ok, manifest} <- HydraX.Backup.create_bundle(Config.backup_root()) do
+      {:ok, "Created backup bundle at #{manifest["archive_path"]}",
+       %{
+         "archive_path" => manifest["archive_path"],
+         "manifest_path" => manifest["manifest_path"],
+         "entry_count" => manifest["entry_count"]
+       }}
+    end
+  end
+
   defp run_job_prompt(agent, job, prompt) do
     with {:ok, _pid} <- HydraX.Agent.ensure_started(agent),
          {:ok, conversation} <-
@@ -1090,6 +1105,39 @@ defmodule HydraX.Runtime do
     case Repo.get(AgentProfile, job.agent_id) do
       nil -> {:error, :agent_not_found}
       agent -> {:ok, agent}
+    end
+  end
+
+  defp ensure_named_job!(agent_id, kind, name, attrs) do
+    jobs =
+      ScheduledJob
+      |> where([job], job.agent_id == ^agent_id and job.kind == ^kind and job.name == ^name)
+      |> order_by([job], asc: job.inserted_at, asc: job.id)
+      |> Repo.all()
+
+    case jobs do
+      [] ->
+        {:ok, job} =
+          save_scheduled_job(
+            Map.merge(attrs, %{
+              agent_id: agent_id,
+              name: name,
+              kind: kind
+            })
+          )
+
+        job
+
+      [job | rest] ->
+        Enum.each(rest, &Repo.delete!/1)
+
+        {:ok, job} =
+          save_scheduled_job(job, %{
+            interval_minutes: attrs[:interval_minutes],
+            enabled: attrs[:enabled]
+          })
+
+        job
     end
   end
 

@@ -7,6 +7,7 @@ defmodule Mix.Tasks.HydraX.Healthcheck do
   def run(_args) do
     Mix.Task.run("app.start")
     HydraX.Runtime.ensure_default_agent!()
+    HydraX.Runtime.ensure_default_jobs!()
 
     HydraX.Runtime.health_snapshot()
     |> Enum.each(fn check ->

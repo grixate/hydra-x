@@ -25,6 +25,8 @@ defmodule HydraXWeb.SetupLive do
      |> assign(:current, "setup")
      |> assign(:operator_secret, Runtime.get_operator_secret())
      |> assign(:provider_test_result, nil)
+     |> assign(:install_export, nil)
+     |> assign(:backup_export, nil)
      |> assign(:readiness_report, Runtime.readiness_report())
      |> assign(:stats, stats())
      |> assign(:agent, agent)
@@ -196,6 +198,25 @@ defmodule HydraXWeb.SetupLive do
     end
   end
 
+  def handle_event("export_install", _params, socket) do
+    {:ok, export} = HydraX.Install.export_snapshot()
+
+    {:noreply,
+     socket
+     |> assign(:install_export, export)
+     |> put_flash(:info, "Install bundle exported")}
+  end
+
+  def handle_event("create_backup_bundle", _params, socket) do
+    {:ok, manifest} = HydraX.Backup.create_bundle(HydraX.Config.backup_root())
+
+    {:noreply,
+     socket
+     |> assign(:backup_export, manifest)
+     |> assign(:readiness_report, Runtime.readiness_report())
+     |> put_flash(:info, "Backup bundle created")}
+  end
+
   @impl true
   def render(assigns) do
     ~H"""
@@ -238,6 +259,54 @@ defmodule HydraXWeb.SetupLive do
               </div>
               <p class="mt-3 text-sm text-[var(--hx-mute)]">{item.detail}</p>
             </article>
+          </div>
+        </article>
+      </section>
+
+      <section class="mb-6">
+        <article class="glass-panel p-6">
+          <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">
+            Deploy + recovery
+          </div>
+          <h2 class="mt-3 font-display text-4xl">Export runtime artifacts</h2>
+          <p class="mt-3 max-w-3xl text-sm text-[var(--hx-mute)]">
+            Generate deployment templates and portable backup bundles directly from the control plane.
+          </p>
+          <div class="mt-6 flex flex-wrap gap-3">
+            <button
+              type="button"
+              phx-click="export_install"
+              class="btn btn-outline border-white/10 bg-white/5 text-white hover:bg-white/10"
+            >
+              Export install bundle
+            </button>
+            <button
+              type="button"
+              phx-click="create_backup_bundle"
+              class="btn btn-outline border-white/10 bg-white/5 text-white hover:bg-white/10"
+            >
+              Create backup bundle
+            </button>
+          </div>
+          <div
+            :if={@install_export}
+            class="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-4 text-sm text-[var(--hx-mute)]"
+          >
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-accent)]">
+              Install export
+            </div>
+            <p class="mt-2 break-all">Env file: {@install_export.env_path}</p>
+            <p class="mt-1 break-all">Preview note: {@install_export.note_path}</p>
+          </div>
+          <div
+            :if={@backup_export}
+            class="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-4 text-sm text-[var(--hx-mute)]"
+          >
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-accent)]">
+              Backup export
+            </div>
+            <p class="mt-2 break-all">Archive: {@backup_export["archive_path"]}</p>
+            <p class="mt-1 break-all">Manifest: {@backup_export["manifest_path"]}</p>
           </div>
         </article>
       </section>

@@ -44,7 +44,9 @@ defmodule HydraXWeb.ConnCase do
       Phoenix.ConnTest.build_conn()
       |> Plug.Conn.put_req_header("user-agent", metadata)
 
-    seed_default_agent()
+    if Map.get(tags, :seed_default_agent, true) do
+      seed_default_agent()
+    end
 
     {:ok, conn: conn}
   end
