@@ -862,6 +862,111 @@ defmodule HydraX.Runtime do
     }
   end
 
+  def readiness_report do
+    tool_policy = effective_tool_policy()
+    backup_root = Config.backup_root()
+    telegram = telegram_status()
+    backups = backup_status()
+    public_url = Config.public_base_url()
+    local_url? = local_public_url?(public_url)
+
+    items = [
+      %{
+        id: "operator_password",
+        label: "Operator password configured",
+        required: true,
+        status: if(operator_password_configured?(), do: :ok, else: :warn),
+        detail:
+          if(operator_password_configured?(),
+            do: "control plane requires login",
+            else: "set a password on /setup before exposing the node"
+          )
+      },
+      %{
+        id: "public_url",
+        label: "Public URL points beyond localhost",
+        required: true,
+        status: if(local_url?, do: :warn, else: :ok),
+        detail:
+          if(local_url?,
+            do: "HYDRA_X_PUBLIC_URL is still local: #{public_url}",
+            else: public_url
+          )
+      },
+      %{
+        id: "backups",
+        label: "Backups are being written",
+        required: true,
+        status: if(backups.latest_backup, do: :ok, else: :warn),
+        detail:
+          if(backups.latest_backup,
+            do: backups.latest_backup["archive_path"],
+            else: "no backup manifest found in #{backup_root}"
+          )
+      },
+      %{
+        id: "provider",
+        label: "Primary provider configured",
+        required: false,
+        status: if(enabled_provider(), do: :ok, else: :warn),
+        detail:
+          case enabled_provider() do
+            nil -> "mock fallback only"
+            provider -> "#{provider.kind}: #{provider.model}"
+          end
+      },
+      %{
+        id: "telegram",
+        label: "Telegram ingress configured",
+        required: false,
+        status: if(telegram.configured and telegram.enabled, do: :ok, else: :warn),
+        detail:
+          cond do
+            telegram.configured and telegram.enabled ->
+              (telegram.bot_username && "@#{telegram.bot_username}") || "configured"
+
+            telegram.configured ->
+              "saved but disabled"
+
+            true ->
+              "not configured"
+          end
+      },
+      %{
+        id: "scheduler",
+        label: "Scheduler has jobs",
+        required: false,
+        status: if(list_scheduled_jobs(limit: 1) == [], do: :warn, else: :ok),
+        detail:
+          case list_scheduled_jobs(limit: 5) do
+            [] -> "no scheduled jobs configured"
+            jobs -> "#{length(jobs)} jobs configured"
+          end
+      },
+      %{
+        id: "tool_policy",
+        label: "Tool policy reviewed",
+        required: false,
+        status:
+          if(tool_policy.shell_command_enabled or tool_policy.http_allowlist != [],
+            do: :ok,
+            else: :warn
+          ),
+        detail:
+          "shell #{enabled_text(tool_policy.shell_command_enabled)}; http allowlist #{describe_allowlist(tool_policy.http_allowlist)}"
+      }
+    ]
+
+    %{
+      summary:
+        if(Enum.any?(items, &(&1.required and &1.status != :ok)),
+          do: :warn,
+          else: :ok
+        ),
+      items: items
+    }
+  end
+
   def backup_status do
     root = Config.backup_root()
 
@@ -891,6 +996,9 @@ defmodule HydraX.Runtime do
 
     "workspace read #{enabled_text(tool_status.workspace_guard)}; http fetch #{enabled_text(tool_status.url_guard)}; shell #{enabled_text(tool_status.shell_command_enabled)}; shell allowlist: #{shell}; http allowlist: #{http}"
   end
+
+  defp describe_allowlist([]), do: "public hosts"
+  defp describe_allowlist(hosts), do: Enum.join(hosts, ", ")
 
   defp provider_module(%ProviderConfig{kind: "openai_compatible"}),
     do: HydraX.LLM.Providers.OpenAICompatible
@@ -999,6 +1107,14 @@ defmodule HydraX.Runtime do
 
   defp format_alarm({alarm, _details}), do: inspect(alarm)
   defp format_alarm(alarm), do: inspect(alarm)
+
+  defp local_public_url?(url) do
+    case URI.parse(url) do
+      %URI{host: host} when host in [nil, "", "localhost", "127.0.0.1"] -> true
+      %URI{host: host} when is_binary(host) -> String.ends_with?(host, ".local")
+      _ -> true
+    end
+  end
 
   defp read_backup_manifest(path) do
     with {:ok, body} <- File.read(path),

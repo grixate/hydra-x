@@ -25,6 +25,7 @@ defmodule HydraXWeb.SetupLive do
      |> assign(:current, "setup")
      |> assign(:operator_secret, Runtime.get_operator_secret())
      |> assign(:provider_test_result, nil)
+     |> assign(:readiness_report, Runtime.readiness_report())
      |> assign(:stats, stats())
      |> assign(:agent, agent)
      |> assign(:provider, provider)
@@ -47,6 +48,7 @@ defmodule HydraXWeb.SetupLive do
          socket
          |> put_flash(:info, "Agent updated")
          |> assign(:agent, agent)
+         |> assign(:readiness_report, Runtime.readiness_report())
          |> assign(:stats, stats())
          |> assign_form(:agent_form, Runtime.change_agent(agent))}
 
@@ -62,6 +64,7 @@ defmodule HydraXWeb.SetupLive do
          socket
          |> put_flash(:info, "Provider updated")
          |> assign(:provider, provider)
+         |> assign(:readiness_report, Runtime.readiness_report())
          |> assign(:stats, stats())
          |> assign_form(:provider_form, Runtime.change_provider_config(provider))}
 
@@ -101,6 +104,7 @@ defmodule HydraXWeb.SetupLive do
          socket
          |> put_flash(:info, "Telegram updated")
          |> assign(:telegram, telegram)
+         |> assign(:readiness_report, Runtime.readiness_report())
          |> assign(:stats, stats())
          |> assign_form(:telegram_form, Runtime.change_telegram_config(telegram))}
 
@@ -116,6 +120,7 @@ defmodule HydraXWeb.SetupLive do
          socket
          |> put_flash(:info, "Tool policy updated")
          |> assign(:tool_policy, tool_policy)
+         |> assign(:readiness_report, Runtime.readiness_report())
          |> assign_form(:tool_policy_form, Runtime.change_tool_policy(tool_policy))}
 
       {:error, changeset} ->
@@ -130,6 +135,7 @@ defmodule HydraXWeb.SetupLive do
          socket
          |> put_flash(:info, "Telegram webhook registered")
          |> assign(:telegram, telegram)
+         |> assign(:readiness_report, Runtime.readiness_report())
          |> assign(:stats, stats())
          |> assign_form(:telegram_form, Runtime.change_telegram_config(telegram))}
 
@@ -145,6 +151,7 @@ defmodule HydraXWeb.SetupLive do
          socket
          |> put_flash(:info, "Telegram webhook status refreshed")
          |> assign(:telegram, telegram)
+         |> assign(:readiness_report, Runtime.readiness_report())
          |> assign_form(:telegram_form, Runtime.change_telegram_config(telegram))}
 
       {:error, reason} ->
@@ -159,6 +166,7 @@ defmodule HydraXWeb.SetupLive do
          socket
          |> put_flash(:info, "Telegram webhook removed")
          |> assign(:telegram, telegram)
+         |> assign(:readiness_report, Runtime.readiness_report())
          |> assign_form(:telegram_form, Runtime.change_telegram_config(telegram))}
 
       {:error, reason} ->
@@ -180,6 +188,7 @@ defmodule HydraXWeb.SetupLive do
          socket
          |> put_flash(:info, "Operator password updated")
          |> assign(:operator_secret, secret)
+         |> assign(:readiness_report, Runtime.readiness_report())
          |> assign_form(:operator_form, Runtime.change_operator_secret(secret))}
 
       {:error, changeset} ->
@@ -196,6 +205,43 @@ defmodule HydraXWeb.SetupLive do
       flash={@flash}
       operator_authenticated={@operator_authenticated}
     >
+      <section class="mb-6">
+        <article class="glass-panel p-6">
+          <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">
+            Preview readiness
+          </div>
+          <h2 class="mt-3 font-display text-4xl">Install preflight</h2>
+          <p class="mt-3 max-w-3xl text-sm text-[var(--hx-mute)]">
+            Required items should be green before exposing the node publicly. Recommended items improve operator experience and recovery but do not block local boot.
+          </p>
+          <div class="mt-6 grid gap-3 lg:grid-cols-2">
+            <article
+              :for={item <- @readiness_report.items}
+              class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4"
+            >
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                    {if item.required, do: "required", else: "recommended"}
+                  </div>
+                  <div class="mt-2 font-display text-2xl">{item.label}</div>
+                </div>
+                <span class={[
+                  "rounded-full border px-3 py-1 font-mono text-xs uppercase tracking-[0.18em]",
+                  if(item.status == :ok,
+                    do: "border-emerald-400/20 bg-emerald-400/10 text-emerald-300",
+                    else: "border-amber-400/20 bg-amber-400/10 text-amber-300"
+                  )
+                ]}>
+                  {item.status}
+                </span>
+              </div>
+              <p class="mt-3 text-sm text-[var(--hx-mute)]">{item.detail}</p>
+            </article>
+          </div>
+        </article>
+      </section>
+
       <section class="mb-6">
         <article class="glass-panel p-6">
           <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">

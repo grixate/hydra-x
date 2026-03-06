@@ -285,6 +285,19 @@ defmodule HydraX.RuntimeTest do
     assert backups.root == backup_root
   end
 
+  test "readiness report marks required local-only setup as warnings" do
+    report = Runtime.readiness_report()
+
+    assert report.summary == :warn
+
+    public_url =
+      report.items
+      |> Enum.find(&(&1.id == "public_url"))
+
+    assert public_url.required
+    assert public_url.status == :warn
+  end
+
   test "heartbeat jobs are ensured once and create persisted job runs" do
     agent = create_agent()
     {:ok, pid} = HydraX.Agent.ensure_started(agent)
