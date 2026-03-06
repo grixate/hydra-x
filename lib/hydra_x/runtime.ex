@@ -7,7 +7,15 @@ defmodule HydraX.Runtime do
 
   alias HydraX.Config
   alias HydraX.Repo
-  alias HydraX.Runtime.{AgentProfile, Checkpoint, Conversation, ProviderConfig, Turn}
+
+  alias HydraX.Runtime.{
+    AgentProfile,
+    Checkpoint,
+    Conversation,
+    ProviderConfig,
+    TelegramConfig,
+    Turn
+  }
 
   @default_agent_slug "hydra-primary"
 
@@ -134,6 +142,50 @@ defmodule HydraX.Runtime do
     |> unwrap_transaction()
   end
 
+  def enabled_telegram_config do
+    TelegramConfig
+    |> where([config], config.enabled == true)
+    |> preload([:default_agent])
+    |> limit(1)
+    |> Repo.one()
+  end
+
+  def list_telegram_configs do
+    TelegramConfig
+    |> preload([:default_agent])
+    |> order_by([config], desc: config.enabled, desc: config.updated_at)
+    |> Repo.all()
+  end
+
+  def change_telegram_config(config \\ %TelegramConfig{}, attrs \\ %{}) do
+    TelegramConfig.changeset(config, attrs)
+  end
+
+  def save_telegram_config(attrs) when is_map(attrs) do
+    config = enabled_telegram_config() || List.first(list_telegram_configs()) || %TelegramConfig{}
+    save_telegram_config(config, attrs)
+  end
+
+  def save_telegram_config(%TelegramConfig{} = config, attrs) do
+    Repo.transaction(fn ->
+      changeset = TelegramConfig.changeset(config, attrs)
+
+      record =
+        case Repo.insert_or_update(changeset) do
+          {:ok, record} -> record
+          {:error, changeset} -> Repo.rollback(changeset)
+        end
+
+      if record.enabled do
+        from(other in TelegramConfig, where: other.id != ^record.id and other.enabled == true)
+        |> Repo.update_all(set: [enabled: false])
+      end
+
+      Repo.preload(record, [:default_agent])
+    end)
+    |> unwrap_transaction()
+  end
+
   def list_conversations(opts \\ []) do
     agent_id = Keyword.get(opts, :agent_id)
     limit = Keyword.get(opts, :limit, 25)
@@ -243,6 +295,22 @@ defmodule HydraX.Runtime do
         name: "providers",
         status: if(provider, do: :ok, else: :warn),
         detail: (provider && "#{provider.kind}: #{provider.model}") || "mock fallback"
+      },
+      %{
+        name: "telegram",
+        status: if(enabled_telegram_config(), do: :ok, else: :warn),
+        detail:
+          case enabled_telegram_config() do
+            %{bot_username: username, default_agent: %{name: agent_name}}
+            when is_binary(username) and username != "" ->
+              "@#{username} -> #{agent_name}"
+
+            %{default_agent: %{name: agent_name}} ->
+              "configured -> #{agent_name}"
+
+            nil ->
+              "not configured"
+          end
       },
       %{
         name: "workspace",

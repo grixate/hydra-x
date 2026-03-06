@@ -16,6 +16,8 @@ Hydra-X is a self-hosted Elixir agent runtime with a Phoenix control plane. This
   OpenAI-compatible, Anthropic, and a built-in mock fallback
 - Management UI routes:
   `/`, `/setup`, `/agents`, `/conversations`, `/memory`, `/settings/providers`, `/health`
+- Telegram ingress:
+  `/api/telegram/webhook` routes inbound updates into persisted channel conversations
 - Operator commands:
   `mix hydra_x.new`, `mix hydra_x.serve`, `mix hydra_x.chat`, `mix hydra_x.migrate`, `mix hydra_x.healthcheck`
 
@@ -32,6 +34,12 @@ Open [http://localhost:4000](http://localhost:4000), go to `/setup`, configure a
 ```bash
 mix hydra_x.chat -m "Remember that Hydra-X is bootable."
 mix hydra_x.chat -m "What do you remember about Hydra-X?"
+```
+
+To enable Telegram, configure the bot token on `/setup`, then set the Telegram webhook to:
+
+```text
+https://<your-host>/api/telegram/webhook
 ```
 
 The repository also includes a thin command wrapper:

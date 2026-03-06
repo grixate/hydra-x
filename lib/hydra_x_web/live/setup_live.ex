@@ -2,7 +2,7 @@ defmodule HydraXWeb.SetupLive do
   use HydraXWeb, :live_view
 
   alias HydraX.Runtime
-  alias HydraX.Runtime.{AgentProfile, ProviderConfig}
+  alias HydraX.Runtime.{AgentProfile, ProviderConfig, TelegramConfig}
   alias HydraXWeb.AppShell
 
   @impl true
@@ -13,6 +13,10 @@ defmodule HydraXWeb.SetupLive do
       Runtime.enabled_provider() || List.first(Runtime.list_provider_configs()) ||
         %ProviderConfig{}
 
+    telegram =
+      Runtime.enabled_telegram_config() || List.first(Runtime.list_telegram_configs()) ||
+        %TelegramConfig{default_agent_id: agent.id}
+
     {:ok,
      socket
      |> assign(:page_title, "Setup")
@@ -20,8 +24,10 @@ defmodule HydraXWeb.SetupLive do
      |> assign(:stats, stats())
      |> assign(:agent, agent)
      |> assign(:provider, provider)
+     |> assign(:telegram, telegram)
      |> assign_form(:agent_form, Runtime.change_agent(agent))
-     |> assign_form(:provider_form, Runtime.change_provider_config(provider))}
+     |> assign_form(:provider_form, Runtime.change_provider_config(provider))
+     |> assign_form(:telegram_form, Runtime.change_telegram_config(telegram))}
   end
 
   @impl true
@@ -54,6 +60,23 @@ defmodule HydraXWeb.SetupLive do
 
       {:error, changeset} ->
         {:noreply, assign_form(socket, :provider_form, changeset)}
+    end
+  end
+
+  def handle_event("save_telegram", %{"telegram_config" => params}, socket) do
+    params = Map.put_new(params, "default_agent_id", socket.assigns.agent.id)
+
+    case Runtime.save_telegram_config(socket.assigns.telegram, params) do
+      {:ok, telegram} ->
+        {:noreply,
+         socket
+         |> put_flash(:info, "Telegram updated")
+         |> assign(:telegram, telegram)
+         |> assign(:stats, stats())
+         |> assign_form(:telegram_form, Runtime.change_telegram_config(telegram))}
+
+      {:error, changeset} ->
+        {:noreply, assign_form(socket, :telegram_form, changeset)}
     end
   end
 
@@ -109,6 +132,33 @@ defmodule HydraXWeb.SetupLive do
             />
             <div class="pt-2">
               <.button>Save provider</.button>
+            </div>
+          </.form>
+        </article>
+      </section>
+
+      <section class="mt-6">
+        <article class="glass-panel p-6">
+          <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">
+            Telegram channel
+          </div>
+          <h2 class="mt-3 font-display text-4xl">Webhook ingress</h2>
+          <p class="mt-3 max-w-3xl text-sm text-[var(--hx-mute)]">
+            Configure a Telegram bot and point its webhook at <span class="font-mono text-[var(--hx-accent)]">/api/telegram/webhook</span>.
+            Inbound messages are routed into the default agent and persisted as channel conversations.
+          </p>
+          <.form
+            for={@telegram_form}
+            id="telegram-form"
+            phx-submit="save_telegram"
+            class="mt-6 grid gap-4 xl:grid-cols-2"
+          >
+            <.input field={@telegram_form[:bot_username]} label="Bot username" />
+            <.input field={@telegram_form[:bot_token]} type="password" label="Bot token" />
+            <.input field={@telegram_form[:webhook_secret]} label="Webhook secret (optional)" />
+            <.input field={@telegram_form[:enabled]} type="checkbox" label="Enable Telegram ingress" />
+            <div class="xl:col-span-2 pt-2">
+              <.button>Save Telegram settings</.button>
             </div>
           </.form>
         </article>

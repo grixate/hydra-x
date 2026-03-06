@@ -26,6 +26,12 @@ defmodule HydraXWeb.Router do
     live "/health", HealthLive
   end
 
+  scope "/api", HydraXWeb do
+    pipe_through :api
+
+    post "/telegram/webhook", TelegramWebhookController, :create
+  end
+
   # Other scopes may use custom stacks.
   # scope "/api", HydraXWeb do
   #   pipe_through :api

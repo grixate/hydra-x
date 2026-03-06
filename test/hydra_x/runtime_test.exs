@@ -7,7 +7,8 @@ defmodule HydraX.RuntimeTest do
 
   test "chat flow persists turns and memory recall works" do
     agent = Runtime.ensure_default_agent!()
-    {:ok, _pid} = HydraX.Agent.ensure_started(agent)
+    {:ok, pid} = HydraX.Agent.ensure_started(agent)
+    on_exit(fn -> if Process.alive?(pid), do: Process.exit(pid, :shutdown) end)
 
     {:ok, write_conversation} =
       Runtime.start_conversation(agent, %{channel: "cli", title: "memory-write"})

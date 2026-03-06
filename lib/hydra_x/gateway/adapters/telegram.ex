@@ -6,8 +6,14 @@ defmodule HydraX.Gateway.Adapters.Telegram do
   @behaviour HydraX.Gateway.Adapter
 
   @impl true
-  def connect(%{"bot_token" => token}) when is_binary(token) and token != "" do
-    {:ok, %{bot_token: token}}
+  def connect(%{"bot_token" => token} = config) when is_binary(token) and token != "" do
+    {:ok,
+     %{
+       bot_token: token,
+       bot_username: config["bot_username"],
+       webhook_secret: config["webhook_secret"],
+       deliver: config["deliver"]
+     }}
   end
 
   def connect(_config), do: {:error, :missing_bot_token}
@@ -27,7 +33,18 @@ defmodule HydraX.Gateway.Adapters.Telegram do
   def handle_event(_event, state), do: {:messages, [], state}
 
   @impl true
-  def send_response(%{content: content, external_ref: external_ref}, %{bot_token: token}) do
+  def send_response(%{content: content, external_ref: external_ref}, %{
+        bot_token: token,
+        deliver: deliver
+      }) do
+    do_send_response(content, external_ref, token, deliver)
+  end
+
+  defp do_send_response(content, external_ref, _token, deliver) when is_function(deliver, 1) do
+    deliver.(%{content: content, external_ref: external_ref})
+  end
+
+  defp do_send_response(content, external_ref, token, _deliver) do
     case Req.post(
            url: "https://api.telegram.org/bot#{token}/sendMessage",
            form: [chat_id: external_ref, text: content]
