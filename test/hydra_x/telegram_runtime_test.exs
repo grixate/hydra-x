@@ -4,7 +4,16 @@ defmodule HydraX.TelegramRuntimeTest do
   alias HydraX.Runtime
 
   test "register_telegram_webhook stores registration metadata" do
-    agent = Runtime.ensure_default_agent!()
+    unique = System.unique_integer([:positive])
+
+    {:ok, agent} =
+      Runtime.save_agent(%{
+        name: "Telegram Agent #{unique}",
+        slug: "telegram-agent-#{unique}",
+        workspace_root: Path.join(System.tmp_dir!(), "hydra-x-telegram-#{unique}"),
+        description: "telegram runtime test agent",
+        is_default: false
+      })
 
     {:ok, telegram} =
       Runtime.save_telegram_config(%{

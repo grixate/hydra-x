@@ -18,6 +18,8 @@ Hydra-X is a self-hosted Elixir agent runtime with a Phoenix control plane. This
   `/`, `/setup`, `/agents`, `/conversations`, `/memory`, `/settings/providers`, `/health`
 - Telegram ingress:
   `/api/telegram/webhook` routes inbound updates into persisted channel conversations
+- Budget guardrails:
+  persisted token policies, preflight enforcement, usage accounting, and safety event logging
 - Operator commands:
   `mix hydra_x.new`, `mix hydra_x.serve`, `mix hydra_x.chat`, `mix hydra_x.migrate`, `mix hydra_x.healthcheck`, `mix hydra_x.telegram.webhook`
 
@@ -63,6 +65,8 @@ Key runtime areas:
 - `lib/hydra_x/runtime.ex`: persistence and orchestration helpers
 - `lib/hydra_x/agent/`: supervised agent processes
 - `lib/hydra_x/memory/`: typed memory and markdown rendering
+- `lib/hydra_x/budget/`: budget policy and usage accounting
+- `lib/hydra_x/safety/`: safety event logging
 - `lib/hydra_x/llm/`: provider routing and adapters
 - `lib/hydra_x_web/live/`: management UI pages
 - `workspace_template/`: scaffolded workspace contract

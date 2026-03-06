@@ -302,8 +302,18 @@ defmodule HydraX.Runtime do
     |> Repo.insert_or_update()
   end
 
+  def update_conversation_metadata(%Conversation{} = conversation, attrs) when is_map(attrs) do
+    metadata = Map.merge(conversation.metadata || %{}, attrs)
+
+    conversation
+    |> Conversation.changeset(%{metadata: metadata})
+    |> Repo.update()
+  end
+
   def health_snapshot do
     provider = enabled_provider()
+    default_agent = get_default_agent()
+    budget_policy = default_agent && HydraX.Budget.ensure_policy!(default_agent.id)
 
     [
       %{name: "database", status: :ok, detail: "SQLite repo online"},
@@ -331,6 +341,15 @@ defmodule HydraX.Runtime do
 
             nil ->
               "not configured"
+          end
+      },
+      %{
+        name: "budget",
+        status: if(budget_policy, do: :ok, else: :warn),
+        detail:
+          case budget_policy do
+            nil -> "no policy configured"
+            policy -> "daily #{policy.daily_limit} · conversation #{policy.conversation_limit}"
           end
       },
       %{
@@ -362,6 +381,24 @@ defmodule HydraX.Runtime do
           registered_at: config.webhook_registered_at,
           default_agent_name: config.default_agent && config.default_agent.name
         }
+    end
+  end
+
+  def budget_status do
+    agent = get_default_agent()
+    policy = agent && HydraX.Budget.ensure_policy!(agent.id)
+
+    if agent && policy do
+      usage = HydraX.Budget.usage_snapshot(agent.id, nil)
+
+      %{
+        agent_name: agent.name,
+        policy: policy,
+        usage: usage,
+        safety_events: HydraX.Safety.recent_events(agent.id, 10)
+      }
+    else
+      %{agent_name: nil, policy: nil, usage: nil, safety_events: []}
     end
   end
 

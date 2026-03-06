@@ -4,7 +4,16 @@ defmodule HydraXWeb.TelegramWebhookControllerTest do
   alias HydraX.Runtime
 
   test "rejects webhook requests with invalid secret", %{conn: conn} do
-    agent = Runtime.ensure_default_agent!()
+    unique = System.unique_integer([:positive])
+
+    {:ok, agent} =
+      Runtime.save_agent(%{
+        name: "Controller Agent #{unique}",
+        slug: "controller-agent-#{unique}",
+        workspace_root: Path.join(System.tmp_dir!(), "hydra-x-controller-#{unique}"),
+        description: "controller test agent",
+        is_default: false
+      })
 
     {:ok, _telegram} =
       Runtime.save_telegram_config(%{

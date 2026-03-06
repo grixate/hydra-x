@@ -48,9 +48,22 @@ defmodule HydraXWeb.ConversationsLive do
                 )
               ]}
             >
-              <div class="font-display text-2xl">{conversation.title || "Untitled"}</div>
-              <div class="mt-1 text-sm text-[var(--hx-mute)]">
-                {conversation.channel} · {conversation.agent.name}
+              <div class="flex items-start justify-between gap-4">
+                <div>
+                  <div class="font-display text-2xl">{conversation.title || "Untitled"}</div>
+                  <div class="mt-1 text-sm text-[var(--hx-mute)]">
+                    {conversation.channel} · {conversation.agent.name}
+                  </div>
+                </div>
+                <span
+                  :if={delivery = last_delivery(conversation)}
+                  class={[
+                    "rounded-full border px-3 py-1 font-mono text-[10px] uppercase tracking-[0.18em]",
+                    delivery_badge_class(delivery["status"])
+                  ]}
+                >
+                  {delivery["status"]}
+                </span>
               </div>
             </.link>
           </div>
@@ -61,6 +74,26 @@ defmodule HydraXWeb.ConversationsLive do
             <div class="border-b border-white/10 pb-4">
               <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">Transcript</div>
               <h2 class="mt-3 font-display text-4xl">{@selected.title || "Untitled conversation"}</h2>
+              <div :if={delivery = last_delivery(@selected)} class="mt-4 flex flex-wrap gap-2 text-xs">
+                <span class={[
+                  "rounded-full border px-3 py-1 font-mono uppercase tracking-[0.18em]",
+                  delivery_badge_class(delivery["status"])
+                ]}>
+                  delivery {delivery["status"]}
+                </span>
+                <span class="rounded-full border border-white/10 px-3 py-1 font-mono uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                  chat {delivery["external_ref"]}
+                </span>
+                <span
+                  :if={delivery["provider_message_id"]}
+                  class="rounded-full border border-white/10 px-3 py-1 font-mono uppercase tracking-[0.18em] text-[var(--hx-mute)]"
+                >
+                  message {delivery["provider_message_id"]}
+                </span>
+              </div>
+              <p :if={delivery_reason(@selected)} class="mt-3 text-sm text-[var(--hx-mute)]">
+                {delivery_reason(@selected)}
+              </p>
             </div>
 
             <div class="space-y-3">
@@ -90,6 +123,24 @@ defmodule HydraXWeb.ConversationsLive do
 
   defp maybe_load(nil), do: nil
   defp maybe_load(conversation), do: Runtime.get_conversation!(conversation.id)
+
+  defp last_delivery(conversation) do
+    metadata = conversation.metadata || %{}
+    metadata["last_delivery"] || metadata[:last_delivery]
+  end
+
+  defp delivery_reason(conversation) do
+    case last_delivery(conversation) do
+      nil -> nil
+      delivery -> delivery["reason"] || delivery[:reason]
+    end
+  end
+
+  defp delivery_badge_class("delivered"),
+    do: "border-emerald-400/30 bg-emerald-400/10 text-emerald-200"
+
+  defp delivery_badge_class("failed"), do: "border-rose-400/30 bg-rose-400/10 text-rose-200"
+  defp delivery_badge_class(_), do: "border-white/10 bg-black/10 text-[var(--hx-mute)]"
 
   defp stats do
     %{

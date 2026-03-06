@@ -18,6 +18,7 @@ defmodule HydraX.Runtime.Bootstrap do
   @impl true
   def handle_info(:bootstrap, state) do
     agent = HydraX.Runtime.ensure_default_agent!()
+    HydraX.Budget.ensure_policy!(agent.id)
     HydraX.Agent.ensure_started(agent)
     {:noreply, Map.put(state, :bootstrapped_at, DateTime.utc_now())}
   end

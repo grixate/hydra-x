@@ -36,8 +36,13 @@ defmodule HydraX.DataCase do
   Sets up the sandbox based on the test tags.
   """
   def setup_sandbox(tags) do
+    shutdown_runtime_processes()
     pid = Ecto.Adapters.SQL.Sandbox.start_owner!(HydraX.Repo, shared: not tags[:async])
-    on_exit(fn -> Ecto.Adapters.SQL.Sandbox.stop_owner(pid) end)
+
+    on_exit(fn ->
+      shutdown_runtime_processes()
+      Ecto.Adapters.SQL.Sandbox.stop_owner(pid)
+    end)
   end
 
   @doc """
@@ -54,5 +59,31 @@ defmodule HydraX.DataCase do
         opts |> Keyword.get(String.to_existing_atom(key), key) |> to_string()
       end)
     end)
+  end
+
+  def shutdown_process(pid) when is_pid(pid) do
+    ref = Process.monitor(pid)
+    Process.exit(pid, :shutdown)
+
+    receive do
+      {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+    after
+      1_000 -> :ok
+    end
+  end
+
+  def shutdown_runtime_processes do
+    if Process.whereis(HydraX.ProcessRegistry) do
+      HydraX.ProcessRegistry
+      |> Registry.select([{{:"$1", :"$2", :_}, [], [:"$2"]}])
+      |> Enum.uniq()
+      |> Enum.each(fn pid ->
+        if is_pid(pid) and Process.alive?(pid) do
+          shutdown_process(pid)
+        end
+      end)
+    end
+
+    :ok
   end
 end

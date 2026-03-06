@@ -3,9 +3,11 @@ defmodule HydraX.Agent.Channel do
   @behaviour :gen_statem
 
   alias HydraX.Agent.{Branch, Compactor, PromptBuilder, Worker}
+  alias HydraX.Budget
   alias HydraX.Config
   alias HydraX.LLM.Router
   alias HydraX.Runtime
+  alias HydraX.Safety
 
   def start_link(opts) do
     conversation = Keyword.fetch!(opts, :conversation)
@@ -116,18 +118,58 @@ defmodule HydraX.Agent.Channel do
       |> PromptBuilder.build(history, bulletin, summary, tool_results)
       |> Map.put(:analysis, analysis)
 
-    {:ok, response} = Router.complete(prompt)
+    estimated_input_tokens = Budget.estimate_prompt_tokens(prompt.messages)
+
+    {response_content, response_metadata} =
+      case Budget.preflight(data.agent_id, data.conversation.id, estimated_input_tokens) do
+        {:ok, result} ->
+          maybe_log_budget_warning(data, result)
+
+          {:ok, response} = Router.complete(prompt)
+          output_tokens = Budget.estimate_tokens(response.content)
+
+          Budget.record_usage(data.agent_id, data.conversation.id,
+            tokens_in: estimated_input_tokens,
+            tokens_out: output_tokens,
+            metadata: %{provider: response.provider}
+          )
+
+          {response.content,
+           %{
+             provider: response.provider,
+             analysis: analysis,
+             tools: tool_results,
+             budget: %{tokens_in: estimated_input_tokens, tokens_out: output_tokens}
+           }}
+
+        {:error, details} ->
+          Safety.log_event(%{
+            agent_id: data.agent_id,
+            conversation_id: data.conversation.id,
+            category: "budget",
+            level: "error",
+            message: "Budget hard limit exceeded",
+            metadata: %{
+              estimated_tokens: estimated_input_tokens,
+              usage: details.usage
+            }
+          })
+
+          {"Budget limit reached for this agent or conversation. Raise the policy in /budget before sending more LLM traffic.",
+           %{
+             provider: "budget-guard",
+             analysis: analysis,
+             tools: tool_results,
+             budget: %{tokens_in: estimated_input_tokens, rejected: true}
+           }}
+      end
 
     {:ok, assistant_turn} =
       Runtime.append_turn(data.conversation, %{
         role: "assistant",
         kind: "message",
-        content: response.content,
-        metadata: %{
-          provider: response.provider,
-          analysis: analysis,
-          tools: tool_results
-        }
+        content: response_content,
+        metadata: response_metadata
       })
 
     Runtime.upsert_checkpoint(data.conversation.id, "channel", %{
@@ -150,4 +192,29 @@ defmodule HydraX.Agent.Channel do
   end
 
   def handle_event(_type, _event, _state, data), do: {:keep_state, data}
+
+  defp maybe_log_budget_warning(_data, %{warnings: []}), do: :ok
+
+  defp maybe_log_budget_warning(data, %{warnings: warnings, usage: usage}) do
+    {level, message} =
+      cond do
+        :hard_limit_reached in warnings ->
+          {"warn", "Budget hard limit reached but policy is set to warn only"}
+
+        :soft_limit_reached in warnings ->
+          {"warn", "Budget soft limit reached"}
+
+        true ->
+          {"info", "Budget policy warning"}
+      end
+
+    Safety.log_event(%{
+      agent_id: data.agent_id,
+      conversation_id: data.conversation.id,
+      category: "budget",
+      level: level,
+      message: message,
+      metadata: %{warnings: warnings, usage: usage}
+    })
+  end
 end

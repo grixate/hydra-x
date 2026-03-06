@@ -59,7 +59,11 @@ defmodule HydraX.Gateway.Adapters.Telegram do
   end
 
   defp do_send_response(content, external_ref, _token, deliver) when is_function(deliver, 1) do
-    deliver.(%{content: content, external_ref: external_ref})
+    case deliver.(%{content: content, external_ref: external_ref}) do
+      :ok -> {:ok, %{channel: "telegram"}}
+      {:ok, metadata} when is_map(metadata) -> {:ok, Map.put_new(metadata, :channel, "telegram")}
+      other -> other
+    end
   end
 
   defp do_send_response(content, external_ref, token, _deliver) do
@@ -67,9 +71,22 @@ defmodule HydraX.Gateway.Adapters.Telegram do
            url: "https://api.telegram.org/bot#{token}/sendMessage",
            form: [chat_id: external_ref, text: content]
          ) do
-      {:ok, %{status: 200}} -> :ok
-      {:ok, response} -> {:error, {:telegram_error, response.status}}
-      {:error, reason} -> {:error, reason}
+      {:ok, %{status: 200, body: %{"ok" => true, "result" => result}}} ->
+        {:ok,
+         %{
+           channel: "telegram",
+           provider_message_id: Map.get(result, "message_id"),
+           status: 200
+         }}
+
+      {:ok, %{status: 200}} ->
+        {:ok, %{channel: "telegram", status: 200}}
+
+      {:ok, response} ->
+        {:error, {:telegram_error, response.status}}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
