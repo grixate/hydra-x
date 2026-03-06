@@ -44,6 +44,42 @@ defmodule HydraXWeb.ConnCase do
       Phoenix.ConnTest.build_conn()
       |> Plug.Conn.put_req_header("user-agent", metadata)
 
+    seed_default_agent()
+
     {:ok, conn: conn}
+  end
+
+  defp seed_default_agent do
+    workspace_root = HydraX.Config.default_workspace("hydra-primary")
+    HydraX.Workspace.Scaffold.copy_template!(workspace_root)
+
+    attrs = %{
+      name: "Hydra Prime",
+      slug: "hydra-primary",
+      status: "active",
+      description: "Default Hydra-X operator agent",
+      is_default: true,
+      workspace_root: workspace_root,
+      runtime_state: %{}
+    }
+
+    changeset =
+      HydraX.Runtime.AgentProfile.changeset(%HydraX.Runtime.AgentProfile{}, attrs)
+
+    HydraX.Repo.insert(
+      changeset,
+      on_conflict: [
+        set: [
+          name: attrs.name,
+          status: attrs.status,
+          description: attrs.description,
+          is_default: attrs.is_default,
+          workspace_root: attrs.workspace_root,
+          runtime_state: attrs.runtime_state,
+          updated_at: DateTime.utc_now()
+        ]
+      ],
+      conflict_target: :slug
+    )
   end
 end

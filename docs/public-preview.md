@@ -8,6 +8,7 @@ This repository is now beyond the initial skeleton. Use this checklist before ex
 2. Run `mix deps.get`.
 3. Run `mix hydra_x.migrate`.
 4. Start the node with `mix hydra_x.serve`.
+5. Export a deployment template with `mix hydra_x.install --output ./deploy`.
 
 ## Control Plane
 
@@ -42,6 +43,7 @@ This repository is now beyond the initial skeleton. Use this checklist before ex
 
 1. Back up `hydra_x_dev.db` and the agent workspace root together.
 2. Prefer using `mix hydra_x.backup` or `./hydra_x backup` to create a timestamped archive.
-3. On restart, run `mix hydra_x.migrate` before bringing the node back online.
-4. Re-run `./hydra_x healthcheck` after deploys or crashes.
-5. Use `/conversations`, `/memory`, and `/jobs` to verify persisted state after recovery.
+3. Use `mix hydra_x.restore --archive <bundle> --target <dir>` to validate that bundles unpack cleanly before relying on them.
+4. On restart, run `mix hydra_x.migrate` before bringing the node back online.
+5. Re-run `./hydra_x healthcheck` after deploys or crashes.
+6. Use `/conversations`, `/memory`, and `/jobs` to verify persisted state after recovery.

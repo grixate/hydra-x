@@ -29,7 +29,7 @@ Hydra-X is a self-hosted Elixir agent runtime with a Phoenix control plane. This
 - Observability:
   telemetry counters for provider, tool, gateway, and scheduler activity surfaced in `/health`
 - Operator commands:
-  `mix hydra_x.new`, `mix hydra_x.serve`, `mix hydra_x.chat`, `mix hydra_x.migrate`, `mix hydra_x.healthcheck`, `mix hydra_x.telegram.webhook`, `mix hydra_x.providers.test`, `mix hydra_x.jobs`, `mix hydra_x.backup`, `mix hydra_x.doctor`
+  `mix hydra_x.new`, `mix hydra_x.serve`, `mix hydra_x.chat`, `mix hydra_x.migrate`, `mix hydra_x.healthcheck`, `mix hydra_x.telegram.webhook`, `mix hydra_x.providers.test`, `mix hydra_x.jobs`, `mix hydra_x.backup`, `mix hydra_x.restore`, `mix hydra_x.doctor`, `mix hydra_x.install`
 
 ## Quick start
 
@@ -69,7 +69,9 @@ The repository also includes a thin command wrapper:
 ./hydra_x provider-test
 ./hydra_x jobs
 ./hydra_x backup
+./hydra_x restore /path/to/hydra-x-backup.tar.gz
 ./hydra_x doctor
+./hydra_x install
 ```
 
 If you want to lock the management UI, set an operator password on `/setup`. After that, browser access requires signing in at `/login`.
@@ -88,8 +90,23 @@ mix hydra_x.backup
 mix hydra_x.backup --output /var/backups/hydra-x
 ```
 
+Portable restore bundles can be unpacked into a clean target directory with:
+
+```bash
+mix hydra_x.restore /var/backups/hydra-x/hydra-x-backup-20260307-010000.tar.gz
+mix hydra_x.restore --archive /var/backups/hydra-x/hydra-x-backup-20260307-010000.tar.gz --target ./restore-staging
+```
+
+Deployment templates can be exported with:
+
+```bash
+mix hydra_x.install
+mix hydra_x.install --output ./deploy
+```
+
 The health page also shows active OTP alarms and the latest backup manifests so recovery state is visible without shell access.
 The setup page now includes a preview-readiness preflight, and the CLI equivalent is `mix hydra_x.doctor`.
+The setup page can also export the install bundle and create a backup bundle directly from the UI.
 
 ## Project shape
 

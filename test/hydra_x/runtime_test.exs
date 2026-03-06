@@ -298,6 +298,16 @@ defmodule HydraX.RuntimeTest do
     assert public_url.status == :warn
   end
 
+  test "install snapshot exposes deployment paths and readiness" do
+    snapshot = Runtime.install_snapshot()
+
+    assert is_binary(snapshot.public_url)
+    assert is_binary(snapshot.database_path)
+    assert is_binary(snapshot.workspace_root)
+    assert is_binary(snapshot.backup_root)
+    assert is_map(snapshot.readiness)
+  end
+
   test "heartbeat jobs are ensured once and create persisted job runs" do
     agent = create_agent()
     {:ok, pid} = HydraX.Agent.ensure_started(agent)

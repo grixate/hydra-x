@@ -22,6 +22,7 @@ config :hydra_x, HydraXWeb.Endpoint,
 # In test we don't send emails
 config :hydra_x, HydraX.Mailer, adapter: Swoosh.Adapters.Test
 config :hydra_x, :bootstrap_runtime, false
+config :hydra_x, :scheduler_enabled, false
 
 # Disable swoosh api client as it is only required for production adapters
 config :swoosh, :api_client, false

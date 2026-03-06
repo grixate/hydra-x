@@ -497,19 +497,21 @@ defmodule HydraX.Runtime do
     if changeset.valid? do
       secret = Ecto.Changeset.apply_changes(changeset)
 
-      Repo.insert(
-        changeset,
-        on_conflict: [
-          set: [
-            password_hash: secret.password_hash,
-            password_salt: secret.password_salt,
-            last_rotated_at: secret.last_rotated_at,
-            updated_at: DateTime.utc_now()
-          ]
-        ],
-        conflict_target: :scope,
-        returning: true
-      )
+      retry_on_busy(fn ->
+        Repo.insert(
+          changeset,
+          on_conflict: [
+            set: [
+              password_hash: secret.password_hash,
+              password_salt: secret.password_salt,
+              last_rotated_at: secret.last_rotated_at,
+              updated_at: DateTime.utc_now()
+            ]
+          ],
+          conflict_target: :scope,
+          returning: true
+        )
+      end)
     else
       {:error, changeset}
     end
@@ -967,16 +969,27 @@ defmodule HydraX.Runtime do
     }
   end
 
+  def install_snapshot do
+    public_url = Config.public_base_url()
+    uri = URI.parse(public_url)
+
+    %{
+      generated_at: DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601(),
+      public_url: public_url,
+      phx_host: uri.host || "localhost",
+      port: uri.port || default_port(uri.scheme),
+      database_path: Config.repo_database_path(),
+      workspace_root: Config.workspace_root(),
+      backup_root: Config.backup_root(),
+      http_allowlist: Config.http_allowlist(),
+      shell_allowlist: Config.shell_allowlist(),
+      readiness: readiness_report()
+    }
+  end
+
   def backup_status do
     root = Config.backup_root()
-
-    manifests =
-      root
-      |> Path.join("hydra-x-backup-*.json")
-      |> Path.wildcard()
-      |> Enum.sort(:desc)
-      |> Enum.map(&read_backup_manifest/1)
-      |> Enum.reject(&is_nil/1)
+    manifests = HydraX.Backup.list_manifests(root)
 
     %{
       root: root,
@@ -999,6 +1012,9 @@ defmodule HydraX.Runtime do
 
   defp describe_allowlist([]), do: "public hosts"
   defp describe_allowlist(hosts), do: Enum.join(hosts, ", ")
+
+  defp default_port("https"), do: 443
+  defp default_port(_scheme), do: 4000
 
   defp provider_module(%ProviderConfig{kind: "openai_compatible"}),
     do: HydraX.LLM.Providers.OpenAICompatible
@@ -1116,18 +1132,23 @@ defmodule HydraX.Runtime do
     end
   end
 
-  defp read_backup_manifest(path) do
-    with {:ok, body} <- File.read(path),
-         {:ok, manifest} <- Jason.decode(body) do
-      Map.put(manifest, "manifest_path", path)
-    else
-      _ -> nil
-    end
-  end
-
   defp normalize_integer(nil), do: nil
   defp normalize_integer(value) when is_integer(value), do: value
   defp normalize_integer(value) when is_binary(value), do: String.to_integer(value)
+
+  defp retry_on_busy(fun, attempts \\ 5)
+
+  defp retry_on_busy(fun, attempts) do
+    fun.()
+  rescue
+    error in Exqlite.Error ->
+      if attempts > 1 and String.contains?(Exception.message(error), "Database busy") do
+        Process.sleep(50)
+        retry_on_busy(fun, attempts - 1)
+      else
+        reraise error, __STACKTRACE__
+      end
+  end
 
   defp maybe_filter_agent(query, nil), do: query
 
