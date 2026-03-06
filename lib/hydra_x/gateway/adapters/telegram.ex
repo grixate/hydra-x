@@ -19,12 +19,15 @@ defmodule HydraX.Gateway.Adapters.Telegram do
   def connect(_config), do: {:error, :missing_bot_token}
 
   @impl true
-  def handle_event(%{"message" => %{"chat" => %{"id" => chat_id}, "text" => text}} = event, state) do
+  def handle_event(%{"message" => %{"chat" => %{"id" => chat_id}} = message} = event, state) do
+    attachments = extract_attachments(message)
+    content = message_content(message, attachments)
+
     message = %{
       channel: "telegram",
       external_ref: to_string(chat_id),
-      content: text,
-      metadata: %{raw: event}
+      content: content,
+      metadata: %{raw: event, attachments: attachments}
     }
 
     {:messages, [message], state}
@@ -115,4 +118,99 @@ defmodule HydraX.Gateway.Adapters.Telegram do
   defp maybe_put_secret(body, nil), do: body
   defp maybe_put_secret(body, ""), do: body
   defp maybe_put_secret(body, secret), do: Map.put(body, :secret_token, secret)
+
+  defp message_content(message, attachments) do
+    message["text"] ||
+      message["caption"] ||
+      attachment_summary(attachments)
+  end
+
+  defp attachment_summary([]), do: "[Telegram attachment]"
+
+  defp attachment_summary(attachments) do
+    kinds =
+      attachments
+      |> Enum.map(& &1["kind"])
+      |> Enum.uniq()
+      |> Enum.join(", ")
+
+    "[Telegram attachments: #{kinds}]"
+  end
+
+  defp extract_attachments(message) do
+    []
+    |> maybe_add_photo(message["photo"])
+    |> maybe_add_document(message["document"])
+    |> maybe_add_audio("audio", message["audio"])
+    |> maybe_add_audio("voice", message["voice"])
+    |> maybe_add_video(message["video"])
+  end
+
+  defp maybe_add_photo(attachments, photos) when is_list(photos) and photos != [] do
+    photo = List.last(photos)
+
+    attachments ++
+      [
+        %{
+          "kind" => "photo",
+          "file_id" => photo["file_id"],
+          "file_unique_id" => photo["file_unique_id"],
+          "width" => photo["width"],
+          "height" => photo["height"],
+          "file_size" => photo["file_size"]
+        }
+      ]
+  end
+
+  defp maybe_add_photo(attachments, _photos), do: attachments
+
+  defp maybe_add_document(attachments, %{} = document) do
+    attachments ++
+      [
+        %{
+          "kind" => "document",
+          "file_id" => document["file_id"],
+          "file_unique_id" => document["file_unique_id"],
+          "file_name" => document["file_name"],
+          "mime_type" => document["mime_type"],
+          "file_size" => document["file_size"]
+        }
+      ]
+  end
+
+  defp maybe_add_document(attachments, _document), do: attachments
+
+  defp maybe_add_audio(attachments, kind, %{} = audio) do
+    attachments ++
+      [
+        %{
+          "kind" => kind,
+          "file_id" => audio["file_id"],
+          "file_unique_id" => audio["file_unique_id"],
+          "mime_type" => audio["mime_type"],
+          "duration" => audio["duration"],
+          "file_size" => audio["file_size"]
+        }
+      ]
+  end
+
+  defp maybe_add_audio(attachments, _kind, _audio), do: attachments
+
+  defp maybe_add_video(attachments, %{} = video) do
+    attachments ++
+      [
+        %{
+          "kind" => "video",
+          "file_id" => video["file_id"],
+          "file_unique_id" => video["file_unique_id"],
+          "width" => video["width"],
+          "height" => video["height"],
+          "duration" => video["duration"],
+          "mime_type" => video["mime_type"],
+          "file_size" => video["file_size"]
+        }
+      ]
+  end
+
+  defp maybe_add_video(attachments, _video), do: attachments
 end

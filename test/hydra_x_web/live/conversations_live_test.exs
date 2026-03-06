@@ -70,4 +70,31 @@ defmodule HydraXWeb.ConversationsLiveTest do
     assert html =~ "Telegram delivery retried"
     assert html =~ "delivery delivered"
   end
+
+  test "conversations page shows Telegram attachment metadata", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{
+        channel: "telegram",
+        external_ref: "902",
+        title: "Telegram 902"
+      })
+
+    {:ok, _turn} =
+      Runtime.append_turn(conversation, %{
+        role: "user",
+        content: "See attachment",
+        metadata: %{
+          "attachments" => [
+            %{"kind" => "document", "file_name" => "spec.pdf"}
+          ]
+        }
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/conversations")
+
+    html = render(view)
+    assert html =~ "document: spec.pdf"
+  end
 end

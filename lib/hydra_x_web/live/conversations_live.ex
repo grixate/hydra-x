@@ -136,6 +136,14 @@ defmodule HydraXWeb.ConversationsLive do
                   <span class="text-xs text-[var(--hx-mute)]">#{turn.sequence}</span>
                 </div>
                 <p class="mt-3 whitespace-pre-wrap text-sm leading-6">{turn.content}</p>
+                <div :if={turn_attachments(turn) != []} class="mt-3 flex flex-wrap gap-2 text-xs">
+                  <span
+                    :for={attachment <- turn_attachments(turn)}
+                    class="rounded-full border border-white/10 px-3 py-1 font-mono uppercase tracking-[0.18em] text-[var(--hx-mute)]"
+                  >
+                    {attachment_label(attachment)}
+                  </span>
+                </div>
               </div>
             </div>
           </div>
@@ -178,6 +186,22 @@ defmodule HydraXWeb.ConversationsLive do
       %{"status" => "failed", "channel" => "telegram"} -> true
       %{status: "failed", channel: "telegram"} -> true
       _ -> false
+    end
+  end
+
+  defp turn_attachments(turn) do
+    metadata = turn.metadata || %{}
+    metadata["attachments"] || metadata[:attachments] || []
+  end
+
+  defp attachment_label(attachment) do
+    kind = attachment["kind"] || attachment[:kind] || "attachment"
+    file_name = attachment["file_name"] || attachment[:file_name]
+
+    if is_binary(file_name) and file_name != "" do
+      "#{kind}: #{file_name}"
+    else
+      kind
     end
   end
 

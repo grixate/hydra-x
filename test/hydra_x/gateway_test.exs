@@ -134,6 +134,47 @@ defmodule HydraX.GatewayTest do
     assert refreshed.metadata["last_delivery"]["metadata"]["provider_message_id"] == 99
   end
 
+  test "telegram attachment messages preserve attachment metadata" do
+    agent = create_agent()
+    {:ok, pid} = HydraX.Agent.ensure_started(agent)
+    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
+
+    {:ok, _telegram} =
+      Runtime.save_telegram_config(%{
+        bot_token: "test-token",
+        bot_username: "hydrax_bot",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
+    assert :ok =
+             HydraX.Gateway.dispatch_telegram_update(
+               %{
+                 "message" => %{
+                   "chat" => %{"id" => 91},
+                   "caption" => "See attached",
+                   "document" => %{
+                     "file_id" => "doc-1",
+                     "file_unique_id" => "doc-uniq",
+                     "file_name" => "spec.pdf",
+                     "mime_type" => "application/pdf",
+                     "file_size" => 1024
+                   }
+                 }
+               },
+               %{deliver: fn _payload -> :ok end}
+             )
+
+    [conversation] = Runtime.list_conversations(agent_id: agent.id, limit: 10)
+    [user_turn | _] = Runtime.list_turns(conversation.id)
+
+    assert user_turn.role == "user"
+    assert user_turn.content == "See attached"
+
+    assert [%{"kind" => "document", "file_name" => "spec.pdf"}] =
+             user_turn.metadata["attachments"]
+  end
+
   defp create_agent do
     unique = System.unique_integer([:positive])
 
