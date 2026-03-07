@@ -112,7 +112,7 @@ defmodule HydraX.MemoryTaskTest do
         ])
       end)
 
-    assert output =~ "\tFact\t0.9\tHydra-X retains filtered facts."
+    assert output =~ "\tFact\tactive\t0.9\tHydra-X retains filtered facts."
     refute output =~ "Ignore this goal."
   end
 
@@ -163,6 +163,67 @@ defmodule HydraX.MemoryTaskTest do
 
     assert delete_output =~ "deleted_memory=#{memory.id}"
     assert_raise Ecto.NoResultsError, fn -> Memory.get_memory!(memory.id) end
+  end
+
+  test "memory task can reconcile memories with merge and supersede" do
+    Mix.Task.reenable("hydra_x.memory")
+    agent = create_agent()
+
+    {:ok, source} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Fact",
+        content: "Old deployment note",
+        importance: 0.4,
+        last_seen_at: DateTime.utc_now()
+      })
+
+    {:ok, target} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Decision",
+        content: "Current deployment policy",
+        importance: 0.9,
+        last_seen_at: DateTime.utc_now()
+      })
+
+    merge_output =
+      capture_io(fn ->
+        Mix.Tasks.HydraX.Memory.run([
+          "merge",
+          to_string(source.id),
+          to_string(target.id),
+          "--content",
+          "Merged deployment policy"
+        ])
+      end)
+
+    assert merge_output =~ "merged=#{source.id}->#{target.id}"
+    assert Memory.get_memory!(source.id).status == "merged"
+    assert Memory.get_memory!(target.id).content == "Merged deployment policy"
+
+    Mix.Task.reenable("hydra_x.memory")
+
+    {:ok, superseded} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Fact",
+        content: "Deprecated note",
+        importance: 0.2,
+        last_seen_at: DateTime.utc_now()
+      })
+
+    supersede_output =
+      capture_io(fn ->
+        Mix.Tasks.HydraX.Memory.run([
+          "supersede",
+          to_string(superseded.id),
+          to_string(target.id)
+        ])
+      end)
+
+    assert supersede_output =~ "superseded=#{superseded.id}->#{target.id}"
+    assert Memory.get_memory!(superseded.id).status == "superseded"
   end
 
   defp create_agent do

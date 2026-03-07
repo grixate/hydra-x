@@ -139,7 +139,8 @@ defmodule HydraX.Runtime do
       agent: agent,
       content: bulletin,
       updated_at: get_in(agent.runtime_state, ["bulletin_updated_at"]),
-      memory_count: Memory.list_memories(agent_id: agent.id, limit: 6) |> length()
+      memory_count:
+        Memory.list_memories(agent_id: agent.id, limit: 6, status: "active") |> length()
     }
   end
 
@@ -166,7 +167,8 @@ defmodule HydraX.Runtime do
       agent: updated_agent,
       content: bulletin,
       updated_at: updated_at,
-      memory_count: Memory.list_memories(agent_id: agent.id, limit: 6) |> length()
+      memory_count:
+        Memory.list_memories(agent_id: agent.id, limit: 6, status: "active") |> length()
     }
   end
 
@@ -1054,7 +1056,7 @@ defmodule HydraX.Runtime do
   end
 
   defp render_agent_bulletin(agent_id) do
-    Memory.list_memories(agent_id: agent_id, limit: 6)
+    Memory.list_memories(agent_id: agent_id, limit: 6, status: "active")
     |> Enum.map_join("\n", fn memory -> "- [#{memory.type}] #{memory.content}" end)
   end
 

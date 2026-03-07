@@ -550,6 +550,36 @@ defmodule HydraX.RuntimeTest do
     assert Runtime.agent_bulletin(agent.id).content =~ "typed graph memory"
   end
 
+  test "reconciled memories are excluded from active bulletin and markdown exports" do
+    agent = create_agent()
+
+    {:ok, source} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Fact",
+        content: "Deprecated operator preference",
+        importance: 0.5
+      })
+
+    {:ok, target} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Preference",
+        content: "Current operator preference",
+        importance: 0.9
+      })
+
+    assert {:ok, _result} = Memory.reconcile_memory!(source.id, target.id, :supersede)
+
+    bulletin = Runtime.refresh_agent_bulletin!(agent.id)
+    markdown = Memory.render_markdown(agent.id)
+
+    assert bulletin.content =~ "Current operator preference"
+    refute bulletin.content =~ "Deprecated operator preference"
+    assert markdown =~ "Current operator preference"
+    refute markdown =~ "Deprecated operator preference"
+  end
+
   test "conversation compaction can be reviewed and reset" do
     agent = create_agent()
 

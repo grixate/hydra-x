@@ -3,9 +3,11 @@ defmodule HydraX.Memory.Entry do
   import Ecto.Changeset
 
   @types ~w(Fact Preference Decision Identity Event Observation Goal Todo)
+  @statuses ~w(active superseded merged archived)
 
   schema "memory_entries" do
     field :type, :string
+    field :status, :string, default: "active"
     field :content, :string
     field :importance, :float, default: 0.5
     field :metadata, :map, default: %{}
@@ -23,6 +25,7 @@ defmodule HydraX.Memory.Entry do
       :agent_id,
       :conversation_id,
       :type,
+      :status,
       :content,
       :importance,
       :metadata,
@@ -30,6 +33,7 @@ defmodule HydraX.Memory.Entry do
     ])
     |> validate_required([:agent_id, :type, :content])
     |> validate_inclusion(:type, @types)
+    |> validate_inclusion(:status, @statuses)
     |> validate_number(:importance, greater_than_or_equal_to: 0.0, less_than_or_equal_to: 1.0)
     |> assoc_constraint(:agent)
     |> assoc_constraint(:conversation)

@@ -17,6 +17,12 @@ defmodule Mix.Tasks.HydraX.Memory do
       ["delete", id] ->
         delete_memory(id)
 
+      ["merge", source_id, target_id | rest] ->
+        merge_memory(source_id, target_id, rest)
+
+      ["supersede", source_id, target_id] ->
+        supersede_memory(source_id, target_id)
+
       ["link", from_id, to_id, kind | rest] ->
         link_memories(from_id, to_id, kind, rest)
 
@@ -85,6 +91,33 @@ defmodule Mix.Tasks.HydraX.Memory do
     Mix.shell().info("deleted_memory=#{memory.id}")
   end
 
+  defp merge_memory(source_id, target_id, rest) do
+    {opts, _args, _invalid} = OptionParser.parse(rest, strict: [content: :string])
+
+    {:ok, result} =
+      HydraX.Memory.reconcile_memory!(
+        String.to_integer(source_id),
+        String.to_integer(target_id),
+        :merge,
+        content: opts[:content]
+      )
+
+    Mix.shell().info("merged=#{result.source.id}->#{result.target.id}")
+    Mix.shell().info("edge=#{result.edge.id}")
+  end
+
+  defp supersede_memory(source_id, target_id) do
+    {:ok, result} =
+      HydraX.Memory.reconcile_memory!(
+        String.to_integer(source_id),
+        String.to_integer(target_id),
+        :supersede
+      )
+
+    Mix.shell().info("superseded=#{result.source.id}->#{result.target.id}")
+    Mix.shell().info("edge=#{result.edge.id}")
+  end
+
   defp unlink_memory(id) do
     edge = HydraX.Memory.delete_edge!(String.to_integer(id))
     Mix.shell().info("deleted_edge=#{edge.id}")
@@ -103,6 +136,7 @@ defmodule Mix.Tasks.HydraX.Memory do
         strict: [
           agent: :string,
           type: :string,
+          status: :string,
           search: :string,
           min_importance: :float,
           limit: :integer
@@ -122,6 +156,7 @@ defmodule Mix.Tasks.HydraX.Memory do
             limit: opts[:limit] || 50,
             agent_id: agent_id,
             type: opts[:type],
+            status: opts[:status] || "active",
             min_importance: opts[:min_importance]
           )
 
@@ -131,6 +166,7 @@ defmodule Mix.Tasks.HydraX.Memory do
             query,
             opts[:limit] || 50,
             type: opts[:type],
+            status: opts[:status] || "active",
             min_importance: opts[:min_importance]
           )
       end
@@ -143,6 +179,7 @@ defmodule Mix.Tasks.HydraX.Memory do
             to_string(memory.id),
             to_string(memory.agent_id),
             memory.type,
+            memory.status,
             Float.to_string(memory.importance),
             memory.content
           ],

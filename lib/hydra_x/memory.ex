@@ -14,12 +14,14 @@ defmodule HydraX.Memory do
   def list_memories(opts \\ []) do
     agent_id = Keyword.get(opts, :agent_id)
     type = Keyword.get(opts, :type)
+    status = Keyword.get(opts, :status)
     min_importance = Keyword.get(opts, :min_importance)
     limit = Keyword.get(opts, :limit, 100)
 
     Entry
     |> maybe_filter_agent(agent_id)
     |> maybe_filter_type(type)
+    |> maybe_filter_status(status)
     |> maybe_filter_min_importance(min_importance)
     |> order_by([entry], desc: entry.importance, desc: entry.updated_at)
     |> preload([:conversation])
@@ -38,6 +40,7 @@ defmodule HydraX.Memory do
   def search(agent_id, query, limit, opts) do
     search_opts = %{
       type: Keyword.get(opts, :type),
+      status: Keyword.get(opts, :status),
       min_importance: Keyword.get(opts, :min_importance)
     }
 
@@ -49,6 +52,7 @@ defmodule HydraX.Memory do
       WHERE ms.content MATCH ?
         AND (? IS NULL OR m.agent_id = ?)
         AND (? IS NULL OR m.type = ?)
+        AND (? IS NULL OR m.status = ?)
         AND (? IS NULL OR m.importance >= ?)
       ORDER BY rank
       LIMIT ?
@@ -61,6 +65,8 @@ defmodule HydraX.Memory do
           agent_id,
           search_opts.type,
           search_opts.type,
+          search_opts.status,
+          search_opts.status,
           search_opts.min_importance,
           search_opts.min_importance,
           limit
@@ -75,6 +81,7 @@ defmodule HydraX.Memory do
         Entry
         |> maybe_filter_agent(agent_id)
         |> maybe_filter_type(search_opts.type)
+        |> maybe_filter_status(search_opts.status)
         |> maybe_filter_min_importance(search_opts.min_importance)
         |> where([entry], like(entry.content, ^"%#{query}%"))
         |> order_by([entry], desc: entry.importance)
@@ -116,6 +123,72 @@ defmodule HydraX.Memory do
     Repo.delete!(entry)
   end
 
+  def reconcile_memory!(source_id, target_id, mode, opts \\ []) do
+    source = get_memory!(source_id)
+    target = get_memory!(target_id)
+
+    if source.id == target.id do
+      raise ArgumentError, "source and target memories must be different"
+    end
+
+    if source.agent_id != target.agent_id do
+      raise ArgumentError, "memories must belong to the same agent"
+    end
+
+    result =
+      Repo.transaction(fn ->
+        target_metadata = target.metadata || %{}
+        source_status = if mode == :merge, do: "merged", else: "superseded"
+        target_content = Keyword.get(opts, :content, target.content)
+
+        merged_from_ids =
+          target_metadata
+          |> Map.get("merged_from_ids", [])
+          |> List.wrap()
+          |> Kernel.++([source.id])
+          |> Enum.uniq()
+
+        {:ok, updated_target} =
+          target
+          |> Entry.changeset(%{
+            content: target_content,
+            metadata:
+              target_metadata
+              |> Map.put("merged_from_ids", merged_from_ids)
+              |> Map.put("last_reconciled_at", DateTime.utc_now())
+          })
+          |> Repo.update()
+
+        {:ok, updated_source} =
+          source
+          |> Entry.changeset(%{
+            status: source_status,
+            metadata:
+              (source.metadata || %{})
+              |> Map.put("reconciled_into_id", target.id)
+              |> Map.put("reconciliation_mode", Atom.to_string(mode))
+              |> Map.put("reconciled_at", DateTime.utc_now())
+          })
+          |> Repo.update()
+
+        {:ok, edge} =
+          link_memories(%{
+            from_memory_id: target.id,
+            to_memory_id: source.id,
+            kind: "supersedes",
+            weight: 1.0,
+            metadata: %{"mode" => Atom.to_string(mode)}
+          })
+
+        %{source: updated_source, target: updated_target, edge: edge}
+      end)
+
+    with {:ok, reconciled} <- unwrap_transaction(result) do
+      maybe_refresh_cortex(reconciled.target.agent_id)
+      {:ok, reconciled}
+    end
+  end
+
   def link_memories(attrs) do
     %Edge{}
     |> Edge.changeset(attrs)
@@ -140,7 +213,7 @@ defmodule HydraX.Memory do
   end
 
   def render_markdown(agent_id) do
-    list_memories(agent_id: agent_id, limit: 500)
+    list_memories(agent_id: agent_id, limit: 500, status: "active")
     |> Markdown.render()
   end
 
@@ -158,6 +231,11 @@ defmodule HydraX.Memory do
   defp maybe_filter_type(query, nil), do: query
   defp maybe_filter_type(query, ""), do: query
   defp maybe_filter_type(query, type), do: where(query, [entry], entry.type == ^type)
+
+  defp maybe_filter_status(query, nil), do: query
+  defp maybe_filter_status(query, ""), do: query
+  defp maybe_filter_status(query, "all"), do: query
+  defp maybe_filter_status(query, status), do: where(query, [entry], entry.status == ^status)
 
   defp maybe_filter_min_importance(query, nil), do: query
 
@@ -178,4 +256,7 @@ defmodule HydraX.Memory do
     |> String.split(~r/\s+/, trim: true)
     |> Enum.map_join(" OR ", &"\"#{&1}\"")
   end
+
+  defp unwrap_transaction({:ok, result}), do: {:ok, result}
+  defp unwrap_transaction({:error, error}), do: {:error, error}
 end

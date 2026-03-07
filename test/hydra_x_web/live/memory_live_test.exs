@@ -178,4 +178,63 @@ defmodule HydraXWeb.MemoryLiveTest do
     refute html =~ "Delete me"
     assert_raise Ecto.NoResultsError, fn -> Memory.get_memory!(first.id) end
   end
+
+  test "memory page can reconcile a memory into another entry", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, source} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Fact",
+        content: "Deprecated workflow",
+        importance: 0.4,
+        last_seen_at: DateTime.utc_now()
+      })
+
+    {:ok, target} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Decision",
+        content: "Current workflow",
+        importance: 0.9,
+        last_seen_at: DateTime.utc_now()
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/memory")
+
+    view
+    |> element(~s(button[phx-click="select_memory"][phx-value-id="#{source.id}"]))
+    |> render_click()
+
+    view
+    |> form("form[phx-submit=\"reconcile_memory\"]", %{
+      "reconcile" => %{
+        "mode" => "supersede",
+        "target_id" => to_string(target.id),
+        "content" => ""
+      }
+    })
+    |> render_submit()
+
+    html = render(view)
+    assert html =~ "Memory reconciled"
+    assert html =~ "Current workflow"
+    assert Memory.get_memory!(source.id).status == "superseded"
+    assert Enum.any?(Memory.list_edges_for(target.id), &(&1.kind == "supersedes"))
+
+    view
+    |> form("form[phx-submit=\"filter_memories\"]", %{
+      "filters" => %{
+        "query" => "",
+        "agent_id" => to_string(agent.id),
+        "type" => "",
+        "status" => "superseded",
+        "min_importance" => ""
+      }
+    })
+    |> render_submit()
+
+    html = render(view)
+    assert html =~ "Deprecated workflow"
+  end
 end

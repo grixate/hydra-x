@@ -24,12 +24,14 @@ defmodule HydraXWeb.MemoryLive do
      |> assign(:filter_form, to_form(filters, as: :filters))
      |> assign(:agents, Runtime.list_agents())
      |> assign(:memory_types, memory_types())
+     |> assign(:memory_statuses, memory_statuses())
      |> assign(:edge_kinds, edge_kinds())
      |> assign(:memories, memories)
      |> assign(:selected, selected)
      |> assign(:edges, load_edges(selected))
      |> assign_form(:memory_form, memory_form(selected), :memory)
-     |> assign_form(:edge_form, edge_form(selected), :edge)}
+     |> assign_form(:edge_form, edge_form(selected), :edge)
+     |> assign(:reconcile_form, reconcile_form(memories, selected))}
   end
 
   @impl true
@@ -50,7 +52,8 @@ defmodule HydraXWeb.MemoryLive do
      |> assign(:selected, selected)
      |> assign(:edges, load_edges(selected))
      |> assign_form(:memory_form, memory_form(selected), :memory)
-     |> assign_form(:edge_form, edge_form(selected), :edge)}
+     |> assign_form(:edge_form, edge_form(selected), :edge)
+     |> assign(:reconcile_form, reconcile_form(memories, selected))}
   end
 
   def handle_event("filter_memories", %{"filters" => params}, socket) do
@@ -73,7 +76,8 @@ defmodule HydraXWeb.MemoryLive do
      |> assign(:selected, selected)
      |> assign(:edges, load_edges(selected))
      |> assign_form(:memory_form, memory_form(selected), :memory)
-     |> assign_form(:edge_form, edge_form(selected), :edge)}
+     |> assign_form(:edge_form, edge_form(selected), :edge)
+     |> assign(:reconcile_form, reconcile_form(memories, selected))}
   end
 
   def handle_event("sync", _params, socket) do
@@ -92,7 +96,8 @@ defmodule HydraXWeb.MemoryLive do
      |> assign(:selected, memory)
      |> assign(:edges, load_edges(memory))
      |> assign_form(:memory_form, memory_form(memory), :memory)
-     |> assign_form(:edge_form, edge_form(memory), :edge)}
+     |> assign_form(:edge_form, edge_form(memory), :edge)
+     |> assign(:reconcile_form, reconcile_form(socket.assigns.memories, memory))}
   end
 
   def handle_event("new_memory", _params, socket) do
@@ -101,7 +106,8 @@ defmodule HydraXWeb.MemoryLive do
      |> assign(:selected, nil)
      |> assign(:edges, [])
      |> assign_form(:memory_form, memory_form(nil), :memory)
-     |> assign_form(:edge_form, edge_form(nil), :edge)}
+     |> assign_form(:edge_form, edge_form(nil), :edge)
+     |> assign(:reconcile_form, reconcile_form(socket.assigns.memories, nil))}
   end
 
   def handle_event("delete_memory", %{"id" => id}, socket) do
@@ -123,7 +129,8 @@ defmodule HydraXWeb.MemoryLive do
      |> assign(:edges, load_edges(selected))
      |> assign(:stats, stats())
      |> assign_form(:memory_form, memory_form(selected), :memory)
-     |> assign_form(:edge_form, edge_form(selected), :edge)}
+     |> assign_form(:edge_form, edge_form(selected), :edge)
+     |> assign(:reconcile_form, reconcile_form(memories, selected))}
   end
 
   def handle_event("save_memory", %{"memory" => params}, socket) do
@@ -147,7 +154,8 @@ defmodule HydraXWeb.MemoryLive do
          |> assign(:edges, load_edges(selected))
          |> assign(:stats, stats())
          |> assign_form(:memory_form, memory_form(selected), :memory)
-         |> assign_form(:edge_form, edge_form(selected), :edge)}
+         |> assign_form(:edge_form, edge_form(selected), :edge)
+         |> assign(:reconcile_form, reconcile_form(memories, selected))}
 
       {:error, changeset} ->
         {:noreply, assign_form(socket, :memory_form, changeset, :memory)}
@@ -181,6 +189,63 @@ defmodule HydraXWeb.MemoryLive do
      socket
      |> put_flash(:info, "Memory link deleted")
      |> assign(:edges, load_edges(socket.assigns.selected))}
+  end
+
+  def handle_event(
+        "reconcile_memory",
+        %{"reconcile" => _params},
+        %{assigns: %{selected: nil}} = socket
+      ) do
+    {:noreply, put_flash(socket, :error, "Select a memory before reconciling it.")}
+  end
+
+  def handle_event("reconcile_memory", %{"reconcile" => params}, socket) do
+    mode = params["mode"] |> to_string()
+    source = socket.assigns.selected
+    target_id = parse_integer(params["target_id"])
+    content = blank_to_nil(params["content"])
+
+    result =
+      case {mode, target_id} do
+        {mode, nil} when mode in ["merge", "supersede"] ->
+          {:error, :missing_target}
+
+        {"merge", target_id} ->
+          Memory.reconcile_memory!(source.id, target_id, :merge,
+            content: content || source.content
+          )
+
+        {"supersede", target_id} ->
+          Memory.reconcile_memory!(source.id, target_id, :supersede)
+
+        _ ->
+          {:error, :invalid_mode}
+      end
+
+    case result do
+      {:ok, %{target: target}} ->
+        if agent = Runtime.get_agent!(target.agent_id), do: Memory.sync_markdown(agent)
+        memories = load_memories(socket.assigns.filters)
+        selected = Memory.get_memory!(target.id)
+
+        {:noreply,
+         socket
+         |> put_flash(:info, "Memory reconciled")
+         |> assign(:memories, memories)
+         |> assign(:selected, selected)
+         |> assign(:edges, load_edges(selected))
+         |> assign(:stats, stats())
+         |> assign_form(:memory_form, memory_form(selected), :memory)
+         |> assign_form(:edge_form, edge_form(selected), :edge)
+         |> assign(:reconcile_form, reconcile_form(memories, selected))}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Memory reconciliation failed: #{inspect(reason)}")}
+    end
+  rescue
+    error ->
+      {:noreply,
+       put_flash(socket, :error, "Memory reconciliation failed: #{Exception.message(error)}")}
   end
 
   @impl true
@@ -245,6 +310,12 @@ defmodule HydraXWeb.MemoryLive do
               options={[{"All types", ""} | Enum.map(@memory_types, &{&1, &1})]}
             />
             <.input
+              field={@filter_form[:status]}
+              type="select"
+              label="Status"
+              options={Enum.map(@memory_statuses, &{format_status_option(&1), &1})}
+            />
+            <.input
               field={@filter_form[:min_importance]}
               type="number"
               label="Min importance"
@@ -275,9 +346,17 @@ defmodule HydraXWeb.MemoryLive do
                 class="w-full text-left"
               >
                 <div class="flex items-center justify-between gap-4">
-                  <span class="rounded-full border border-white/10 px-3 py-1 font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-accent)]">
-                    {memory.type}
-                  </span>
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span class="rounded-full border border-white/10 px-3 py-1 font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-accent)]">
+                      {memory.type}
+                    </span>
+                    <span class={[
+                      "rounded-full border px-3 py-1 font-mono text-xs uppercase tracking-[0.18em]",
+                      status_badge_class(memory.status)
+                    ]}>
+                      {memory.status}
+                    </span>
+                  </div>
                   <span class="text-xs text-[var(--hx-mute)]">
                     importance {Float.round(memory.importance, 2)}
                   </span>
@@ -322,6 +401,15 @@ defmodule HydraXWeb.MemoryLive do
               options={Enum.map(@memory_types, &{&1, &1})}
             />
             <.input
+              field={@memory_form[:status]}
+              type="select"
+              label="Status"
+              options={
+                Enum.reject(@memory_statuses, &(&1 == "all"))
+                |> Enum.map(&{format_status_option(&1), &1})
+              }
+            />
+            <.input
               field={@memory_form[:importance]}
               type="number"
               label="Importance"
@@ -364,6 +452,34 @@ defmodule HydraXWeb.MemoryLive do
                 <.button>Save link</.button>
               </div>
             </.form>
+
+            <div class="mt-8">
+              <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">
+                Reconcile selected memory
+              </div>
+              <.form for={@reconcile_form} phx-submit="reconcile_memory" class="mt-4 space-y-2">
+                <.input
+                  field={@reconcile_form[:mode]}
+                  type="select"
+                  label="Mode"
+                  options={[{"Supersede into target", "supersede"}, {"Merge into target", "merge"}]}
+                />
+                <.input
+                  field={@reconcile_form[:target_id]}
+                  type="select"
+                  label="Target memory"
+                  options={linkable_memory_options(@memories, @selected)}
+                />
+                <.input
+                  field={@reconcile_form[:content]}
+                  type="textarea"
+                  label="Merged target content (used for merge mode)"
+                />
+                <div class="pt-2">
+                  <.button>Reconcile memory</.button>
+                </div>
+              </.form>
+            </div>
 
             <div class="mt-6 space-y-3">
               <div
@@ -411,6 +527,7 @@ defmodule HydraXWeb.MemoryLive do
       limit: 100,
       agent_id: parse_integer(filters["agent_id"]),
       type: blank_to_nil(filters["type"]),
+      status: blank_to_nil(filters["status"]) || "active",
       min_importance: parse_float(filters["min_importance"], nil)
     ]
 
@@ -418,6 +535,7 @@ defmodule HydraXWeb.MemoryLive do
   end
 
   defp memory_types, do: ~w(Fact Preference Decision Identity Event Observation Goal Todo)
+  defp memory_statuses, do: ~w(active superseded merged archived all)
   defp edge_kinds, do: ~w(relates_to contradicts supersedes supports part_of)
 
   defp load_edges(nil), do: []
@@ -429,6 +547,7 @@ defmodule HydraXWeb.MemoryLive do
     Memory.change_memory(%Entry{}, %{
       agent_id: agent_id,
       type: "Fact",
+      status: "active",
       importance: 0.7,
       content: ""
     })
@@ -466,8 +585,29 @@ defmodule HydraXWeb.MemoryLive do
 
   defp linkable_memory_options(memories, selected) do
     memories
-    |> Enum.reject(&(&1.id == selected.id))
+    |> Enum.reject(&(&1.id == selected.id || &1.status != "active"))
     |> Enum.map(&{"#{&1.type}: #{truncate(&1.content, 52)}", &1.id})
+  end
+
+  defp reconcile_form(_memories, nil) do
+    to_form(%{"mode" => "supersede", "target_id" => "", "content" => ""}, as: :reconcile)
+  end
+
+  defp reconcile_form(memories, selected) do
+    default_target =
+      memories
+      |> Enum.reject(&(&1.id == selected.id || &1.status != "active"))
+      |> List.first()
+      |> then(&if(&1, do: to_string(&1.id), else: ""))
+
+    to_form(
+      %{
+        "mode" => "supersede",
+        "target_id" => default_target,
+        "content" => selected.content
+      },
+      as: :reconcile
+    )
   end
 
   defp edge_label(edge, selected) do
@@ -511,8 +651,18 @@ defmodule HydraXWeb.MemoryLive do
   defp blank_to_nil(value), do: value
 
   defp default_filters do
-    %{"query" => "", "agent_id" => "", "type" => "", "min_importance" => ""}
+    %{"query" => "", "agent_id" => "", "type" => "", "status" => "active", "min_importance" => ""}
   end
+
+  defp format_status_option("all"), do: "All statuses"
+  defp format_status_option(status), do: status |> String.replace("_", " ") |> String.capitalize()
+
+  defp status_badge_class("active"),
+    do: "border-emerald-400/30 bg-emerald-400/10 text-emerald-200"
+
+  defp status_badge_class("superseded"), do: "border-amber-400/30 bg-amber-400/10 text-amber-200"
+  defp status_badge_class("merged"), do: "border-cyan-400/30 bg-cyan-400/10 text-cyan-200"
+  defp status_badge_class(_), do: "border-white/10 bg-black/10 text-[var(--hx-mute)]"
 
   defp stats do
     %{
