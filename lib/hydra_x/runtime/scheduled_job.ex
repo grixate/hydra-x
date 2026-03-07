@@ -3,7 +3,7 @@ defmodule HydraX.Runtime.ScheduledJob do
   import Ecto.Changeset
 
   @kinds ~w(heartbeat prompt backup)
-  @schedule_modes ~w(interval weekly)
+  @schedule_modes ~w(interval daily weekly)
 
   schema "scheduled_jobs" do
     field :name, :string
@@ -58,6 +58,12 @@ defmodule HydraX.Runtime.ScheduledJob do
 
   defp validate_schedule(changeset) do
     case get_field(changeset, :schedule_mode) do
+      "daily" ->
+        changeset
+        |> validate_required([:run_hour, :run_minute])
+        |> validate_number(:run_hour, greater_than_or_equal_to: 0, less_than_or_equal_to: 23)
+        |> validate_number(:run_minute, greater_than_or_equal_to: 0, less_than_or_equal_to: 59)
+
       "weekly" ->
         changeset
         |> validate_required([:weekday_csv, :run_hour, :run_minute])

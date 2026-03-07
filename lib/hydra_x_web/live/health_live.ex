@@ -15,8 +15,10 @@ defmodule HydraXWeb.HealthLive do
      |> assign(:stats, stats())
      |> assign(:filters, filters)
      |> assign(:filter_form, to_form(filters, as: :filters))
+     |> assign(:report_export, nil)
      |> assign(:checks, Runtime.health_snapshot())
      |> assign(:readiness_report, Runtime.readiness_report())
+     |> assign(:memory_status, Runtime.memory_triage_status())
      |> assign(:telegram_status, Runtime.telegram_status())
      |> assign(:safety_status, Runtime.safety_status())
      |> assign(:observability_status, Runtime.observability_status())
@@ -40,12 +42,37 @@ defmodule HydraXWeb.HealthLive do
   end
 
   @impl true
+  def handle_event("export_report", _params, socket) do
+    filters = socket.assigns.filters
+
+    {:ok, export} =
+      HydraX.Report.export_snapshot(
+        Path.join(HydraX.Config.install_root(), "reports"),
+        only_warn: filters["check_status"] == "warn" or filters["readiness_status"] == "warn",
+        required_only: filters["required_only"] == "true",
+        search: blank_to_nil(filters["search"])
+      )
+
+    {:noreply,
+     socket
+     |> assign(:report_export, export)
+     |> put_flash(:info, "Operator report exported")}
+  end
+
+  @impl true
   def render(assigns) do
     ~H"""
     <AppShell.shell current={@current} stats={@stats} flash={@flash}>
       <section class="glass-panel p-6">
         <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">Runtime health</div>
         <h2 class="mt-3 font-display text-4xl">Operational snapshot</h2>
+        <div class="mt-6 flex flex-wrap items-center gap-3">
+          <.button phx-click="export_report" type="button">Export operator report</.button>
+          <div :if={@report_export} class="text-xs text-[var(--hx-mute)]">
+            <div>Markdown: {@report_export.markdown_path}</div>
+            <div>JSON: {@report_export.json_path}</div>
+          </div>
+        </div>
         <.form for={@filter_form} phx-submit="filter_health" class="mt-6 grid gap-3 lg:grid-cols-4">
           <.input field={@filter_form[:search]} label="Search" />
           <.input
@@ -126,6 +153,38 @@ defmodule HydraXWeb.HealthLive do
             class="rounded-2xl border border-dashed border-white/10 px-4 py-8 text-center text-[var(--hx-mute)] lg:col-span-2"
           >
             No readiness items match the current filter.
+          </article>
+        </div>
+      </section>
+
+      <section class="glass-panel mt-6 p-6">
+        <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">Memory triage</div>
+        <h2 class="mt-3 font-display text-4xl">Conflict review queue</h2>
+        <div class="mt-6 grid gap-3 lg:grid-cols-3">
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Active
+            </div>
+            <div class="mt-3 font-display text-4xl">
+              {Map.get(@memory_status.counts, "active", 0)}
+            </div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Conflicted
+            </div>
+            <div class="mt-3 font-display text-4xl">
+              {Map.get(@memory_status.counts, "conflicted", 0)}
+            </div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Merged/Superseded
+            </div>
+            <div class="mt-3 font-display text-4xl">
+              {Map.get(@memory_status.counts, "merged", 0) +
+                Map.get(@memory_status.counts, "superseded", 0)}
+            </div>
           </article>
         </div>
       </section>

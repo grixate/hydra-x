@@ -15,6 +15,7 @@ defmodule HydraXWeb.HomeLive do
      |> assign(:current, "home")
      |> assign(:stats, stats())
      |> assign(:health, Runtime.health_snapshot())
+     |> assign(:memory_status, Runtime.memory_triage_status())
      |> assign(:safety_status, Runtime.safety_status())
      |> assign(:observability_status, Runtime.observability_status())
      |> assign(:conversations, conversations)}
@@ -171,6 +172,73 @@ defmodule HydraXWeb.HomeLive do
                 {conversation.status}
               </span>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="glass-panel mt-6 p-6">
+        <div class="flex items-end justify-between gap-4">
+          <div>
+            <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">
+              Memory triage
+            </div>
+            <h3 class="mt-2 font-display text-3xl">Conflicts and non-active memory</h3>
+          </div>
+          <.link
+            navigate={~p"/memory"}
+            class="font-mono text-xs uppercase tracking-[0.2em] text-[var(--hx-accent)]"
+          >
+            Open memory
+          </.link>
+        </div>
+
+        <div class="mt-6 grid gap-3 md:grid-cols-3">
+          <article class="metric-card">
+            <div class="metric-label">Active</div>
+            <div class="metric-value">{Map.get(@memory_status.counts, "active", 0)}</div>
+            <p>Memories currently feeding bulletins, prompt recall, and markdown exports.</p>
+          </article>
+          <article class="metric-card">
+            <div class="metric-label">Conflicted</div>
+            <div class="metric-value">{Map.get(@memory_status.counts, "conflicted", 0)}</div>
+            <p>Entries that need operator review before they can become authoritative again.</p>
+          </article>
+          <article class="metric-card">
+            <div class="metric-label">Merged/Superseded</div>
+            <div class="metric-value">
+              {Map.get(@memory_status.counts, "merged", 0) +
+                Map.get(@memory_status.counts, "superseded", 0)}
+            </div>
+            <p>Historical entries retained for traceability but excluded from active recall.</p>
+          </article>
+        </div>
+
+        <div class="mt-6 space-y-3">
+          <div
+            :if={@memory_status.recent_conflicts == []}
+            class="rounded-2xl border border-dashed border-white/10 px-4 py-8 text-center text-[var(--hx-mute)]"
+          >
+            No conflicted memories are waiting for review.
+          </div>
+
+          <div
+            :for={memory <- @memory_status.recent_conflicts}
+            class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4"
+          >
+            <div class="flex items-center justify-between gap-4">
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="rounded-full border border-white/10 px-3 py-1 font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-accent)]">
+                  {memory.type}
+                </span>
+                <span class="rounded-full border border-amber-400/30 bg-amber-400/10 px-3 py-1 font-mono text-xs uppercase tracking-[0.18em] text-amber-200">
+                  conflicted
+                </span>
+              </div>
+              <span class="text-xs text-[var(--hx-mute)]">
+                importance {Float.round(memory.importance, 2)}
+              </span>
+            </div>
+            <p class="mt-3 text-sm leading-6">{memory.content}</p>
           </div>
         </div>
       </section>

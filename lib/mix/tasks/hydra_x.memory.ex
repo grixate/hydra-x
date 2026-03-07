@@ -23,6 +23,12 @@ defmodule Mix.Tasks.HydraX.Memory do
       ["supersede", source_id, target_id] ->
         supersede_memory(source_id, target_id)
 
+      ["conflict", source_id, target_id | rest] ->
+        conflict_memory(source_id, target_id, rest)
+
+      ["resolve", winner_id, loser_id | rest] ->
+        resolve_conflict(winner_id, loser_id, rest)
+
       ["link", from_id, to_id, kind | rest] ->
         link_memories(from_id, to_id, kind, rest)
 
@@ -115,6 +121,37 @@ defmodule Mix.Tasks.HydraX.Memory do
       )
 
     Mix.shell().info("superseded=#{result.source.id}->#{result.target.id}")
+    Mix.shell().info("edge=#{result.edge.id}")
+  end
+
+  defp conflict_memory(source_id, target_id, rest) do
+    {opts, _args, _invalid} = OptionParser.parse(rest, strict: [reason: :string])
+
+    {:ok, result} =
+      HydraX.Memory.conflict_memory!(
+        String.to_integer(source_id),
+        String.to_integer(target_id),
+        reason: opts[:reason]
+      )
+
+    Mix.shell().info("conflicted=#{result.source.id}<->#{result.target.id}")
+    Mix.shell().info("edge=#{result.edge.id}")
+  end
+
+  defp resolve_conflict(winner_id, loser_id, rest) do
+    {opts, _args, _invalid} =
+      OptionParser.parse(rest, strict: [content: :string, note: :string, loser_status: :string])
+
+    {:ok, result} =
+      HydraX.Memory.resolve_conflict!(
+        String.to_integer(winner_id),
+        String.to_integer(loser_id),
+        content: opts[:content],
+        note: opts[:note],
+        loser_status: opts[:loser_status] || "superseded"
+      )
+
+    Mix.shell().info("resolved=#{result.winner.id}>#{result.loser.id}")
     Mix.shell().info("edge=#{result.edge.id}")
   end
 

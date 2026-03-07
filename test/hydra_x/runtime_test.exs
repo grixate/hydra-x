@@ -154,6 +154,83 @@ defmodule HydraX.RuntimeTest do
     assert Budget.get_policy(agent.id)
   end
 
+  test "health and readiness warn when conflicted memories exist" do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, source} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Fact",
+        content: "Daily review should be authoritative."
+      })
+
+    {:ok, target} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Decision",
+        content: "Weekly review should be authoritative."
+      })
+
+    assert {:ok, _result} =
+             Memory.conflict_memory!(source.id, target.id, reason: "Open memory disagreement")
+
+    memory_check =
+      Runtime.health_snapshot()
+      |> Enum.find(&(&1.name == "memory"))
+
+    readiness_item =
+      Runtime.readiness_report().items
+      |> Enum.find(&(&1.id == "memory_conflicts"))
+
+    assert memory_check.status == :warn
+    assert memory_check.detail =~ "conflicted 2"
+    assert readiness_item.status == :warn
+    assert readiness_item.detail =~ "conflicted memories"
+  end
+
+  test "resolving a memory conflict clears the conflict and resolves its safety event" do
+    agent = create_agent()
+
+    {:ok, winner} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Decision",
+        content: "Daily review is canonical."
+      })
+
+    {:ok, loser} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Fact",
+        content: "Weekly review is canonical."
+      })
+
+    assert {:ok, _conflicted} =
+             Memory.conflict_memory!(winner.id, loser.id, reason: "Operator disagreement")
+
+    [event | _] = Safety.recent_events(agent.id, 5)
+    assert event.category == "memory"
+    assert event.status == "open"
+
+    assert {:ok, resolved} =
+             Memory.resolve_conflict!(winner.id, loser.id,
+               content: "Daily review remains canonical.",
+               note: "Operator settled the dispute."
+             )
+
+    assert resolved.winner.status == "active"
+    assert resolved.loser.status == "superseded"
+    assert Memory.get_memory!(winner.id).content == "Daily review remains canonical."
+
+    resolved_event = Safety.get_event!(event.id)
+    assert resolved_event.status == "resolved"
+    assert resolved_event.resolved_by == "memory_reconciliation"
+    assert resolved_event.operator_note =~ "Operator settled the dispute."
+
+    refute Map.has_key?(Memory.get_memory!(winner.id).metadata || %{}, "conflict_reason")
+    assert Enum.any?(Memory.list_edges_for(winner.id), &(&1.kind == "supersedes"))
+  end
+
   test "workspace reads are routed through the worker with path confinement" do
     agent = create_agent()
     {:ok, pid} = HydraX.Agent.ensure_started(agent)
@@ -473,6 +550,33 @@ defmodule HydraX.RuntimeTest do
     assert DateTime.compare(updated.next_run_at, DateTime.utc_now()) == :gt
   end
 
+  test "daily scheduled jobs compute the next run after execution" do
+    agent = create_agent()
+
+    {:ok, job} =
+      Runtime.save_scheduled_job(%{
+        agent_id: agent.id,
+        name: "Daily review",
+        kind: "prompt",
+        schedule_mode: "daily",
+        run_hour: 8,
+        run_minute: 45,
+        prompt: "Daily review",
+        enabled: true
+      })
+
+    assert job.schedule_mode == "daily"
+    assert job.run_hour == 8
+    assert job.run_minute == 45
+    assert job.next_run_at
+
+    assert {:ok, run} = Runtime.run_scheduled_job(job)
+    assert run.status == "success"
+
+    updated = Runtime.get_scheduled_job!(job.id)
+    assert DateTime.compare(updated.next_run_at, DateTime.utc_now()) == :gt
+  end
+
   test "tool policy can disable shell execution at runtime" do
     agent = create_agent()
     {:ok, pid} = HydraX.Agent.ensure_started(agent)
@@ -579,7 +683,7 @@ defmodule HydraX.RuntimeTest do
     assert Runtime.agent_bulletin(agent.id).content =~ "typed graph memory"
   end
 
-  test "reconciled memories are excluded from active bulletin and markdown exports" do
+  test "non-active memories are excluded from active bulletin and markdown exports" do
     agent = create_agent()
 
     {:ok, source} =
@@ -607,6 +711,35 @@ defmodule HydraX.RuntimeTest do
     refute bulletin.content =~ "Deprecated operator preference"
     assert markdown =~ "Current operator preference"
     refute markdown =~ "Deprecated operator preference"
+
+    {:ok, conflicting_source} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Fact",
+        content: "Backups should run daily.",
+        importance: 0.6
+      })
+
+    {:ok, conflicting_target} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Decision",
+        content: "Backups should run weekly.",
+        importance: 0.7
+      })
+
+    assert {:ok, _result} =
+             Memory.conflict_memory!(conflicting_source.id, conflicting_target.id,
+               reason: "Open operator dispute"
+             )
+
+    refreshed_bulletin = Runtime.refresh_agent_bulletin!(agent.id)
+    refreshed_markdown = Memory.render_markdown(agent.id)
+
+    refute refreshed_bulletin.content =~ "Backups should run daily."
+    refute refreshed_bulletin.content =~ "Backups should run weekly."
+    refute refreshed_markdown =~ "Backups should run daily."
+    refute refreshed_markdown =~ "Backups should run weekly."
   end
 
   test "conversation compaction can be reviewed and reset" do

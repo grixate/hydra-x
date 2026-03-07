@@ -135,6 +135,10 @@ defmodule Mix.Tasks.HydraX.Jobs do
   defp format_datetime(nil), do: "never"
   defp format_datetime(datetime), do: Calendar.strftime(datetime, "%Y-%m-%d %H:%M:%S UTC")
 
+  defp schedule_summary(%{schedule_mode: "daily"} = job) do
+    "daily@#{pad(job.run_hour)}:#{pad(job.run_minute)}"
+  end
+
   defp schedule_summary(%{schedule_mode: "weekly"} = job) do
     "#{job.weekday_csv || "mon"}@#{pad(job.run_hour)}:#{pad(job.run_minute)}"
   end

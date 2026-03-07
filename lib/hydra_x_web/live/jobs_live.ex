@@ -258,7 +258,7 @@ defmodule HydraXWeb.JobsLive do
               field={@form[:schedule_mode]}
               type="select"
               label="Schedule mode"
-              options={[{"Interval", "interval"}, {"Weekly", "weekly"}]}
+              options={[{"Interval", "interval"}, {"Daily", "daily"}, {"Weekly", "weekly"}]}
             />
             <.input field={@form[:interval_minutes]} type="number" label="Interval minutes" />
             <.input field={@form[:weekday_csv]} label="Weekdays (mon,tue,wed...)" />
@@ -364,6 +364,10 @@ defmodule HydraXWeb.JobsLive do
 
   defp format_datetime(nil), do: "never"
   defp format_datetime(datetime), do: Calendar.strftime(datetime, "%Y-%m-%d %H:%M UTC")
+
+  defp schedule_summary(%{schedule_mode: "daily"} = job) do
+    "daily @ #{pad(job.run_hour)}:#{pad(job.run_minute)} UTC"
+  end
 
   defp schedule_summary(%{schedule_mode: "weekly"} = job) do
     "#{job.weekday_csv || "mon"} @ #{pad(job.run_hour)}:#{pad(job.run_minute)} UTC"

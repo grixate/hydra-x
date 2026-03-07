@@ -207,7 +207,7 @@ defmodule HydraXWeb.MemoryLive do
 
     result =
       case {mode, target_id} do
-        {mode, nil} when mode in ["merge", "supersede"] ->
+        {mode, nil} when mode in ["merge", "supersede", "conflict", "resolve_conflict"] ->
           {:error, :missing_target}
 
         {"merge", target_id} ->
@@ -218,19 +218,36 @@ defmodule HydraXWeb.MemoryLive do
         {"supersede", target_id} ->
           Memory.reconcile_memory!(source.id, target_id, :supersede)
 
+        {"conflict", target_id} ->
+          Memory.conflict_memory!(source.id, target_id, reason: content)
+
+        {"resolve_conflict", target_id} ->
+          Memory.resolve_conflict!(source.id, target_id,
+            content: content || source.content,
+            note: content
+          )
+
         _ ->
           {:error, :invalid_mode}
       end
 
     case result do
-      {:ok, %{target: target}} ->
-        if agent = Runtime.get_agent!(target.agent_id), do: Memory.sync_markdown(agent)
-        memories = load_memories(socket.assigns.filters)
-        selected = Memory.get_memory!(target.id)
+      {:ok, reconciled} ->
+        selected_memory = Map.get(reconciled, :target) || Map.get(reconciled, :winner)
+
+        if agent = Runtime.get_agent!(selected_memory.agent_id), do: Memory.sync_markdown(agent)
+
+        filters =
+          refresh_filters_after_reconcile(socket.assigns.filters, selected_memory.status)
+
+        memories = load_memories(filters)
+        selected = Memory.get_memory!(selected_memory.id)
 
         {:noreply,
          socket
          |> put_flash(:info, "Memory reconciled")
+         |> assign(:filters, filters)
+         |> assign(:filter_form, to_form(filters, as: :filters))
          |> assign(:memories, memories)
          |> assign(:selected, selected)
          |> assign(:edges, load_edges(selected))
@@ -462,18 +479,23 @@ defmodule HydraXWeb.MemoryLive do
                   field={@reconcile_form[:mode]}
                   type="select"
                   label="Mode"
-                  options={[{"Supersede into target", "supersede"}, {"Merge into target", "merge"}]}
+                  options={[
+                    {"Supersede into target", "supersede"},
+                    {"Merge into target", "merge"},
+                    {"Mark both memories as conflicted", "conflict"},
+                    {"Resolve conflict in favor of selected memory", "resolve_conflict"}
+                  ]}
                 />
                 <.input
                   field={@reconcile_form[:target_id]}
                   type="select"
                   label="Target memory"
-                  options={linkable_memory_options(@memories, @selected)}
+                  options={reconcilable_memory_options(@memories, @selected)}
                 />
                 <.input
                   field={@reconcile_form[:content]}
                   type="textarea"
-                  label="Merged target content (used for merge mode)"
+                  label="Merged content or reconciliation note"
                 />
                 <div class="pt-2">
                   <.button>Reconcile memory</.button>
@@ -535,7 +557,7 @@ defmodule HydraXWeb.MemoryLive do
   end
 
   defp memory_types, do: ~w(Fact Preference Decision Identity Event Observation Goal Todo)
-  defp memory_statuses, do: ~w(active superseded merged archived all)
+  defp memory_statuses, do: ~w(active conflicted superseded merged archived all)
   defp edge_kinds, do: ~w(relates_to contradicts supersedes supports part_of)
 
   defp load_edges(nil), do: []
@@ -589,6 +611,12 @@ defmodule HydraXWeb.MemoryLive do
     |> Enum.map(&{"#{&1.type}: #{truncate(&1.content, 52)}", &1.id})
   end
 
+  defp reconcilable_memory_options(memories, selected) do
+    memories
+    |> Enum.reject(&(&1.id == selected.id || &1.status not in ["active", "conflicted"]))
+    |> Enum.map(&{"#{&1.type} [#{&1.status}]: #{truncate(&1.content, 52)}", &1.id})
+  end
+
   defp reconcile_form(_memories, nil) do
     to_form(%{"mode" => "supersede", "target_id" => "", "content" => ""}, as: :reconcile)
   end
@@ -596,7 +624,7 @@ defmodule HydraXWeb.MemoryLive do
   defp reconcile_form(memories, selected) do
     default_target =
       memories
-      |> Enum.reject(&(&1.id == selected.id || &1.status != "active"))
+      |> Enum.reject(&(&1.id == selected.id || &1.status not in ["active", "conflicted"]))
       |> List.first()
       |> then(&if(&1, do: to_string(&1.id), else: ""))
 
@@ -620,6 +648,23 @@ defmodule HydraXWeb.MemoryLive do
 
     "#{target.type}: #{truncate(target.content, 80)}"
   end
+
+  defp refresh_filters_after_reconcile(filters, "conflicted") do
+    case blank_to_nil(filters["status"]) do
+      nil -> Map.put(filters, "status", "conflicted")
+      "active" -> Map.put(filters, "status", "conflicted")
+      _ -> filters
+    end
+  end
+
+  defp refresh_filters_after_reconcile(filters, "active") do
+    case blank_to_nil(filters["status"]) do
+      "conflicted" -> Map.put(filters, "status", "active")
+      _ -> filters
+    end
+  end
+
+  defp refresh_filters_after_reconcile(filters, _status), do: filters
 
   defp truncate(content, limit) when byte_size(content) <= limit, do: content
   defp truncate(content, limit), do: String.slice(content, 0, limit) <> "..."

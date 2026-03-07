@@ -5,7 +5,9 @@ defmodule HydraX.Repo.Migrations.AddDeliveryFieldsToScheduledJobs do
     existing_columns = scheduled_job_columns()
 
     unless "delivery_enabled" in existing_columns do
-      execute("ALTER TABLE scheduled_jobs ADD COLUMN delivery_enabled INTEGER DEFAULT false NOT NULL")
+      execute(
+        "ALTER TABLE scheduled_jobs ADD COLUMN delivery_enabled INTEGER DEFAULT false NOT NULL"
+      )
     end
 
     unless "delivery_channel" in existing_columns do

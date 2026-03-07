@@ -226,6 +226,90 @@ defmodule HydraX.MemoryTaskTest do
     assert Memory.get_memory!(superseded.id).status == "superseded"
   end
 
+  test "memory task can mark memories as conflicted" do
+    Mix.Task.reenable("hydra_x.memory")
+    agent = create_agent()
+
+    {:ok, source} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Fact",
+        content: "Use daily schedule for backups.",
+        importance: 0.6,
+        last_seen_at: DateTime.utc_now()
+      })
+
+    {:ok, target} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Decision",
+        content: "Use weekly schedule for backups.",
+        importance: 0.8,
+        last_seen_at: DateTime.utc_now()
+      })
+
+    output =
+      capture_io(fn ->
+        Mix.Tasks.HydraX.Memory.run([
+          "conflict",
+          to_string(source.id),
+          to_string(target.id),
+          "--reason",
+          "Operator guidance disagrees."
+        ])
+      end)
+
+    assert output =~ "conflicted=#{source.id}<->#{target.id}"
+    assert Memory.get_memory!(source.id).status == "conflicted"
+    assert Memory.get_memory!(target.id).status == "conflicted"
+    assert Enum.any?(Memory.list_edges_for(source.id), &(&1.kind == "contradicts"))
+  end
+
+  test "memory task can resolve conflicted memories" do
+    Mix.Task.reenable("hydra_x.memory")
+    agent = create_agent()
+
+    {:ok, winner} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Decision",
+        content: "Daily reviews are canonical.",
+        importance: 0.8,
+        last_seen_at: DateTime.utc_now()
+      })
+
+    {:ok, loser} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Fact",
+        content: "Weekly reviews are canonical.",
+        importance: 0.6,
+        last_seen_at: DateTime.utc_now()
+      })
+
+    assert {:ok, _result} =
+             Memory.conflict_memory!(winner.id, loser.id, reason: "Operator dispute")
+
+    output =
+      capture_io(fn ->
+        Mix.Tasks.HydraX.Memory.run([
+          "resolve",
+          to_string(winner.id),
+          to_string(loser.id),
+          "--content",
+          "Daily reviews remain canonical.",
+          "--note",
+          "Confirmed by operator."
+        ])
+      end)
+
+    assert output =~ "resolved=#{winner.id}>#{loser.id}"
+    assert Memory.get_memory!(winner.id).status == "active"
+    assert Memory.get_memory!(winner.id).content == "Daily reviews remain canonical."
+    assert Memory.get_memory!(loser.id).status == "superseded"
+    assert Enum.any?(Memory.list_edges_for(winner.id), &(&1.kind == "supersedes"))
+  end
+
   defp create_agent do
     unique = System.unique_integer([:positive])
 

@@ -390,8 +390,7 @@ defmodule HydraX.Runtime do
     schedule_mode = Map.get(normalized_attrs, "schedule_mode", job.schedule_mode || "interval")
     weekday_csv = persisted_weekday_csv(normalized_attrs, "weekday_csv", job.weekday_csv)
 
-    interval_minutes =
-      if schedule_mode == "weekly" and is_nil(interval_minutes), do: 60, else: interval_minutes
+    interval_minutes = interval_minutes || job.interval_minutes || 60
 
     next_run_at =
       case blank_to_nil(Map.get(normalized_attrs, "next_run_at")) do
@@ -1123,6 +1122,7 @@ defmodule HydraX.Runtime do
     provider = enabled_provider()
     default_agent = get_default_agent()
     budget_policy = default_agent && HydraX.Budget.ensure_policy!(default_agent.id)
+    memory_status = memory_triage_status(default_agent)
     safety_counts = HydraX.Safety.recent_counts()
     system = system_status()
     backups = backup_status()
@@ -1180,6 +1180,12 @@ defmodule HydraX.Runtime do
             nil -> "no policy configured"
             policy -> "daily #{policy.daily_limit}; conversation #{policy.conversation_limit}"
           end
+      },
+      %{
+        name: "memory",
+        status: if(Map.get(memory_status.counts, "conflicted", 0) > 0, do: :warn, else: :ok),
+        detail:
+          "active #{Map.get(memory_status.counts, "active", 0)}; conflicted #{Map.get(memory_status.counts, "conflicted", 0)}; superseded #{Map.get(memory_status.counts, "superseded", 0)}"
       },
       %{
         name: "safety",
@@ -1304,6 +1310,27 @@ defmodule HydraX.Runtime do
     end
   end
 
+  def memory_triage_status(agent_or_id \\ nil)
+  def memory_triage_status(%AgentProfile{} = agent), do: do_memory_triage_status(agent)
+
+  def memory_triage_status(agent_id) when is_integer(agent_id),
+    do: get_agent!(agent_id) |> do_memory_triage_status()
+
+  def memory_triage_status(nil), do: do_memory_triage_status(get_default_agent())
+
+  defp do_memory_triage_status(nil) do
+    %{agent_id: nil, agent_name: nil, counts: %{}, recent_conflicts: []}
+  end
+
+  defp do_memory_triage_status(agent) do
+    %{
+      agent_id: agent.id,
+      agent_name: agent.name,
+      counts: Memory.status_counts(agent_id: agent.id),
+      recent_conflicts: Memory.list_memories(agent_id: agent.id, status: "conflicted", limit: 8)
+    }
+  end
+
   def safety_status(opts \\ []) do
     counts = HydraX.Safety.recent_counts()
     statuses = HydraX.Safety.status_counts()
@@ -1388,6 +1415,7 @@ defmodule HydraX.Runtime do
     backups = backup_status()
     public_url = Config.public_base_url()
     local_url? = local_public_url?(public_url)
+    memory_status = memory_triage_status()
 
     items = [
       %{
@@ -1460,6 +1488,17 @@ defmodule HydraX.Runtime do
           case list_scheduled_jobs(limit: 5) do
             [] -> "no scheduled jobs configured"
             jobs -> "#{length(jobs)} jobs configured"
+          end
+      },
+      %{
+        id: "memory_conflicts",
+        label: "Memory conflicts are triaged",
+        required: false,
+        status: if(Map.get(memory_status.counts, "conflicted", 0) > 0, do: :warn, else: :ok),
+        detail:
+          case Map.get(memory_status.counts, "conflicted", 0) do
+            0 -> "no conflicted memories pending"
+            count -> "#{count} conflicted memories need review"
           end
       },
       %{
@@ -1663,6 +1702,10 @@ defmodule HydraX.Runtime do
   defp next_run_at(%ScheduledJob{} = job), do: next_run_at(job, DateTime.utc_now())
   defp next_run_at(interval_minutes), do: next_run_at(interval_minutes, DateTime.utc_now())
 
+  defp next_run_at(%ScheduledJob{schedule_mode: "daily"} = job, from) do
+    next_daily_run_at(job.run_hour, job.run_minute, from)
+  end
+
   defp next_run_at(%ScheduledJob{schedule_mode: "weekly"} = job, from) do
     next_weekly_run_at(job.weekday_csv, job.run_hour, job.run_minute, from)
   end
@@ -1677,6 +1720,20 @@ defmodule HydraX.Runtime do
 
   defp next_interval_run_at(interval_minutes, from) do
     DateTime.add(from, interval_minutes * 60, :second)
+  end
+
+  defp next_daily_run_at(run_hour, run_minute, from) do
+    time = Time.new!(run_hour || 0, run_minute || 0, 0)
+    date = DateTime.to_date(from)
+    {:ok, naive} = NaiveDateTime.new(date, time)
+    candidate = DateTime.from_naive!(naive, "Etc/UTC")
+
+    if DateTime.compare(candidate, from) == :gt do
+      candidate
+    else
+      {:ok, next_naive} = NaiveDateTime.new(Date.add(date, 1), time)
+      DateTime.from_naive!(next_naive, "Etc/UTC")
+    end
   end
 
   defp next_weekly_run_at(weekday_csv, run_hour, run_minute, from) do

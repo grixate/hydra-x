@@ -237,4 +237,115 @@ defmodule HydraXWeb.MemoryLiveTest do
     html = render(view)
     assert html =~ "Deprecated workflow"
   end
+
+  test "memory page can mark memories as conflicted and switch to conflicted view", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, source} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Fact",
+        content: "Daily backup cadence is preferred.",
+        importance: 0.6,
+        last_seen_at: DateTime.utc_now()
+      })
+
+    {:ok, target} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Decision",
+        content: "Weekly backup cadence is preferred.",
+        importance: 0.8,
+        last_seen_at: DateTime.utc_now()
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/memory")
+
+    view
+    |> element(~s(button[phx-click="select_memory"][phx-value-id="#{source.id}"]))
+    |> render_click()
+
+    view
+    |> form("form[phx-submit=\"reconcile_memory\"]", %{
+      "reconcile" => %{
+        "mode" => "conflict",
+        "target_id" => to_string(target.id),
+        "content" => "Operator guidance is inconsistent."
+      }
+    })
+    |> render_submit()
+
+    html = render(view)
+    assert html =~ "Memory reconciled"
+    assert html =~ "Daily backup cadence is preferred."
+    assert html =~ "conflicted"
+    assert Memory.get_memory!(source.id).status == "conflicted"
+    assert Memory.get_memory!(target.id).status == "conflicted"
+    assert Enum.any?(Memory.list_edges_for(source.id), &(&1.kind == "contradicts"))
+  end
+
+  test "memory page can resolve a conflicted memory in favor of the selected entry", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, winner} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Decision",
+        content: "Daily backup cadence is canonical.",
+        importance: 0.8,
+        last_seen_at: DateTime.utc_now()
+      })
+
+    {:ok, loser} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Fact",
+        content: "Weekly backup cadence is canonical.",
+        importance: 0.6,
+        last_seen_at: DateTime.utc_now()
+      })
+
+    assert {:ok, _result} =
+             Memory.conflict_memory!(winner.id, loser.id, reason: "Operator guidance diverged")
+
+    {:ok, view, _html} = live(conn, ~p"/memory")
+
+    view
+    |> form("form[phx-submit=\"filter_memories\"]", %{
+      "filters" => %{
+        "query" => "",
+        "agent_id" => to_string(agent.id),
+        "type" => "",
+        "status" => "conflicted",
+        "min_importance" => ""
+      }
+    })
+    |> render_submit()
+
+    view
+    |> element(~s(button[phx-click="select_memory"][phx-value-id="#{winner.id}"]))
+    |> render_click()
+
+    view
+    |> form("form[phx-submit=\"reconcile_memory\"]", %{
+      "reconcile" => %{
+        "mode" => "resolve_conflict",
+        "target_id" => to_string(loser.id),
+        "content" => "Daily backup cadence remains canonical."
+      }
+    })
+    |> render_submit()
+
+    html = render(view)
+    assert html =~ "Memory reconciled"
+    assert html =~ "Daily backup cadence remains canonical."
+
+    assert has_element?(
+             view,
+             ~s(select[name="filters[status]"] option[selected][value="active"])
+           )
+
+    assert Memory.get_memory!(winner.id).status == "active"
+    assert Memory.get_memory!(loser.id).status == "superseded"
+  end
 end

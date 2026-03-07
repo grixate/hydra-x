@@ -29,7 +29,7 @@ Hydra-X is a self-hosted Elixir agent runtime with a Phoenix control plane. This
 - Observability:
   telemetry counters for provider, tool, gateway, and scheduler activity surfaced in `/health`, plus a dedicated `/safety` ledger for operator review
 - Operator commands:
-  `mix hydra_x.new`, `mix hydra_x.serve`, `mix hydra_x.chat`, `mix hydra_x.migrate`, `mix hydra_x.healthcheck`, `mix hydra_x.telegram.webhook`, `mix hydra_x.providers.test`, `mix hydra_x.agents`, `mix hydra_x.jobs`, `mix hydra_x.conversations`, `mix hydra_x.safety`, `mix hydra_x.backup`, `mix hydra_x.restore`, `mix hydra_x.doctor`, `mix hydra_x.install`
+  `mix hydra_x.new`, `mix hydra_x.serve`, `mix hydra_x.chat`, `mix hydra_x.migrate`, `mix hydra_x.healthcheck`, `mix hydra_x.telegram.webhook`, `mix hydra_x.providers.test`, `mix hydra_x.agents`, `mix hydra_x.jobs`, `mix hydra_x.conversations`, `mix hydra_x.safety`, `mix hydra_x.backup`, `mix hydra_x.restore`, `mix hydra_x.doctor`, `mix hydra_x.install`, `mix hydra_x.report`
 
 ## Quick start
 
@@ -78,6 +78,7 @@ The repository also includes a thin command wrapper:
 ./hydra_x restore /path/to/hydra-x-backup.tar.gz
 ./hydra_x doctor
 ./hydra_x install
+./hydra_x report
 ```
 
 If you want to lock the management UI, set an operator password on `/setup`. After that, browser access requires signing in at `/login`.
@@ -117,6 +118,8 @@ mix hydra_x.memory update 12 "Hydra-X stores curated typed memory."
 mix hydra_x.memory link 12 13 supports
 mix hydra_x.memory merge 12 13 --content "Merged canonical memory"
 mix hydra_x.memory supersede 14 13
+mix hydra_x.memory conflict 15 16 --reason "Operator guidance disagrees"
+mix hydra_x.memory resolve 15 16 --content "Canonical memory after review" --note "Conflict resolved"
 mix hydra_x.memory unlink 9
 mix hydra_x.memory delete 12
 mix hydra_x.memory sync
@@ -127,13 +130,14 @@ Recurring heartbeat, prompt, and backup jobs are managed from `/jobs` or the CLI
 ```bash
 mix hydra_x.jobs
 mix hydra_x.jobs --kind prompt --enabled true --search workspace
+mix hydra_x.jobs create --name "Morning review" --kind prompt --schedule_mode daily --run_hour 6 --run_minute 30
 mix hydra_x.jobs create --name "Weekly review" --kind prompt --schedule_mode weekly --weekday_csv mon,fri --run_hour 8 --run_minute 15
 mix hydra_x.jobs update 12 --enabled false --weekday_csv wed --run_hour 9 --run_minute 0
 mix hydra_x.jobs run 1
 mix hydra_x.jobs delete 1
 ```
 
-Jobs now support both fixed intervals and weekly schedules in UTC. Jobs can also optionally deliver their run output back to Telegram by enabling `Deliver result` and setting a chat id target on `/jobs`.
+Jobs now support fixed intervals plus daily and weekly UTC schedules. Jobs can also optionally deliver their run output back to Telegram by enabling `Deliver result` and setting a chat id target on `/jobs`.
 
 Failed Telegram deliveries can be retried from `/conversations` or the CLI:
 
@@ -191,10 +195,18 @@ mix hydra_x.install
 mix hydra_x.install --output ./deploy
 ```
 
+Operator reports can be exported in markdown and JSON with:
+
+```bash
+mix hydra_x.report
+mix hydra_x.report --required-only --only-warn --search telegram
+```
+
 The health page also shows active OTP alarms and the latest backup manifests so recovery state is visible without shell access.
 The setup page now includes a preview-readiness preflight, and the CLI equivalent is `mix hydra_x.doctor`.
+The health page can also export a full operator report directly from the UI.
 The setup page can also export the install bundle and create a backup bundle directly from the UI.
-`mix hydra_x.healthcheck --only-warn --search backup` and `mix hydra_x.doctor --required-only --only-warn` can now narrow those reports to just the failing sections you care about.
+`mix hydra_x.healthcheck --only-warn --search backup`, `mix hydra_x.doctor --required-only --only-warn`, and `mix hydra_x.report --required-only --only-warn` can now narrow those reports to just the failing sections you care about.
 
 ## Project shape
 
