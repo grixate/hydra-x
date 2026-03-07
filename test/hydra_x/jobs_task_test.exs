@@ -88,4 +88,58 @@ defmodule HydraX.JobsTaskTest do
     assert output =~ "deleted_job=#{job.id}"
     assert_raise Ecto.NoResultsError, fn -> Runtime.get_scheduled_job!(job.id) end
   end
+
+  test "jobs task can create and update weekly jobs" do
+    Mix.Task.reenable("hydra_x.jobs")
+    agent = Runtime.ensure_default_agent!()
+
+    capture_io(fn ->
+      Mix.Tasks.HydraX.Jobs.run([
+        "create",
+        "--agent",
+        agent.slug,
+        "--name",
+        "CLI Weekly Review",
+        "--kind",
+        "prompt",
+        "--schedule_mode",
+        "weekly",
+        "--weekday_csv",
+        "tue,thu",
+        "--run_hour",
+        "7",
+        "--run_minute",
+        "45",
+        "--prompt",
+        "Review weekly CLI state."
+      ])
+    end)
+
+    [job | _] =
+      Runtime.list_scheduled_jobs(limit: 10)
+      |> Enum.filter(&(&1.name == "CLI Weekly Review"))
+
+    Mix.Task.reenable("hydra_x.jobs")
+
+    capture_io(fn ->
+      Mix.Tasks.HydraX.Jobs.run([
+        "update",
+        to_string(job.id),
+        "--enabled",
+        "false",
+        "--weekday_csv",
+        "wed",
+        "--run_hour",
+        "9",
+        "--run_minute",
+        "0"
+      ])
+    end)
+
+    updated = Runtime.get_scheduled_job!(job.id)
+    assert updated.enabled == false
+    assert updated.weekday_csv == "wed"
+    assert updated.run_hour == 9
+    assert updated.run_minute == 0
+  end
 end
