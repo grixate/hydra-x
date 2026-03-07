@@ -13,45 +13,74 @@ defmodule HydraX.Memory do
 
   def list_memories(opts \\ []) do
     agent_id = Keyword.get(opts, :agent_id)
+    type = Keyword.get(opts, :type)
+    min_importance = Keyword.get(opts, :min_importance)
     limit = Keyword.get(opts, :limit, 100)
 
     Entry
     |> maybe_filter_agent(agent_id)
+    |> maybe_filter_type(type)
+    |> maybe_filter_min_importance(min_importance)
     |> order_by([entry], desc: entry.importance, desc: entry.updated_at)
     |> preload([:conversation])
     |> limit(^limit)
     |> Repo.all()
   end
 
-  def search(agent_id, query, limit \\ 8)
-  def search(_agent_id, "", limit), do: list_memories(limit: limit)
-  def search(_agent_id, nil, limit), do: list_memories(limit: limit)
+  def search(agent_id, query, limit \\ 8, opts \\ [])
 
-  def search(agent_id, query, limit) do
-    sql = """
-    SELECT m.*
-    FROM memory_search ms
-    JOIN memory_entries m ON m.id = ms.rowid
-    WHERE ms.content MATCH ? AND (? IS NULL OR m.agent_id = ?)
-    ORDER BY rank
-    LIMIT ?
-    """
+  def search(agent_id, "", limit, opts),
+    do: list_memories(Keyword.merge(opts, agent_id: agent_id, limit: limit))
 
-    {:ok, %{rows: rows, columns: columns}} =
-      SQL.query(Repo, sql, [fts_query(query), agent_id, agent_id, limit])
+  def search(agent_id, nil, limit, opts),
+    do: list_memories(Keyword.merge(opts, agent_id: agent_id, limit: limit))
 
-    rows
-    |> Enum.map(&Enum.zip(columns, &1))
-    |> Enum.map(&Map.new/1)
-    |> Enum.map(&Repo.load(Entry, &1))
-  rescue
-    _ ->
-      Entry
-      |> maybe_filter_agent(agent_id)
-      |> where([entry], like(entry.content, ^"%#{query}%"))
-      |> order_by([entry], desc: entry.importance)
-      |> limit(^limit)
-      |> Repo.all()
+  def search(agent_id, query, limit, opts) do
+    search_opts = %{
+      type: Keyword.get(opts, :type),
+      min_importance: Keyword.get(opts, :min_importance)
+    }
+
+    try do
+      sql = """
+      SELECT m.*
+      FROM memory_search ms
+      JOIN memory_entries m ON m.id = ms.rowid
+      WHERE ms.content MATCH ?
+        AND (? IS NULL OR m.agent_id = ?)
+        AND (? IS NULL OR m.type = ?)
+        AND (? IS NULL OR m.importance >= ?)
+      ORDER BY rank
+      LIMIT ?
+      """
+
+      {:ok, %{rows: rows, columns: columns}} =
+        SQL.query(Repo, sql, [
+          fts_query(query),
+          agent_id,
+          agent_id,
+          search_opts.type,
+          search_opts.type,
+          search_opts.min_importance,
+          search_opts.min_importance,
+          limit
+        ])
+
+      rows
+      |> Enum.map(&Enum.zip(columns, &1))
+      |> Enum.map(&Map.new/1)
+      |> Enum.map(&Repo.load(Entry, &1))
+    rescue
+      _ ->
+        Entry
+        |> maybe_filter_agent(agent_id)
+        |> maybe_filter_type(search_opts.type)
+        |> maybe_filter_min_importance(search_opts.min_importance)
+        |> where([entry], like(entry.content, ^"%#{query}%"))
+        |> order_by([entry], desc: entry.importance)
+        |> limit(^limit)
+        |> Repo.all()
+    end
   end
 
   def create_memory(attrs) do
@@ -115,6 +144,15 @@ defmodule HydraX.Memory do
 
   defp maybe_filter_agent(query, nil), do: query
   defp maybe_filter_agent(query, agent_id), do: where(query, [entry], entry.agent_id == ^agent_id)
+
+  defp maybe_filter_type(query, nil), do: query
+  defp maybe_filter_type(query, ""), do: query
+  defp maybe_filter_type(query, type), do: where(query, [entry], entry.type == ^type)
+
+  defp maybe_filter_min_importance(query, nil), do: query
+
+  defp maybe_filter_min_importance(query, min_importance),
+    do: where(query, [entry], entry.importance >= ^min_importance)
 
   defp maybe_refresh_cortex(nil), do: :ok
 

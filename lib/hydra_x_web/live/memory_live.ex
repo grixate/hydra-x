@@ -8,8 +8,11 @@ defmodule HydraXWeb.MemoryLive do
 
   @impl true
   def mount(params, _session, socket) do
-    query = Map.get(params, "q", "")
-    memories = load_memories(query)
+    filters =
+      default_filters()
+      |> Map.put("query", Map.get(params, "q", ""))
+
+    memories = load_memories(filters)
     selected = List.first(memories)
 
     {:ok,
@@ -17,7 +20,8 @@ defmodule HydraXWeb.MemoryLive do
      |> assign(:page_title, "Memory")
      |> assign(:current, "memory")
      |> assign(:stats, stats())
-     |> assign(:query, query)
+     |> assign(:filters, filters)
+     |> assign(:filter_form, to_form(filters, as: :filters))
      |> assign(:agents, Runtime.list_agents())
      |> assign(:memory_types, memory_types())
      |> assign(:edge_kinds, edge_kinds())
@@ -30,7 +34,8 @@ defmodule HydraXWeb.MemoryLive do
 
   @impl true
   def handle_event("search", %{"q" => query}, socket) do
-    memories = load_memories(query)
+    filters = Map.put(socket.assigns.filters, "query", query)
+    memories = load_memories(filters)
 
     selected =
       socket.assigns.selected && maybe_refresh_selection(memories, socket.assigns.selected.id)
@@ -39,7 +44,31 @@ defmodule HydraXWeb.MemoryLive do
 
     {:noreply,
      socket
-     |> assign(:query, query)
+     |> assign(:filters, filters)
+     |> assign(:filter_form, to_form(filters, as: :filters))
+     |> assign(:memories, memories)
+     |> assign(:selected, selected)
+     |> assign(:edges, load_edges(selected))
+     |> assign_form(:memory_form, memory_form(selected), :memory)
+     |> assign_form(:edge_form, edge_form(selected), :edge)}
+  end
+
+  def handle_event("filter_memories", %{"filters" => params}, socket) do
+    filters =
+      socket.assigns.filters
+      |> Map.merge(params)
+
+    memories = load_memories(filters)
+
+    selected =
+      socket.assigns.selected && maybe_refresh_selection(memories, socket.assigns.selected.id)
+
+    selected = selected || List.first(memories)
+
+    {:noreply,
+     socket
+     |> assign(:filters, filters)
+     |> assign(:filter_form, to_form(filters, as: :filters))
      |> assign(:memories, memories)
      |> assign(:selected, selected)
      |> assign(:edges, load_edges(selected))
@@ -85,7 +114,7 @@ defmodule HydraXWeb.MemoryLive do
     case result do
       {:ok, memory} ->
         if agent = Runtime.get_agent!(memory.agent_id), do: Memory.sync_markdown(agent)
-        memories = load_memories(socket.assigns.query)
+        memories = load_memories(socket.assigns.filters)
         selected = Memory.get_memory!(memory.id)
 
         {:noreply,
@@ -160,11 +189,42 @@ defmodule HydraXWeb.MemoryLive do
               <input
                 type="text"
                 name="q"
-                value={@query}
+                value={@filters["query"]}
                 placeholder="Recall preferences, decisions, goals..."
               />
             </label>
           </form>
+
+          <.form
+            for={@filter_form}
+            phx-submit="filter_memories"
+            class="mt-4 grid gap-3 md:grid-cols-3"
+          >
+            <.input field={@filter_form[:query]} label="Query" />
+            <.input
+              field={@filter_form[:agent_id]}
+              type="select"
+              label="Agent"
+              options={[{"All agents", ""} | Enum.map(@agents, &{"#{&1.name} (#{&1.slug})", &1.id})]}
+            />
+            <.input
+              field={@filter_form[:type]}
+              type="select"
+              label="Type"
+              options={[{"All types", ""} | Enum.map(@memory_types, &{&1, &1})]}
+            />
+            <.input
+              field={@filter_form[:min_importance]}
+              type="number"
+              label="Min importance"
+              min="0"
+              max="1"
+              step="0.1"
+            />
+            <div class="md:col-span-3 pt-1">
+              <.button>Filter memory</.button>
+            </div>
+          </.form>
 
           <div class="mt-6 grid gap-3">
             <button
@@ -291,8 +351,16 @@ defmodule HydraXWeb.MemoryLive do
     """
   end
 
-  defp load_memories(""), do: Memory.list_memories(limit: 100)
-  defp load_memories(query), do: Memory.search(nil, query, 100)
+  defp load_memories(filters) do
+    opts = [
+      limit: 100,
+      agent_id: parse_integer(filters["agent_id"]),
+      type: blank_to_nil(filters["type"]),
+      min_importance: parse_float(filters["min_importance"], nil)
+    ]
+
+    Memory.search(parse_integer(filters["agent_id"]), filters["query"], 100, opts)
+  end
 
   defp memory_types, do: ~w(Fact Preference Decision Identity Event Observation Goal Todo)
   defp edge_kinds, do: ~w(relates_to contradicts supersedes supports part_of)
@@ -370,6 +438,25 @@ defmodule HydraXWeb.MemoryLive do
       {parsed, _} -> parsed
       :error -> default
     end
+  end
+
+  defp parse_integer(nil), do: nil
+  defp parse_integer(""), do: nil
+  defp parse_integer(value) when is_integer(value), do: value
+
+  defp parse_integer(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {parsed, _} -> parsed
+      :error -> nil
+    end
+  end
+
+  defp blank_to_nil(nil), do: nil
+  defp blank_to_nil(""), do: nil
+  defp blank_to_nil(value), do: value
+
+  defp default_filters do
+    %{"query" => "", "agent_id" => "", "type" => "", "min_importance" => ""}
   end
 
   defp stats do

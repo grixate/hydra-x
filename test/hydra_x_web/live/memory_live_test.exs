@@ -88,4 +88,43 @@ defmodule HydraXWeb.MemoryLiveTest do
     assert html =~ "supports"
     assert Enum.any?(Memory.list_edges_for(first.id), &(&1.to_memory_id == second.id))
   end
+
+  test "memory page can filter memories by type and search", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, _fact} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Fact",
+        content: "Filterable fact memory",
+        importance: 0.9,
+        last_seen_at: DateTime.utc_now()
+      })
+
+    {:ok, _goal} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Goal",
+        content: "Filterable goal memory",
+        importance: 0.3,
+        last_seen_at: DateTime.utc_now()
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/memory")
+
+    view
+    |> form("form[phx-submit=\"filter_memories\"]", %{
+      "filters" => %{
+        "query" => "fact",
+        "agent_id" => to_string(agent.id),
+        "type" => "Fact",
+        "min_importance" => "0.8"
+      }
+    })
+    |> render_submit()
+
+    html = render(view)
+    assert html =~ "Filterable fact memory"
+    refute html =~ "Filterable goal memory"
+  end
 end

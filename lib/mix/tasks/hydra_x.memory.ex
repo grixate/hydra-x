@@ -21,7 +21,7 @@ defmodule Mix.Tasks.HydraX.Memory do
         sync_memory(rest)
 
       _ ->
-        list_memories()
+        list_memories(args)
     end
   end
 
@@ -81,13 +81,51 @@ defmodule Mix.Tasks.HydraX.Memory do
     Mix.shell().info("path=#{path}")
   end
 
-  defp list_memories do
-    HydraX.Memory.list_memories(limit: 50)
+  defp list_memories(args) do
+    {opts, _positional, _invalid} =
+      OptionParser.parse(args,
+        strict: [
+          agent: :string,
+          type: :string,
+          search: :string,
+          min_importance: :float,
+          limit: :integer
+        ]
+      )
+
+    agent_id =
+      case opts[:agent] do
+        nil -> nil
+        slug -> resolve_agent(slug).id
+      end
+
+    memories =
+      case opts[:search] do
+        nil ->
+          HydraX.Memory.list_memories(
+            limit: opts[:limit] || 50,
+            agent_id: agent_id,
+            type: opts[:type],
+            min_importance: opts[:min_importance]
+          )
+
+        query ->
+          HydraX.Memory.search(
+            agent_id,
+            query,
+            opts[:limit] || 50,
+            type: opts[:type],
+            min_importance: opts[:min_importance]
+          )
+      end
+
+    memories
     |> Enum.each(fn memory ->
       Mix.shell().info(
         Enum.join(
           [
             to_string(memory.id),
+            to_string(memory.agent_id),
             memory.type,
             Float.to_string(memory.importance),
             memory.content

@@ -107,6 +107,7 @@ Typed memory can now be curated from `/memory` or the CLI:
 
 ```bash
 mix hydra_x.memory
+mix hydra_x.memory --type Fact --search "operator" --min_importance 0.8
 mix hydra_x.memory create Fact "Hydra-X stores typed memory."
 mix hydra_x.memory update 12 "Hydra-X stores curated typed memory."
 mix hydra_x.memory link 12 13 supports

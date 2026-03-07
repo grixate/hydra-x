@@ -75,6 +75,47 @@ defmodule HydraX.MemoryTaskTest do
     assert sync_output =~ "path="
   end
 
+  test "memory task can filter memory by type, agent, and search" do
+    Mix.Task.reenable("hydra_x.memory")
+    agent = create_agent()
+    other_agent = create_agent()
+
+    {:ok, _fact} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Fact",
+        content: "Hydra-X retains filtered facts.",
+        importance: 0.9,
+        last_seen_at: DateTime.utc_now()
+      })
+
+    {:ok, _goal} =
+      Memory.create_memory(%{
+        agent_id: other_agent.id,
+        type: "Goal",
+        content: "Ignore this goal.",
+        importance: 0.4,
+        last_seen_at: DateTime.utc_now()
+      })
+
+    output =
+      capture_io(fn ->
+        Mix.Tasks.HydraX.Memory.run([
+          "--agent",
+          agent.slug,
+          "--type",
+          "Fact",
+          "--search",
+          "filtered",
+          "--min_importance",
+          "0.8"
+        ])
+      end)
+
+    assert output =~ "\tFact\t0.9\tHydra-X retains filtered facts."
+    refute output =~ "Ignore this goal."
+  end
+
   defp create_agent do
     unique = System.unique_integer([:positive])
 
