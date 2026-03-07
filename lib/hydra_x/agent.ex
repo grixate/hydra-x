@@ -19,6 +19,35 @@ defmodule HydraX.Agent do
     end
   end
 
+  def ensure_stopped(%AgentProfile{} = agent) do
+    case pid(agent.id) do
+      nil ->
+        :ok
+
+      running_pid ->
+        case DynamicSupervisor.terminate_child(HydraX.AgentSupervisor, running_pid) do
+          :ok -> :ok
+          {:error, :not_found} -> :ok
+        end
+    end
+  end
+
+  def restart(%AgentProfile{} = agent) do
+    with :ok <- ensure_stopped(agent) do
+      ensure_started(agent)
+    end
+  end
+
+  def pid(agent_id) do
+    case Registry.lookup(HydraX.ProcessRegistry, {:agent, agent_id}) do
+      [{pid, _}] -> pid
+      [] -> nil
+    end
+  end
+
+  def running?(%AgentProfile{} = agent), do: running?(agent.id)
+  def running?(agent_id), do: not is_nil(pid(agent_id))
+
   def via_name(agent_id), do: ProcessRegistry.via({:agent, agent_id})
   def channel_supervisor(agent_id), do: ProcessRegistry.via({:agent, agent_id, :channels})
   def branch_supervisor(agent_id), do: ProcessRegistry.via({:agent, agent_id, :branches})

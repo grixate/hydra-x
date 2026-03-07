@@ -1,7 +1,17 @@
 defmodule HydraXWeb.AgentsLiveTest do
   use HydraXWeb.ConnCase
+  @moduletag seed_default_agent: false
 
   alias HydraX.Runtime
+
+  setup do
+    on_exit(fn ->
+      Runtime.list_agents()
+      |> Enum.each(fn agent -> HydraX.Agent.ensure_stopped(agent) end)
+    end)
+
+    :ok
+  end
 
   test "agents page can edit an agent and make it default", %{conn: conn} do
     {:ok, agent} =
@@ -60,5 +70,35 @@ defmodule HydraXWeb.AgentsLiveTest do
     html = render(view)
     assert html =~ "Workspace template repaired"
     assert File.exists?(soul_path)
+  end
+
+  test "agents page can start and stop runtime", %{conn: conn} do
+    {:ok, agent} =
+      Runtime.save_agent(%{
+        name: "Runtime Agent",
+        slug: "runtime-agent",
+        workspace_root: Path.join(System.tmp_dir!(), "hydra-x-runtime-agent"),
+        description: "runtime",
+        is_default: false,
+        status: "paused"
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/agents")
+    assert render(view) =~ "runtime down"
+
+    view
+    |> element(~s(button[phx-click="start_runtime"][phx-value-id="#{agent.id}"]))
+    |> render_click()
+
+    assert Runtime.agent_runtime_status(agent.id).running
+
+    view
+    |> element(~s(button[phx-click="stop_runtime"][phx-value-id="#{agent.id}"]))
+    |> render_click()
+
+    html = render(view)
+    assert html =~ "Agent runtime stopped"
+    assert html =~ "runtime down"
+    refute Runtime.agent_runtime_status(agent.id).running
   end
 end

@@ -12,7 +12,7 @@ defmodule HydraXWeb.AgentsLive do
      |> assign(:page_title, "Agents")
      |> assign(:current, "agents")
      |> assign(:stats, stats())
-     |> assign(:agents, Runtime.list_agents())
+     |> assign(:agents, agents_with_runtime())
      |> assign(:editing_agent, %AgentProfile{})
      |> assign(:form, to_form(Runtime.change_agent(%AgentProfile{})))}
   end
@@ -22,13 +22,11 @@ defmodule HydraXWeb.AgentsLive do
     action = if socket.assigns.editing_agent.id, do: "updated", else: "created"
 
     case Runtime.save_agent(socket.assigns.editing_agent, params) do
-      {:ok, agent} ->
-        HydraX.Agent.ensure_started(agent)
-
+      {:ok, _agent} ->
         {:noreply,
          socket
          |> put_flash(:info, "Agent #{action}")
-         |> assign(:agents, Runtime.list_agents())
+         |> assign(:agents, agents_with_runtime())
          |> assign(:stats, stats())
          |> assign(:editing_agent, %AgentProfile{})
          |> assign(:form, to_form(Runtime.change_agent(%AgentProfile{})))}
@@ -59,7 +57,7 @@ defmodule HydraXWeb.AgentsLive do
 
     {:noreply,
      socket
-     |> assign(:agents, Runtime.list_agents())
+     |> assign(:agents, agents_with_runtime())
      |> assign(:stats, stats())}
   end
 
@@ -69,7 +67,7 @@ defmodule HydraXWeb.AgentsLive do
     {:noreply,
      socket
      |> put_flash(:info, "Default agent updated")
-     |> assign(:agents, Runtime.list_agents())
+     |> assign(:agents, agents_with_runtime())
      |> assign(:stats, stats())}
   end
 
@@ -79,7 +77,50 @@ defmodule HydraXWeb.AgentsLive do
     {:noreply,
      socket
      |> put_flash(:info, "Workspace template repaired")
-     |> assign(:agents, Runtime.list_agents())
+     |> assign(:agents, agents_with_runtime())
+     |> assign(:stats, stats())}
+  end
+
+  def handle_event("start_runtime", %{"id" => id}, socket) do
+    Runtime.start_agent_runtime!(id)
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Agent runtime started")
+     |> assign(:agents, agents_with_runtime())
+     |> assign(:stats, stats())}
+  end
+
+  def handle_event("stop_runtime", %{"id" => id}, socket) do
+    Runtime.stop_agent_runtime!(id)
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Agent runtime stopped")
+     |> assign(:agents, agents_with_runtime())
+     |> assign(:stats, stats())}
+  end
+
+  def handle_event("restart_runtime", %{"id" => id}, socket) do
+    Runtime.restart_agent_runtime!(id)
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Agent runtime restarted")
+     |> assign(:agents, agents_with_runtime())
+     |> assign(:stats, stats())}
+  end
+
+  def handle_event("reconcile_runtime", _params, socket) do
+    summary = Runtime.reconcile_agents!()
+
+    {:noreply,
+     socket
+     |> put_flash(
+       :info,
+       "Runtime reconciled (started #{summary.started}, stopped #{summary.stopped})"
+     )
+     |> assign(:agents, agents_with_runtime())
      |> assign(:stats, stats())}
   end
 
@@ -113,6 +154,15 @@ defmodule HydraXWeb.AgentsLive do
                   <span class="rounded-full border border-white/10 px-3 py-1 font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
                     {agent.status}
                   </span>
+                  <span class={[
+                    "rounded-full border px-3 py-1 font-mono text-xs uppercase tracking-[0.18em]",
+                    if(agent.runtime.running,
+                      do: "border-cyan-400/20 bg-cyan-400/10 text-cyan-200",
+                      else: "border-white/10 text-[var(--hx-mute)]"
+                    )
+                  ]}>
+                    {if agent.runtime.running, do: "runtime up", else: "runtime down"}
+                  </span>
                   <button
                     phx-click="edit"
                     phx-value-id={agent.id}
@@ -136,6 +186,29 @@ defmodule HydraXWeb.AgentsLive do
                     Repair workspace
                   </button>
                   <button
+                    :if={!agent.runtime.running}
+                    phx-click="start_runtime"
+                    phx-value-id={agent.id}
+                    class="btn btn-sm btn-outline border-white/10 bg-white/5 text-white hover:bg-white/10"
+                  >
+                    Start runtime
+                  </button>
+                  <button
+                    :if={agent.runtime.running}
+                    phx-click="stop_runtime"
+                    phx-value-id={agent.id}
+                    class="btn btn-sm btn-outline border-white/10 bg-white/5 text-white hover:bg-white/10"
+                  >
+                    Stop runtime
+                  </button>
+                  <button
+                    phx-click="restart_runtime"
+                    phx-value-id={agent.id}
+                    class="btn btn-sm btn-outline border-white/10 bg-white/5 text-white hover:bg-white/10"
+                  >
+                    Restart runtime
+                  </button>
+                  <button
                     phx-click="toggle"
                     phx-value-id={agent.id}
                     class="btn btn-sm btn-outline border-white/10 bg-white/5 text-white hover:bg-white/10"
@@ -145,7 +218,19 @@ defmodule HydraXWeb.AgentsLive do
                 </div>
               </div>
               <div class="mt-3 text-sm text-[var(--hx-mute)]">{agent.workspace_root}</div>
+              <div :if={agent.runtime.pid} class="mt-2 font-mono text-xs text-[var(--hx-mute)]">
+                {agent.runtime.pid}
+              </div>
             </div>
+          </div>
+          <div class="mt-6">
+            <button
+              type="button"
+              phx-click="reconcile_runtime"
+              class="btn btn-outline border-white/10 bg-white/5 text-white hover:bg-white/10"
+            >
+              Reconcile runtimes
+            </button>
           </div>
         </article>
 
@@ -187,5 +272,10 @@ defmodule HydraXWeb.AgentsLive do
         |> length(),
       memories: HydraX.Memory.list_memories(limit: 1_000) |> length()
     }
+  end
+
+  defp agents_with_runtime do
+    Runtime.list_agents()
+    |> Enum.map(fn agent -> Map.put(agent, :runtime, Runtime.agent_runtime_status(agent)) end)
   end
 end

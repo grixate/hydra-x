@@ -533,6 +533,39 @@ defmodule HydraX.RuntimeTest do
     assert File.exists?(soul_path)
   end
 
+  test "runtime reconciliation starts active agents and stops paused agents" do
+    {:ok, active_agent} =
+      Runtime.save_agent(%{
+        name: "Active Agent",
+        slug: "active-agent-#{System.unique_integer([:positive])}",
+        workspace_root: Path.join(System.tmp_dir!(), "hydra-x-active-agent"),
+        description: "active agent",
+        is_default: false,
+        status: "active"
+      })
+
+    {:ok, paused_agent} =
+      Runtime.save_agent(%{
+        name: "Paused Agent",
+        slug: "paused-agent-#{System.unique_integer([:positive])}",
+        workspace_root: Path.join(System.tmp_dir!(), "hydra-x-paused-agent"),
+        description: "paused agent",
+        is_default: false,
+        status: "paused"
+      })
+
+    Runtime.start_agent_runtime!(paused_agent.id)
+    refute HydraX.Agent.running?(active_agent)
+    assert HydraX.Agent.running?(paused_agent)
+
+    summary = Runtime.reconcile_agents!()
+
+    assert summary.started >= 1
+    assert summary.stopped >= 1
+    assert HydraX.Agent.running?(active_agent)
+    refute HydraX.Agent.running?(paused_agent)
+  end
+
   test "safety events can be acknowledged, resolved, and reopened" do
     agent = create_agent()
 

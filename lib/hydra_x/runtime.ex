@@ -109,6 +109,12 @@ defmodule HydraX.Runtime do
     agent = get_agent!(id)
     next = if agent.status == "active", do: "paused", else: "active"
     {:ok, updated} = save_agent(agent, %{status: next})
+
+    case updated.status do
+      "active" -> start_agent_runtime!(updated.id)
+      _ -> stop_agent_runtime!(updated.id)
+    end
+
     updated
   end
 
@@ -122,6 +128,77 @@ defmodule HydraX.Runtime do
     agent = get_agent!(id)
     Workspace.Scaffold.copy_template!(agent.workspace_root)
     agent
+  end
+
+  def agent_runtime_status(%AgentProfile{} = agent) do
+    pid = HydraX.Agent.pid(agent.id)
+
+    %{
+      running: not is_nil(pid),
+      pid: pid && inspect(pid),
+      last_started_at: agent.last_started_at,
+      persisted_status: agent.status
+    }
+  end
+
+  def agent_runtime_status(id), do: get_agent!(id) |> agent_runtime_status()
+
+  def start_agent_runtime!(id) do
+    agent = get_agent!(id)
+    {:ok, _pid} = HydraX.Agent.ensure_started(agent)
+
+    {:ok, updated} =
+      save_agent(agent, %{
+        last_started_at: DateTime.utc_now(),
+        runtime_state: Map.merge(agent.runtime_state || %{}, %{"running" => true})
+      })
+
+    updated
+  end
+
+  def stop_agent_runtime!(id) do
+    agent = get_agent!(id)
+    :ok = HydraX.Agent.ensure_stopped(agent)
+
+    {:ok, updated} =
+      save_agent(agent, %{
+        runtime_state:
+          Map.merge(agent.runtime_state || %{}, %{
+            "running" => false,
+            "last_stopped_at" => DateTime.utc_now()
+          })
+      })
+
+    updated
+  end
+
+  def restart_agent_runtime!(id) do
+    agent = get_agent!(id)
+    :ok = HydraX.Agent.ensure_stopped(agent)
+    start_agent_runtime!(agent.id)
+  end
+
+  def reconcile_agents! do
+    ensure_default_agent!()
+
+    list_agents()
+    |> Enum.reduce(%{started: 0, stopped: 0}, fn agent, acc ->
+      case {agent.status, HydraX.Agent.running?(agent)} do
+        {"active", false} ->
+          start_agent_runtime!(agent.id)
+          %{acc | started: acc.started + 1}
+
+        {"active", true} ->
+          acc
+
+        {_, true} ->
+          stop_agent_runtime!(agent.id)
+          %{acc | stopped: acc.stopped + 1}
+
+        _ ->
+          acc
+      end
+    end)
   end
 
   def list_provider_configs do

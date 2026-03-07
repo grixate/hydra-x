@@ -94,6 +94,10 @@ Agent lifecycle can be managed from `/agents` or the CLI:
 
 ```bash
 mix hydra_x.agents
+mix hydra_x.agents start 2
+mix hydra_x.agents restart 2
+mix hydra_x.agents stop 2
+mix hydra_x.agents reconcile
 mix hydra_x.agents default 2
 mix hydra_x.agents repair 2
 mix hydra_x.agents toggle 2
