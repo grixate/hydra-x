@@ -68,12 +68,44 @@ defmodule HydraX.Backup do
     end
   end
 
+  def verify_bundle(archive_path) do
+    verify_root =
+      Path.join(System.tmp_dir!(), "hydra-x-backup-verify-#{System.unique_integer([:positive])}")
+
+    File.rm_rf!(verify_root)
+
+    try do
+      with {:ok, result} <- restore_bundle(archive_path, verify_root) do
+        manifest = result["manifest"]
+
+        missing_entries =
+          manifest["entries"]
+          |> Enum.reject(fn entry ->
+            File.exists?(Path.join(verify_root, entry["bundle_path"]))
+          end)
+          |> Enum.map(& &1["bundle_path"])
+
+        {:ok,
+         %{
+           "archive_path" => Path.expand(archive_path),
+           "manifest" => manifest,
+           "verified" => missing_entries == [],
+           "missing_entries" => missing_entries,
+           "entry_count" => manifest["entry_count"]
+         }}
+      end
+    after
+      File.rm_rf(verify_root)
+    end
+  end
+
   def list_manifests(root \\ Config.backup_root()) do
     root
     |> Path.join("hydra-x-backup-*.json")
     |> Path.wildcard()
     |> Enum.sort(:desc)
     |> Enum.map(&read_manifest/1)
+    |> Enum.map(&annotate_manifest/1)
     |> Enum.reject(&is_nil/1)
   end
 
@@ -84,6 +116,17 @@ defmodule HydraX.Backup do
     else
       _ -> nil
     end
+  end
+
+  defp annotate_manifest(nil), do: nil
+
+  defp annotate_manifest(manifest) do
+    archive_path = manifest["archive_path"]
+
+    Map.merge(manifest, %{
+      "archive_exists" => is_binary(archive_path) and File.exists?(archive_path),
+      "verified_at" => DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+    })
   end
 
   defp collect_entries(staging_root) do

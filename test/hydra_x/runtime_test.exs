@@ -407,6 +407,7 @@ defmodule HydraX.RuntimeTest do
     backups = Runtime.backup_status()
 
     assert backups.latest_backup["archive_path"] == "/tmp/hydra-x-backup-test.tar.gz"
+    refute backups.latest_backup["archive_exists"]
     assert backups.root == backup_root
   end
 

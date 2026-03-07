@@ -7,7 +7,7 @@ defmodule Mix.Tasks.HydraX.Restore do
   def run(args) do
     {opts, positional, _invalid} =
       OptionParser.parse(args,
-        strict: [archive: :string, target: :string],
+        strict: [archive: :string, target: :string, verify: :boolean],
         aliases: [a: :archive, t: :target]
       )
 
@@ -22,15 +22,30 @@ defmodule Mix.Tasks.HydraX.Restore do
           File.cwd!()
         )
 
-    case HydraX.Backup.restore_bundle(archive_path, target_root) do
-      {:ok, result} ->
-        manifest = result["manifest"]
-        Mix.shell().info("restored_to=#{result["target_root"]}")
-        Mix.shell().info("manifest=#{result["manifest_path"]}")
-        Mix.shell().info("entries=#{manifest["entry_count"]}")
+    if opts[:verify] do
+      case HydraX.Backup.verify_bundle(archive_path) do
+        {:ok, result} ->
+          Mix.shell().info("verified=#{result["verified"]}")
+          Mix.shell().info("entries=#{result["entry_count"]}")
 
-      {:error, reason} ->
-        Mix.raise("restore failed: #{inspect(reason)}")
+          if result["missing_entries"] != [] do
+            Mix.shell().info("missing=#{Enum.join(result["missing_entries"], ",")}")
+          end
+
+        {:error, reason} ->
+          Mix.raise("verify failed: #{inspect(reason)}")
+      end
+    else
+      case HydraX.Backup.restore_bundle(archive_path, target_root) do
+        {:ok, result} ->
+          manifest = result["manifest"]
+          Mix.shell().info("restored_to=#{result["target_root"]}")
+          Mix.shell().info("manifest=#{result["manifest_path"]}")
+          Mix.shell().info("entries=#{manifest["entry_count"]}")
+
+        {:error, reason} ->
+          Mix.raise("restore failed: #{inspect(reason)}")
+      end
     end
   end
 end

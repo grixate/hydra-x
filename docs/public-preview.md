@@ -54,7 +54,7 @@ This repository is now beyond the initial skeleton. Use this checklist before ex
 
 1. Back up `hydra_x_dev.db` and the agent workspace root together.
 2. Prefer using `mix hydra_x.backup` or `./hydra_x backup` to create a timestamped archive.
-3. Use `mix hydra_x.restore --archive <bundle> --target <dir>` to validate that bundles unpack cleanly before relying on them.
+3. Use `mix hydra_x.restore --verify --archive <bundle>` for a quick integrity check, then `mix hydra_x.restore --archive <bundle> --target <dir>` to validate that bundles unpack cleanly before relying on them.
 4. On restart, run `mix hydra_x.migrate` before bringing the node back online.
 5. Re-run `./hydra_x healthcheck` after deploys or crashes.
 6. Use `mix hydra_x.healthcheck --only-warn` and `mix hydra_x.doctor --required-only --only-warn` when you want just the unresolved blockers instead of the full report.

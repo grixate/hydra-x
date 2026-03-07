@@ -263,7 +263,9 @@ defmodule HydraX.Report do
 
   defp render_backups(backups) do
     Enum.map_join(backups, "\n", fn backup ->
-      "- #{backup["archive_path"]} (entries=#{backup["entry_count"]}, created=#{backup["created_at"]})"
+      status = if backup["archive_exists"], do: "present", else: "missing"
+
+      "- #{backup["archive_path"]} (archive=#{status}, entries=#{backup["entry_count"]}, created=#{backup["created_at"]})"
     end)
   end
 

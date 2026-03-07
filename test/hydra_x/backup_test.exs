@@ -55,6 +55,23 @@ defmodule HydraX.BackupTest do
     assert File.exists?(Path.join(restore_root, database_entry["bundle_path"]))
   end
 
+  test "verify_bundle confirms portable archives are restorable" do
+    agent = create_agent()
+    File.write!(Path.join(agent.workspace_root, "SOUL.md"), "Verify workspace")
+
+    output_root =
+      Path.join(System.tmp_dir!(), "hydra-x-backup-output-#{System.unique_integer([:positive])}")
+
+    on_exit(fn -> File.rm_rf(output_root) end)
+
+    {:ok, manifest} = Backup.create_bundle(output_root)
+
+    assert {:ok, verification} = Backup.verify_bundle(manifest["archive_path"])
+    assert verification["verified"]
+    assert verification["missing_entries"] == []
+    assert verification["entry_count"] == manifest["entry_count"]
+  end
+
   defp create_agent do
     unique = System.unique_integer([:positive])
 

@@ -1267,11 +1267,22 @@ defmodule HydraX.Runtime do
       },
       %{
         name: "backups",
-        status: if(backups.latest_backup, do: :ok, else: :warn),
+        status:
+          if(backups.latest_backup && backups.latest_backup["archive_exists"],
+            do: :ok,
+            else: :warn
+          ),
         detail:
           case backups.latest_backup do
-            nil -> "no backup manifests found in #{backups.root}"
-            backup -> "latest backup #{backup["archive_path"]}"
+            nil ->
+              "no backup manifests found in #{backups.root}"
+
+            backup ->
+              if backup["archive_exists"] do
+                "latest backup #{backup["archive_path"]}"
+              else
+                "latest backup archive missing for #{backup["archive_path"]}"
+              end
           end
       },
       %{
@@ -1495,12 +1506,23 @@ defmodule HydraX.Runtime do
         id: "backups",
         label: "Backups are being written",
         required: true,
-        status: if(backups.latest_backup, do: :ok, else: :warn),
+        status:
+          if(backups.latest_backup && backups.latest_backup["archive_exists"],
+            do: :ok,
+            else: :warn
+          ),
         detail:
-          if(backups.latest_backup,
-            do: backups.latest_backup["archive_path"],
-            else: "no backup manifest found in #{backup_root}"
-          )
+          case backups.latest_backup do
+            nil ->
+              "no backup manifest found in #{backup_root}"
+
+            backup ->
+              if backup["archive_exists"] do
+                backup["archive_path"]
+              else
+                "archive missing for #{backup["archive_path"]}"
+              end
+          end
       },
       %{
         id: "provider",

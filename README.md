@@ -188,6 +188,7 @@ Portable restore bundles can be unpacked into a clean target directory with:
 ```bash
 mix hydra_x.restore /var/backups/hydra-x/hydra-x-backup-20260307-010000.tar.gz
 mix hydra_x.restore --archive /var/backups/hydra-x/hydra-x-backup-20260307-010000.tar.gz --target ./restore-staging
+mix hydra_x.restore --verify --archive /var/backups/hydra-x/hydra-x-backup-20260307-010000.tar.gz
 ```
 
 Deployment templates can be exported with:

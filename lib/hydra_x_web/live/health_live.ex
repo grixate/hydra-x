@@ -497,7 +497,12 @@ defmodule HydraXWeb.HealthLive do
                 :for={backup <- @observability_status.backups.recent_backups}
                 class="rounded-xl border border-white/10 bg-black/10 px-3 py-3"
               >
-                <div class="text-sm text-[var(--hx-accent)]">{backup["archive_path"]}</div>
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                  <div class="text-sm text-[var(--hx-accent)]">{backup["archive_path"]}</div>
+                  <div class="text-xs text-[var(--hx-mute)]">
+                    {if backup["archive_exists"], do: "archive present", else: "archive missing"}
+                  </div>
+                </div>
                 <div class="mt-1 text-xs text-[var(--hx-mute)]">
                   entries: {backup["entry_count"]} · created {backup["created_at"]}
                 </div>
