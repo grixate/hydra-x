@@ -121,11 +121,15 @@ defmodule HydraX.Budget do
       )
 
     conversation_tokens =
-      Repo.one(
-        from usage in Usage,
-          where: usage.agent_id == ^agent_id and usage.conversation_id == ^conversation_id,
-          select: coalesce(sum(usage.tokens_in + usage.tokens_out), 0)
-      )
+      if is_nil(conversation_id) do
+        0
+      else
+        Repo.one(
+          from usage in Usage,
+            where: usage.agent_id == ^agent_id and usage.conversation_id == ^conversation_id,
+            select: coalesce(sum(usage.tokens_in + usage.tokens_out), 0)
+        )
+      end
 
     %{
       day: Date.to_iso8601(DateTime.to_date(now)),

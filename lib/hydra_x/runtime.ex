@@ -1033,8 +1033,15 @@ defmodule HydraX.Runtime do
     end
   end
 
-  def budget_status do
-    agent = get_default_agent()
+  def budget_status(agent_or_id \\ nil)
+  def budget_status(%AgentProfile{} = agent), do: do_budget_status(agent)
+
+  def budget_status(agent_id) when is_integer(agent_id),
+    do: get_agent!(agent_id) |> do_budget_status()
+
+  def budget_status(nil), do: do_budget_status(get_default_agent())
+
+  defp do_budget_status(agent) do
     policy = agent && HydraX.Budget.ensure_policy!(agent.id)
 
     if agent && policy do
@@ -1042,12 +1049,21 @@ defmodule HydraX.Runtime do
 
       %{
         agent_name: agent.name,
+        agent_id: agent.id,
         policy: policy,
         usage: usage,
-        safety_events: HydraX.Safety.recent_events(agent.id, 10)
+        safety_events: HydraX.Safety.recent_events(agent.id, 10),
+        recent_usage: HydraX.Budget.recent_usage(agent.id, 15)
       }
     else
-      %{agent_name: nil, policy: nil, usage: nil, safety_events: []}
+      %{
+        agent_name: nil,
+        agent_id: nil,
+        policy: nil,
+        usage: nil,
+        safety_events: [],
+        recent_usage: []
+      }
     end
   end
 

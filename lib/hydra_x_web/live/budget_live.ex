@@ -15,9 +15,11 @@ defmodule HydraXWeb.BudgetLive do
      |> assign(:page_title, "Budget")
      |> assign(:current, "budget")
      |> assign(:stats, stats())
+     |> assign(:agents, Runtime.list_agents())
      |> assign(:agent, agent)
      |> assign(:policy, policy)
-     |> assign(:status, Runtime.budget_status())
+     |> assign(:status, Runtime.budget_status(agent))
+     |> assign(:agent_form, to_form(%{"agent_id" => to_string(agent.id)}, as: :agent))
      |> assign(:form, to_form(Budget.change_policy(policy)))}
   end
 
@@ -31,13 +33,26 @@ defmodule HydraXWeb.BudgetLive do
          socket
          |> put_flash(:info, "Budget policy updated")
          |> assign(:policy, policy)
-         |> assign(:status, Runtime.budget_status())
+         |> assign(:status, Runtime.budget_status(socket.assigns.agent))
          |> assign(:form, to_form(Budget.change_policy(policy)))
          |> assign(:stats, stats())}
 
       {:error, changeset} ->
         {:noreply, assign(socket, :form, to_form(changeset))}
     end
+  end
+
+  def handle_event("select_agent", %{"agent" => %{"agent_id" => id}}, socket) do
+    agent = Runtime.get_agent!(id)
+    policy = Budget.ensure_policy!(agent.id)
+
+    {:noreply,
+     socket
+     |> assign(:agent, agent)
+     |> assign(:policy, policy)
+     |> assign(:status, Runtime.budget_status(agent))
+     |> assign(:agent_form, to_form(%{"agent_id" => to_string(agent.id)}, as: :agent))
+     |> assign(:form, to_form(Budget.change_policy(policy)))}
   end
 
   @impl true
@@ -51,6 +66,14 @@ defmodule HydraXWeb.BudgetLive do
           <p class="mt-3 max-w-xl text-sm text-[var(--hx-mute)]">
             Every LLM completion now runs through a preflight budget check. Soft warnings are logged, and hard-limit breaches either warn or reject depending on the selected policy.
           </p>
+          <.form for={@agent_form} phx-change="select_agent" class="mt-6">
+            <.input
+              field={@agent_form[:agent_id]}
+              type="select"
+              label="Agent"
+              options={Enum.map(@agents, &{"#{&1.name} (#{&1.slug})", &1.id})}
+            />
+          </.form>
           <.form for={@form} phx-submit="save" class="mt-6 space-y-2">
             <.input field={@form[:daily_limit]} type="number" label="Daily limit" />
             <.input field={@form[:conversation_limit]} type="number" label="Per-conversation limit" />
@@ -112,6 +135,34 @@ defmodule HydraXWeb.BudgetLive do
               class="rounded-2xl border border-dashed border-white/10 px-4 py-8 text-center text-[var(--hx-mute)]"
             >
               No safety events recorded yet.
+            </div>
+          </div>
+
+          <div class="mt-8 text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">
+            Recent token usage
+          </div>
+          <div class="mt-4 space-y-3">
+            <div
+              :for={usage <- @status.recent_usage}
+              class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4"
+            >
+              <div class="flex items-center justify-between gap-4">
+                <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-accent)]">
+                  {usage.scope}
+                </div>
+                <span class="text-xs text-[var(--hx-mute)]">
+                  {usage.tokens_in + usage.tokens_out} tokens
+                </span>
+              </div>
+              <p class="mt-3 text-sm text-[var(--hx-mute)]">
+                in {usage.tokens_in} · out {usage.tokens_out}
+              </p>
+            </div>
+            <div
+              :if={@status.recent_usage == []}
+              class="rounded-2xl border border-dashed border-white/10 px-4 py-8 text-center text-[var(--hx-mute)]"
+            >
+              No budget usage recorded yet.
             </div>
           </div>
         </article>

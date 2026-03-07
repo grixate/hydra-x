@@ -46,6 +46,7 @@ This repository is now beyond the initial skeleton. Use this checklist before ex
 3. Review the runtime counters section to confirm provider requests, tool executions, gateway deliveries, scheduler jobs, OTP alarms, and backup manifests are visible.
 4. If outbound fetches should be restricted, set `HYDRA_X_HTTP_ALLOWLIST` or configure the persisted tool policy in `/setup`.
 5. If shell access is not needed, disable it in `/setup`.
+6. Open `/budget` or run `mix hydra_x.budget` to confirm the active agent has the intended hard-limit action and token ceilings before preview traffic starts.
 
 ## Recovery
 
