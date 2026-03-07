@@ -137,6 +137,41 @@ defmodule HydraX.ConversationsTaskTest do
     assert Runtime.get_conversation!(conversation.id).status == "archived"
   end
 
+  test "conversation task can filter archived conversations by status and search" do
+    Mix.Task.reenable("hydra_x.conversations")
+    agent = create_agent()
+
+    {:ok, active} =
+      Runtime.start_conversation(agent, %{
+        channel: "control_plane",
+        title: "Active Ops Thread"
+      })
+
+    {:ok, archived} =
+      Runtime.start_conversation(agent, %{
+        channel: "control_plane",
+        title: "Archived Ops Thread"
+      })
+
+    Runtime.archive_conversation!(archived.id)
+    assert Runtime.get_conversation!(active.id).status == "active"
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Mix.Tasks.HydraX.Conversations.run([
+          "--status",
+          "archived",
+          "--search",
+          "Archived",
+          "--limit",
+          "10"
+        ])
+      end)
+
+    assert output =~ "archived\tcontrol_plane\tArchived Ops Thread"
+    refute output =~ "Active Ops Thread"
+  end
+
   defp create_agent do
     unique = System.unique_integer([:positive])
 

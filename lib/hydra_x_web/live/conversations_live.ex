@@ -7,7 +7,8 @@ defmodule HydraXWeb.ConversationsLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    conversations = Runtime.list_conversations(limit: 50)
+    filters = default_filters()
+    conversations = list_conversations(filters)
     selected = conversations |> List.first() |> maybe_load()
     agents = Runtime.list_agents()
 
@@ -17,6 +18,8 @@ defmodule HydraXWeb.ConversationsLive do
      |> assign(:current, "conversations")
      |> assign(:stats, stats())
      |> assign(:agents, agents)
+     |> assign(:filters, filters)
+     |> assign(:filter_form, to_form(filters, as: :filters))
      |> assign(:conversations, conversations)
      |> assign(:selected, selected)
      |> assign(:new_form, to_form(default_new_conversation(agents), as: :conversation))
@@ -46,7 +49,7 @@ defmodule HydraXWeb.ConversationsLive do
         {:noreply,
          socket
          |> put_flash(:info, "Conversation renamed")
-         |> assign(:conversations, Runtime.list_conversations(limit: 50))
+         |> assign(:conversations, list_conversations(socket.assigns.filters))
          |> assign(:selected, selected)
          |> assign(:rename_form, rename_form(selected))}
 
@@ -57,7 +60,7 @@ defmodule HydraXWeb.ConversationsLive do
 
   def handle_event("archive_conversation", %{"id" => id}, socket) do
     updated = Runtime.archive_conversation!(id)
-    conversations = Runtime.list_conversations(limit: 50)
+    conversations = list_conversations(socket.assigns.filters)
     selected = maybe_refresh_selection(conversations, updated.id)
 
     {:noreply,
@@ -88,7 +91,7 @@ defmodule HydraXWeb.ConversationsLive do
            }),
          {:ok, selected} <-
            submit_reply(agent, conversation, params["message"], %{"source" => "control_plane"}) do
-      conversations = Runtime.list_conversations(limit: 50)
+      conversations = list_conversations(socket.assigns.filters)
 
       {:noreply,
        socket
@@ -113,7 +116,7 @@ defmodule HydraXWeb.ConversationsLive do
         {:noreply,
          socket
          |> put_flash(:info, "Reply sent")
-         |> assign(:conversations, Runtime.list_conversations(limit: 50))
+         |> assign(:conversations, list_conversations(socket.assigns.filters))
          |> assign(:selected, selected)
          |> assign(:stats, stats())
          |> assign(:rename_form, rename_form(selected))
@@ -134,7 +137,7 @@ defmodule HydraXWeb.ConversationsLive do
         {:noreply,
          socket
          |> put_flash(:info, "Telegram delivery retried")
-         |> assign(:conversations, Runtime.list_conversations(limit: 50))
+         |> assign(:conversations, list_conversations(socket.assigns.filters))
          |> assign(:selected, refreshed)
          |> assign(:rename_form, rename_form(refreshed))
          |> assign(:stats, stats())}
@@ -144,6 +147,31 @@ defmodule HydraXWeb.ConversationsLive do
     end
   end
 
+  def handle_event("filter_conversations", %{"filters" => params}, socket) do
+    filters =
+      default_filters()
+      |> Map.merge(params)
+
+    conversations = list_conversations(filters)
+
+    selected =
+      maybe_refresh_selection(
+        conversations,
+        socket.assigns.selected && socket.assigns.selected.id
+      )
+
+    {:noreply,
+     socket
+     |> assign(:filters, filters)
+     |> assign(:filter_form, to_form(filters, as: :filters))
+     |> assign(:conversations, conversations)
+     |> assign(:selected, selected || conversations |> List.first() |> maybe_load())
+     |> assign(
+       :rename_form,
+       rename_form(selected || conversations |> List.first() |> maybe_load())
+     )}
+  end
+
   @impl true
   def render(assigns) do
     ~H"""
@@ -151,6 +179,29 @@ defmodule HydraXWeb.ConversationsLive do
       <section class="grid gap-6 xl:grid-cols-[0.8fr_1.2fr]">
         <article class="glass-panel p-6">
           <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">Conversations</div>
+          <.form for={@filter_form} phx-submit="filter_conversations" class="mt-4 space-y-2">
+            <.input field={@filter_form[:search]} label="Search" />
+            <.input
+              field={@filter_form[:status]}
+              type="select"
+              label="Status"
+              options={[{"All statuses", ""}, {"Active", "active"}, {"Archived", "archived"}]}
+            />
+            <.input
+              field={@filter_form[:channel]}
+              type="select"
+              label="Channel"
+              options={[
+                {"All channels", ""},
+                {"Control plane", "control_plane"},
+                {"CLI", "cli"},
+                {"Telegram", "telegram"}
+              ]}
+            />
+            <div class="pt-1">
+              <.button>Filter conversations</.button>
+            </div>
+          </.form>
           <.form for={@new_form} phx-submit="start_conversation" class="mt-4 space-y-2">
             <.input
               field={@new_form[:agent_id]}
@@ -383,6 +434,23 @@ defmodule HydraXWeb.ConversationsLive do
       "message" => ""
     }
   end
+
+  defp default_filters do
+    %{"search" => "", "status" => "", "channel" => ""}
+  end
+
+  defp list_conversations(filters) do
+    Runtime.list_conversations(
+      limit: 50,
+      search: blank_to_nil(filters["search"]),
+      status: blank_to_nil(filters["status"]),
+      channel: blank_to_nil(filters["channel"])
+    )
+  end
+
+  defp blank_to_nil(nil), do: nil
+  defp blank_to_nil(""), do: nil
+  defp blank_to_nil(value), do: value
 
   defp rename_form(nil), do: to_form(%{"title" => ""}, as: :rename)
   defp rename_form(conversation), do: to_form(%{"title" => conversation.title || ""}, as: :rename)

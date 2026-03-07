@@ -20,8 +20,9 @@ This repository is now beyond the initial skeleton. Use this checklist before ex
 6. Review the tool policy section and decide whether HTTP fetches or shell commands should be enabled.
 7. Use `/agents` or `mix hydra_x.agents` to verify the intended default agent, confirm the runtime is actually up for each active agent, and repair any workspace scaffold drift before going live.
 8. Use `/conversations` or `mix hydra_x.conversations start ...` to confirm the control plane can run a real operator-driven chat before exposing external channels.
-9. Export one transcript and archive one completed thread from `/conversations` or `mix hydra_x.conversations export|archive ...` to verify operator lifecycle workflows before preview.
-10. Use `/memory` or `mix hydra_x.memory` to verify that critical operator facts, goals, and decisions can be curated and synced back into the workspace markdown view.
+9. Use the conversations filters to confirm archived threads, Telegram threads, and active control-plane threads can be triaged quickly once the list grows.
+10. Export one transcript and archive one completed thread from `/conversations` or `mix hydra_x.conversations export|archive ...` to verify operator lifecycle workflows before preview.
+11. Use `/memory` or `mix hydra_x.memory` to verify that critical operator facts, goals, and decisions can be curated and synced back into the workspace markdown view.
 
 ## Telegram
 

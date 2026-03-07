@@ -169,4 +169,34 @@ defmodule HydraXWeb.ConversationsLiveTest do
     assert html =~ "Conversation archived"
     assert Runtime.get_conversation!(conversation.id).status == "archived"
   end
+
+  test "conversations page can filter archived conversations by search", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, _active} =
+      Runtime.start_conversation(agent, %{
+        channel: "control_plane",
+        title: "Alpha Active"
+      })
+
+    {:ok, archived} =
+      Runtime.start_conversation(agent, %{
+        channel: "control_plane",
+        title: "Beta Archived"
+      })
+
+    Runtime.archive_conversation!(archived.id)
+
+    {:ok, view, _html} = live(conn, ~p"/conversations")
+
+    view
+    |> form("form[phx-submit=\"filter_conversations\"]", %{
+      "filters" => %{"search" => "Beta", "status" => "archived", "channel" => "control_plane"}
+    })
+    |> render_submit()
+
+    html = render(view)
+    assert html =~ "Beta Archived"
+    refute html =~ "Alpha Active"
+  end
 end

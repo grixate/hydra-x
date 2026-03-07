@@ -24,7 +24,7 @@ defmodule Mix.Tasks.HydraX.Conversations do
         retry_delivery(id)
 
       _ ->
-        list_conversations()
+        list_conversations(args)
     end
   end
 
@@ -93,8 +93,18 @@ defmodule Mix.Tasks.HydraX.Conversations do
     Mix.shell().info("path=#{export.path}")
   end
 
-  defp list_conversations do
-    HydraX.Runtime.list_conversations(limit: 25)
+  defp list_conversations(args) do
+    {opts, _positional, _invalid} =
+      OptionParser.parse(args,
+        strict: [status: :string, channel: :string, search: :string, limit: :integer]
+      )
+
+    HydraX.Runtime.list_conversations(
+      limit: opts[:limit] || 25,
+      status: opts[:status],
+      channel: opts[:channel],
+      search: opts[:search]
+    )
     |> Enum.each(fn conversation ->
       delivery =
         case conversation.metadata do
@@ -109,6 +119,7 @@ defmodule Mix.Tasks.HydraX.Conversations do
         Enum.join(
           [
             to_string(conversation.id),
+            conversation.status,
             conversation.channel,
             conversation.title || "Untitled",
             delivery

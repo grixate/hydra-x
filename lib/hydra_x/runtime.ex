@@ -748,11 +748,17 @@ defmodule HydraX.Runtime do
 
   def list_conversations(opts \\ []) do
     agent_id = Keyword.get(opts, :agent_id)
+    status = Keyword.get(opts, :status)
+    channel = Keyword.get(opts, :channel)
+    search = Keyword.get(opts, :search)
     limit = Keyword.get(opts, :limit, 25)
 
     Conversation
     |> preload([:agent])
     |> maybe_filter_agent(agent_id)
+    |> maybe_filter_conversation_status(status)
+    |> maybe_filter_conversation_channel(channel)
+    |> maybe_filter_conversation_search(search)
     |> order_by([conversation], desc: conversation.updated_at)
     |> limit(^limit)
     |> Repo.all()
@@ -1448,6 +1454,31 @@ defmodule HydraX.Runtime do
 
   defp maybe_filter_agent(query, agent_id),
     do: where(query, [conversation], conversation.agent_id == ^agent_id)
+
+  defp maybe_filter_conversation_status(query, nil), do: query
+  defp maybe_filter_conversation_status(query, ""), do: query
+
+  defp maybe_filter_conversation_status(query, status),
+    do: where(query, [conversation], conversation.status == ^status)
+
+  defp maybe_filter_conversation_channel(query, nil), do: query
+  defp maybe_filter_conversation_channel(query, ""), do: query
+
+  defp maybe_filter_conversation_channel(query, channel),
+    do: where(query, [conversation], conversation.channel == ^channel)
+
+  defp maybe_filter_conversation_search(query, nil), do: query
+  defp maybe_filter_conversation_search(query, ""), do: query
+
+  defp maybe_filter_conversation_search(query, search) do
+    pattern = "%#{search}%"
+
+    where(
+      query,
+      [conversation],
+      like(conversation.title, ^pattern) or like(conversation.external_ref, ^pattern)
+    )
+  end
 
   defp normalize_agent_attrs(attrs) do
     normalized = normalize_string_keys(attrs)
