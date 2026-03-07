@@ -59,7 +59,8 @@ defmodule HydraX.Telemetry.Store do
       budget: %{},
       tool: %{},
       gateway: %{},
-      scheduler: %{}
+      scheduler: %{},
+      recent_events: []
     }
   end
 
@@ -74,7 +75,11 @@ defmodule HydraX.Telemetry.Store do
   end
 
   defp bump_counter(state, :budget, metadata) do
-    update_in(state, [:budget, status_key(metadata[:status])], &((&1 || 0) + 1))
+    status = status_key(metadata[:status])
+
+    state
+    |> update_in([:budget, status], &((&1 || 0) + 1))
+    |> push_recent_event(:budget, "budget", status)
   end
 
   defp bump_counter(state, :tool, metadata) do
@@ -117,5 +122,21 @@ defmodule HydraX.Telemetry.Store do
       [root],
       &Map.put(&1 || %{}, bucket, Map.put(Map.get(&1 || %{}, bucket, %{}), status, current + 1))
     )
+    |> push_recent_event(root, bucket, status)
+  end
+
+  defp push_recent_event(state, namespace, bucket, status) do
+    event = %{
+      namespace: Atom.to_string(namespace),
+      bucket: bucket,
+      status: status,
+      observed_at: DateTime.utc_now()
+    }
+
+    recent =
+      [event | Map.get(state, :recent_events, [])]
+      |> Enum.take(20)
+
+    Map.put(state, :recent_events, recent)
   end
 end

@@ -1426,8 +1426,11 @@ defmodule HydraX.Runtime do
   end
 
   def observability_status do
+    telemetry = HydraX.Telemetry.Store.snapshot()
+
     %{
-      telemetry: HydraX.Telemetry.Store.snapshot(),
+      telemetry: telemetry,
+      telemetry_summary: telemetry_summary(telemetry),
       scheduler: %{
         total_jobs: length(list_scheduled_jobs(limit: 100)),
         recent_runs: recent_job_runs(10)
@@ -1617,6 +1620,41 @@ defmodule HydraX.Runtime do
 
   defp default_port("https"), do: 443
   defp default_port(_scheme), do: 4000
+
+  defp telemetry_summary(telemetry) do
+    %{
+      provider: summarize_telemetry_namespace(telemetry.provider),
+      budget: summarize_telemetry_namespace(telemetry.budget),
+      tool: summarize_telemetry_namespace(telemetry.tool),
+      gateway: summarize_telemetry_namespace(telemetry.gateway),
+      scheduler: summarize_telemetry_namespace(telemetry.scheduler)
+    }
+  end
+
+  defp summarize_telemetry_namespace(namespace) when map_size(namespace) == 0 do
+    %{total: 0, success: 0, error: 0, warn: 0, unknown: 0}
+  end
+
+  defp summarize_telemetry_namespace(namespace) do
+    counts =
+      Enum.reduce(namespace, %{}, fn
+        {_bucket, statuses}, acc when is_map(statuses) ->
+          Enum.reduce(statuses, acc, fn {status, count}, nested ->
+            Map.update(nested, status, count, &(&1 + count))
+          end)
+
+        {status, count}, acc when is_integer(count) ->
+          Map.update(acc, status, count, &(&1 + count))
+      end)
+
+    %{
+      total: Enum.reduce(Map.values(counts), 0, &(&1 + &2)),
+      success: Map.get(counts, "ok", 0) + Map.get(counts, "success", 0),
+      error: Map.get(counts, "error", 0),
+      warn: Map.get(counts, "warn", 0),
+      unknown: Map.get(counts, "unknown", 0)
+    }
+  end
 
   defp provider_module(%ProviderConfig{kind: "openai_compatible"}),
     do: HydraX.LLM.Providers.OpenAICompatible

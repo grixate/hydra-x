@@ -47,6 +47,11 @@ defmodule HydraX.TelemetryTest do
 
     snapshot = HydraX.Telemetry.Store.snapshot()
     assert get_in(snapshot, [:provider, "Broken Provider", "error"]) == 1
+
+    assert Enum.any?(snapshot.recent_events, fn event ->
+             event.namespace == "provider" and event.bucket == "Broken Provider" and
+               event.status == "error"
+           end)
   end
 
   defp create_agent do

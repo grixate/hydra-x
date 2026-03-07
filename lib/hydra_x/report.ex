@@ -145,10 +145,11 @@ defmodule HydraX.Report do
     #{render_conversations(snapshot.conversations)}
 
     ## Observability
-    - Provider counters: `#{inspect(snapshot.observability.telemetry.provider)}`
-    - Tool counters: `#{inspect(snapshot.observability.telemetry.tool)}`
-    - Gateway counters: `#{inspect(snapshot.observability.telemetry.gateway)}`
-    - Scheduler counters: `#{inspect(snapshot.observability.telemetry.scheduler)}`
+    #{render_observability_summary(snapshot.observability.telemetry_summary)}
+
+    ### Recent Telemetry Events
+    #{render_recent_telemetry_events(snapshot.observability.telemetry.recent_events)}
+
     - OTP alarms: #{render_alarms(snapshot.observability.system.alarms)}
 
     ## Backup Inventory
@@ -260,6 +261,29 @@ defmodule HydraX.Report do
   defp render_backups(backups) do
     Enum.map_join(backups, "\n", fn backup ->
       "- #{backup["archive_path"]} (entries=#{backup["entry_count"]}, created=#{backup["created_at"]})"
+    end)
+  end
+
+  defp render_observability_summary(summary) do
+    [
+      render_observability_line("Provider", summary.provider),
+      render_observability_line("Budget", summary.budget),
+      render_observability_line("Tool", summary.tool),
+      render_observability_line("Gateway", summary.gateway),
+      render_observability_line("Scheduler", summary.scheduler)
+    ]
+    |> Enum.join("\n")
+  end
+
+  defp render_observability_line(label, data) do
+    "- #{label}: total=#{data.total} ok=#{data.success} warn=#{data.warn} error=#{data.error} unknown=#{data.unknown}"
+  end
+
+  defp render_recent_telemetry_events([]), do: "- none"
+
+  defp render_recent_telemetry_events(events) do
+    Enum.map_join(events, "\n", fn event ->
+      "- #{event.namespace}/#{event.bucket} status=#{event.status} observed=#{format_datetime(event.observed_at)}"
     end)
   end
 

@@ -2,6 +2,7 @@ defmodule HydraX.ReportTest do
   use HydraX.DataCase
 
   alias HydraX.Report
+  alias HydraX.Telemetry
   alias HydraX.Runtime
 
   setup do
@@ -21,6 +22,7 @@ defmodule HydraX.ReportTest do
 
   test "snapshot includes default agent, readiness, and health data" do
     agent = Runtime.ensure_default_agent!()
+    Telemetry.tool_execution("workspace_read", :error, %{})
     snapshot = Report.snapshot()
 
     assert snapshot.default_agent.id == agent.id
@@ -28,6 +30,8 @@ defmodule HydraX.ReportTest do
     assert is_map(snapshot.readiness)
     assert snapshot.install.public_url
     assert is_list(snapshot.conversations)
+    assert snapshot.observability.telemetry_summary.tool.error >= 1
+    assert Enum.any?(snapshot.observability.telemetry.recent_events, &(&1.namespace == "tool"))
   end
 
   test "export_snapshot writes markdown and json reports" do

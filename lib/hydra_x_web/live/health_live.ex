@@ -340,30 +340,90 @@ defmodule HydraXWeb.HealthLive do
       <section class="glass-panel mt-6 p-6">
         <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">Observability</div>
         <h2 class="mt-3 font-display text-4xl">Runtime counters</h2>
-        <div class="mt-6 grid gap-3 lg:grid-cols-2">
+        <div class="mt-6 grid gap-3 lg:grid-cols-5">
           <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
             <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
               Provider requests
             </div>
-            <pre class="mt-3 overflow-x-auto text-xs text-[var(--hx-mute)]">{inspect(@observability_status.telemetry.provider, pretty: true)}</pre>
+            <div class="mt-3 font-display text-4xl">
+              {@observability_status.telemetry_summary.provider.total}
+            </div>
+            <div class="mt-2 text-xs text-[var(--hx-mute)]">
+              ok {@observability_status.telemetry_summary.provider.success} · error {@observability_status.telemetry_summary.provider.error}
+            </div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Budget events
+            </div>
+            <div class="mt-3 font-display text-4xl">
+              {@observability_status.telemetry_summary.budget.total}
+            </div>
+            <div class="mt-2 text-xs text-[var(--hx-mute)]">
+              warn {@observability_status.telemetry_summary.budget.warn} · error {@observability_status.telemetry_summary.budget.error}
+            </div>
           </article>
           <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
             <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
               Tool executions
             </div>
-            <pre class="mt-3 overflow-x-auto text-xs text-[var(--hx-mute)]">{inspect(@observability_status.telemetry.tool, pretty: true)}</pre>
+            <div class="mt-3 font-display text-4xl">
+              {@observability_status.telemetry_summary.tool.total}
+            </div>
+            <div class="mt-2 text-xs text-[var(--hx-mute)]">
+              ok {@observability_status.telemetry_summary.tool.success} · error {@observability_status.telemetry_summary.tool.error}
+            </div>
           </article>
           <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
             <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
               Gateway delivery
             </div>
-            <pre class="mt-3 overflow-x-auto text-xs text-[var(--hx-mute)]">{inspect(@observability_status.telemetry.gateway, pretty: true)}</pre>
+            <div class="mt-3 font-display text-4xl">
+              {@observability_status.telemetry_summary.gateway.total}
+            </div>
+            <div class="mt-2 text-xs text-[var(--hx-mute)]">
+              ok {@observability_status.telemetry_summary.gateway.success} · error {@observability_status.telemetry_summary.gateway.error}
+            </div>
           </article>
           <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
             <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
               Scheduler counters
             </div>
-            <pre class="mt-3 overflow-x-auto text-xs text-[var(--hx-mute)]">{inspect(@observability_status.telemetry.scheduler, pretty: true)}</pre>
+            <div class="mt-3 font-display text-4xl">
+              {@observability_status.telemetry_summary.scheduler.total}
+            </div>
+            <div class="mt-2 text-xs text-[var(--hx-mute)]">
+              ok {@observability_status.telemetry_summary.scheduler.success} · error {@observability_status.telemetry_summary.scheduler.error}
+            </div>
+          </article>
+        </div>
+        <div class="mt-6 grid gap-3 lg:grid-cols-2">
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4 lg:col-span-2">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Recent telemetry events
+            </div>
+            <div class="mt-3 space-y-2">
+              <p
+                :if={@observability_status.telemetry.recent_events == []}
+                class="text-sm text-[var(--hx-mute)]"
+              >
+                No telemetry events captured yet.
+              </p>
+              <div
+                :for={event <- @observability_status.telemetry.recent_events}
+                class="rounded-xl border border-white/10 bg-black/10 px-3 py-3"
+              >
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                  <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                    {event.namespace} · {event.bucket}
+                  </div>
+                  <div class="text-xs text-[var(--hx-mute)]">
+                    {format_datetime(event.observed_at)}
+                  </div>
+                </div>
+                <div class="mt-2 text-sm text-[var(--hx-mute)]">status {event.status}</div>
+              </div>
+            </div>
           </article>
           <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4 lg:col-span-2">
             <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
@@ -508,6 +568,9 @@ defmodule HydraXWeb.HealthLive do
   defp blank_to_nil(nil), do: nil
   defp blank_to_nil(""), do: nil
   defp blank_to_nil(value), do: value
+
+  defp format_datetime(nil), do: "unknown"
+  defp format_datetime(value), do: Calendar.strftime(value, "%Y-%m-%d %H:%M:%S UTC")
 
   defp stats do
     %{

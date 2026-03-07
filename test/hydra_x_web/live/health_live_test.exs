@@ -3,6 +3,7 @@ defmodule HydraXWeb.HealthLiveTest do
 
   alias HydraX.Memory
   alias HydraX.Runtime
+  alias HydraX.Telemetry
 
   setup do
     install_root =
@@ -78,6 +79,17 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "Conflict review queue"
     assert html =~ "Conflicted"
     assert html =~ ">2<"
+  end
+
+  test "health page shows recent telemetry summaries", %{conn: conn} do
+    Telemetry.provider_request(:error, "Broken Provider", %{})
+    Telemetry.gateway_delivery("telegram", :ok, %{})
+
+    {:ok, _view, html} = live(conn, ~p"/health")
+
+    assert html =~ "Recent telemetry events"
+    assert html =~ "Broken Provider"
+    assert html =~ "telegram"
   end
 
   defp restore_env(key, nil), do: System.delete_env(key)
