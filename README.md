@@ -88,6 +88,16 @@ mix hydra_x.agents repair 2
 mix hydra_x.agents toggle 2
 ```
 
+Typed memory can now be curated from `/memory` or the CLI:
+
+```bash
+mix hydra_x.memory
+mix hydra_x.memory create Fact "Hydra-X stores typed memory."
+mix hydra_x.memory update 12 "Hydra-X stores curated typed memory."
+mix hydra_x.memory link 12 13 supports
+mix hydra_x.memory sync
+```
+
 Recurring heartbeat, prompt, and backup jobs are managed from `/jobs` or the CLI:
 
 ```bash

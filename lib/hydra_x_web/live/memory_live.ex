@@ -2,12 +2,15 @@ defmodule HydraXWeb.MemoryLive do
   use HydraXWeb, :live_view
 
   alias HydraX.Memory
+  alias HydraX.Memory.{Edge, Entry}
   alias HydraX.Runtime
   alias HydraXWeb.AppShell
 
   @impl true
   def mount(params, _session, socket) do
     query = Map.get(params, "q", "")
+    memories = load_memories(query)
+    selected = List.first(memories)
 
     {:ok,
      socket
@@ -15,15 +18,33 @@ defmodule HydraXWeb.MemoryLive do
      |> assign(:current, "memory")
      |> assign(:stats, stats())
      |> assign(:query, query)
-     |> assign(:memories, load_memories(query))}
+     |> assign(:agents, Runtime.list_agents())
+     |> assign(:memory_types, memory_types())
+     |> assign(:edge_kinds, edge_kinds())
+     |> assign(:memories, memories)
+     |> assign(:selected, selected)
+     |> assign(:edges, load_edges(selected))
+     |> assign_form(:memory_form, memory_form(selected), :memory)
+     |> assign_form(:edge_form, edge_form(selected), :edge)}
   end
 
   @impl true
   def handle_event("search", %{"q" => query}, socket) do
+    memories = load_memories(query)
+
+    selected =
+      socket.assigns.selected && maybe_refresh_selection(memories, socket.assigns.selected.id)
+
+    selected = selected || List.first(memories)
+
     {:noreply,
      socket
      |> assign(:query, query)
-     |> assign(:memories, load_memories(query))}
+     |> assign(:memories, memories)
+     |> assign(:selected, selected)
+     |> assign(:edges, load_edges(selected))
+     |> assign_form(:memory_form, memory_form(selected), :memory)
+     |> assign_form(:edge_form, edge_form(selected), :edge)}
   end
 
   def handle_event("sync", _params, socket) do
@@ -34,56 +55,237 @@ defmodule HydraXWeb.MemoryLive do
     {:noreply, put_flash(socket, :info, "Memory markdown synced")}
   end
 
+  def handle_event("select_memory", %{"id" => id}, socket) do
+    memory = Memory.get_memory!(id)
+
+    {:noreply,
+     socket
+     |> assign(:selected, memory)
+     |> assign(:edges, load_edges(memory))
+     |> assign_form(:memory_form, memory_form(memory), :memory)
+     |> assign_form(:edge_form, edge_form(memory), :edge)}
+  end
+
+  def handle_event("new_memory", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:selected, nil)
+     |> assign(:edges, [])
+     |> assign_form(:memory_form, memory_form(nil), :memory)
+     |> assign_form(:edge_form, edge_form(nil), :edge)}
+  end
+
+  def handle_event("save_memory", %{"memory" => params}, socket) do
+    result =
+      case socket.assigns.selected do
+        %Entry{} = entry -> Memory.update_memory(entry, normalize_memory_params(params))
+        nil -> Memory.create_memory(normalize_memory_params(params))
+      end
+
+    case result do
+      {:ok, memory} ->
+        if agent = Runtime.get_agent!(memory.agent_id), do: Memory.sync_markdown(agent)
+        memories = load_memories(socket.assigns.query)
+        selected = Memory.get_memory!(memory.id)
+
+        {:noreply,
+         socket
+         |> put_flash(:info, "Memory saved")
+         |> assign(:memories, memories)
+         |> assign(:selected, selected)
+         |> assign(:edges, load_edges(selected))
+         |> assign(:stats, stats())
+         |> assign_form(:memory_form, memory_form(selected), :memory)
+         |> assign_form(:edge_form, edge_form(selected), :edge)}
+
+      {:error, changeset} ->
+        {:noreply, assign_form(socket, :memory_form, changeset, :memory)}
+    end
+  end
+
+  def handle_event("link_memory", %{"edge" => _params}, %{assigns: %{selected: nil}} = socket) do
+    {:noreply, put_flash(socket, :error, "Select a memory before linking it.")}
+  end
+
+  def handle_event("link_memory", %{"edge" => params}, socket) do
+    params = normalize_edge_params(socket.assigns.selected, params)
+
+    case Memory.link_memories(params) do
+      {:ok, _edge} ->
+        {:noreply,
+         socket
+         |> put_flash(:info, "Memory link saved")
+         |> assign(:edges, load_edges(socket.assigns.selected))
+         |> assign_form(:edge_form, edge_form(socket.assigns.selected), :edge)}
+
+      {:error, changeset} ->
+        {:noreply, assign_form(socket, :edge_form, changeset, :edge)}
+    end
+  end
+
   @impl true
   def render(assigns) do
     ~H"""
     <AppShell.shell current={@current} stats={@stats} flash={@flash}>
-      <section class="glass-panel p-6">
-        <div class="flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">
-              Typed graph memory
+      <section class="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
+        <article class="glass-panel p-6">
+          <div class="flex flex-wrap items-end justify-between gap-4">
+            <div>
+              <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">
+                Typed graph memory
+              </div>
+              <h2 class="mt-3 font-display text-4xl">Authoritative memory store</h2>
             </div>
-            <h2 class="mt-3 font-display text-4xl">Authoritative memory store</h2>
+            <div class="flex gap-3">
+              <button
+                phx-click="new_memory"
+                class="btn btn-outline border-white/10 bg-white/5 text-white hover:bg-white/10"
+              >
+                New memory
+              </button>
+              <button
+                phx-click="sync"
+                class="btn btn-outline border-white/10 bg-white/5 text-white hover:bg-white/10"
+              >
+                Sync markdown view
+              </button>
+            </div>
           </div>
-          <button
-            phx-click="sync"
-            class="btn btn-outline border-white/10 bg-white/5 text-white hover:bg-white/10"
-          >
-            Sync markdown view
-          </button>
-        </div>
 
-        <form phx-submit="search" class="mt-6 max-w-xl">
-          <label class="input w-full border-white/10 bg-black/10">
-            <span class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
-              Query
-            </span>
-            <input
-              type="text"
-              name="q"
-              value={@query}
-              placeholder="Recall preferences, decisions, goals..."
-            />
-          </label>
-        </form>
+          <form phx-submit="search" class="mt-6 max-w-xl">
+            <label class="input w-full border-white/10 bg-black/10">
+              <span class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                Query
+              </span>
+              <input
+                type="text"
+                name="q"
+                value={@query}
+                placeholder="Recall preferences, decisions, goals..."
+              />
+            </label>
+          </form>
 
-        <div class="mt-6 grid gap-3 lg:grid-cols-2">
-          <article
-            :for={memory <- @memories}
-            class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4"
-          >
-            <div class="flex items-center justify-between gap-4">
-              <span class="rounded-full border border-white/10 px-3 py-1 font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-accent)]">
-                {memory.type}
-              </span>
-              <span class="text-xs text-[var(--hx-mute)]">
-                importance {Float.round(memory.importance, 2)}
-              </span>
+          <div class="mt-6 grid gap-3">
+            <button
+              :for={memory <- @memories}
+              type="button"
+              phx-click="select_memory"
+              phx-value-id={memory.id}
+              class={[
+                "rounded-2xl border px-4 py-4 text-left transition",
+                if(@selected && @selected.id == memory.id,
+                  do: "border-[var(--hx-accent)] bg-[rgba(245,110,66,0.08)]",
+                  else: "border-white/10 bg-black/10 hover:bg-white/5"
+                )
+              ]}
+            >
+              <div class="flex items-center justify-between gap-4">
+                <span class="rounded-full border border-white/10 px-3 py-1 font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-accent)]">
+                  {memory.type}
+                </span>
+                <span class="text-xs text-[var(--hx-mute)]">
+                  importance {Float.round(memory.importance, 2)}
+                </span>
+              </div>
+              <p class="mt-3 text-sm leading-6">{memory.content}</p>
+            </button>
+            <div
+              :if={@memories == []}
+              class="rounded-2xl border border-dashed border-white/10 px-4 py-8 text-center text-[var(--hx-mute)]"
+            >
+              No memories match the current query.
             </div>
-            <p class="mt-3 text-sm leading-6">{memory.content}</p>
-          </article>
-        </div>
+          </div>
+        </article>
+
+        <article class="glass-panel p-6">
+          <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">
+            {if @selected, do: "Edit memory", else: "Create memory"}
+          </div>
+          <.form for={@memory_form} phx-submit="save_memory" class="mt-6 space-y-2">
+            <.input
+              field={@memory_form[:agent_id]}
+              type="select"
+              label="Agent"
+              options={Enum.map(@agents, &{"#{&1.name} (#{&1.slug})", &1.id})}
+            />
+            <.input
+              field={@memory_form[:type]}
+              type="select"
+              label="Type"
+              options={Enum.map(@memory_types, &{&1, &1})}
+            />
+            <.input
+              field={@memory_form[:importance]}
+              type="number"
+              label="Importance"
+              min="0"
+              max="1"
+              step="0.1"
+            />
+            <.input field={@memory_form[:content]} type="textarea" label="Content" />
+            <div class="pt-2">
+              <.button>Save memory</.button>
+            </div>
+          </.form>
+
+          <div :if={@selected} class="mt-8">
+            <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">
+              Link selected memory
+            </div>
+            <.form for={@edge_form} phx-submit="link_memory" class="mt-4 space-y-2">
+              <.input
+                field={@edge_form[:to_memory_id]}
+                type="select"
+                label="Target memory"
+                options={linkable_memory_options(@memories, @selected)}
+              />
+              <.input
+                field={@edge_form[:kind]}
+                type="select"
+                label="Relationship"
+                options={Enum.map(@edge_kinds, &{&1, &1})}
+              />
+              <.input
+                field={@edge_form[:weight]}
+                type="number"
+                label="Weight"
+                min="0.1"
+                max="1"
+                step="0.1"
+              />
+              <div class="pt-2">
+                <.button>Save link</.button>
+              </div>
+            </.form>
+
+            <div class="mt-6 space-y-3">
+              <div
+                :for={edge <- @edges}
+                class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4"
+              >
+                <div class="flex items-center justify-between gap-4">
+                  <span class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-accent)]">
+                    {edge.kind}
+                  </span>
+                  <span class="text-xs text-[var(--hx-mute)]">
+                    weight {Float.round(edge.weight, 2)}
+                  </span>
+                </div>
+                <p class="mt-3 text-sm text-[var(--hx-mute)]">
+                  {edge_label(edge, @selected)}
+                </p>
+              </div>
+              <div
+                :if={@edges == []}
+                class="rounded-2xl border border-dashed border-white/10 px-4 py-8 text-center text-[var(--hx-mute)]"
+              >
+                No links for this memory yet.
+              </div>
+            </div>
+          </div>
+        </article>
       </section>
     </AppShell.shell>
     """
@@ -91,6 +293,84 @@ defmodule HydraXWeb.MemoryLive do
 
   defp load_memories(""), do: Memory.list_memories(limit: 100)
   defp load_memories(query), do: Memory.search(nil, query, 100)
+
+  defp memory_types, do: ~w(Fact Preference Decision Identity Event Observation Goal Todo)
+  defp edge_kinds, do: ~w(relates_to contradicts supersedes supports part_of)
+
+  defp load_edges(nil), do: []
+  defp load_edges(memory), do: Memory.list_edges_for(memory.id)
+
+  defp memory_form(nil) do
+    agent_id = Runtime.get_default_agent() |> then(&(&1 && &1.id))
+
+    Memory.change_memory(%Entry{}, %{
+      agent_id: agent_id,
+      type: "Fact",
+      importance: 0.7,
+      content: ""
+    })
+  end
+
+  defp memory_form(memory), do: Memory.change_memory(memory)
+
+  defp edge_form(nil) do
+    Memory.change_edge(%Edge{}, %{kind: "relates_to", weight: 1.0})
+  end
+
+  defp edge_form(memory) do
+    Memory.change_edge(%Edge{}, %{from_memory_id: memory.id, kind: "relates_to", weight: 1.0})
+  end
+
+  defp assign_form(socket, key, changeset, as) do
+    assign(socket, key, to_form(changeset, as: as))
+  end
+
+  defp normalize_memory_params(params) do
+    params
+    |> Map.put("importance", parse_float(params["importance"], 0.7))
+    |> Map.put("last_seen_at", DateTime.utc_now())
+  end
+
+  defp normalize_edge_params(selected, params) do
+    params
+    |> Map.put("from_memory_id", selected.id)
+    |> Map.put("weight", parse_float(params["weight"], 1.0))
+  end
+
+  defp maybe_refresh_selection(memories, id) do
+    Enum.find(memories, &(&1.id == id))
+  end
+
+  defp linkable_memory_options(memories, selected) do
+    memories
+    |> Enum.reject(&(&1.id == selected.id))
+    |> Enum.map(&{"#{&1.type}: #{truncate(&1.content, 52)}", &1.id})
+  end
+
+  defp edge_label(edge, selected) do
+    target =
+      if edge.from_memory_id == selected.id do
+        edge.to_memory
+      else
+        edge.from_memory
+      end
+
+    "#{target.type}: #{truncate(target.content, 80)}"
+  end
+
+  defp truncate(content, limit) when byte_size(content) <= limit, do: content
+  defp truncate(content, limit), do: String.slice(content, 0, limit) <> "..."
+
+  defp parse_float(nil, default), do: default
+  defp parse_float("", default), do: default
+  defp parse_float(value, _default) when is_float(value), do: value
+
+  defp parse_float(value, default) when is_binary(value) do
+    case Float.parse(value) do
+      {parsed, _} -> parsed
+      :error -> default
+    end
+  end
 
   defp stats do
     %{

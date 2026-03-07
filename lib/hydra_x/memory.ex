@@ -9,6 +9,8 @@ defmodule HydraX.Memory do
   alias HydraX.Memory.{Edge, Entry, Markdown}
   alias HydraX.Repo
 
+  def get_memory!(id), do: Repo.get!(Entry, id)
+
   def list_memories(opts \\ []) do
     agent_id = Keyword.get(opts, :agent_id)
     limit = Keyword.get(opts, :limit, 100)
@@ -64,10 +66,38 @@ defmodule HydraX.Memory do
     end
   end
 
+  def change_memory(entry \\ %Entry{}, attrs \\ %{}) do
+    Entry.changeset(entry, attrs)
+  end
+
+  def update_memory(%Entry{} = entry, attrs) do
+    result =
+      entry
+      |> Entry.changeset(attrs)
+      |> Repo.update()
+
+    with {:ok, updated} <- result do
+      maybe_refresh_cortex(updated.agent_id)
+      {:ok, updated}
+    end
+  end
+
   def link_memories(attrs) do
     %Edge{}
     |> Edge.changeset(attrs)
     |> Repo.insert()
+  end
+
+  def change_edge(edge \\ %Edge{}, attrs \\ %{}) do
+    Edge.changeset(edge, attrs)
+  end
+
+  def list_edges_for(memory_id) do
+    Edge
+    |> where([edge], edge.from_memory_id == ^memory_id or edge.to_memory_id == ^memory_id)
+    |> preload([:from_memory, :to_memory])
+    |> order_by([edge], desc: edge.inserted_at)
+    |> Repo.all()
   end
 
   def render_markdown(agent_id) do
