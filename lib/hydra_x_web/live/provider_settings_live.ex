@@ -13,24 +13,66 @@ defmodule HydraXWeb.ProviderSettingsLive do
      |> assign(:current, "providers")
      |> assign(:stats, stats())
      |> assign(:providers, Runtime.list_provider_configs())
+     |> assign(:editing_provider, %ProviderConfig{})
      |> assign(:test_result, nil)
      |> assign(:form, to_form(Runtime.change_provider_config(%ProviderConfig{})))}
   end
 
   @impl true
-  def handle_event("create", %{"provider_config" => params}, socket) do
-    case Runtime.save_provider_config(params) do
+  def handle_event("save", %{"provider_config" => params}, socket) do
+    action = if socket.assigns.editing_provider.id, do: "updated", else: "saved"
+
+    case Runtime.save_provider_config(socket.assigns.editing_provider, params) do
       {:ok, _provider} ->
         {:noreply,
          socket
-         |> put_flash(:info, "Provider saved")
+         |> put_flash(:info, "Provider #{action}")
          |> assign(:providers, Runtime.list_provider_configs())
+         |> assign(:editing_provider, %ProviderConfig{})
          |> assign(:stats, stats())
          |> assign(:form, to_form(Runtime.change_provider_config(%ProviderConfig{})))}
 
       {:error, changeset} ->
         {:noreply, assign(socket, :form, to_form(changeset))}
     end
+  end
+
+  def handle_event("edit", %{"id" => id}, socket) do
+    provider = Runtime.get_provider_config!(id)
+
+    {:noreply,
+     socket
+     |> assign(:editing_provider, provider)
+     |> assign(:form, to_form(Runtime.change_provider_config(provider)))}
+  end
+
+  def handle_event("reset_form", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:editing_provider, %ProviderConfig{})
+     |> assign(:form, to_form(Runtime.change_provider_config(%ProviderConfig{})))}
+  end
+
+  def handle_event("activate", %{"id" => id}, socket) do
+    Runtime.activate_provider!(id)
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Active provider updated")
+     |> assign(:providers, Runtime.list_provider_configs())
+     |> assign(:stats, stats())}
+  end
+
+  def handle_event("delete", %{"id" => id}, socket) do
+    Runtime.delete_provider_config!(id)
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Provider deleted")
+     |> assign(:providers, Runtime.list_provider_configs())
+     |> assign(:stats, stats())
+     |> assign(:editing_provider, %ProviderConfig{})
+     |> assign(:form, to_form(Runtime.change_provider_config(%ProviderConfig{})))}
   end
 
   def handle_event("test", %{"id" => id}, socket) do
@@ -91,18 +133,45 @@ defmodule HydraXWeb.ProviderSettingsLive do
               </div>
               <button
                 type="button"
+                phx-click="edit"
+                phx-value-id={provider.id}
+                class="btn btn-outline mt-4 border-white/10 bg-white/5 text-white hover:bg-white/10"
+              >
+                Edit
+              </button>
+              <button
+                :if={!provider.enabled}
+                type="button"
+                phx-click="activate"
+                phx-value-id={provider.id}
+                class="btn btn-outline mt-4 border-white/10 bg-white/5 text-white hover:bg-white/10"
+              >
+                Make active
+              </button>
+              <button
+                type="button"
                 phx-click="test"
                 phx-value-id={provider.id}
                 class="btn btn-outline mt-4 border-white/10 bg-white/5 text-white hover:bg-white/10"
               >
                 Test provider
               </button>
+              <button
+                type="button"
+                phx-click="delete"
+                phx-value-id={provider.id}
+                class="btn btn-outline mt-4 border-white/10 bg-white/5 text-white hover:bg-white/10"
+              >
+                Delete
+              </button>
             </div>
           </div>
         </article>
 
         <article class="glass-panel p-6">
-          <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">Add provider</div>
+          <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">
+            {if @editing_provider.id, do: "Edit provider", else: "Add provider"}
+          </div>
           <div
             :if={@test_result}
             class="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-4 text-sm text-[var(--hx-mute)]"
@@ -115,7 +184,7 @@ defmodule HydraXWeb.ProviderSettingsLive do
               {@test_result.content}
             </p>
           </div>
-          <.form for={@form} phx-submit="create" class="mt-6 space-y-2">
+          <.form for={@form} phx-submit="save" class="mt-6 space-y-2">
             <.input field={@form[:name]} label="Label" />
             <.input
               field={@form[:kind]}
@@ -129,6 +198,14 @@ defmodule HydraXWeb.ProviderSettingsLive do
             <.input field={@form[:enabled]} type="checkbox" label="Set active" />
             <div class="pt-2">
               <.button>Save provider</.button>
+              <button
+                :if={@editing_provider.id}
+                type="button"
+                phx-click="reset_form"
+                class="ml-3 inline-flex items-center rounded-2xl border border-white/10 bg-white/5 px-4 py-2 font-mono text-xs uppercase tracking-[0.18em] text-white transition hover:bg-white/10"
+              >
+                New provider
+              </button>
             </div>
           </.form>
         </article>

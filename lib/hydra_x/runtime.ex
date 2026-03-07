@@ -164,6 +164,23 @@ defmodule HydraX.Runtime do
     |> unwrap_transaction()
   end
 
+  def activate_provider!(id) do
+    provider = get_provider_config!(id)
+    {:ok, updated} = save_provider_config(provider, %{enabled: true})
+    updated
+  end
+
+  def toggle_provider_enabled!(id) do
+    provider = get_provider_config!(id)
+    {:ok, updated} = save_provider_config(provider, %{enabled: !provider.enabled})
+    updated
+  end
+
+  def delete_provider_config!(id) do
+    provider = get_provider_config!(id)
+    Repo.delete!(provider)
+  end
+
   def get_tool_policy do
     Repo.get_by(ToolPolicy, scope: "default")
   end

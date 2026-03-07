@@ -2,6 +2,7 @@ defmodule HydraXWeb.ProviderFlowsTest do
   use HydraXWeb.ConnCase
 
   alias HydraX.Repo
+  alias HydraX.Runtime
   alias HydraX.Runtime.ProviderConfig
 
   setup do
@@ -38,7 +39,7 @@ defmodule HydraXWeb.ProviderFlowsTest do
     {:ok, view, _html} = live(conn, ~p"/settings/providers")
 
     view
-    |> element(~s(button[phx-value-id="#{provider.id}"]))
+    |> element(~s(button[phx-click="test"][phx-value-id="#{provider.id}"]))
     |> render_click()
 
     html = render(view)
@@ -69,5 +70,56 @@ defmodule HydraXWeb.ProviderFlowsTest do
     assert html =~ "Provider test succeeded"
     assert html =~ "Test reply:"
     assert html =~ "OK"
+  end
+
+  test "providers page can edit and activate a provider", %{conn: conn} do
+    {:ok, first} =
+      Runtime.save_provider_config(%{
+        name: "First Provider",
+        kind: "openai_compatible",
+        base_url: "https://first.test",
+        api_key: "secret",
+        model: "gpt-first",
+        enabled: false
+      })
+
+    {:ok, second} =
+      Runtime.save_provider_config(%{
+        name: "Second Provider",
+        kind: "openai_compatible",
+        base_url: "https://second.test",
+        api_key: "secret",
+        model: "gpt-second",
+        enabled: false
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/settings/providers")
+
+    view
+    |> element(~s(button[phx-click="edit"][phx-value-id="#{first.id}"]))
+    |> render_click()
+
+    view
+    |> form("form", %{
+      "provider_config" => %{
+        "name" => "First Provider Updated",
+        "kind" => "openai_compatible",
+        "base_url" => "https://first.test",
+        "api_key" => "secret",
+        "model" => "gpt-updated",
+        "enabled" => "false"
+      }
+    })
+    |> render_submit()
+
+    assert Runtime.get_provider_config!(first.id).name == "First Provider Updated"
+
+    view
+    |> element(~s(button[phx-click="activate"][phx-value-id="#{second.id}"]))
+    |> render_click()
+
+    html = render(view)
+    assert html =~ "Active provider updated"
+    assert Runtime.enabled_provider().id == second.id
   end
 end

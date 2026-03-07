@@ -67,6 +67,7 @@ The repository also includes a thin command wrapper:
 ./hydra_x healthcheck
 ./hydra_x chat -m "Hello"
 ./hydra_x provider-test
+./hydra_x providers
 ./hydra_x agents
 ./hydra_x jobs
 ./hydra_x conversations
@@ -78,6 +79,16 @@ The repository also includes a thin command wrapper:
 ```
 
 If you want to lock the management UI, set an operator password on `/setup`. After that, browser access requires signing in at `/login`.
+
+Provider lifecycle can be managed from `/settings/providers` or the CLI:
+
+```bash
+mix hydra_x.providers
+mix hydra_x.providers activate 2
+mix hydra_x.providers toggle 2
+mix hydra_x.providers delete 2
+mix hydra_x.providers.test
+```
 
 Agent lifecycle can be managed from `/agents` or the CLI:
 
