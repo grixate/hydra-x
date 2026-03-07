@@ -36,7 +36,7 @@ defmodule Mix.Tasks.HydraX.Jobs do
     )
     |> Enum.each(fn job ->
       Mix.shell().info(
-        "#{job.id}\t#{job.name}\t#{job.kind}\t#{if(job.enabled, do: "enabled", else: "paused")}\tnext=#{format_datetime(job.next_run_at)}" <>
+        "#{job.id}\t#{job.name}\t#{job.kind}\t#{schedule_summary(job)}\t#{if(job.enabled, do: "enabled", else: "paused")}\tnext=#{format_datetime(job.next_run_at)}" <>
           if(job.delivery_enabled,
             do: "\tdelivery=#{job.delivery_channel}:#{job.delivery_target}",
             else: ""
@@ -76,4 +76,14 @@ defmodule Mix.Tasks.HydraX.Jobs do
 
   defp format_datetime(nil), do: "never"
   defp format_datetime(datetime), do: Calendar.strftime(datetime, "%Y-%m-%d %H:%M:%S UTC")
+
+  defp schedule_summary(%{schedule_mode: "weekly"} = job) do
+    "#{job.weekday_csv || "mon"}@#{pad(job.run_hour)}:#{pad(job.run_minute)}"
+  end
+
+  defp schedule_summary(job), do: "every-#{job.interval_minutes}m"
+
+  defp pad(nil), do: "00"
+  defp pad(value) when value < 10, do: "0#{value}"
+  defp pad(value), do: to_string(value)
 end

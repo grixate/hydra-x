@@ -39,8 +39,32 @@ defmodule HydraX.JobsTaskTest do
         ])
       end)
 
-    assert output =~ "Filtered Prompt Job\tprompt\tenabled"
+    assert output =~ "Filtered Prompt Job\tprompt\tevery-30m\tenabled"
     refute output =~ "Paused Backup Job"
+  end
+
+  test "jobs task lists weekly schedules with a human-readable summary" do
+    Mix.Task.reenable("hydra_x.jobs")
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, _job} =
+      Runtime.save_scheduled_job(%{
+        agent_id: agent.id,
+        name: "Weekly Planning",
+        kind: "prompt",
+        schedule_mode: "weekly",
+        weekday_csv: "mon,fri",
+        run_hour: 8,
+        run_minute: 15,
+        enabled: true
+      })
+
+    output =
+      capture_io(fn ->
+        Mix.Tasks.HydraX.Jobs.run(["--search", "Weekly Planning"])
+      end)
+
+    assert output =~ "Weekly Planning\tprompt\tmon,fri@08:15\tenabled"
   end
 
   test "jobs task can delete jobs" do

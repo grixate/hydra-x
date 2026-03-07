@@ -444,6 +444,35 @@ defmodule HydraX.RuntimeTest do
     assert run.metadata["delivery"]["metadata"]["provider_message_id"] == 77
   end
 
+  test "weekly scheduled jobs compute the next run after execution" do
+    agent = create_agent()
+
+    {:ok, job} =
+      Runtime.save_scheduled_job(%{
+        agent_id: agent.id,
+        name: "Weekly review",
+        kind: "prompt",
+        schedule_mode: "weekly",
+        weekday_csv: "mon,wed",
+        run_hour: 9,
+        run_minute: 30,
+        prompt: "Weekly review",
+        enabled: true
+      })
+
+    assert job.schedule_mode == "weekly"
+    assert job.weekday_csv == "mon,wed"
+    assert job.run_hour == 9
+    assert job.run_minute == 30
+    assert job.next_run_at
+
+    assert {:ok, run} = Runtime.run_scheduled_job(job)
+    assert run.status == "success"
+
+    updated = Runtime.get_scheduled_job!(job.id)
+    assert DateTime.compare(updated.next_run_at, DateTime.utc_now()) == :gt
+  end
+
   test "tool policy can disable shell execution at runtime" do
     agent = create_agent()
     {:ok, pid} = HydraX.Agent.ensure_started(agent)

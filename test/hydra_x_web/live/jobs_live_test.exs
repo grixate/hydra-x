@@ -127,6 +127,44 @@ defmodule HydraXWeb.JobsLiveTest do
     refute html =~ "Beta Backup Job"
   end
 
+  test "jobs page can create a weekly scheduled job", %{conn: conn} do
+    _agent = Runtime.ensure_default_agent!()
+
+    {:ok, view, _html} = live(conn, ~p"/jobs")
+
+    view
+    |> form("#job-form", %{
+      scheduled_job: %{
+        name: "Weekly Planning Review",
+        kind: "prompt",
+        schedule_mode: "weekly",
+        interval_minutes: "",
+        weekday_csv: "mon,fri",
+        run_hour: 8,
+        run_minute: 15,
+        prompt: "Review weekly plan.",
+        enabled: true,
+        delivery_enabled: false,
+        delivery_channel: "telegram",
+        delivery_target: ""
+      }
+    })
+    |> render_submit()
+
+    [job | _] =
+      Runtime.list_scheduled_jobs(limit: 10)
+      |> Enum.filter(&(&1.name == "Weekly Planning Review"))
+
+    assert job.schedule_mode == "weekly"
+    assert job.weekday_csv == "mon,fri"
+    assert job.run_hour == 8
+    assert job.run_minute == 15
+
+    html = render(view)
+    assert html =~ "Weekly Planning Review"
+    assert html =~ "mon,fri @ 08:15 UTC"
+  end
+
   test "jobs page can delete jobs", %{conn: conn} do
     agent = Runtime.ensure_default_agent!()
 

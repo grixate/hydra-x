@@ -31,7 +31,6 @@ defmodule HydraXWeb.JobsLive do
   @impl true
   def handle_event("create", %{"scheduled_job" => params}, socket) do
     params = Map.put_new(params, "agent_id", socket.assigns.agent.id)
-    params = Map.put_new(params, "next_run_at", DateTime.utc_now())
     action = if socket.assigns.editing_job.id, do: "updated", else: "saved"
 
     case Runtime.save_scheduled_job(socket.assigns.editing_job, params) do
@@ -174,7 +173,7 @@ defmodule HydraXWeb.JobsLive do
                 <div>
                   <div class="font-display text-2xl">{job.name}</div>
                   <div class="mt-1 text-sm text-[var(--hx-mute)]">
-                    {job.kind} · every {job.interval_minutes} min
+                    {job.kind} · {schedule_summary(job)}
                   </div>
                   <div class="mt-1 text-xs text-[var(--hx-mute)]">
                     next {format_datetime(job.next_run_at)} · last {format_datetime(job.last_run_at)}
@@ -255,7 +254,22 @@ defmodule HydraXWeb.JobsLive do
               label="Kind"
               options={[{"Heartbeat", "heartbeat"}, {"Prompt", "prompt"}, {"Backup", "backup"}]}
             />
+            <.input
+              field={@form[:schedule_mode]}
+              type="select"
+              label="Schedule mode"
+              options={[{"Interval", "interval"}, {"Weekly", "weekly"}]}
+            />
             <.input field={@form[:interval_minutes]} type="number" label="Interval minutes" />
+            <.input field={@form[:weekday_csv]} label="Weekdays (mon,tue,wed...)" />
+            <.input field={@form[:run_hour]} type="number" label="Run hour (UTC)" min="0" max="23" />
+            <.input
+              field={@form[:run_minute]}
+              type="number"
+              label="Run minute (UTC)"
+              min="0"
+              max="59"
+            />
             <.input field={@form[:prompt]} type="textarea" label="Prompt override" />
             <.input field={@form[:enabled]} type="checkbox" label="Enabled" />
             <.input field={@form[:delivery_enabled]} type="checkbox" label="Deliver result" />
@@ -324,7 +338,11 @@ defmodule HydraXWeb.JobsLive do
       agent_id: agent_id,
       name: "Workspace heartbeat",
       kind: "heartbeat",
+      schedule_mode: "interval",
       interval_minutes: 60,
+      weekday_csv: "mon",
+      run_hour: 9,
+      run_minute: 0,
       enabled: true,
       delivery_enabled: false,
       delivery_channel: "telegram"
@@ -347,6 +365,12 @@ defmodule HydraXWeb.JobsLive do
   defp format_datetime(nil), do: "never"
   defp format_datetime(datetime), do: Calendar.strftime(datetime, "%Y-%m-%d %H:%M UTC")
 
+  defp schedule_summary(%{schedule_mode: "weekly"} = job) do
+    "#{job.weekday_csv || "mon"} @ #{pad(job.run_hour)}:#{pad(job.run_minute)} UTC"
+  end
+
+  defp schedule_summary(job), do: "every #{job.interval_minutes} min"
+
   defp run_class("success"), do: "border-emerald-400/20 bg-emerald-400/10 text-emerald-300"
   defp run_class("error"), do: "border-rose-400/20 bg-rose-400/10 text-rose-300"
   defp run_class(_), do: "border-white/10 text-[var(--hx-mute)]"
@@ -363,6 +387,10 @@ defmodule HydraXWeb.JobsLive do
   defp blank_to_nil(nil), do: nil
   defp blank_to_nil(""), do: nil
   defp blank_to_nil(value), do: value
+
+  defp pad(nil), do: "00"
+  defp pad(value) when value < 10, do: "0#{value}"
+  defp pad(value), do: to_string(value)
 
   defp stats do
     %{

@@ -381,15 +381,42 @@ defmodule HydraX.Runtime do
 
   def save_scheduled_job(%ScheduledJob{} = job, attrs) do
     normalized_attrs = normalize_string_keys(attrs)
-    interval_minutes = normalize_integer(normalized_attrs["interval_minutes"])
+
+    interval_minutes =
+      persisted_integer(normalized_attrs, "interval_minutes", job.interval_minutes || 60)
+
+    run_hour = persisted_integer(normalized_attrs, "run_hour", job.run_hour)
+    run_minute = persisted_integer(normalized_attrs, "run_minute", job.run_minute)
+    schedule_mode = Map.get(normalized_attrs, "schedule_mode", job.schedule_mode || "interval")
+    weekday_csv = persisted_weekday_csv(normalized_attrs, "weekday_csv", job.weekday_csv)
+
+    interval_minutes =
+      if schedule_mode == "weekly" and is_nil(interval_minutes), do: 60, else: interval_minutes
+
+    next_run_at =
+      case blank_to_nil(Map.get(normalized_attrs, "next_run_at")) do
+        nil ->
+          next_run_at(%ScheduledJob{
+            job
+            | schedule_mode: schedule_mode,
+              interval_minutes: interval_minutes || job.interval_minutes,
+              weekday_csv: weekday_csv,
+              run_hour: run_hour || job.run_hour,
+              run_minute: run_minute || job.run_minute
+          })
+
+        value ->
+          value
+      end
 
     attrs =
       normalized_attrs
-      |> Map.put_new("interval_minutes", interval_minutes)
-      |> Map.put_new(
-        "next_run_at",
-        next_run_at(interval_minutes)
-      )
+      |> Map.put("schedule_mode", schedule_mode)
+      |> Map.put("interval_minutes", interval_minutes)
+      |> Map.put("weekday_csv", weekday_csv)
+      |> Map.put("run_hour", run_hour)
+      |> Map.put("run_minute", run_minute)
+      |> Map.put("next_run_at", next_run_at)
 
     job
     |> ScheduledJob.changeset(attrs)
@@ -464,7 +491,7 @@ defmodule HydraX.Runtime do
         :job,
         ScheduledJob.changeset(job, %{
           last_run_at: started_at,
-          next_run_at: next_run_at(job.interval_minutes, started_at)
+          next_run_at: next_run_at(job, started_at)
         })
       )
       |> Ecto.Multi.insert(
@@ -1633,11 +1660,49 @@ defmodule HydraX.Runtime do
     end
   end
 
-  defp next_run_at(nil), do: DateTime.utc_now()
+  defp next_run_at(%ScheduledJob{} = job), do: next_run_at(job, DateTime.utc_now())
   defp next_run_at(interval_minutes), do: next_run_at(interval_minutes, DateTime.utc_now())
 
+  defp next_run_at(%ScheduledJob{schedule_mode: "weekly"} = job, from) do
+    next_weekly_run_at(job.weekday_csv, job.run_hour, job.run_minute, from)
+  end
+
+  defp next_run_at(%ScheduledJob{} = job, from) do
+    next_interval_run_at(job.interval_minutes || 60, from)
+  end
+
   defp next_run_at(interval_minutes, from) do
+    next_interval_run_at(interval_minutes, from)
+  end
+
+  defp next_interval_run_at(interval_minutes, from) do
     DateTime.add(from, interval_minutes * 60, :second)
+  end
+
+  defp next_weekly_run_at(weekday_csv, run_hour, run_minute, from) do
+    weekdays = parse_weekdays(weekday_csv)
+    current_date = DateTime.to_date(from)
+
+    candidates =
+      0..7
+      |> Enum.map(fn offset ->
+        date = Date.add(current_date, offset)
+
+        if Date.day_of_week(date) in weekdays do
+          {:ok, naive} = NaiveDateTime.new(date, Time.new!(run_hour || 0, run_minute || 0, 0))
+          DateTime.from_naive!(naive, "Etc/UTC")
+        end
+      end)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.filter(&(DateTime.compare(&1, from) == :gt))
+
+    List.first(candidates) ||
+      next_weekly_run_at(
+        weekday_csv,
+        run_hour,
+        run_minute,
+        DateTime.add(from, 7 * 86_400, :second)
+      )
   end
 
   defp enabled_text(true), do: "enabled"
@@ -1673,8 +1738,64 @@ defmodule HydraX.Runtime do
   end
 
   defp normalize_integer(nil), do: nil
+  defp normalize_integer(""), do: nil
   defp normalize_integer(value) when is_integer(value), do: value
   defp normalize_integer(value) when is_binary(value), do: String.to_integer(value)
+
+  defp persisted_integer(attrs, key, fallback) do
+    if Map.has_key?(attrs, key) do
+      normalize_integer(Map.get(attrs, key))
+    else
+      fallback
+    end
+  end
+
+  defp normalize_weekday_csv(nil), do: nil
+  defp normalize_weekday_csv(""), do: nil
+
+  defp normalize_weekday_csv(value) when is_binary(value) do
+    value
+    |> String.split(",", trim: true)
+    |> Enum.map(&String.trim/1)
+    |> Enum.map(&String.downcase/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+    |> Enum.join(",")
+  end
+
+  defp persisted_weekday_csv(attrs, key, fallback) do
+    if Map.has_key?(attrs, key) do
+      normalize_weekday_csv(Map.get(attrs, key))
+    else
+      fallback
+    end
+  end
+
+  defp parse_weekdays(nil), do: [1]
+  defp parse_weekdays(""), do: [1]
+
+  defp parse_weekdays(csv) do
+    weekday_map = %{
+      "mon" => 1,
+      "tue" => 2,
+      "wed" => 3,
+      "thu" => 4,
+      "fri" => 5,
+      "sat" => 6,
+      "sun" => 7
+    }
+
+    csv
+    |> String.split(",", trim: true)
+    |> Enum.map(&String.trim/1)
+    |> Enum.map(&String.downcase/1)
+    |> Enum.map(&Map.get(weekday_map, &1))
+    |> Enum.reject(&is_nil/1)
+    |> case do
+      [] -> [1]
+      weekdays -> weekdays
+    end
+  end
 
   defp retry_on_busy(fun, attempts \\ 5)
 

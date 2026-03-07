@@ -131,7 +131,7 @@ mix hydra_x.jobs run 1
 mix hydra_x.jobs delete 1
 ```
 
-Jobs can optionally deliver their run output back to Telegram by enabling `Deliver result` and setting a chat id target on `/jobs`.
+Jobs now support both fixed intervals and weekly schedules in UTC. Jobs can also optionally deliver their run output back to Telegram by enabling `Deliver result` and setting a chat id target on `/jobs`.
 
 Failed Telegram deliveries can be retried from `/conversations` or the CLI:
 
