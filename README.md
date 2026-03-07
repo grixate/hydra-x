@@ -182,6 +182,7 @@ mix hydra_x.install --output ./deploy
 The health page also shows active OTP alarms and the latest backup manifests so recovery state is visible without shell access.
 The setup page now includes a preview-readiness preflight, and the CLI equivalent is `mix hydra_x.doctor`.
 The setup page can also export the install bundle and create a backup bundle directly from the UI.
+`mix hydra_x.healthcheck --only-warn --search backup` and `mix hydra_x.doctor --required-only --only-warn` can now narrow those reports to just the failing sections you care about.
 
 ## Project shape
 

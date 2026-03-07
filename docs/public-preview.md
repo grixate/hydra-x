@@ -55,5 +55,6 @@ This repository is now beyond the initial skeleton. Use this checklist before ex
 3. Use `mix hydra_x.restore --archive <bundle> --target <dir>` to validate that bundles unpack cleanly before relying on them.
 4. On restart, run `mix hydra_x.migrate` before bringing the node back online.
 5. Re-run `./hydra_x healthcheck` after deploys or crashes.
-6. Use `/conversations`, `/memory`, and `/jobs` to verify persisted state after recovery.
-7. Use `/conversations` or `mix hydra_x.conversations retry-delivery <id>` to retry any failed Telegram delivery before clearing the incident.
+6. Use `mix hydra_x.healthcheck --only-warn` and `mix hydra_x.doctor --required-only --only-warn` when you want just the unresolved blockers instead of the full report.
+7. Use `/conversations`, `/memory`, and `/jobs` to verify persisted state after recovery.
+8. Use `/conversations` or `mix hydra_x.conversations retry-delivery <id>` to retry any failed Telegram delivery before clearing the incident.

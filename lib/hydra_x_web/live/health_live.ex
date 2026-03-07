@@ -6,12 +6,17 @@ defmodule HydraXWeb.HealthLive do
 
   @impl true
   def mount(_params, _session, socket) do
+    filters = default_filters()
+
     {:ok,
      socket
      |> assign(:page_title, "Health")
      |> assign(:current, "health")
      |> assign(:stats, stats())
+     |> assign(:filters, filters)
+     |> assign(:filter_form, to_form(filters, as: :filters))
      |> assign(:checks, Runtime.health_snapshot())
+     |> assign(:readiness_report, Runtime.readiness_report())
      |> assign(:telegram_status, Runtime.telegram_status())
      |> assign(:safety_status, Runtime.safety_status())
      |> assign(:observability_status, Runtime.observability_status())
@@ -21,12 +26,50 @@ defmodule HydraXWeb.HealthLive do
   end
 
   @impl true
+  def handle_event("filter_health", %{"filters" => params}, socket) do
+    filters =
+      default_filters()
+      |> Map.merge(params)
+
+    {:noreply,
+     socket
+     |> assign(:filters, filters)
+     |> assign(:filter_form, to_form(filters, as: :filters))
+     |> assign(:checks, filtered_checks(filters))
+     |> assign(:readiness_report, filtered_readiness(filters))}
+  end
+
+  @impl true
   def render(assigns) do
     ~H"""
     <AppShell.shell current={@current} stats={@stats} flash={@flash}>
       <section class="glass-panel p-6">
         <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">Runtime health</div>
         <h2 class="mt-3 font-display text-4xl">Operational snapshot</h2>
+        <.form for={@filter_form} phx-submit="filter_health" class="mt-6 grid gap-3 lg:grid-cols-4">
+          <.input field={@filter_form[:search]} label="Search" />
+          <.input
+            field={@filter_form[:check_status]}
+            type="select"
+            label="Health status"
+            options={[{"All", ""}, {"Warn", "warn"}, {"Ok", "ok"}]}
+          />
+          <.input
+            field={@filter_form[:readiness_status]}
+            type="select"
+            label="Readiness status"
+            options={[{"All", ""}, {"Warn", "warn"}, {"Ok", "ok"}]}
+          />
+          <.input
+            field={@filter_form[:required_only]}
+            type="select"
+            label="Readiness scope"
+            options={[{"All items", "false"}, {"Required only", "true"}]}
+          />
+          <div class="lg:col-span-4 pt-1">
+            <.button>Filter health</.button>
+          </div>
+        </.form>
         <div class="mt-6 grid gap-3 lg:grid-cols-2">
           <article
             :for={check <- @checks}
@@ -47,6 +90,42 @@ defmodule HydraXWeb.HealthLive do
               </span>
             </div>
             <p class="mt-3 text-sm text-[var(--hx-mute)]">{check.detail}</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="glass-panel mt-6 p-6">
+        <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">Preview readiness</div>
+        <h2 class="mt-3 font-display text-4xl">Launch blockers and recommendations</h2>
+        <div class="mt-6 grid gap-3 lg:grid-cols-2">
+          <article
+            :for={item <- @readiness_report.items}
+            class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4"
+          >
+            <div class="flex items-center justify-between gap-4">
+              <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                {item.label}
+              </div>
+              <span class={[
+                "rounded-full border px-3 py-1 font-mono text-xs uppercase tracking-[0.18em]",
+                if(item.status == :ok,
+                  do: "border-emerald-400/20 bg-emerald-400/10 text-emerald-300",
+                  else: "border-amber-400/20 bg-amber-400/10 text-amber-300"
+                )
+              ]}>
+                {item.status}
+              </span>
+            </div>
+            <p class="mt-3 text-sm text-[var(--hx-mute)]">{item.detail}</p>
+            <p class="mt-2 text-xs text-[var(--hx-mute)]">
+              {if item.required, do: "required", else: "recommended"}
+            </p>
+          </article>
+          <article
+            :if={@readiness_report.items == []}
+            class="rounded-2xl border border-dashed border-white/10 px-4 py-8 text-center text-[var(--hx-mute)] lg:col-span-2"
+          >
+            No readiness items match the current filter.
           </article>
         </div>
       </section>
@@ -342,6 +421,34 @@ defmodule HydraXWeb.HealthLive do
   defp level_class("error"), do: "border-rose-400/20 bg-rose-400/10 text-rose-300"
   defp level_class("warn"), do: "border-amber-400/20 bg-amber-400/10 text-amber-300"
   defp level_class(_), do: "border-white/10 bg-black/10 text-[var(--hx-mute)]"
+
+  defp filtered_checks(filters) do
+    Runtime.health_snapshot(
+      status: blank_to_nil(filters["check_status"]),
+      search: blank_to_nil(filters["search"])
+    )
+  end
+
+  defp filtered_readiness(filters) do
+    Runtime.readiness_report(
+      status: blank_to_nil(filters["readiness_status"]),
+      search: blank_to_nil(filters["search"]),
+      required_only: filters["required_only"] == "true"
+    )
+  end
+
+  defp default_filters do
+    %{
+      "search" => "",
+      "check_status" => "",
+      "readiness_status" => "",
+      "required_only" => "false"
+    }
+  end
+
+  defp blank_to_nil(nil), do: nil
+  defp blank_to_nil(""), do: nil
+  defp blank_to_nil(value), do: value
 
   defp stats do
     %{

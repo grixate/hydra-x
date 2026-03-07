@@ -886,7 +886,7 @@ defmodule HydraX.Runtime do
     |> Repo.update()
   end
 
-  def health_snapshot do
+  def health_snapshot(opts \\ []) do
     provider = enabled_provider()
     default_agent = get_default_agent()
     budget_policy = default_agent && HydraX.Budget.ensure_policy!(default_agent.id)
@@ -896,7 +896,7 @@ defmodule HydraX.Runtime do
     safety_errors = Map.get(safety_counts, "error", 0)
     safety_warnings = Map.get(safety_counts, "warn", 0)
 
-    [
+    checks = [
       %{name: "database", status: :ok, detail: "SQLite repo online"},
       %{
         name: "agents",
@@ -1001,6 +1001,10 @@ defmodule HydraX.Runtime do
         detail: Config.workspace_root()
       }
     ]
+
+    checks
+    |> maybe_filter_check_status(Keyword.get(opts, :status))
+    |> maybe_filter_check_search(Keyword.get(opts, :search))
   end
 
   def telegram_status do
@@ -1144,7 +1148,7 @@ defmodule HydraX.Runtime do
     }
   end
 
-  def readiness_report do
+  def readiness_report(opts \\ []) do
     tool_policy = effective_tool_policy()
     backup_root = Config.backup_root()
     telegram = telegram_status()
@@ -1238,6 +1242,12 @@ defmodule HydraX.Runtime do
           "shell #{enabled_text(tool_policy.shell_command_enabled)}; http allowlist #{describe_allowlist(tool_policy.http_allowlist)}"
       }
     ]
+
+    items =
+      items
+      |> maybe_filter_readiness_required(Keyword.get(opts, :required_only, false))
+      |> maybe_filter_readiness_status(Keyword.get(opts, :status))
+      |> maybe_filter_readiness_search(Keyword.get(opts, :search))
 
     %{
       summary:
@@ -1531,6 +1541,47 @@ defmodule HydraX.Runtime do
       [job],
       like(job.name, ^pattern) or like(job.prompt, ^pattern)
     )
+  end
+
+  defp maybe_filter_check_status(checks, nil), do: checks
+  defp maybe_filter_check_status(checks, ""), do: checks
+
+  defp maybe_filter_check_status(checks, status) do
+    Enum.filter(checks, &(Atom.to_string(&1.status) == to_string(status)))
+  end
+
+  defp maybe_filter_check_search(checks, nil), do: checks
+  defp maybe_filter_check_search(checks, ""), do: checks
+
+  defp maybe_filter_check_search(checks, search) do
+    downcased = String.downcase(search)
+
+    Enum.filter(checks, fn check ->
+      String.contains?(String.downcase(check.name), downcased) or
+        String.contains?(String.downcase(check.detail), downcased)
+    end)
+  end
+
+  defp maybe_filter_readiness_required(items, true), do: Enum.filter(items, & &1.required)
+  defp maybe_filter_readiness_required(items, _), do: items
+
+  defp maybe_filter_readiness_status(items, nil), do: items
+  defp maybe_filter_readiness_status(items, ""), do: items
+
+  defp maybe_filter_readiness_status(items, status) do
+    Enum.filter(items, &(Atom.to_string(&1.status) == to_string(status)))
+  end
+
+  defp maybe_filter_readiness_search(items, nil), do: items
+  defp maybe_filter_readiness_search(items, ""), do: items
+
+  defp maybe_filter_readiness_search(items, search) do
+    downcased = String.downcase(search)
+
+    Enum.filter(items, fn item ->
+      String.contains?(String.downcase(item.label), downcased) or
+        String.contains?(String.downcase(item.detail), downcased)
+    end)
   end
 
   defp normalize_agent_attrs(attrs) do
