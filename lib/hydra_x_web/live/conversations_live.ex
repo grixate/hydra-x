@@ -22,6 +22,7 @@ defmodule HydraXWeb.ConversationsLive do
      |> assign(:filter_form, to_form(filters, as: :filters))
      |> assign(:conversations, conversations)
      |> assign(:selected, selected)
+     |> assign(:compaction, selected && Runtime.conversation_compaction(selected.id))
      |> assign(:new_form, to_form(default_new_conversation(agents), as: :conversation))
      |> assign(:reply_form, to_form(%{"message" => ""}, as: :reply))
      |> assign(:rename_form, rename_form(selected))}
@@ -35,7 +36,10 @@ defmodule HydraXWeb.ConversationsLive do
         id -> Runtime.get_conversation!(id)
       end
 
-    {:noreply, assign(socket, :selected, selected)}
+    {:noreply,
+     socket
+     |> assign(:selected, selected)
+     |> assign(:compaction, selected && Runtime.conversation_compaction(selected.id))}
   end
 
   @impl true
@@ -51,6 +55,7 @@ defmodule HydraXWeb.ConversationsLive do
          |> put_flash(:info, "Conversation renamed")
          |> assign(:conversations, list_conversations(socket.assigns.filters))
          |> assign(:selected, selected)
+         |> assign(:compaction, Runtime.conversation_compaction(selected.id))
          |> assign(:rename_form, rename_form(selected))}
 
       {:error, reason} ->
@@ -68,6 +73,7 @@ defmodule HydraXWeb.ConversationsLive do
      |> put_flash(:info, "Conversation archived")
      |> assign(:conversations, conversations)
      |> assign(:selected, selected)
+     |> assign(:compaction, selected && Runtime.conversation_compaction(selected.id))
      |> assign(:rename_form, rename_form(selected))
      |> assign(:stats, stats())}
   end
@@ -98,6 +104,7 @@ defmodule HydraXWeb.ConversationsLive do
        |> put_flash(:info, "Conversation started")
        |> assign(:conversations, conversations)
        |> assign(:selected, selected)
+       |> assign(:compaction, Runtime.conversation_compaction(selected.id))
        |> assign(:stats, stats())
        |> assign(:rename_form, rename_form(selected))
        |> assign(:reply_form, to_form(%{"message" => ""}, as: :reply))}
@@ -118,6 +125,7 @@ defmodule HydraXWeb.ConversationsLive do
          |> put_flash(:info, "Reply sent")
          |> assign(:conversations, list_conversations(socket.assigns.filters))
          |> assign(:selected, selected)
+         |> assign(:compaction, Runtime.conversation_compaction(selected.id))
          |> assign(:stats, stats())
          |> assign(:rename_form, rename_form(selected))
          |> assign(:reply_form, to_form(%{"message" => ""}, as: :reply))}
@@ -139,6 +147,7 @@ defmodule HydraXWeb.ConversationsLive do
          |> put_flash(:info, "Telegram delivery retried")
          |> assign(:conversations, list_conversations(socket.assigns.filters))
          |> assign(:selected, refreshed)
+         |> assign(:compaction, Runtime.conversation_compaction(refreshed.id))
          |> assign(:rename_form, rename_form(refreshed))
          |> assign(:stats, stats())}
 
@@ -160,16 +169,44 @@ defmodule HydraXWeb.ConversationsLive do
         socket.assigns.selected && socket.assigns.selected.id
       )
 
+    selected = selected || conversations |> List.first() |> maybe_load()
+
     {:noreply,
      socket
      |> assign(:filters, filters)
      |> assign(:filter_form, to_form(filters, as: :filters))
      |> assign(:conversations, conversations)
-     |> assign(:selected, selected || conversations |> List.first() |> maybe_load())
-     |> assign(
-       :rename_form,
-       rename_form(selected || conversations |> List.first() |> maybe_load())
-     )}
+     |> assign(:selected, selected)
+     |> assign(:compaction, selected && Runtime.conversation_compaction(selected.id))
+     |> assign(:rename_form, rename_form(selected))}
+  end
+
+  def handle_event("review_compaction", %{"id" => id}, socket) do
+    compaction = Runtime.review_conversation_compaction!(String.to_integer(id))
+    selected = Runtime.get_conversation!(compaction.conversation.id)
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Conversation compaction reviewed")
+     |> assign(:selected, selected)
+     |> assign(:compaction, compaction)
+     |> assign(:conversations, list_conversations(socket.assigns.filters))
+     |> assign(:rename_form, rename_form(selected))
+     |> assign(:stats, stats())}
+  end
+
+  def handle_event("reset_compaction", %{"id" => id}, socket) do
+    compaction = Runtime.reset_conversation_compaction!(String.to_integer(id))
+    selected = Runtime.get_conversation!(compaction.conversation.id)
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Conversation summary reset")
+     |> assign(:selected, selected)
+     |> assign(:compaction, compaction)
+     |> assign(:conversations, list_conversations(socket.assigns.filters))
+     |> assign(:rename_form, rename_form(selected))
+     |> assign(:stats, stats())}
   end
 
   @impl true
@@ -306,6 +343,39 @@ defmodule HydraXWeb.ConversationsLive do
                 >
                   Export transcript
                 </button>
+              </div>
+              <div class="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                      Compaction
+                    </div>
+                    <div class="mt-2 text-sm text-[var(--hx-mute)]">
+                      {compaction_label(@compaction)}
+                    </div>
+                  </div>
+                  <div class="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      phx-click="review_compaction"
+                      phx-value-id={@selected.id}
+                      class="btn btn-outline border-white/10 bg-white/5 text-white hover:bg-white/10"
+                    >
+                      Review compaction
+                    </button>
+                    <button
+                      type="button"
+                      phx-click="reset_compaction"
+                      phx-value-id={@selected.id}
+                      class="btn btn-outline border-white/10 bg-white/5 text-white hover:bg-white/10"
+                    >
+                      Reset summary
+                    </button>
+                  </div>
+                </div>
+                <p class="mt-3 whitespace-pre-wrap text-sm text-[var(--hx-mute)]">
+                  {(@compaction && @compaction.summary) || "No summary checkpoint yet"}
+                </p>
               </div>
               <.form for={@rename_form} phx-submit="rename_conversation" class="mt-4 space-y-2">
                 <.input field={@rename_form[:title]} label="Title" />
@@ -458,6 +528,13 @@ defmodule HydraXWeb.ConversationsLive do
   defp blank_to_default(nil, default), do: default
   defp blank_to_default("", default), do: default
   defp blank_to_default(value, _default), do: value
+
+  defp compaction_label(nil), do: "No compaction data available"
+
+  defp compaction_label(compaction) do
+    level = compaction.level || "idle"
+    "#{compaction.turn_count} turns · #{level}"
+  end
 
   defp format_reason(reason) when is_binary(reason), do: reason
   defp format_reason(reason), do: inspect(reason)

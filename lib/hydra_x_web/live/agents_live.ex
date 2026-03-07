@@ -81,6 +81,16 @@ defmodule HydraXWeb.AgentsLive do
      |> assign(:stats, stats())}
   end
 
+  def handle_event("refresh_bulletin", %{"id" => id}, socket) do
+    Runtime.refresh_agent_bulletin!(String.to_integer(id))
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Agent bulletin refreshed")
+     |> assign(:agents, agents_with_runtime())
+     |> assign(:stats, stats())}
+  end
+
   def handle_event("start_runtime", %{"id" => id}, socket) do
     Runtime.start_agent_runtime!(id)
 
@@ -221,6 +231,26 @@ defmodule HydraXWeb.AgentsLive do
               <div :if={agent.runtime.pid} class="mt-2 font-mono text-xs text-[var(--hx-mute)]">
                 {agent.runtime.pid}
               </div>
+              <div class="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-3">
+                <div class="flex items-center justify-between gap-3">
+                  <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                    Bulletin
+                  </div>
+                  <button
+                    phx-click="refresh_bulletin"
+                    phx-value-id={agent.id}
+                    class="btn btn-sm btn-outline border-white/10 bg-white/5 text-white hover:bg-white/10"
+                  >
+                    Refresh bulletin
+                  </button>
+                </div>
+                <p class="mt-3 whitespace-pre-wrap text-sm text-[var(--hx-mute)]">
+                  {agent.bulletin.content || "No bulletin yet"}
+                </p>
+                <div class="mt-2 text-xs text-[var(--hx-mute)]">
+                  {agent.bulletin.memory_count} memory items in bulletin scope
+                </div>
+              </div>
             </div>
           </div>
           <div class="mt-6">
@@ -276,6 +306,10 @@ defmodule HydraXWeb.AgentsLive do
 
   defp agents_with_runtime do
     Runtime.list_agents()
-    |> Enum.map(fn agent -> Map.put(agent, :runtime, Runtime.agent_runtime_status(agent)) end)
+    |> Enum.map(fn agent ->
+      agent
+      |> Map.put(:runtime, Runtime.agent_runtime_status(agent))
+      |> Map.put(:bulletin, Runtime.agent_bulletin(agent.id))
+    end)
   end
 end

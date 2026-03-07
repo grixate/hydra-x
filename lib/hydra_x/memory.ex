@@ -111,10 +111,20 @@ defmodule HydraX.Memory do
     end
   end
 
+  def delete_memory!(id) do
+    entry = get_memory!(id)
+    Repo.delete!(entry)
+  end
+
   def link_memories(attrs) do
     %Edge{}
     |> Edge.changeset(attrs)
     |> Repo.insert()
+  end
+
+  def delete_edge!(id) do
+    edge = Repo.get!(Edge, id)
+    Repo.delete!(edge)
   end
 
   def change_edge(edge \\ %Edge{}, attrs \\ %{}) do

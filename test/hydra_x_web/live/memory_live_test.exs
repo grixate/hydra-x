@@ -127,4 +127,55 @@ defmodule HydraXWeb.MemoryLiveTest do
     assert html =~ "Filterable fact memory"
     refute html =~ "Filterable goal memory"
   end
+
+  test "memory page can delete a memory and its link", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, first} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Fact",
+        content: "Delete me",
+        importance: 0.7,
+        last_seen_at: DateTime.utc_now()
+      })
+
+    {:ok, second} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Goal",
+        content: "Keep me",
+        importance: 0.8,
+        last_seen_at: DateTime.utc_now()
+      })
+
+    {:ok, edge} =
+      Memory.link_memories(%{
+        from_memory_id: first.id,
+        to_memory_id: second.id,
+        kind: "supports",
+        weight: 1.0
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/memory")
+
+    view
+    |> element(~s(button[phx-click="select_memory"][phx-value-id="#{first.id}"]))
+    |> render_click()
+
+    view
+    |> element(~s(button[phx-click="delete_edge"][phx-value-id="#{edge.id}"]))
+    |> render_click()
+
+    assert Memory.list_edges_for(first.id) == []
+
+    view
+    |> element(~s(button[phx-click="delete_memory"][phx-value-id="#{first.id}"]))
+    |> render_click()
+
+    html = render(view)
+    assert html =~ "Memory deleted"
+    refute html =~ "Delete me"
+    assert_raise Ecto.NoResultsError, fn -> Memory.get_memory!(first.id) end
+  end
 end

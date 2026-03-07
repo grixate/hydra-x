@@ -172,6 +172,44 @@ defmodule HydraX.ConversationsTaskTest do
     refute output =~ "Active Ops Thread"
   end
 
+  test "conversation task can review and reset compaction" do
+    Mix.Task.reenable("hydra_x.conversations")
+    agent = create_agent()
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{
+        channel: "control_plane",
+        title: "Compact Me"
+      })
+
+    Enum.each(1..12, fn index ->
+      {:ok, _turn} =
+        Runtime.append_turn(conversation, %{
+          role: if(rem(index, 2) == 0, do: "assistant", else: "user"),
+          content: "Compaction turn #{index}",
+          metadata: %{}
+        })
+    end)
+
+    compact_output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Mix.Tasks.HydraX.Conversations.run(["compact", to_string(conversation.id)])
+      end)
+
+    assert compact_output =~ "turn_count=12"
+    assert compact_output =~ "level="
+
+    Mix.Task.reenable("hydra_x.conversations")
+
+    reset_output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Mix.Tasks.HydraX.Conversations.run(["reset-compact", to_string(conversation.id)])
+      end)
+
+    assert reset_output =~ "level=idle"
+    assert Runtime.conversation_compaction(conversation.id).summary == nil
+  end
+
   defp create_agent do
     unique = System.unique_integer([:positive])
 

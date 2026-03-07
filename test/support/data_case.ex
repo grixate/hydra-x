@@ -75,6 +75,8 @@ defmodule HydraX.DataCase do
   end
 
   def shutdown_runtime_processes do
+    HydraX.Agent.stop_all()
+
     if Process.whereis(HydraX.ProcessRegistry) do
       HydraX.ProcessRegistry
       |> Registry.select([{{:"$1", :"$2", :_}, [], [:"$2"]}])
@@ -86,6 +88,28 @@ defmodule HydraX.DataCase do
       end)
     end
 
+    wait_for_runtime_shutdown()
+
     :ok
+  end
+
+  defp wait_for_runtime_shutdown do
+    Enum.reduce_while(1..20, :ok, fn _, _acc ->
+      pids =
+        if Process.whereis(HydraX.ProcessRegistry) do
+          HydraX.ProcessRegistry
+          |> Registry.select([{{:"$1", :"$2", :_}, [], [:"$2"]}])
+          |> Enum.filter(&(is_pid(&1) and Process.alive?(&1)))
+        else
+          []
+        end
+
+      if pids == [] do
+        {:halt, :ok}
+      else
+        Process.sleep(25)
+        {:cont, :ok}
+      end
+    end)
   end
 end

@@ -126,4 +126,28 @@ defmodule HydraXWeb.JobsLiveTest do
     assert html =~ "Alpha Prompt Job Updated"
     refute html =~ "Beta Backup Job"
   end
+
+  test "jobs page can delete jobs", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, job} =
+      Runtime.save_scheduled_job(%{
+        agent_id: agent.id,
+        name: "Delete Me Job",
+        kind: "prompt",
+        interval_minutes: 10,
+        enabled: true
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/jobs")
+
+    view
+    |> element(~s(button[phx-click="delete"][phx-value-id="#{job.id}"]))
+    |> render_click()
+
+    html = render(view)
+    assert html =~ "Job deleted"
+    refute html =~ "Delete Me Job"
+    assert_raise Ecto.NoResultsError, fn -> Runtime.get_scheduled_job!(job.id) end
+  end
 end

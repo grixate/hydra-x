@@ -37,6 +37,12 @@ defmodule Mix.Tasks.HydraX.Agents do
         agent = HydraX.Runtime.repair_agent_workspace!(String.to_integer(id))
         Mix.shell().info("workspace=#{agent.workspace_root}")
 
+      ["bulletin", id] ->
+        bulletin = HydraX.Runtime.refresh_agent_bulletin!(String.to_integer(id))
+        Mix.shell().info("agent=#{bulletin.agent.slug}")
+        Mix.shell().info("memory_count=#{bulletin.memory_count}")
+        Mix.shell().info(bulletin.content || "No bulletin yet")
+
       _ ->
         HydraX.Runtime.list_agents()
         |> Enum.each(fn agent ->

@@ -102,6 +102,7 @@ mix hydra_x.agents reconcile
 mix hydra_x.agents default 2
 mix hydra_x.agents repair 2
 mix hydra_x.agents toggle 2
+mix hydra_x.agents bulletin 2
 ```
 
 Typed memory can now be curated from `/memory` or the CLI:
@@ -112,6 +113,8 @@ mix hydra_x.memory --type Fact --search "operator" --min_importance 0.8
 mix hydra_x.memory create Fact "Hydra-X stores typed memory."
 mix hydra_x.memory update 12 "Hydra-X stores curated typed memory."
 mix hydra_x.memory link 12 13 supports
+mix hydra_x.memory unlink 9
+mix hydra_x.memory delete 12
 mix hydra_x.memory sync
 ```
 
@@ -121,6 +124,7 @@ Recurring heartbeat, prompt, and backup jobs are managed from `/jobs` or the CLI
 mix hydra_x.jobs
 mix hydra_x.jobs --kind prompt --enabled true --search workspace
 mix hydra_x.jobs run 1
+mix hydra_x.jobs delete 1
 ```
 
 Jobs can optionally deliver their run output back to Telegram by enabling `Deliver result` and setting a chat id target on `/jobs`.
@@ -140,6 +144,8 @@ mix hydra_x.conversations send 42 "What do you remember?"
 mix hydra_x.conversations --status archived --search "Ops"
 mix hydra_x.conversations export 42
 mix hydra_x.conversations archive 42
+mix hydra_x.conversations compact 42
+mix hydra_x.conversations reset-compact 42
 ```
 
 Recent safety events can be reviewed from `/safety` or the CLI:

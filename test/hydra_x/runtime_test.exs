@@ -533,6 +533,49 @@ defmodule HydraX.RuntimeTest do
     assert File.exists?(soul_path)
   end
 
+  test "agent bulletins can be rebuilt from typed memory" do
+    agent = create_agent()
+
+    {:ok, _memory} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Fact",
+        content: "Hydra-X keeps a typed graph memory."
+      })
+
+    bulletin = Runtime.refresh_agent_bulletin!(agent.id)
+
+    assert bulletin.memory_count >= 1
+    assert bulletin.content =~ "typed graph memory"
+    assert Runtime.agent_bulletin(agent.id).content =~ "typed graph memory"
+  end
+
+  test "conversation compaction can be reviewed and reset" do
+    agent = create_agent()
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{channel: "control_plane", title: "Compaction Thread"})
+
+    Enum.each(1..12, fn index ->
+      {:ok, _turn} =
+        Runtime.append_turn(conversation, %{
+          role: if(rem(index, 2) == 0, do: "assistant", else: "user"),
+          content: "Turn #{index} for compaction coverage",
+          metadata: %{}
+        })
+    end)
+
+    compaction = Runtime.review_conversation_compaction!(conversation.id)
+
+    assert compaction.turn_count == 12
+    assert compaction.level in ["soft", "medium", "hard"]
+    assert compaction.summary =~ "Turn"
+
+    reset = Runtime.reset_conversation_compaction!(conversation.id)
+    assert reset.level == nil
+    assert reset.summary == nil
+  end
+
   test "runtime reconciliation starts active agents and stops paused agents" do
     {:ok, active_agent} =
       Runtime.save_agent(%{

@@ -199,4 +199,41 @@ defmodule HydraXWeb.ConversationsLiveTest do
     assert html =~ "Beta Archived"
     refute html =~ "Alpha Active"
   end
+
+  test "conversations page can review and reset compaction", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{
+        channel: "control_plane",
+        title: "Compaction UI"
+      })
+
+    Enum.each(1..12, fn index ->
+      {:ok, _turn} =
+        Runtime.append_turn(conversation, %{
+          role: if(rem(index, 2) == 0, do: "assistant", else: "user"),
+          content: "Conversation turn #{index}",
+          metadata: %{}
+        })
+    end)
+
+    {:ok, view, _html} = live(conn, ~p"/conversations?conversation_id=#{conversation.id}")
+
+    view
+    |> element(~s(button[phx-click="review_compaction"][phx-value-id="#{conversation.id}"]))
+    |> render_click()
+
+    html = render(view)
+    assert html =~ "Conversation compaction reviewed"
+    assert html =~ "12 turns"
+
+    view
+    |> element(~s(button[phx-click="reset_compaction"][phx-value-id="#{conversation.id}"]))
+    |> render_click()
+
+    html = render(view)
+    assert html =~ "Conversation summary reset"
+    assert html =~ "No summary checkpoint yet"
+  end
 end

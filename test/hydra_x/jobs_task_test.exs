@@ -42,4 +42,26 @@ defmodule HydraX.JobsTaskTest do
     assert output =~ "Filtered Prompt Job\tprompt\tenabled"
     refute output =~ "Paused Backup Job"
   end
+
+  test "jobs task can delete jobs" do
+    Mix.Task.reenable("hydra_x.jobs")
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, job} =
+      Runtime.save_scheduled_job(%{
+        agent_id: agent.id,
+        name: "Disposable Job",
+        kind: "prompt",
+        interval_minutes: 15,
+        enabled: true
+      })
+
+    output =
+      capture_io(fn ->
+        Mix.Tasks.HydraX.Jobs.run(["delete", to_string(job.id)])
+      end)
+
+    assert output =~ "deleted_job=#{job.id}"
+    assert_raise Ecto.NoResultsError, fn -> Runtime.get_scheduled_job!(job.id) end
+  end
 end

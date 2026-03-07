@@ -16,8 +16,14 @@ defmodule Mix.Tasks.HydraX.Jobs do
       )
 
     case opts[:run] || parse_positional_run(positional) do
-      nil -> list_jobs(opts)
-      id -> run_job(id)
+      nil ->
+        case positional do
+          ["delete", id] -> delete_job(String.to_integer(id))
+          _ -> list_jobs(opts)
+        end
+
+      id ->
+        run_job(id)
     end
   end
 
@@ -54,6 +60,11 @@ defmodule Mix.Tasks.HydraX.Jobs do
       {:error, reason} ->
         Mix.raise("job execution failed: #{inspect(reason)}")
     end
+  end
+
+  defp delete_job(id) do
+    job = HydraX.Runtime.delete_scheduled_job!(id)
+    Mix.shell().info("deleted_job=#{job.id}")
   end
 
   defp parse_positional_run(["run", id]), do: String.to_integer(id)

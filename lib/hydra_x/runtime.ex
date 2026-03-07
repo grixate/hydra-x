@@ -6,6 +6,7 @@ defmodule HydraX.Runtime do
   import Ecto.Query
 
   alias HydraX.Config
+  alias HydraX.Memory
   alias HydraX.Repo
   alias HydraX.Workspace
 
@@ -128,6 +129,37 @@ defmodule HydraX.Runtime do
     agent = get_agent!(id)
     Workspace.Scaffold.copy_template!(agent.workspace_root)
     agent
+  end
+
+  def agent_bulletin(id) when is_integer(id) do
+    agent = get_agent!(id)
+    bulletin = get_in(agent.runtime_state, ["bulletin"])
+
+    %{
+      agent: agent,
+      content: bulletin,
+      updated_at: get_in(agent.runtime_state, ["bulletin_updated_at"]),
+      memory_count: Memory.list_memories(agent_id: agent.id, limit: 6) |> length()
+    }
+  end
+
+  def refresh_agent_bulletin!(id) when is_integer(id) do
+    agent = get_agent!(id)
+    bulletin = render_agent_bulletin(agent.id)
+    updated_at = DateTime.utc_now()
+
+    {:ok, updated_agent} =
+      update_agent_runtime_state(agent, %{
+        "bulletin" => bulletin,
+        "bulletin_updated_at" => updated_at
+      })
+
+    %{
+      agent: updated_agent,
+      content: bulletin,
+      updated_at: updated_at,
+      memory_count: Memory.list_memories(agent_id: agent.id, limit: 6) |> length()
+    }
   end
 
   def agent_runtime_status(%AgentProfile{} = agent) do
@@ -352,6 +384,11 @@ defmodule HydraX.Runtime do
     job
     |> ScheduledJob.changeset(attrs)
     |> Repo.insert_or_update()
+  end
+
+  def delete_scheduled_job!(id) do
+    job = get_scheduled_job!(id)
+    Repo.delete!(job)
   end
 
   def list_due_scheduled_jobs(now) do
@@ -812,6 +849,43 @@ defmodule HydraX.Runtime do
     updated
   end
 
+  def conversation_compaction(id) when is_integer(id) do
+    conversation = get_conversation!(id)
+    checkpoint = get_checkpoint(conversation.id, "compactor")
+    state = (checkpoint && checkpoint.state) || %{}
+    turns = list_turns(conversation.id)
+
+    %{
+      conversation: conversation,
+      turn_count: length(turns),
+      level: state["level"],
+      summary: state["summary"],
+      updated_at: state["updated_at"],
+      checkpoint_id: checkpoint && checkpoint.id
+    }
+  end
+
+  def review_conversation_compaction!(id) when is_integer(id) do
+    conversation = get_conversation!(id)
+
+    {:ok, _pid} =
+      HydraX.Agent.ensure_started(conversation.agent || get_agent!(conversation.agent_id))
+
+    HydraX.Agent.Compactor.review_now(conversation.agent_id, conversation.id)
+  end
+
+  def reset_conversation_compaction!(id) when is_integer(id) do
+    conversation = get_conversation!(id)
+
+    from(checkpoint in Checkpoint,
+      where:
+        checkpoint.conversation_id == ^conversation.id and checkpoint.process_type == "compactor"
+    )
+    |> Repo.delete_all()
+
+    conversation_compaction(conversation.id)
+  end
+
   def export_conversation_transcript!(id) do
     conversation = get_conversation!(id)
     agent = conversation.agent || get_agent!(conversation.agent_id)
@@ -884,6 +958,11 @@ defmodule HydraX.Runtime do
     conversation
     |> Conversation.changeset(%{metadata: metadata})
     |> Repo.update()
+  end
+
+  defp render_agent_bulletin(agent_id) do
+    Memory.list_memories(agent_id: agent_id, limit: 6)
+    |> Enum.map_join("\n", fn memory -> "- [#{memory.type}] #{memory.content}" end)
   end
 
   def health_snapshot(opts \\ []) do

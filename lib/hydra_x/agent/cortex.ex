@@ -3,7 +3,6 @@ defmodule HydraX.Agent.Cortex do
   use GenServer
 
   alias HydraX.Config
-  alias HydraX.Memory
   alias HydraX.Runtime
 
   def start_link(opts) do
@@ -42,17 +41,8 @@ defmodule HydraX.Agent.Cortex do
   end
 
   defp refresh_state(%{agent: agent} = state) do
-    bulletin =
-      Memory.list_memories(agent_id: agent.id, limit: 6)
-      |> Enum.map_join("\n", fn memory -> "- [#{memory.type}] #{memory.content}" end)
-
-    {:ok, updated_agent} =
-      Runtime.update_agent_runtime_state(agent, %{
-        "bulletin" => bulletin,
-        "bulletin_updated_at" => DateTime.utc_now()
-      })
-
-    %{state | agent: updated_agent, bulletin: bulletin}
+    refreshed = Runtime.refresh_agent_bulletin!(agent.id)
+    %{state | agent: refreshed.agent, bulletin: refreshed.content}
   end
 
   defp schedule_refresh do

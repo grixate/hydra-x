@@ -14,8 +14,14 @@ defmodule Mix.Tasks.HydraX.Memory do
       ["update", id, content | rest] ->
         update_memory(id, content, rest)
 
+      ["delete", id] ->
+        delete_memory(id)
+
       ["link", from_id, to_id, kind | rest] ->
         link_memories(from_id, to_id, kind, rest)
+
+      ["unlink", id] ->
+        unlink_memory(id)
 
       ["sync" | rest] ->
         sync_memory(rest)
@@ -72,6 +78,16 @@ defmodule Mix.Tasks.HydraX.Memory do
       })
 
     Mix.shell().info("edge=#{edge.id}")
+  end
+
+  defp delete_memory(id) do
+    memory = HydraX.Memory.delete_memory!(String.to_integer(id))
+    Mix.shell().info("deleted_memory=#{memory.id}")
+  end
+
+  defp unlink_memory(id) do
+    edge = HydraX.Memory.delete_edge!(String.to_integer(id))
+    Mix.shell().info("deleted_edge=#{edge.id}")
   end
 
   defp sync_memory(rest) do

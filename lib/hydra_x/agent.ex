@@ -38,6 +38,25 @@ defmodule HydraX.Agent do
     end
   end
 
+  def stop_all do
+    if Process.whereis(HydraX.AgentSupervisor) do
+      HydraX.AgentSupervisor
+      |> DynamicSupervisor.which_children()
+      |> Enum.each(fn
+        {_, pid, _, _} when is_pid(pid) ->
+          case DynamicSupervisor.terminate_child(HydraX.AgentSupervisor, pid) do
+            :ok -> :ok
+            {:error, :not_found} -> :ok
+          end
+
+        _ ->
+          :ok
+      end)
+    end
+
+    :ok
+  end
+
   def pid(agent_id) do
     case Registry.lookup(HydraX.ProcessRegistry, {:agent, agent_id}) do
       [{pid, _}] -> pid

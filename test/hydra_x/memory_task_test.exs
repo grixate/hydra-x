@@ -116,6 +116,55 @@ defmodule HydraX.MemoryTaskTest do
     refute output =~ "Ignore this goal."
   end
 
+  test "memory task can delete memories and links" do
+    Mix.Task.reenable("hydra_x.memory")
+    agent = create_agent()
+
+    {:ok, memory} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Fact",
+        content: "Disposable memory",
+        importance: 0.5,
+        last_seen_at: DateTime.utc_now()
+      })
+
+    {:ok, other} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Goal",
+        content: "Disposable linked memory",
+        importance: 0.6,
+        last_seen_at: DateTime.utc_now()
+      })
+
+    {:ok, edge} =
+      Memory.link_memories(%{
+        from_memory_id: memory.id,
+        to_memory_id: other.id,
+        kind: "supports",
+        weight: 1.0
+      })
+
+    unlink_output =
+      capture_io(fn ->
+        Mix.Tasks.HydraX.Memory.run(["unlink", to_string(edge.id)])
+      end)
+
+    assert unlink_output =~ "deleted_edge=#{edge.id}"
+    assert Memory.list_edges_for(memory.id) == []
+
+    Mix.Task.reenable("hydra_x.memory")
+
+    delete_output =
+      capture_io(fn ->
+        Mix.Tasks.HydraX.Memory.run(["delete", to_string(memory.id)])
+      end)
+
+    assert delete_output =~ "deleted_memory=#{memory.id}"
+    assert_raise Ecto.NoResultsError, fn -> Memory.get_memory!(memory.id) end
+  end
+
   defp create_agent do
     unique = System.unique_integer([:positive])
 

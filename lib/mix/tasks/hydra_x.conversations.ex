@@ -20,6 +20,12 @@ defmodule Mix.Tasks.HydraX.Conversations do
       ["export", id] ->
         export_conversation(id)
 
+      ["compact", id] ->
+        compact_conversation(id)
+
+      ["reset-compact", id] ->
+        reset_compaction(id)
+
       ["retry-delivery", id] ->
         retry_delivery(id)
 
@@ -91,6 +97,21 @@ defmodule Mix.Tasks.HydraX.Conversations do
     export = HydraX.Runtime.export_conversation_transcript!(String.to_integer(id))
     Mix.shell().info("conversation=#{export.conversation.id}")
     Mix.shell().info("path=#{export.path}")
+  end
+
+  defp compact_conversation(id) do
+    compaction = HydraX.Runtime.review_conversation_compaction!(String.to_integer(id))
+    Mix.shell().info("conversation=#{compaction.conversation.id}")
+    Mix.shell().info("turn_count=#{compaction.turn_count}")
+    Mix.shell().info("level=#{compaction.level || "idle"}")
+    Mix.shell().info(compaction.summary || "No summary checkpoint yet")
+  end
+
+  defp reset_compaction(id) do
+    compaction = HydraX.Runtime.reset_conversation_compaction!(String.to_integer(id))
+    Mix.shell().info("conversation=#{compaction.conversation.id}")
+    Mix.shell().info("level=#{compaction.level || "idle"}")
+    Mix.shell().info("summary=#{compaction.summary || ""}")
   end
 
   defp list_conversations(args) do

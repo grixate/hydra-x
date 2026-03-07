@@ -104,6 +104,28 @@ defmodule HydraXWeb.MemoryLive do
      |> assign_form(:edge_form, edge_form(nil), :edge)}
   end
 
+  def handle_event("delete_memory", %{"id" => id}, socket) do
+    deleted = Memory.delete_memory!(id)
+    if agent = Runtime.get_agent!(deleted.agent_id), do: Memory.sync_markdown(agent)
+
+    memories = load_memories(socket.assigns.filters)
+
+    selected =
+      socket.assigns.selected && maybe_refresh_selection(memories, socket.assigns.selected.id)
+
+    selected = selected || List.first(memories)
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Memory deleted")
+     |> assign(:memories, memories)
+     |> assign(:selected, selected)
+     |> assign(:edges, load_edges(selected))
+     |> assign(:stats, stats())
+     |> assign_form(:memory_form, memory_form(selected), :memory)
+     |> assign_form(:edge_form, edge_form(selected), :edge)}
+  end
+
   def handle_event("save_memory", %{"memory" => params}, socket) do
     result =
       case socket.assigns.selected do
@@ -150,6 +172,15 @@ defmodule HydraXWeb.MemoryLive do
       {:error, changeset} ->
         {:noreply, assign_form(socket, :edge_form, changeset, :edge)}
     end
+  end
+
+  def handle_event("delete_edge", %{"id" => id}, socket) do
+    Memory.delete_edge!(id)
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Memory link deleted")
+     |> assign(:edges, load_edges(socket.assigns.selected))}
   end
 
   @impl true
@@ -227,11 +258,8 @@ defmodule HydraXWeb.MemoryLive do
           </.form>
 
           <div class="mt-6 grid gap-3">
-            <button
+            <div
               :for={memory <- @memories}
-              type="button"
-              phx-click="select_memory"
-              phx-value-id={memory.id}
               class={[
                 "rounded-2xl border px-4 py-4 text-left transition",
                 if(@selected && @selected.id == memory.id,
@@ -240,16 +268,33 @@ defmodule HydraXWeb.MemoryLive do
                 )
               ]}
             >
-              <div class="flex items-center justify-between gap-4">
-                <span class="rounded-full border border-white/10 px-3 py-1 font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-accent)]">
-                  {memory.type}
-                </span>
-                <span class="text-xs text-[var(--hx-mute)]">
-                  importance {Float.round(memory.importance, 2)}
-                </span>
+              <button
+                type="button"
+                phx-click="select_memory"
+                phx-value-id={memory.id}
+                class="w-full text-left"
+              >
+                <div class="flex items-center justify-between gap-4">
+                  <span class="rounded-full border border-white/10 px-3 py-1 font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-accent)]">
+                    {memory.type}
+                  </span>
+                  <span class="text-xs text-[var(--hx-mute)]">
+                    importance {Float.round(memory.importance, 2)}
+                  </span>
+                </div>
+                <p class="mt-3 text-sm leading-6">{memory.content}</p>
+              </button>
+              <div class="mt-4">
+                <button
+                  type="button"
+                  phx-click="delete_memory"
+                  phx-value-id={memory.id}
+                  class="btn btn-outline border-white/10 bg-white/5 text-white hover:bg-white/10"
+                >
+                  Delete
+                </button>
               </div>
-              <p class="mt-3 text-sm leading-6">{memory.content}</p>
-            </button>
+            </div>
             <div
               :if={@memories == []}
               class="rounded-2xl border border-dashed border-white/10 px-4 py-8 text-center text-[var(--hx-mute)]"
@@ -336,6 +381,16 @@ defmodule HydraXWeb.MemoryLive do
                 <p class="mt-3 text-sm text-[var(--hx-mute)]">
                   {edge_label(edge, @selected)}
                 </p>
+                <div class="mt-4">
+                  <button
+                    type="button"
+                    phx-click="delete_edge"
+                    phx-value-id={edge.id}
+                    class="btn btn-outline border-white/10 bg-white/5 text-white hover:bg-white/10"
+                  >
+                    Delete link
+                  </button>
+                </div>
               </div>
               <div
                 :if={@edges == []}

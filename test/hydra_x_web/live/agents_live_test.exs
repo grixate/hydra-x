@@ -101,4 +101,32 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "runtime down"
     refute Runtime.agent_runtime_status(agent.id).running
   end
+
+  test "agents page can refresh a bulletin from memory", %{conn: conn} do
+    {:ok, agent} =
+      Runtime.save_agent(%{
+        name: "Bulletin Agent",
+        slug: "bulletin-agent",
+        workspace_root: Path.join(System.tmp_dir!(), "hydra-x-bulletin-agent"),
+        description: "bulletin",
+        is_default: false
+      })
+
+    {:ok, _memory} =
+      HydraX.Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Fact",
+        content: "Operators can inspect the current bulletin."
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/agents")
+
+    view
+    |> element(~s(button[phx-click="refresh_bulletin"][phx-value-id="#{agent.id}"]))
+    |> render_click()
+
+    html = render(view)
+    assert html =~ "Agent bulletin refreshed"
+    assert html =~ "Operators can inspect the current bulletin."
+  end
 end

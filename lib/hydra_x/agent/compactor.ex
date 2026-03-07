@@ -30,6 +30,11 @@ defmodule HydraX.Agent.Compactor do
     GenServer.cast(via_name(conversation_id), :review)
   end
 
+  def review_now(agent_id, conversation_id) do
+    {:ok, _pid} = ensure_started(agent_id, conversation_id)
+    GenServer.call(via_name(conversation_id), :review_now)
+  end
+
   def current_summary(conversation_id) do
     case Runtime.get_checkpoint(conversation_id, "compactor") do
       nil -> nil
@@ -42,6 +47,16 @@ defmodule HydraX.Agent.Compactor do
 
   @impl true
   def handle_cast(:review, state) do
+    {:noreply, review_state(state)}
+  end
+
+  @impl true
+  def handle_call(:review_now, _from, state) do
+    next_state = review_state(state)
+    {:reply, Runtime.conversation_compaction(state.conversation_id), next_state}
+  end
+
+  defp review_state(state) do
     turns = Runtime.list_turns(state.conversation_id)
     thresholds = Config.compaction_thresholds()
     level = level_for(length(turns), thresholds)
@@ -49,7 +64,6 @@ defmodule HydraX.Agent.Compactor do
     if level do
       summary =
         turns
-        |> Enum.reject(&(&1.kind == "summary"))
         |> Enum.take(max(length(turns) - 3, 0))
         |> Enum.map_join("\n", fn turn -> "#{turn.role}: #{turn.content}" end)
         |> String.slice(0, 800)
@@ -61,7 +75,7 @@ defmodule HydraX.Agent.Compactor do
       })
     end
 
-    {:noreply, state}
+    state
   end
 
   defp level_for(count, thresholds) when count >= thresholds.hard, do: "hard"

@@ -83,6 +83,24 @@ defmodule HydraXWeb.JobsLive do
      |> assign(:stats, stats())}
   end
 
+  def handle_event("delete", %{"id" => id}, socket) do
+    Runtime.delete_scheduled_job!(id)
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Job deleted")
+     |> assign(:jobs, list_jobs(socket.assigns.filters))
+     |> assign(:runs, Runtime.recent_job_runs(20))
+     |> assign(:stats, stats())
+     |> assign(:editing_job, %ScheduledJob{})
+     |> assign(
+       :form,
+       to_form(
+         Runtime.change_scheduled_job(%ScheduledJob{}, default_job_attrs(socket.assigns.agent.id))
+       )
+     )}
+  end
+
   def handle_event("edit", %{"id" => id}, socket) do
     job = Runtime.get_scheduled_job!(id)
 
@@ -205,6 +223,14 @@ defmodule HydraXWeb.JobsLive do
                   class="btn btn-outline border-white/10 bg-white/5 text-white hover:bg-white/10"
                 >
                   {if job.enabled, do: "Pause", else: "Enable"}
+                </button>
+                <button
+                  type="button"
+                  phx-click="delete"
+                  phx-value-id={job.id}
+                  class="btn btn-outline border-white/10 bg-white/5 text-white hover:bg-white/10"
+                >
+                  Delete
                 </button>
               </div>
             </div>
