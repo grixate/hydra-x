@@ -227,9 +227,41 @@ defmodule HydraXWeb.HealthLive do
             <p class="mt-2 text-xs text-[var(--hx-mute)]">
               Pending updates: {@telegram_status.pending_update_count}
             </p>
+            <p class="mt-2 text-xs text-[var(--hx-mute)]">
+              Retryable failed deliveries: {@telegram_status.retryable_count}
+            </p>
             <p :if={@telegram_status.last_error} class="mt-2 text-xs text-amber-200">
               Last Telegram error: {@telegram_status.last_error}
             </p>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4 lg:col-span-2">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Recent Telegram delivery failures
+            </div>
+            <div class="mt-3 space-y-2">
+              <p
+                :if={@telegram_status.recent_failures == []}
+                class="text-sm text-[var(--hx-mute)]"
+              >
+                No recent Telegram delivery failures.
+              </p>
+              <div
+                :for={failure <- @telegram_status.recent_failures}
+                class="rounded-xl border border-white/10 bg-black/10 px-3 py-3"
+              >
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                  <div class="text-sm text-[var(--hx-accent)]">
+                    ##{failure.id} {failure.title}
+                  </div>
+                  <div class="text-xs text-[var(--hx-mute)]">
+                    {format_datetime(failure.updated_at)}
+                  </div>
+                </div>
+                <div class="mt-2 text-xs text-[var(--hx-mute)]">
+                  retry {failure.retry_count} · {failure.reason || "unknown reason"}
+                </div>
+              </div>
+            </div>
           </article>
         </div>
       </section>

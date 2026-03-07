@@ -1287,6 +1287,8 @@ defmodule HydraX.Runtime do
   end
 
   def telegram_status do
+    diagnostics = telegram_delivery_diagnostics()
+
     case enabled_telegram_config() || List.first(list_telegram_configs()) do
       nil ->
         %{
@@ -1298,7 +1300,10 @@ defmodule HydraX.Runtime do
           last_checked_at: nil,
           pending_update_count: 0,
           last_error: nil,
-          default_agent_name: nil
+          default_agent_name: nil,
+          retryable_count: diagnostics.retryable_count,
+          recent_failures: diagnostics.recent_failures,
+          gateway_events: diagnostics.gateway_events
         }
 
       config ->
@@ -1311,7 +1316,10 @@ defmodule HydraX.Runtime do
           last_checked_at: config.webhook_last_checked_at,
           pending_update_count: config.webhook_pending_update_count || 0,
           last_error: config.webhook_last_error,
-          default_agent_name: config.default_agent && config.default_agent.name
+          default_agent_name: config.default_agent && config.default_agent.name,
+          retryable_count: diagnostics.retryable_count,
+          recent_failures: diagnostics.recent_failures,
+          gateway_events: diagnostics.gateway_events
         }
     end
   end
@@ -2024,6 +2032,45 @@ defmodule HydraX.Runtime do
     end)
   end
 
+  defp telegram_delivery_diagnostics do
+    telegram_conversations = list_conversations(channel: "telegram", limit: 50)
+
+    recent_failures =
+      telegram_conversations
+      |> Enum.filter(&failed_telegram_delivery?/1)
+      |> Enum.take(5)
+      |> Enum.map(fn conversation ->
+        delivery = last_delivery(conversation)
+
+        %{
+          id: conversation.id,
+          title: conversation.title || conversation.external_ref || "telegram conversation",
+          external_ref: conversation.external_ref,
+          reason: delivery_value(delivery, "reason"),
+          retry_count: delivery_value(delivery, "retry_count") || 0,
+          updated_at: conversation.updated_at
+        }
+      end)
+
+    gateway_events =
+      HydraX.Safety.list_events(category: "gateway", limit: 5)
+      |> Enum.map(fn event ->
+        %{
+          id: event.id,
+          message: event.message,
+          level: event.level,
+          inserted_at: event.inserted_at,
+          conversation_id: event.conversation_id
+        }
+      end)
+
+    %{
+      retryable_count: Enum.count(telegram_conversations, &failed_telegram_delivery?/1),
+      recent_failures: recent_failures,
+      gateway_events: gateway_events
+    }
+  end
+
   defp maybe_filter_readiness_required(items, true), do: Enum.filter(items, & &1.required)
   defp maybe_filter_readiness_required(items, _), do: items
 
@@ -2135,6 +2182,24 @@ defmodule HydraX.Runtime do
       {key, value}, acc -> Map.put(acc, key, value)
     end)
   end
+
+  defp failed_telegram_delivery?(conversation) do
+    delivery = last_delivery(conversation)
+
+    delivery_value(delivery, "channel") == "telegram" and
+      delivery_value(delivery, "status") == "failed"
+  end
+
+  defp last_delivery(conversation) do
+    metadata = conversation.metadata || %{}
+    metadata["last_delivery"] || metadata[:last_delivery] || %{}
+  end
+
+  defp delivery_value(map, key) when is_map(map) do
+    Map.get(map, key) || Map.get(map, String.to_atom(key))
+  end
+
+  defp delivery_value(_map, _key), do: nil
 
   defp map_integer(nil, default), do: default
   defp map_integer("", default), do: default

@@ -122,7 +122,10 @@ defmodule HydraX.Report do
     - Registered at: #{format_datetime(snapshot.telegram.registered_at)}
     - Last checked at: #{format_datetime(snapshot.telegram.last_checked_at)}
     - Pending updates: #{snapshot.telegram.pending_update_count}
+    - Retryable failed deliveries: #{snapshot.telegram.retryable_count}
     - Last error: #{snapshot.telegram.last_error || "none"}
+    - Recent failed conversations:
+    #{render_telegram_failures(snapshot.telegram.recent_failures)}
 
     ## Tool Policy
     - Workspace guard: #{yes_no(snapshot.tools.workspace_guard)}
@@ -284,6 +287,14 @@ defmodule HydraX.Report do
   defp render_recent_telemetry_events(events) do
     Enum.map_join(events, "\n", fn event ->
       "- #{event.namespace}/#{event.bucket} status=#{event.status} observed=#{format_datetime(event.observed_at)}"
+    end)
+  end
+
+  defp render_telegram_failures([]), do: "- none"
+
+  defp render_telegram_failures(failures) do
+    Enum.map_join(failures, "\n", fn failure ->
+      "- ##{failure.id} #{failure.title} retry=#{failure.retry_count} updated=#{format_datetime(failure.updated_at)} reason=#{failure.reason || "unknown"}"
     end)
   end
 

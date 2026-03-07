@@ -54,10 +54,17 @@ defmodule Mix.Tasks.HydraX.Telegram.Webhook do
     end
 
     Mix.shell().info("Pending updates: #{status.pending_update_count}")
+    Mix.shell().info("Retryable failed deliveries: #{status.retryable_count}")
 
     if status.last_error do
       Mix.shell().info("Last error: #{status.last_error}")
     end
+
+    Enum.each(status.recent_failures, fn failure ->
+      Mix.shell().info(
+        "Failed conversation ##{failure.id}: #{failure.title} (retry #{failure.retry_count})"
+      )
+    end)
   end
 
   defp register do

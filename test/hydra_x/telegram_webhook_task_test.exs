@@ -41,6 +41,45 @@ defmodule HydraX.TelegramWebhookTaskTest do
     assert output =~ "provider_message_id"
   end
 
+  test "telegram webhook task shows retryable failed deliveries" do
+    Mix.Task.reenable("hydra_x.telegram.webhook")
+    agent = create_agent()
+
+    {:ok, _telegram} =
+      Runtime.save_telegram_config(%{
+        bot_token: "test-token",
+        bot_username: "hydrax_bot",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{
+        channel: "telegram",
+        title: "Retry me",
+        external_ref: "777"
+      })
+
+    {:ok, _updated} =
+      Runtime.update_conversation_metadata(conversation, %{
+        "last_delivery" => %{
+          "channel" => "telegram",
+          "external_ref" => "777",
+          "status" => "failed",
+          "retry_count" => 2,
+          "reason" => "timeout"
+        }
+      })
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Mix.Tasks.HydraX.Telegram.Webhook.run([])
+      end)
+
+    assert output =~ "Retryable failed deliveries: 1"
+    assert output =~ "Failed conversation ##{conversation.id}: Retry me (retry 2)"
+  end
+
   defp create_agent do
     unique = System.unique_integer([:positive])
 

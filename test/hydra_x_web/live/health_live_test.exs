@@ -92,6 +92,42 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "telegram"
   end
 
+  test "health page shows retryable Telegram failures", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, _telegram} =
+      Runtime.save_telegram_config(%{
+        bot_token: "test-token",
+        bot_username: "hydrax_bot",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{
+        channel: "telegram",
+        title: "Delayed reply",
+        external_ref: "999"
+      })
+
+    {:ok, _updated} =
+      Runtime.update_conversation_metadata(conversation, %{
+        "last_delivery" => %{
+          "channel" => "telegram",
+          "external_ref" => "999",
+          "status" => "failed",
+          "retry_count" => 1,
+          "reason" => "timeout"
+        }
+      })
+
+    {:ok, _view, html} = live(conn, ~p"/health")
+
+    assert html =~ "Retryable failed deliveries: 1"
+    assert html =~ "Recent Telegram delivery failures"
+    assert html =~ "Delayed reply"
+  end
+
   defp restore_env(key, nil), do: System.delete_env(key)
   defp restore_env(key, value), do: System.put_env(key, value)
 end
