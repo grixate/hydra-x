@@ -18,6 +18,7 @@ This repository is now beyond the initial skeleton. Use this checklist before ex
 4. Configure the primary provider or stay on the mock fallback for dry-runs.
 5. Review the tool policy section and decide whether HTTP fetches or shell commands should be enabled.
 6. Use `/agents` or `mix hydra_x.agents` to verify the intended default agent and repair any workspace scaffold drift before going live.
+7. Use `/conversations` or `mix hydra_x.conversations start ...` to confirm the control plane can run a real operator-driven chat before exposing external channels.
 
 ## Telegram
 

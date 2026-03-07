@@ -64,6 +64,44 @@ defmodule HydraX.ConversationsTaskTest do
     assert refreshed.metadata["last_delivery"]["retry_count"] == 1
   end
 
+  test "conversation task can start and send control-plane messages" do
+    Mix.Task.reenable("hydra_x.conversations")
+    agent = create_agent()
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Mix.Tasks.HydraX.Conversations.run([
+          "start",
+          "Remember that Codex can drive conversations from the CLI task.",
+          "--agent",
+          agent.slug,
+          "--title",
+          "Task Chat"
+        ])
+      end)
+
+    assert output =~ "conversation="
+
+    [conversation | _] = Runtime.list_conversations(agent_id: agent.id, limit: 5)
+    assert conversation.title == "Task Chat"
+
+    Mix.Task.reenable("hydra_x.conversations")
+
+    send_output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Mix.Tasks.HydraX.Conversations.run([
+          "send",
+          to_string(conversation.id),
+          "What do you remember?"
+        ])
+      end)
+
+    assert send_output =~ "conversation=#{conversation.id}"
+
+    refreshed = Runtime.get_conversation!(conversation.id)
+    assert length(refreshed.turns) == 4
+  end
+
   defp create_agent do
     unique = System.unique_integer([:positive])
 

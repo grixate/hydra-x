@@ -104,6 +104,13 @@ mix hydra_x.conversations
 mix hydra_x.conversations retry-delivery 42
 ```
 
+The conversations surface can also start control-plane conversations and send replies from either the UI or the CLI:
+
+```bash
+mix hydra_x.conversations start "Summarize the current workspace." --title "Ops Chat"
+mix hydra_x.conversations send 42 "What do you remember?"
+```
+
 Recent safety events can be reviewed from `/safety` or the CLI:
 
 ```bash

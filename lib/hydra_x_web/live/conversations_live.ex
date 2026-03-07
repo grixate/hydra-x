@@ -9,14 +9,18 @@ defmodule HydraXWeb.ConversationsLive do
   def mount(_params, _session, socket) do
     conversations = Runtime.list_conversations(limit: 50)
     selected = conversations |> List.first() |> maybe_load()
+    agents = Runtime.list_agents()
 
     {:ok,
      socket
      |> assign(:page_title, "Conversations")
      |> assign(:current, "conversations")
      |> assign(:stats, stats())
+     |> assign(:agents, agents)
      |> assign(:conversations, conversations)
-     |> assign(:selected, selected)}
+     |> assign(:selected, selected)
+     |> assign(:new_form, to_form(default_new_conversation(agents), as: :conversation))
+     |> assign(:reply_form, to_form(%{"message" => ""}, as: :reply))}
   end
 
   @impl true
@@ -31,6 +35,51 @@ defmodule HydraXWeb.ConversationsLive do
   end
 
   @impl true
+  def handle_event("start_conversation", %{"conversation" => params}, socket) do
+    with {:ok, agent} <- fetch_agent(params["agent_id"]),
+         {:ok, _pid} <- HydraX.Agent.ensure_started(agent),
+         {:ok, conversation} <-
+           Runtime.start_conversation(agent, %{
+             channel: blank_to_default(params["channel"], "control_plane"),
+             title: blank_to_default(params["title"], "Control plane · #{Date.utc_today()}"),
+             metadata: %{"source" => "control_plane"}
+           }),
+         {:ok, selected} <-
+           submit_reply(agent, conversation, params["message"], %{"source" => "control_plane"}) do
+      conversations = Runtime.list_conversations(limit: 50)
+
+      {:noreply,
+       socket
+       |> put_flash(:info, "Conversation started")
+       |> assign(:conversations, conversations)
+       |> assign(:selected, selected)
+       |> assign(:stats, stats())
+       |> assign(:reply_form, to_form(%{"message" => ""}, as: :reply))}
+    else
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Start failed: #{format_reason(reason)}")}
+    end
+  end
+
+  def handle_event("send_reply", %{"reply" => %{"message" => message}}, socket) do
+    conversation = socket.assigns.selected
+    agent = conversation.agent || Runtime.get_agent!(conversation.agent_id)
+
+    case submit_reply(agent, conversation, message, %{"source" => "control_plane"}) do
+      {:ok, selected} ->
+        {:noreply,
+         socket
+         |> put_flash(:info, "Reply sent")
+         |> assign(:conversations, Runtime.list_conversations(limit: 50))
+         |> assign(:selected, selected)
+         |> assign(:stats, stats())
+         |> assign(:reply_form, to_form(%{"message" => ""}, as: :reply))}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Reply failed: #{format_reason(reason)}")}
+    end
+  end
+
   def handle_event("retry_delivery", %{"id" => id}, socket) do
     conversation = Runtime.get_conversation!(id)
 
@@ -57,6 +106,25 @@ defmodule HydraXWeb.ConversationsLive do
       <section class="grid gap-6 xl:grid-cols-[0.8fr_1.2fr]">
         <article class="glass-panel p-6">
           <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">Conversations</div>
+          <.form for={@new_form} phx-submit="start_conversation" class="mt-4 space-y-2">
+            <.input
+              field={@new_form[:agent_id]}
+              type="select"
+              label="Agent"
+              options={Enum.map(@agents, &{"#{&1.name} (#{&1.slug})", &1.id})}
+            />
+            <.input
+              field={@new_form[:channel]}
+              type="select"
+              label="Channel"
+              options={[{"Control plane", "control_plane"}, {"CLI", "cli"}]}
+            />
+            <.input field={@new_form[:title]} label="Title" />
+            <.input field={@new_form[:message]} type="textarea" label="Initial message" />
+            <div class="pt-1">
+              <.button>Start conversation</.button>
+            </div>
+          </.form>
           <div class="mt-4 space-y-3">
             <.link
               :for={conversation <- @conversations}
@@ -125,6 +193,12 @@ defmodule HydraXWeb.ConversationsLive do
                   Retry Telegram delivery
                 </button>
               </div>
+              <.form for={@reply_form} phx-submit="send_reply" class="mt-4 space-y-2">
+                <.input field={@reply_form[:message]} type="textarea" label="Reply" />
+                <div class="pt-1">
+                  <.button>Send reply</.button>
+                </div>
+              </.form>
             </div>
 
             <div class="space-y-3">
@@ -204,6 +278,42 @@ defmodule HydraXWeb.ConversationsLive do
       kind
     end
   end
+
+  defp fetch_agent(nil), do: {:error, :missing_agent}
+  defp fetch_agent(""), do: {:error, :missing_agent}
+
+  defp fetch_agent(id) do
+    {:ok, Runtime.get_agent!(id)}
+  rescue
+    Ecto.NoResultsError -> {:error, :agent_not_found}
+  end
+
+  defp submit_reply(_agent, _conversation, message, _metadata) when message in [nil, ""] do
+    {:error, :empty_message}
+  end
+
+  defp submit_reply(agent, conversation, message, metadata) do
+    _response = HydraX.Agent.Channel.submit(agent, conversation, message, metadata)
+    {:ok, Runtime.get_conversation!(conversation.id)}
+  rescue
+    error -> {:error, Exception.message(error)}
+  end
+
+  defp default_new_conversation(agents) do
+    %{
+      "agent_id" => agents |> List.first() |> then(&(&1 && to_string(&1.id))) || "",
+      "channel" => "control_plane",
+      "title" => "Control plane · #{Date.utc_today()}",
+      "message" => ""
+    }
+  end
+
+  defp blank_to_default(nil, default), do: default
+  defp blank_to_default("", default), do: default
+  defp blank_to_default(value, _default), do: value
+
+  defp format_reason(reason) when is_binary(reason), do: reason
+  defp format_reason(reason), do: inspect(reason)
 
   defp stats do
     %{

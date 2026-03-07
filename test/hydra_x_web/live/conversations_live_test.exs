@@ -97,4 +97,41 @@ defmodule HydraXWeb.ConversationsLiveTest do
     html = render(view)
     assert html =~ "document: spec.pdf"
   end
+
+  test "conversations page can start and reply to a control-plane conversation", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, view, _html} = live(conn, ~p"/conversations")
+
+    view
+    |> form("form[phx-submit=\"start_conversation\"]", %{
+      "conversation" => %{
+        "agent_id" => to_string(agent.id),
+        "channel" => "control_plane",
+        "title" => "UI Chat",
+        "message" => "Remember that the UI can drive conversations."
+      }
+    })
+    |> render_submit()
+
+    html = render(view)
+    assert html =~ "Conversation started"
+    assert html =~ "UI Chat"
+    assert html =~ "Remember that the UI can drive conversations."
+
+    [conversation | _] = Runtime.list_conversations(limit: 5)
+
+    view
+    |> form("form[phx-submit=\"send_reply\"]", %{
+      "reply" => %{"message" => "What do you remember?"}
+    })
+    |> render_submit()
+
+    refreshed = Runtime.get_conversation!(conversation.id)
+    assert length(refreshed.turns) == 4
+
+    html = render(view)
+    assert html =~ "Reply sent"
+    assert html =~ "Relevant memory"
+  end
 end
