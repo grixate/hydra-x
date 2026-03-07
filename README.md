@@ -25,7 +25,7 @@ Hydra-X is a self-hosted Elixir agent runtime with a Phoenix control plane. This
 - Guarded tools:
   workspace-confined file reads, outbound HTTP fetches with basic SSRF checks, allowlisted shell commands, and a persisted tool policy surface
 - Scheduler:
-  recurring heartbeat/prompt jobs with persisted run history and CLI/UI controls
+  recurring heartbeat/prompt/backup jobs with persisted run history, CLI/UI controls, and optional Telegram delivery-back
 - Observability:
   telemetry counters for provider, tool, gateway, and scheduler activity surfaced in `/health`, plus a dedicated `/safety` ledger for operator review
 - Operator commands:
@@ -78,12 +78,14 @@ The repository also includes a thin command wrapper:
 
 If you want to lock the management UI, set an operator password on `/setup`. After that, browser access requires signing in at `/login`.
 
-Recurring heartbeat and prompt jobs are managed from `/jobs` or the CLI:
+Recurring heartbeat, prompt, and backup jobs are managed from `/jobs` or the CLI:
 
 ```bash
 mix hydra_x.jobs
 mix hydra_x.jobs run 1
 ```
+
+Jobs can optionally deliver their run output back to Telegram by enabling `Deliver result` and setting a chat id target on `/jobs`.
 
 Failed Telegram deliveries can be retried from `/conversations` or the CLI:
 

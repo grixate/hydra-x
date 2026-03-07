@@ -399,6 +399,51 @@ defmodule HydraX.RuntimeTest do
     assert File.exists?(run.metadata["manifest_path"])
   end
 
+  test "scheduled jobs can deliver run results to Telegram" do
+    previous = Application.get_env(:hydra_x, :telegram_deliver)
+
+    Application.put_env(:hydra_x, :telegram_deliver, fn payload ->
+      send(self(), {:job_delivery, payload})
+      {:ok, %{provider_message_id: 77}}
+    end)
+
+    on_exit(fn ->
+      if previous do
+        Application.put_env(:hydra_x, :telegram_deliver, previous)
+      else
+        Application.delete_env(:hydra_x, :telegram_deliver)
+      end
+    end)
+
+    agent = create_agent()
+
+    {:ok, _telegram} =
+      Runtime.save_telegram_config(%{
+        bot_token: "test-token",
+        bot_username: "hydrax_bot",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
+    {:ok, job} =
+      Runtime.save_scheduled_job(%{
+        agent_id: agent.id,
+        name: "Backup delivery",
+        kind: "backup",
+        interval_minutes: 60,
+        enabled: true,
+        delivery_enabled: true,
+        delivery_channel: "telegram",
+        delivery_target: "9001"
+      })
+
+    assert {:ok, run} = Runtime.run_scheduled_job(job)
+    assert_receive {:job_delivery, %{external_ref: "9001", content: content}}
+    assert content =~ "finished with success"
+    assert run.metadata["delivery"]["status"] == "delivered"
+    assert run.metadata["delivery"]["metadata"]["provider_message_id"] == 77
+  end
+
   test "tool policy can disable shell execution at runtime" do
     agent = create_agent()
     {:ok, pid} = HydraX.Agent.ensure_started(agent)

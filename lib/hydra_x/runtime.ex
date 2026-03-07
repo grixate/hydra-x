@@ -321,27 +321,132 @@ defmodule HydraX.Runtime do
       {:ok, output, metadata} ->
         Telemetry.scheduler_job(job.kind, :ok)
 
-        run
-        |> JobRun.changeset(%{
-          status: "success",
-          finished_at: DateTime.utc_now(),
-          output: output,
-          metadata: metadata
-        })
-        |> Repo.update()
+        {:ok, run} =
+          run
+          |> JobRun.changeset(%{
+            status: "success",
+            finished_at: DateTime.utc_now(),
+            output: output,
+            metadata: metadata
+          })
+          |> Repo.update()
+
+        maybe_deliver_job_run(job, run)
 
       {:error, reason} ->
         Telemetry.scheduler_job(job.kind, :error, %{reason: inspect(reason)})
 
-        run
-        |> JobRun.changeset(%{
-          status: "error",
-          finished_at: DateTime.utc_now(),
-          output: inspect(reason),
-          metadata: %{error: inspect(reason)}
-        })
-        |> Repo.update()
+        {:ok, run} =
+          run
+          |> JobRun.changeset(%{
+            status: "error",
+            finished_at: DateTime.utc_now(),
+            output: inspect(reason),
+            metadata: %{"error" => inspect(reason)}
+          })
+          |> Repo.update()
+
+        maybe_deliver_job_run(job, run)
     end
+  end
+
+  defp maybe_deliver_job_run(%ScheduledJob{delivery_enabled: false}, run), do: {:ok, run}
+  defp maybe_deliver_job_run(%ScheduledJob{delivery_enabled: nil}, run), do: {:ok, run}
+
+  defp maybe_deliver_job_run(%ScheduledJob{} = job, %JobRun{} = run) do
+    case deliver_job_run(job, run) do
+      {:ok, delivery} ->
+        update_job_run_delivery(run, delivery)
+
+      {:error, reason} ->
+        HydraX.Safety.log_event(%{
+          agent_id: job.agent_id,
+          category: "scheduler",
+          level: "error",
+          message: "Scheduled job delivery failed",
+          metadata: %{
+            job_id: job.id,
+            job_name: job.name,
+            reason: inspect(reason),
+            channel: job.delivery_channel,
+            target: job.delivery_target
+          }
+        })
+
+        update_job_run_delivery(run, %{
+          "status" => "failed",
+          "channel" => job.delivery_channel,
+          "target" => job.delivery_target,
+          "attempted_at" => DateTime.utc_now(),
+          "reason" => inspect(reason)
+        })
+    end
+  end
+
+  defp deliver_job_run(%ScheduledJob{delivery_channel: "telegram", delivery_target: target}, run) do
+    with config when not is_nil(config) <- enabled_telegram_config(),
+         true <- is_binary(target) and target != "",
+         {:ok, state} <-
+           Telegram.connect(%{
+             "bot_token" => config.bot_token,
+             "bot_username" => config.bot_username,
+             "webhook_secret" => config.webhook_secret,
+             "deliver" => Application.get_env(:hydra_x, :telegram_deliver)
+           }),
+         {:ok, metadata} <-
+           normalize_delivery_result(
+             Telegram.send_response(
+               %{content: job_delivery_message(run), external_ref: target},
+               state
+             )
+           ) do
+      {:ok,
+       %{
+         "status" => "delivered",
+         "channel" => "telegram",
+         "target" => target,
+         "delivered_at" => DateTime.utc_now(),
+         "metadata" => stringify_metadata(metadata)
+       }}
+    else
+      nil -> {:error, :telegram_not_configured}
+      false -> {:error, :missing_delivery_target}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp deliver_job_run(%ScheduledJob{delivery_channel: channel}, _run) do
+    {:error, {:unsupported_delivery_channel, channel}}
+  end
+
+  defp normalize_delivery_result(:ok), do: {:ok, %{}}
+  defp normalize_delivery_result({:ok, metadata}) when is_map(metadata), do: {:ok, metadata}
+  defp normalize_delivery_result({:error, reason}), do: {:error, reason}
+
+  defp update_job_run_delivery(run, delivery) do
+    metadata =
+      (run.metadata || %{})
+      |> Map.put("delivery", delivery)
+
+    run
+    |> JobRun.changeset(%{metadata: metadata})
+    |> Repo.update()
+  end
+
+  defp job_delivery_message(run) do
+    """
+    Hydra-X scheduled job #{run.scheduled_job_id} finished with #{run.status}.
+
+    #{run.output || "No output captured."}
+    """
+    |> String.trim()
+  end
+
+  defp stringify_metadata(map) do
+    Enum.reduce(map, %{}, fn
+      {key, value}, acc when is_atom(key) -> Map.put(acc, Atom.to_string(key), value)
+      {key, value}, acc -> Map.put(acc, key, value)
+    end)
   end
 
   def test_provider_config(%ProviderConfig{} = provider, opts \\ []) do

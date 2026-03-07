@@ -22,7 +22,11 @@ defmodule Mix.Tasks.HydraX.Jobs do
     HydraX.Runtime.list_scheduled_jobs(limit: 100)
     |> Enum.each(fn job ->
       Mix.shell().info(
-        "#{job.id}\t#{job.name}\t#{job.kind}\t#{if(job.enabled, do: "enabled", else: "paused")}\tnext=#{format_datetime(job.next_run_at)}"
+        "#{job.id}\t#{job.name}\t#{job.kind}\t#{if(job.enabled, do: "enabled", else: "paused")}\tnext=#{format_datetime(job.next_run_at)}" <>
+          if(job.delivery_enabled,
+            do: "\tdelivery=#{job.delivery_channel}:#{job.delivery_target}",
+            else: ""
+          )
       )
     end)
   end
@@ -35,6 +39,9 @@ defmodule Mix.Tasks.HydraX.Jobs do
         Mix.shell().info("job=#{job.name}")
         Mix.shell().info("status=#{run.status}")
         Mix.shell().info("output=#{run.output}")
+
+        if delivery = run.metadata["delivery"],
+          do: Mix.shell().info("delivery=#{delivery["status"]}")
 
       {:error, reason} ->
         Mix.raise("job execution failed: #{inspect(reason)}")

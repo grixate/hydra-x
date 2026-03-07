@@ -99,6 +99,12 @@ defmodule HydraXWeb.JobsLive do
                   <div class="mt-1 text-xs text-[var(--hx-mute)]">
                     next {format_datetime(job.next_run_at)} · last {format_datetime(job.last_run_at)}
                   </div>
+                  <div
+                    :if={job.delivery_enabled}
+                    class="mt-2 text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]"
+                  >
+                    deliver {job.delivery_channel} -> {job.delivery_target}
+                  </div>
                 </div>
                 <span class={[
                   "rounded-full border px-3 py-1 font-mono text-xs uppercase tracking-[0.18em]",
@@ -154,6 +160,14 @@ defmodule HydraXWeb.JobsLive do
             <.input field={@form[:interval_minutes]} type="number" label="Interval minutes" />
             <.input field={@form[:prompt]} type="textarea" label="Prompt override" />
             <.input field={@form[:enabled]} type="checkbox" label="Enabled" />
+            <.input field={@form[:delivery_enabled]} type="checkbox" label="Deliver result" />
+            <.input
+              field={@form[:delivery_channel]}
+              type="select"
+              label="Delivery channel"
+              options={[{"Telegram", "telegram"}]}
+            />
+            <.input field={@form[:delivery_target]} label="Delivery target" />
             <div class="pt-2">
               <.button>Save job</.button>
             </div>
@@ -179,6 +193,12 @@ defmodule HydraXWeb.JobsLive do
                 </span>
               </div>
               <p class="mt-3 text-sm text-[var(--hx-mute)]">{run.output || "No output captured."}</p>
+              <div
+                :if={delivery = delivery_status(run)}
+                class="mt-3 text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]"
+              >
+                delivery {delivery["status"]} via {delivery["channel"]} -> {delivery["target"]}
+              </div>
             </div>
             <div
               :if={@runs == []}
@@ -199,7 +219,9 @@ defmodule HydraXWeb.JobsLive do
       name: "Workspace heartbeat",
       kind: "heartbeat",
       interval_minutes: 60,
-      enabled: true
+      enabled: true,
+      delivery_enabled: false,
+      delivery_channel: "telegram"
     }
   end
 
@@ -209,6 +231,11 @@ defmodule HydraXWeb.JobsLive do
   defp run_class("success"), do: "border-emerald-400/20 bg-emerald-400/10 text-emerald-300"
   defp run_class("error"), do: "border-rose-400/20 bg-rose-400/10 text-rose-300"
   defp run_class(_), do: "border-white/10 text-[var(--hx-mute)]"
+
+  defp delivery_status(run) do
+    metadata = run.metadata || %{}
+    metadata["delivery"] || metadata[:delivery]
+  end
 
   defp stats do
     %{

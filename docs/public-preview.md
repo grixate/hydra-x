@@ -29,8 +29,9 @@ This repository is now beyond the initial skeleton. Use this checklist before ex
 
 1. Open `/jobs` and confirm the default heartbeat and backup jobs exist.
 2. Add any additional prompt jobs needed for preview operations.
-3. Run each job once manually before relying on the recurring scheduler.
-4. Use `mix hydra_x.jobs` to inspect the current schedule and `mix hydra_x.jobs run <id>` for CLI execution.
+3. If a job should report back to Telegram, enable delivery and set the target chat id before the first run.
+4. Run each job once manually before relying on the recurring scheduler.
+5. Use `mix hydra_x.jobs` to inspect the current schedule and `mix hydra_x.jobs run <id>` for CLI execution.
 
 ## Safety And Observability
 
