@@ -87,6 +87,36 @@ defmodule HydraX.TelegramRuntimeTest do
     assert updated.webhook_last_checked_at
   end
 
+  test "telegram delivery smoke test routes through the adapter" do
+    agent = create_agent()
+
+    {:ok, telegram} =
+      Runtime.save_telegram_config(%{
+        bot_token: "test-token",
+        bot_username: "hydrax_bot",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
+    deliver = fn payload ->
+      send(self(), {:telegram_test_delivery, payload})
+      {:ok, %{provider_message_id: 456}}
+    end
+
+    assert {:ok, result} =
+             Runtime.test_telegram_delivery(
+               telegram,
+               "4242",
+               "Hydra-X smoke test",
+               deliver: deliver
+             )
+
+    assert_receive {:telegram_test_delivery,
+                    %{content: "Hydra-X smoke test", external_ref: "4242"}}
+
+    assert result.metadata[:provider_message_id] == 456
+  end
+
   defp create_agent do
     unique = System.unique_integer([:positive])
 

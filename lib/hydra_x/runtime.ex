@@ -733,6 +733,36 @@ defmodule HydraX.Runtime do
     end
   end
 
+  def test_telegram_delivery(%TelegramConfig{} = config, target, message, opts \\ []) do
+    target = blank_to_nil(to_string(target || ""))
+    message = blank_to_nil(message)
+    deliver = Keyword.get(opts, :deliver, Application.get_env(:hydra_x, :telegram_deliver))
+
+    cond do
+      is_nil(target) ->
+        {:error, :missing_target}
+
+      is_nil(message) ->
+        {:error, :missing_message}
+
+      blank_to_nil(config.bot_token) == nil ->
+        {:error, :missing_bot_token}
+
+      true ->
+        with {:ok, state} <-
+               Telegram.connect(%{
+                 "bot_token" => config.bot_token,
+                 "bot_username" => config.bot_username,
+                 "webhook_secret" => config.webhook_secret,
+                 "deliver" => deliver
+               }),
+             {:ok, metadata} <-
+               Telegram.send_response(%{content: message, external_ref: target}, state) do
+          {:ok, %{target: target, message: message, metadata: metadata}}
+        end
+    end
+  end
+
   def get_operator_secret do
     Repo.get_by(OperatorSecret, scope: "control_plane")
   end

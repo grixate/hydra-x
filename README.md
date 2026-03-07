@@ -59,6 +59,7 @@ mix hydra_x.telegram.webhook
 mix hydra_x.telegram.webhook register
 mix hydra_x.telegram.webhook sync
 mix hydra_x.telegram.webhook delete
+mix hydra_x.telegram.webhook test 4242 "Hydra-X smoke test"
 ```
 
 The repository also includes a thin command wrapper:

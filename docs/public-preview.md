@@ -29,7 +29,8 @@ This repository is now beyond the initial skeleton. Use this checklist before ex
 1. Save the Telegram bot token and optional webhook secret on `/setup`.
 2. Register the webhook from the UI or with `mix hydra_x.telegram.webhook register`.
 3. Refresh webhook status from the UI or with `mix hydra_x.telegram.webhook sync`.
-4. Confirm `/health` shows the expected webhook URL, pending update count, and no Telegram error.
+4. Send a Telegram smoke test from `/setup` or with `mix hydra_x.telegram.webhook test <chat_id> "<message>"`.
+5. Confirm `/health` shows the expected webhook URL, pending update count, and no Telegram error.
 
 ## Scheduler
 

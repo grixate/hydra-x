@@ -18,6 +18,9 @@ defmodule Mix.Tasks.HydraX.Telegram.Webhook do
       ["sync"] ->
         sync()
 
+      ["test", chat_id, message] ->
+        test_delivery(chat_id, message)
+
       _ ->
         show()
     end
@@ -104,6 +107,24 @@ defmodule Mix.Tasks.HydraX.Telegram.Webhook do
 
           {:error, reason} ->
             Mix.raise("Telegram webhook deletion failed: #{inspect(reason)}")
+        end
+    end
+  end
+
+  defp test_delivery(chat_id, message) do
+    case HydraX.Runtime.enabled_telegram_config() ||
+           List.first(HydraX.Runtime.list_telegram_configs()) do
+      nil ->
+        Mix.raise("No Telegram config found. Configure it in /setup first.")
+
+      config ->
+        case HydraX.Runtime.test_telegram_delivery(config, chat_id, message) do
+          {:ok, result} ->
+            Mix.shell().info("Delivered test message to #{result.target}")
+            Mix.shell().info("metadata=#{inspect(result.metadata)}")
+
+          {:error, reason} ->
+            Mix.raise("Telegram delivery test failed: #{inspect(reason)}")
         end
     end
   end

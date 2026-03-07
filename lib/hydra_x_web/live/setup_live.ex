@@ -25,6 +25,7 @@ defmodule HydraXWeb.SetupLive do
      |> assign(:current, "setup")
      |> assign(:operator_secret, Runtime.get_operator_secret())
      |> assign(:provider_test_result, nil)
+     |> assign(:telegram_test_result, nil)
      |> assign(:install_export, nil)
      |> assign(:backup_export, nil)
      |> assign(:readiness_report, Runtime.readiness_report())
@@ -37,6 +38,7 @@ defmodule HydraXWeb.SetupLive do
      |> assign_form(:agent_form, Runtime.change_agent(agent))
      |> assign_form(:provider_form, Runtime.change_provider_config(provider))
      |> assign_form(:telegram_form, Runtime.change_telegram_config(telegram))
+     |> assign(:telegram_test_form, to_form(default_telegram_test(), as: :telegram_test))
      |> assign_form(:tool_policy_form, Runtime.change_tool_policy(tool_policy))}
   end
 
@@ -181,6 +183,26 @@ defmodule HydraXWeb.SetupLive do
     changeset = Runtime.change_telegram_config(socket.assigns.telegram, %{webhook_secret: secret})
 
     {:noreply, assign_form(socket, :telegram_form, changeset)}
+  end
+
+  def handle_event("test_telegram_delivery", %{"telegram_test" => params}, socket) do
+    case Runtime.test_telegram_delivery(
+           socket.assigns.telegram,
+           params["chat_id"],
+           params["message"]
+         ) do
+      {:ok, result} ->
+        {:noreply,
+         socket
+         |> assign(:telegram_test_result, %{status: :ok, content: inspect(result.metadata)})
+         |> put_flash(:info, "Telegram delivery test succeeded")}
+
+      {:error, reason} ->
+        {:noreply,
+         socket
+         |> assign(:telegram_test_result, %{status: :error, content: inspect(reason)})
+         |> put_flash(:error, "Telegram delivery test failed")}
+    end
   end
 
   def handle_event("save_operator_password", %{"operator_secret" => params}, socket) do
@@ -535,6 +557,26 @@ defmodule HydraXWeb.SetupLive do
               </button>
             </div>
           </.form>
+          <.form
+            for={@telegram_test_form}
+            phx-submit="test_telegram_delivery"
+            class="mt-6 grid gap-4 xl:grid-cols-[1fr_2fr_auto]"
+          >
+            <.input field={@telegram_test_form[:chat_id]} label="Test chat id" />
+            <.input field={@telegram_test_form[:message]} label="Test message" />
+            <div class="self-end pt-2">
+              <.button>Send test delivery</.button>
+            </div>
+          </.form>
+          <div
+            :if={@telegram_test_result}
+            class="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-4 text-sm text-[var(--hx-mute)]"
+          >
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Telegram test result
+            </div>
+            <p class="mt-3 whitespace-pre-wrap">{@telegram_test_result.content}</p>
+          </div>
         </article>
       </section>
     </AppShell.shell>
@@ -555,5 +597,9 @@ defmodule HydraXWeb.SetupLive do
         |> length(),
       memories: HydraX.Memory.list_memories(limit: 1_000) |> length()
     }
+  end
+
+  defp default_telegram_test do
+    %{"chat_id" => "", "message" => "Hydra-X Telegram smoke test"}
   end
 end
