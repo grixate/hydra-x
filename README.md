@@ -139,6 +139,8 @@ Recent safety events can be reviewed from `/safety` or the CLI:
 ```bash
 mix hydra_x.safety
 mix hydra_x.safety --level error --category gateway --limit 20
+mix hydra_x.safety acknowledge 7 --note "triaged"
+mix hydra_x.safety resolve 7 --note "delivery restored"
 ```
 
 Backup archives can be produced with:

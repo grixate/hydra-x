@@ -26,6 +26,39 @@ defmodule HydraXWeb.SafetyLive do
   end
 
   @impl true
+  def handle_event("acknowledge", %{"id" => id}, socket) do
+    HydraX.Safety.acknowledge_event!(String.to_integer(id), "operator")
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Safety event acknowledged")
+     |> assign(:stats, stats())
+     |> assign_safety(socket.assigns.filters)}
+  end
+
+  @impl true
+  def handle_event("resolve", %{"id" => id}, socket) do
+    HydraX.Safety.resolve_event!(String.to_integer(id), "operator")
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Safety event resolved")
+     |> assign(:stats, stats())
+     |> assign_safety(socket.assigns.filters)}
+  end
+
+  @impl true
+  def handle_event("reopen", %{"id" => id}, socket) do
+    HydraX.Safety.reopen_event!(String.to_integer(id), "operator")
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Safety event reopened")
+     |> assign(:stats, stats())
+     |> assign_safety(socket.assigns.filters)}
+  end
+
+  @impl true
   def render(assigns) do
     ~H"""
     <AppShell.shell current={@current} stats={@stats} flash={@flash}>
@@ -58,6 +91,27 @@ defmodule HydraXWeb.SafetyLive do
             </div>
           </div>
 
+          <div class="mt-3 grid gap-3 md:grid-cols-3">
+            <div class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+              <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                Open
+              </div>
+              <div class="mt-3 font-display text-4xl">{@safety.statuses.open}</div>
+            </div>
+            <div class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+              <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                Acknowledged
+              </div>
+              <div class="mt-3 font-display text-4xl">{@safety.statuses.acknowledged}</div>
+            </div>
+            <div class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+              <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                Resolved
+              </div>
+              <div class="mt-3 font-display text-4xl">{@safety.statuses.resolved}</div>
+            </div>
+          </div>
+
           <.form for={@form} phx-submit="filter" class="mt-6 space-y-2">
             <.input
               field={@form[:level]}
@@ -70,6 +124,17 @@ defmodule HydraXWeb.SafetyLive do
               type="select"
               label="Category"
               options={[{"All categories", ""} | Enum.map(@safety.categories, &{&1, &1})]}
+            />
+            <.input
+              field={@form[:status]}
+              type="select"
+              label="Status"
+              options={[
+                {"All statuses", ""},
+                {"Open", "open"},
+                {"Acknowledged", "acknowledged"},
+                {"Resolved", "resolved"}
+              ]}
             />
             <.input field={@form[:limit]} type="number" label="Rows" min="1" max="100" />
             <div class="pt-2">
@@ -99,6 +164,26 @@ defmodule HydraXWeb.SafetyLive do
                   {event.level}
                 </span>
               </div>
+              <div class="mt-3 flex flex-wrap items-center gap-2 text-xs">
+                <span class={[
+                  "rounded-full border px-3 py-1 font-mono uppercase tracking-[0.18em]",
+                  status_class(event.status)
+                ]}>
+                  {event.status}
+                </span>
+                <span
+                  :if={event.acknowledged_by}
+                  class="rounded-full border border-white/10 px-3 py-1 text-[var(--hx-mute)]"
+                >
+                  ack {event.acknowledged_by}
+                </span>
+                <span
+                  :if={event.resolved_by}
+                  class="rounded-full border border-white/10 px-3 py-1 text-[var(--hx-mute)]"
+                >
+                  resolved {event.resolved_by}
+                </span>
+              </div>
               <p class="mt-3 text-sm">{event.message}</p>
               <div class="mt-3 flex flex-wrap gap-2 text-xs text-[var(--hx-mute)]">
                 <span
@@ -113,6 +198,38 @@ defmodule HydraXWeb.SafetyLive do
                 >
                   {event.metadata["reason"]}
                 </span>
+              </div>
+              <p :if={event.operator_note} class="mt-3 text-xs text-[var(--hx-mute)]">
+                Note: {event.operator_note}
+              </p>
+              <div class="mt-4 flex flex-wrap gap-2">
+                <button
+                  :if={event.status == "open"}
+                  type="button"
+                  phx-click="acknowledge"
+                  phx-value-id={event.id}
+                  class="btn btn-outline border-white/10 bg-white/5 text-white hover:bg-white/10"
+                >
+                  Acknowledge
+                </button>
+                <button
+                  :if={event.status != "resolved"}
+                  type="button"
+                  phx-click="resolve"
+                  phx-value-id={event.id}
+                  class="btn btn-outline border-white/10 bg-white/5 text-white hover:bg-white/10"
+                >
+                  Resolve
+                </button>
+                <button
+                  :if={event.status == "resolved"}
+                  type="button"
+                  phx-click="reopen"
+                  phx-value-id={event.id}
+                  class="btn btn-outline border-white/10 bg-white/5 text-white hover:bg-white/10"
+                >
+                  Reopen
+                </button>
               </div>
             </div>
             <div
@@ -142,7 +259,8 @@ defmodule HydraXWeb.SafetyLive do
       Runtime.safety_status(
         limit: limit,
         level: blank_to_nil(filters["level"]),
-        category: blank_to_nil(filters["category"])
+        category: blank_to_nil(filters["category"]),
+        status: blank_to_nil(filters["status"])
       )
 
     socket
@@ -152,7 +270,7 @@ defmodule HydraXWeb.SafetyLive do
   end
 
   defp default_filters do
-    %{"level" => "", "category" => "", "limit" => "25"}
+    %{"level" => "", "category" => "", "status" => "", "limit" => "25"}
   end
 
   defp blank_to_nil(nil), do: nil
@@ -164,6 +282,10 @@ defmodule HydraXWeb.SafetyLive do
   defp level_class("error"), do: "border-rose-400/30 bg-rose-400/10 text-rose-200"
   defp level_class("warn"), do: "border-amber-400/30 bg-amber-400/10 text-amber-200"
   defp level_class(_), do: "border-cyan-400/30 bg-cyan-400/10 text-cyan-200"
+
+  defp status_class("resolved"), do: "border-emerald-400/30 bg-emerald-400/10 text-emerald-200"
+  defp status_class("acknowledged"), do: "border-amber-400/30 bg-amber-400/10 text-amber-200"
+  defp status_class(_), do: "border-rose-400/30 bg-rose-400/10 text-rose-200"
 
   defp stats do
     %{

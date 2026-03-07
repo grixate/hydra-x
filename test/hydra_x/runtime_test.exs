@@ -533,6 +533,34 @@ defmodule HydraX.RuntimeTest do
     assert File.exists?(soul_path)
   end
 
+  test "safety events can be acknowledged, resolved, and reopened" do
+    agent = create_agent()
+
+    {:ok, event} =
+      Safety.log_event(%{
+        agent_id: agent.id,
+        category: "gateway",
+        level: "error",
+        message: "delivery failed"
+      })
+
+    acknowledged = Safety.acknowledge_event!(event.id, "operator", "investigating")
+    assert acknowledged.status == "acknowledged"
+    assert acknowledged.acknowledged_by == "operator"
+    assert acknowledged.operator_note == "investigating"
+
+    resolved = Safety.resolve_event!(event.id, "operator", "delivery restored")
+    assert resolved.status == "resolved"
+    assert resolved.resolved_by == "operator"
+    assert resolved.operator_note == "delivery restored"
+
+    reopened = Safety.reopen_event!(event.id, "operator", "regression")
+    assert reopened.status == "open"
+    assert reopened.acknowledged_by == nil
+    assert reopened.resolved_by == nil
+    assert reopened.operator_note == "regression"
+  end
+
   defp create_agent do
     unique = System.unique_integer([:positive])
 

@@ -36,6 +36,44 @@ defmodule HydraX.SafetyTaskTest do
     refute output =~ "blocked shell command"
   end
 
+  test "safety task can acknowledge and resolve incidents" do
+    Mix.Task.reenable("hydra_x.safety")
+    agent = create_agent()
+
+    {:ok, event} =
+      Safety.log_event(%{
+        agent_id: agent.id,
+        category: "gateway",
+        level: "error",
+        message: "delivery failed"
+      })
+
+    acknowledge_output =
+      capture_io(fn ->
+        Mix.Tasks.HydraX.Safety.run([
+          "acknowledge",
+          Integer.to_string(event.id),
+          "--note",
+          "triaged"
+        ])
+      end)
+
+    assert acknowledge_output =~ "acknowledged=#{event.id}"
+    assert Safety.get_event!(event.id).status == "acknowledged"
+
+    Mix.Task.reenable("hydra_x.safety")
+
+    resolve_output =
+      capture_io(fn ->
+        Mix.Tasks.HydraX.Safety.run(["resolve", Integer.to_string(event.id), "--note", "fixed"])
+      end)
+
+    assert resolve_output =~ "resolved=#{event.id}"
+    resolved = Safety.get_event!(event.id)
+    assert resolved.status == "resolved"
+    assert resolved.operator_note == "fixed"
+  end
+
   defp create_agent do
     unique = System.unique_integer([:positive])
 

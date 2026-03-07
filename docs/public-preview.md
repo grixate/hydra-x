@@ -41,7 +41,7 @@ This repository is now beyond the initial skeleton. Use this checklist before ex
 ## Safety And Observability
 
 1. Check `/health` for provider, Telegram, tool policy, scheduler, and recent safety events.
-2. Open `/safety` or run `mix hydra_x.safety --level error` to review the latest operator-facing incidents directly.
+2. Open `/safety` or run `mix hydra_x.safety --level error` to review the latest operator-facing incidents directly, then acknowledge or resolve anything already triaged.
 3. Review the runtime counters section to confirm provider requests, tool executions, gateway deliveries, scheduler jobs, OTP alarms, and backup manifests are visible.
 4. If outbound fetches should be restricted, set `HYDRA_X_HTTP_ALLOWLIST` or configure the persisted tool policy in `/setup`.
 5. If shell access is not needed, disable it in `/setup`.

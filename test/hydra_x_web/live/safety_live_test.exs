@@ -33,4 +33,33 @@ defmodule HydraXWeb.SafetyLiveTest do
     assert html =~ "error event"
     refute html =~ "warn event"
   end
+
+  test "safety page can acknowledge and resolve incidents", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, event} =
+      Safety.log_event(%{
+        agent_id: agent.id,
+        category: "gateway",
+        level: "error",
+        message: "delivery failed"
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/safety")
+
+    view
+    |> element(~s(button[phx-click="acknowledge"][phx-value-id="#{event.id}"]))
+    |> render_click()
+
+    assert Safety.get_event!(event.id).status == "acknowledged"
+
+    view
+    |> element(~s(button[phx-click="resolve"][phx-value-id="#{event.id}"]))
+    |> render_click()
+
+    html = render(view)
+    assert html =~ "Safety event resolved"
+    assert html =~ "resolved"
+    assert Safety.get_event!(event.id).status == "resolved"
+  end
 end
