@@ -154,6 +154,14 @@ defmodule HydraX.Runtime do
         "bulletin_updated_at" => updated_at
       })
 
+    audit_operator_action(
+      "Refreshed bulletin for #{updated_agent.slug}",
+      agent: updated_agent,
+      metadata: %{
+        "memory_count" => Memory.list_memories(agent_id: agent.id, limit: 6) |> length()
+      }
+    )
+
     %{
       agent: updated_agent,
       content: bulletin,
@@ -679,6 +687,12 @@ defmodule HydraX.Runtime do
              webhook_last_error: nil,
              enabled: true
            }) do
+      audit_operator_action(
+        "Registered Telegram webhook",
+        agent_id: updated.default_agent_id,
+        metadata: %{"webhook_url" => updated.webhook_url}
+      )
+
       {:ok, updated}
     else
       false -> {:error, :missing_bot_token}
@@ -698,6 +712,15 @@ defmodule HydraX.Runtime do
              webhook_last_error: blank_to_nil(result["last_error_message"]),
              webhook_url: blank_to_nil(result["url"]) || config.webhook_url
            }) do
+      audit_operator_action(
+        "Synced Telegram webhook status",
+        agent_id: updated.default_agent_id,
+        metadata: %{
+          "pending_update_count" => updated.webhook_pending_update_count || 0,
+          "webhook_url" => updated.webhook_url
+        }
+      )
+
       {:ok, updated}
     else
       false ->
@@ -726,6 +749,12 @@ defmodule HydraX.Runtime do
              webhook_pending_update_count: 0,
              webhook_last_error: nil
            }) do
+      audit_operator_action(
+        "Removed Telegram webhook",
+        agent_id: updated.default_agent_id,
+        metadata: %{"webhook_url" => updated.webhook_url}
+      )
+
       {:ok, updated}
     else
       false -> {:error, :missing_bot_token}
@@ -758,6 +787,12 @@ defmodule HydraX.Runtime do
                }),
              {:ok, metadata} <-
                Telegram.send_response(%{content: message, external_ref: target}, state) do
+          audit_operator_action(
+            "Sent Telegram smoke test to #{target}",
+            agent_id: config.default_agent_id,
+            metadata: %{"channel" => "telegram", "target" => target}
+          )
+
           {:ok, %{target: target, message: message, metadata: metadata}}
         end
     end
@@ -876,6 +911,12 @@ defmodule HydraX.Runtime do
   def archive_conversation!(id) do
     conversation = get_conversation!(id)
     {:ok, updated} = save_conversation(conversation, %{status: "archived"})
+
+    audit_operator_action("Archived conversation #{updated.id}",
+      agent_id: updated.agent_id,
+      conversation_id: updated.id
+    )
+
     updated
   end
 
@@ -901,7 +942,16 @@ defmodule HydraX.Runtime do
     {:ok, _pid} =
       HydraX.Agent.ensure_started(conversation.agent || get_agent!(conversation.agent_id))
 
-    HydraX.Agent.Compactor.review_now(conversation.agent_id, conversation.id)
+    compaction = HydraX.Agent.Compactor.review_now(conversation.agent_id, conversation.id)
+
+    audit_operator_action(
+      "Reviewed compaction for conversation #{conversation.id}",
+      agent_id: conversation.agent_id,
+      conversation_id: conversation.id,
+      metadata: %{"level" => compaction.level, "turn_count" => compaction.turn_count}
+    )
+
+    compaction
   end
 
   def reset_conversation_compaction!(id) when is_integer(id) do
@@ -913,6 +963,12 @@ defmodule HydraX.Runtime do
     )
     |> Repo.delete_all()
 
+    audit_operator_action(
+      "Reset compaction for conversation #{conversation.id}",
+      agent_id: conversation.agent_id,
+      conversation_id: conversation.id
+    )
+
     conversation_compaction(conversation.id)
   end
 
@@ -923,6 +979,13 @@ defmodule HydraX.Runtime do
 
     File.mkdir_p!(Path.dirname(path))
     File.write!(path, render_transcript(conversation))
+
+    audit_operator_action(
+      "Exported transcript for conversation #{conversation.id}",
+      agent: agent,
+      conversation_id: conversation.id,
+      metadata: %{"path" => path}
+    )
 
     %{conversation: conversation, agent: agent, path: path}
   end
@@ -993,6 +1056,38 @@ defmodule HydraX.Runtime do
   defp render_agent_bulletin(agent_id) do
     Memory.list_memories(agent_id: agent_id, limit: 6)
     |> Enum.map_join("\n", fn memory -> "- [#{memory.type}] #{memory.content}" end)
+  end
+
+  defp audit_operator_action(message, opts) do
+    case resolve_audit_agent(opts) do
+      nil ->
+        :ok
+
+      agent ->
+        HydraX.Safety.log_event(%{
+          agent_id: agent.id,
+          conversation_id: Keyword.get(opts, :conversation_id),
+          category: "operator",
+          level: "info",
+          message: message,
+          metadata: Keyword.get(opts, :metadata, %{})
+        })
+
+        :ok
+    end
+  end
+
+  defp resolve_audit_agent(opts) do
+    cond do
+      match?(%AgentProfile{}, Keyword.get(opts, :agent)) ->
+        Keyword.get(opts, :agent)
+
+      is_integer(Keyword.get(opts, :agent_id)) ->
+        Repo.get(AgentProfile, Keyword.get(opts, :agent_id))
+
+      true ->
+        get_default_agent() || List.first(list_agents())
+    end
   end
 
   def health_snapshot(opts \\ []) do

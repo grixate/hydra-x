@@ -576,6 +576,40 @@ defmodule HydraX.RuntimeTest do
     assert reset.summary == nil
   end
 
+  test "operator-driven runtime actions are logged to the safety ledger" do
+    agent = create_agent()
+
+    {:ok, _memory} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Fact",
+        content: "Hydra-X records operator actions."
+      })
+
+    Runtime.refresh_agent_bulletin!(agent.id)
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{channel: "control_plane", title: "Audit Thread"})
+
+    Enum.each(1..12, fn index ->
+      {:ok, _turn} =
+        Runtime.append_turn(conversation, %{
+          role: if(rem(index, 2) == 0, do: "assistant", else: "user"),
+          content: "Audit turn #{index}",
+          metadata: %{}
+        })
+    end)
+
+    _compaction = Runtime.review_conversation_compaction!(conversation.id)
+    _export = Runtime.export_conversation_transcript!(conversation.id)
+
+    events = Safety.list_events(level: "info", category: "operator", limit: 10)
+
+    assert Enum.any?(events, &String.contains?(&1.message, "Refreshed bulletin"))
+    assert Enum.any?(events, &String.contains?(&1.message, "Reviewed compaction"))
+    assert Enum.any?(events, &String.contains?(&1.message, "Exported transcript"))
+  end
+
   test "runtime reconciliation starts active agents and stops paused agents" do
     {:ok, active_agent} =
       Runtime.save_agent(%{
