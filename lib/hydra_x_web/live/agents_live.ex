@@ -13,20 +13,24 @@ defmodule HydraXWeb.AgentsLive do
      |> assign(:current, "agents")
      |> assign(:stats, stats())
      |> assign(:agents, Runtime.list_agents())
+     |> assign(:editing_agent, %AgentProfile{})
      |> assign(:form, to_form(Runtime.change_agent(%AgentProfile{})))}
   end
 
   @impl true
-  def handle_event("create", %{"agent_profile" => params}, socket) do
-    case Runtime.save_agent(params) do
+  def handle_event("save", %{"agent_profile" => params}, socket) do
+    action = if socket.assigns.editing_agent.id, do: "updated", else: "created"
+
+    case Runtime.save_agent(socket.assigns.editing_agent, params) do
       {:ok, agent} ->
         HydraX.Agent.ensure_started(agent)
 
         {:noreply,
          socket
-         |> put_flash(:info, "Agent created")
+         |> put_flash(:info, "Agent #{action}")
          |> assign(:agents, Runtime.list_agents())
          |> assign(:stats, stats())
+         |> assign(:editing_agent, %AgentProfile{})
          |> assign(:form, to_form(Runtime.change_agent(%AgentProfile{})))}
 
       {:error, changeset} ->
@@ -34,11 +38,47 @@ defmodule HydraXWeb.AgentsLive do
     end
   end
 
+  def handle_event("edit", %{"id" => id}, socket) do
+    agent = Runtime.get_agent!(id)
+
+    {:noreply,
+     socket
+     |> assign(:editing_agent, agent)
+     |> assign(:form, to_form(Runtime.change_agent(agent)))}
+  end
+
+  def handle_event("reset_form", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:editing_agent, %AgentProfile{})
+     |> assign(:form, to_form(Runtime.change_agent(%AgentProfile{})))}
+  end
+
   def handle_event("toggle", %{"id" => id}, socket) do
     Runtime.toggle_agent_status!(id)
 
     {:noreply,
      socket
+     |> assign(:agents, Runtime.list_agents())
+     |> assign(:stats, stats())}
+  end
+
+  def handle_event("set_default", %{"id" => id}, socket) do
+    Runtime.set_default_agent!(id)
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Default agent updated")
+     |> assign(:agents, Runtime.list_agents())
+     |> assign(:stats, stats())}
+  end
+
+  def handle_event("repair_workspace", %{"id" => id}, socket) do
+    Runtime.repair_agent_workspace!(id)
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Workspace template repaired")
      |> assign(:agents, Runtime.list_agents())
      |> assign(:stats, stats())}
   end
@@ -64,9 +104,37 @@ defmodule HydraXWeb.AgentsLive do
                   <p class="mt-3 max-w-xl text-sm text-[var(--hx-mute)]">{agent.description}</p>
                 </div>
                 <div class="flex items-center gap-2">
+                  <span
+                    :if={agent.is_default}
+                    class="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 font-mono text-xs uppercase tracking-[0.18em] text-emerald-300"
+                  >
+                    default
+                  </span>
                   <span class="rounded-full border border-white/10 px-3 py-1 font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
                     {agent.status}
                   </span>
+                  <button
+                    phx-click="edit"
+                    phx-value-id={agent.id}
+                    class="btn btn-sm btn-outline border-white/10 bg-white/5 text-white hover:bg-white/10"
+                  >
+                    Edit
+                  </button>
+                  <button
+                    :if={!agent.is_default}
+                    phx-click="set_default"
+                    phx-value-id={agent.id}
+                    class="btn btn-sm btn-outline border-white/10 bg-white/5 text-white hover:bg-white/10"
+                  >
+                    Make default
+                  </button>
+                  <button
+                    phx-click="repair_workspace"
+                    phx-value-id={agent.id}
+                    class="btn btn-sm btn-outline border-white/10 bg-white/5 text-white hover:bg-white/10"
+                  >
+                    Repair workspace
+                  </button>
                   <button
                     phx-click="toggle"
                     phx-value-id={agent.id}
@@ -82,14 +150,25 @@ defmodule HydraXWeb.AgentsLive do
         </article>
 
         <article class="glass-panel p-6">
-          <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">New agent</div>
-          <.form for={@form} phx-submit="create" class="mt-6 space-y-2">
+          <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">
+            {if @editing_agent.id, do: "Edit agent", else: "New agent"}
+          </div>
+          <.form for={@form} phx-submit="save" class="mt-6 space-y-2">
             <.input field={@form[:name]} label="Name" />
             <.input field={@form[:slug]} label="Slug" />
             <.input field={@form[:workspace_root]} label="Workspace root" />
             <.input field={@form[:description]} type="textarea" label="Description" />
+            <.input field={@form[:is_default]} type="checkbox" label="Default agent" />
             <div class="pt-2">
-              <.button>Create agent</.button>
+              <.button>{if @editing_agent.id, do: "Save agent", else: "Create agent"}</.button>
+              <button
+                :if={@editing_agent.id}
+                type="button"
+                phx-click="reset_form"
+                class="ml-3 inline-flex items-center rounded-2xl border border-white/10 bg-white/5 px-4 py-2 font-mono text-xs uppercase tracking-[0.18em] text-white transition hover:bg-white/10"
+              >
+                New agent
+              </button>
             </div>
           </.form>
         </article>

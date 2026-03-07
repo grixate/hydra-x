@@ -112,6 +112,18 @@ defmodule HydraX.Runtime do
     updated
   end
 
+  def set_default_agent!(id) do
+    agent = get_agent!(id)
+    {:ok, updated} = save_agent(agent, %{is_default: true})
+    updated
+  end
+
+  def repair_agent_workspace!(id) do
+    agent = get_agent!(id)
+    Workspace.Scaffold.copy_template!(agent.workspace_root)
+    agent
+  end
+
   def list_provider_configs do
     ProviderConfig
     |> order_by([provider], desc: provider.enabled, asc: provider.name)
@@ -1313,12 +1325,18 @@ defmodule HydraX.Runtime do
     do: where(query, [conversation], conversation.agent_id == ^agent_id)
 
   defp normalize_agent_attrs(attrs) do
-    attrs
-    |> normalize_string_keys()
-    |> Map.put_new(
-      "workspace_root",
-      Config.default_workspace(Map.get(attrs, :slug, attrs["slug"] || @default_agent_slug))
-    )
+    normalized = normalize_string_keys(attrs)
+
+    cond do
+      Map.has_key?(normalized, "workspace_root") ->
+        normalized
+
+      is_binary(normalized["slug"]) and normalized["slug"] != "" ->
+        Map.put(normalized, "workspace_root", Config.default_workspace(normalized["slug"]))
+
+      true ->
+        normalized
+    end
   end
 
   defp normalize_string_keys(attrs) do

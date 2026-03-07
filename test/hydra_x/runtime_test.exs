@@ -520,6 +520,19 @@ defmodule HydraX.RuntimeTest do
              Runtime.test_provider_config(provider, request_fn: request_fn)
   end
 
+  test "default agent can be reassigned and workspace repaired" do
+    agent = create_agent()
+    soul_path = Path.join(agent.workspace_root, "SOUL.md")
+    File.rm_rf!(soul_path)
+
+    updated = Runtime.set_default_agent!(agent.id)
+    Runtime.repair_agent_workspace!(agent.id)
+
+    assert updated.is_default
+    assert Runtime.get_default_agent().id == agent.id
+    assert File.exists?(soul_path)
+  end
+
   defp create_agent do
     unique = System.unique_integer([:positive])
 
