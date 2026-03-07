@@ -20,7 +20,8 @@ defmodule HydraXWeb.ConversationsLive do
      |> assign(:conversations, conversations)
      |> assign(:selected, selected)
      |> assign(:new_form, to_form(default_new_conversation(agents), as: :conversation))
-     |> assign(:reply_form, to_form(%{"message" => ""}, as: :reply))}
+     |> assign(:reply_form, to_form(%{"message" => ""}, as: :reply))
+     |> assign(:rename_form, rename_form(selected))}
   end
 
   @impl true
@@ -35,6 +36,47 @@ defmodule HydraXWeb.ConversationsLive do
   end
 
   @impl true
+  def handle_event("rename_conversation", %{"rename" => %{"title" => title}}, socket) do
+    conversation = socket.assigns.selected
+
+    case Runtime.save_conversation(conversation, %{title: title}) do
+      {:ok, updated} ->
+        selected = Runtime.get_conversation!(updated.id)
+
+        {:noreply,
+         socket
+         |> put_flash(:info, "Conversation renamed")
+         |> assign(:conversations, Runtime.list_conversations(limit: 50))
+         |> assign(:selected, selected)
+         |> assign(:rename_form, rename_form(selected))}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Rename failed: #{format_reason(reason)}")}
+    end
+  end
+
+  def handle_event("archive_conversation", %{"id" => id}, socket) do
+    updated = Runtime.archive_conversation!(id)
+    conversations = Runtime.list_conversations(limit: 50)
+    selected = maybe_refresh_selection(conversations, updated.id)
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Conversation archived")
+     |> assign(:conversations, conversations)
+     |> assign(:selected, selected)
+     |> assign(:rename_form, rename_form(selected))
+     |> assign(:stats, stats())}
+  end
+
+  def handle_event("export_conversation", %{"id" => id}, socket) do
+    export = Runtime.export_conversation_transcript!(id)
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Transcript exported to #{export.path}")}
+  end
+
   def handle_event("start_conversation", %{"conversation" => params}, socket) do
     with {:ok, agent} <- fetch_agent(params["agent_id"]),
          {:ok, _pid} <- HydraX.Agent.ensure_started(agent),
@@ -54,6 +96,7 @@ defmodule HydraXWeb.ConversationsLive do
        |> assign(:conversations, conversations)
        |> assign(:selected, selected)
        |> assign(:stats, stats())
+       |> assign(:rename_form, rename_form(selected))
        |> assign(:reply_form, to_form(%{"message" => ""}, as: :reply))}
     else
       {:error, reason} ->
@@ -73,6 +116,7 @@ defmodule HydraXWeb.ConversationsLive do
          |> assign(:conversations, Runtime.list_conversations(limit: 50))
          |> assign(:selected, selected)
          |> assign(:stats, stats())
+         |> assign(:rename_form, rename_form(selected))
          |> assign(:reply_form, to_form(%{"message" => ""}, as: :reply))}
 
       {:error, reason} ->
@@ -92,6 +136,7 @@ defmodule HydraXWeb.ConversationsLive do
          |> put_flash(:info, "Telegram delivery retried")
          |> assign(:conversations, Runtime.list_conversations(limit: 50))
          |> assign(:selected, refreshed)
+         |> assign(:rename_form, rename_form(refreshed))
          |> assign(:stats, stats())}
 
       {:error, reason} ->
@@ -193,6 +238,30 @@ defmodule HydraXWeb.ConversationsLive do
                   Retry Telegram delivery
                 </button>
               </div>
+              <div class="mt-4 flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  phx-click="archive_conversation"
+                  phx-value-id={@selected.id}
+                  class="btn btn-outline border-white/10 bg-white/5 text-white hover:bg-white/10"
+                >
+                  Archive
+                </button>
+                <button
+                  type="button"
+                  phx-click="export_conversation"
+                  phx-value-id={@selected.id}
+                  class="btn btn-outline border-white/10 bg-white/5 text-white hover:bg-white/10"
+                >
+                  Export transcript
+                </button>
+              </div>
+              <.form for={@rename_form} phx-submit="rename_conversation" class="mt-4 space-y-2">
+                <.input field={@rename_form[:title]} label="Title" />
+                <div class="pt-1">
+                  <.button>Rename conversation</.button>
+                </div>
+              </.form>
               <.form for={@reply_form} phx-submit="send_reply" class="mt-4 space-y-2">
                 <.input field={@reply_form[:message]} type="textarea" label="Reply" />
                 <div class="pt-1">
@@ -236,6 +305,13 @@ defmodule HydraXWeb.ConversationsLive do
 
   defp maybe_load(nil), do: nil
   defp maybe_load(conversation), do: Runtime.get_conversation!(conversation.id)
+
+  defp maybe_refresh_selection(conversations, id) do
+    case Enum.find(conversations, &(&1.id == id)) do
+      nil -> nil
+      conversation -> Runtime.get_conversation!(conversation.id)
+    end
+  end
 
   defp last_delivery(conversation) do
     metadata = conversation.metadata || %{}
@@ -307,6 +383,9 @@ defmodule HydraXWeb.ConversationsLive do
       "message" => ""
     }
   end
+
+  defp rename_form(nil), do: to_form(%{"title" => ""}, as: :rename)
+  defp rename_form(conversation), do: to_form(%{"title" => conversation.title || ""}, as: :rename)
 
   defp blank_to_default(nil, default), do: default
   defp blank_to_default("", default), do: default

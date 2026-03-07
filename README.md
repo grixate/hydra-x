@@ -119,6 +119,8 @@ The conversations surface can also start control-plane conversations and send re
 ```bash
 mix hydra_x.conversations start "Summarize the current workspace." --title "Ops Chat"
 mix hydra_x.conversations send 42 "What do you remember?"
+mix hydra_x.conversations export 42
+mix hydra_x.conversations archive 42
 ```
 
 Recent safety events can be reviewed from `/safety` or the CLI:

@@ -692,6 +692,29 @@ defmodule HydraX.Runtime do
     |> Repo.insert()
   end
 
+  def save_conversation(%Conversation{} = conversation, attrs) do
+    conversation
+    |> Conversation.changeset(normalize_string_keys(attrs))
+    |> Repo.update()
+  end
+
+  def archive_conversation!(id) do
+    conversation = get_conversation!(id)
+    {:ok, updated} = save_conversation(conversation, %{status: "archived"})
+    updated
+  end
+
+  def export_conversation_transcript!(id) do
+    conversation = get_conversation!(id)
+    agent = conversation.agent || get_agent!(conversation.agent_id)
+    path = transcript_path(agent, conversation)
+
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, render_transcript(conversation))
+
+    %{conversation: conversation, agent: agent, path: path}
+  end
+
   def list_turns(conversation_id) do
     Turn
     |> where([turn], turn.conversation_id == ^conversation_id)
@@ -1337,6 +1360,50 @@ defmodule HydraX.Runtime do
       true ->
         normalized
     end
+  end
+
+  defp transcript_path(agent, conversation) do
+    safe_title =
+      (conversation.title || "conversation")
+      |> String.downcase()
+      |> String.replace(~r/[^a-z0-9]+/u, "-")
+      |> String.trim("-")
+      |> case do
+        "" -> "conversation"
+        value -> value
+      end
+
+    Path.join([
+      agent.workspace_root,
+      "transcripts",
+      "#{conversation.id}-#{safe_title}.md"
+    ])
+  end
+
+  defp render_transcript(conversation) do
+    header = [
+      "# #{conversation.title || "Untitled conversation"}",
+      "",
+      "- id: #{conversation.id}",
+      "- channel: #{conversation.channel}",
+      "- status: #{conversation.status}",
+      "- updated_at: #{Calendar.strftime(conversation.updated_at, "%Y-%m-%d %H:%M UTC")}",
+      ""
+    ]
+
+    turns =
+      Enum.map(conversation.turns, fn turn ->
+        [
+          "## #{String.capitalize(turn.role)} ##{turn.sequence}",
+          "",
+          turn.content,
+          ""
+        ]
+      end)
+
+    [header | turns]
+    |> List.flatten()
+    |> Enum.join("\n")
   end
 
   defp normalize_string_keys(attrs) do

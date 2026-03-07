@@ -14,6 +14,12 @@ defmodule Mix.Tasks.HydraX.Conversations do
       ["send", id, message | _rest] ->
         send_message(id, message)
 
+      ["archive", id] ->
+        archive_conversation(id)
+
+      ["export", id] ->
+        export_conversation(id)
+
       ["retry-delivery", id] ->
         retry_delivery(id)
 
@@ -73,6 +79,18 @@ defmodule Mix.Tasks.HydraX.Conversations do
 
     Mix.shell().info("conversation=#{conversation.id}")
     Mix.shell().info(response)
+  end
+
+  defp archive_conversation(id) do
+    conversation = HydraX.Runtime.archive_conversation!(String.to_integer(id))
+    Mix.shell().info("conversation=#{conversation.id}")
+    Mix.shell().info("status=#{conversation.status}")
+  end
+
+  defp export_conversation(id) do
+    export = HydraX.Runtime.export_conversation_transcript!(String.to_integer(id))
+    Mix.shell().info("conversation=#{export.conversation.id}")
+    Mix.shell().info("path=#{export.path}")
   end
 
   defp list_conversations do

@@ -102,6 +102,41 @@ defmodule HydraX.ConversationsTaskTest do
     assert length(refreshed.turns) == 4
   end
 
+  test "conversation task can archive and export transcripts" do
+    Mix.Task.reenable("hydra_x.conversations")
+    agent = create_agent()
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{
+        channel: "control_plane",
+        title: "Export Chat"
+      })
+
+    {:ok, _turn} =
+      Runtime.append_turn(conversation, %{
+        role: "assistant",
+        content: "Exportable transcript body",
+        metadata: %{}
+      })
+
+    export_output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Mix.Tasks.HydraX.Conversations.run(["export", to_string(conversation.id)])
+      end)
+
+    assert export_output =~ "path="
+
+    Mix.Task.reenable("hydra_x.conversations")
+
+    archive_output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Mix.Tasks.HydraX.Conversations.run(["archive", to_string(conversation.id)])
+      end)
+
+    assert archive_output =~ "status=archived"
+    assert Runtime.get_conversation!(conversation.id).status == "archived"
+  end
+
   defp create_agent do
     unique = System.unique_integer([:positive])
 

@@ -134,4 +134,39 @@ defmodule HydraXWeb.ConversationsLiveTest do
     assert html =~ "Reply sent"
     assert html =~ "Relevant memory"
   end
+
+  test "conversations page can rename and archive a conversation", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{
+        channel: "control_plane",
+        title: "Rename Me"
+      })
+
+    {:ok, _turn} =
+      Runtime.append_turn(conversation, %{
+        role: "assistant",
+        content: "Transcript body",
+        metadata: %{}
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/conversations?conversation_id=#{conversation.id}")
+
+    view
+    |> form("form[phx-submit=\"rename_conversation\"]", %{
+      "rename" => %{"title" => "Renamed Chat"}
+    })
+    |> render_submit()
+
+    assert Runtime.get_conversation!(conversation.id).title == "Renamed Chat"
+
+    view
+    |> element(~s(button[phx-click="archive_conversation"][phx-value-id="#{conversation.id}"]))
+    |> render_click()
+
+    html = render(view)
+    assert html =~ "Conversation archived"
+    assert Runtime.get_conversation!(conversation.id).status == "archived"
+  end
 end
