@@ -43,6 +43,9 @@ defmodule Mix.Tasks.HydraX.Agents do
         Mix.shell().info("memory_count=#{bulletin.memory_count}")
         Mix.shell().info(bulletin.content || "No bulletin yet")
 
+      ["compaction", id | rest] ->
+        manage_compaction_policy(id, rest)
+
       _ ->
         HydraX.Runtime.list_agents()
         |> Enum.each(fn agent ->
@@ -61,5 +64,29 @@ defmodule Mix.Tasks.HydraX.Agents do
           )
         end)
     end
+  end
+
+  defp manage_compaction_policy(id, rest) do
+    {opts, _args, _invalid} =
+      OptionParser.parse(rest, strict: [soft: :integer, medium: :integer, hard: :integer])
+
+    agent_id = String.to_integer(id)
+
+    policy =
+      if Enum.any?([opts[:soft], opts[:medium], opts[:hard]], &(!is_nil(&1))) do
+        HydraX.Runtime.save_compaction_policy!(agent_id, %{
+          "soft" => opts[:soft],
+          "medium" => opts[:medium],
+          "hard" => opts[:hard]
+        })
+      else
+        HydraX.Runtime.compaction_policy(agent_id)
+      end
+
+    agent = HydraX.Runtime.get_agent!(agent_id)
+    Mix.shell().info("agent=#{agent.slug}")
+    Mix.shell().info("soft=#{policy.soft}")
+    Mix.shell().info("medium=#{policy.medium}")
+    Mix.shell().info("hard=#{policy.hard}")
   end
 end

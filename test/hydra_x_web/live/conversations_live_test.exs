@@ -202,6 +202,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
 
   test "conversations page can review and reset compaction", %{conn: conn} do
     agent = Runtime.ensure_default_agent!()
+    Runtime.save_compaction_policy!(agent.id, %{"soft" => 4, "medium" => 8, "hard" => 12})
 
     {:ok, conversation} =
       Runtime.start_conversation(agent, %{
@@ -227,6 +228,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
     html = render(view)
     assert html =~ "Conversation compaction reviewed"
     assert html =~ "12 turns"
+    assert html =~ "Policy thresholds: soft 4"
 
     view
     |> element(~s(button[phx-click="reset_compaction"][phx-value-id="#{conversation.id}"]))

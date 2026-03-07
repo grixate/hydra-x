@@ -105,6 +105,8 @@ mix hydra_x.agents default 2
 mix hydra_x.agents repair 2
 mix hydra_x.agents toggle 2
 mix hydra_x.agents bulletin 2
+mix hydra_x.agents compaction 2
+mix hydra_x.agents compaction 2 --soft 8 --medium 12 --hard 16
 ```
 
 Typed memory can now be curated from `/memory` or the CLI:

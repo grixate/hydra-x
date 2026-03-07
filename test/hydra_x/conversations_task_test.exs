@@ -175,6 +175,7 @@ defmodule HydraX.ConversationsTaskTest do
   test "conversation task can review and reset compaction" do
     Mix.Task.reenable("hydra_x.conversations")
     agent = create_agent()
+    Runtime.save_compaction_policy!(agent.id, %{"soft" => 4, "medium" => 8, "hard" => 12})
 
     {:ok, conversation} =
       Runtime.start_conversation(agent, %{
@@ -197,7 +198,10 @@ defmodule HydraX.ConversationsTaskTest do
       end)
 
     assert compact_output =~ "turn_count=12"
-    assert compact_output =~ "level="
+    assert compact_output =~ "level=hard"
+    assert compact_output =~ "soft=4"
+    assert compact_output =~ "medium=8"
+    assert compact_output =~ "hard=12"
 
     Mix.Task.reenable("hydra_x.conversations")
 

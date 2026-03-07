@@ -144,6 +144,44 @@ defmodule HydraX.Runtime do
     }
   end
 
+  def compaction_policy(id) when is_integer(id) do
+    agent = get_agent!(id)
+    persisted = get_in(agent.runtime_state || %{}, ["compaction_policy"]) || %{}
+    defaults = Config.compaction_thresholds()
+
+    %{
+      soft: map_integer(persisted["soft"], defaults.soft),
+      medium: map_integer(persisted["medium"], defaults.medium),
+      hard: map_integer(persisted["hard"], defaults.hard)
+    }
+  end
+
+  def save_compaction_policy!(id, attrs) when is_integer(id) and is_map(attrs) do
+    agent = get_agent!(id)
+    policy = normalize_compaction_policy(attrs)
+    validate_compaction_policy!(policy)
+
+    {:ok, updated} =
+      update_agent_runtime_state(agent, %{
+        "compaction_policy" => %{
+          "soft" => policy.soft,
+          "medium" => policy.medium,
+          "hard" => policy.hard
+        }
+      })
+
+    audit_operator_action("Updated compaction policy for #{updated.slug}",
+      agent: updated,
+      metadata: %{
+        "soft" => policy.soft,
+        "medium" => policy.medium,
+        "hard" => policy.hard
+      }
+    )
+
+    policy
+  end
+
   def refresh_agent_bulletin!(id) when is_integer(id) do
     agent = get_agent!(id)
     bulletin = render_agent_bulletin(agent.id)
@@ -953,6 +991,7 @@ defmodule HydraX.Runtime do
     checkpoint = get_checkpoint(conversation.id, "compactor")
     state = (checkpoint && checkpoint.state) || %{}
     turns = list_turns(conversation.id)
+    thresholds = compaction_policy(conversation.agent_id)
 
     %{
       conversation: conversation,
@@ -960,7 +999,8 @@ defmodule HydraX.Runtime do
       level: state["level"],
       summary: state["summary"],
       updated_at: state["updated_at"],
-      checkpoint_id: checkpoint && checkpoint.id
+      checkpoint_id: checkpoint && checkpoint.id,
+      thresholds: thresholds
     }
   end
 
@@ -1983,6 +2023,30 @@ defmodule HydraX.Runtime do
     end
   end
 
+  defp normalize_compaction_policy(attrs) do
+    defaults = Config.compaction_thresholds()
+    normalized = normalize_string_keys(attrs)
+
+    %{
+      soft: map_integer(normalized["soft"], defaults.soft),
+      medium: map_integer(normalized["medium"], defaults.medium),
+      hard: map_integer(normalized["hard"], defaults.hard)
+    }
+  end
+
+  defp validate_compaction_policy!(%{soft: soft, medium: medium, hard: hard}) do
+    cond do
+      soft < 1 or medium < 1 or hard < 1 ->
+        raise ArgumentError, "compaction thresholds must be positive integers"
+
+      not (soft < medium and medium < hard) ->
+        raise ArgumentError, "compaction thresholds must satisfy soft < medium < hard"
+
+      true ->
+        :ok
+    end
+  end
+
   defp transcript_path(agent, conversation) do
     safe_title =
       (conversation.title || "conversation")
@@ -2033,6 +2097,11 @@ defmodule HydraX.Runtime do
       {key, value}, acc -> Map.put(acc, key, value)
     end)
   end
+
+  defp map_integer(nil, default), do: default
+  defp map_integer("", default), do: default
+  defp map_integer(value, _default) when is_integer(value), do: value
+  defp map_integer(value, _default) when is_binary(value), do: String.to_integer(value)
 
   defp unwrap_transaction({:ok, value}), do: {:ok, value}
   defp unwrap_transaction({:error, reason}), do: {:error, reason}

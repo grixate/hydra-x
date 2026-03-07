@@ -30,7 +30,7 @@ defmodule HydraXWeb.AgentsLiveTest do
     |> render_click()
 
     view
-    |> form("form", %{
+    |> form(~s(form[phx-submit="save"]), %{
       "agent_profile" => %{
         "name" => "Ops Agent Updated",
         "slug" => "ops-agent",
@@ -128,5 +128,34 @@ defmodule HydraXWeb.AgentsLiveTest do
     html = render(view)
     assert html =~ "Agent bulletin refreshed"
     assert html =~ "Operators can inspect the current bulletin."
+  end
+
+  test "agents page can update a compaction policy", %{conn: conn} do
+    {:ok, agent} =
+      Runtime.save_agent(%{
+        name: "Compaction Agent",
+        slug: "compaction-agent",
+        workspace_root: Path.join(System.tmp_dir!(), "hydra-x-compaction-agent"),
+        description: "compaction",
+        is_default: false
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/agents")
+
+    view
+    |> form(~s(form[phx-submit="save_compaction_policy"]), %{
+      "compaction_policy" => %{
+        "agent_id" => to_string(agent.id),
+        "soft" => "5",
+        "medium" => "9",
+        "hard" => "13"
+      }
+    })
+    |> render_submit()
+
+    html = render(view)
+    assert html =~ "Compaction policy updated"
+    assert html =~ "Soft 5"
+    assert Runtime.compaction_policy(agent.id) == %{soft: 5, medium: 9, hard: 13}
   end
 end

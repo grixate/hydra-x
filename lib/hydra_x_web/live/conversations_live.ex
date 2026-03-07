@@ -376,6 +376,9 @@ defmodule HydraXWeb.ConversationsLive do
                 <p class="mt-3 whitespace-pre-wrap text-sm text-[var(--hx-mute)]">
                   {(@compaction && @compaction.summary) || "No summary checkpoint yet"}
                 </p>
+                <div :if={@compaction} class="mt-2 text-xs text-[var(--hx-mute)]">
+                  Policy thresholds: {compaction_thresholds_label(@compaction.thresholds)}
+                </div>
               </div>
               <.form for={@rename_form} phx-submit="rename_conversation" class="mt-4 space-y-2">
                 <.input field={@rename_form[:title]} label="Title" />
@@ -534,6 +537,10 @@ defmodule HydraXWeb.ConversationsLive do
   defp compaction_label(compaction) do
     level = compaction.level || "idle"
     "#{compaction.turn_count} turns · #{level}"
+  end
+
+  defp compaction_thresholds_label(%{soft: soft, medium: medium, hard: hard}) do
+    "soft #{soft} · medium #{medium} · hard #{hard}"
   end
 
   defp format_reason(reason) when is_binary(reason), do: reason

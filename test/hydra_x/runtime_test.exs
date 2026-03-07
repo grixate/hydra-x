@@ -745,6 +745,9 @@ defmodule HydraX.RuntimeTest do
   test "conversation compaction can be reviewed and reset" do
     agent = create_agent()
 
+    policy =
+      Runtime.save_compaction_policy!(agent.id, %{"soft" => 4, "medium" => 8, "hard" => 12})
+
     {:ok, conversation} =
       Runtime.start_conversation(agent, %{channel: "control_plane", title: "Compaction Thread"})
 
@@ -760,12 +763,22 @@ defmodule HydraX.RuntimeTest do
     compaction = Runtime.review_conversation_compaction!(conversation.id)
 
     assert compaction.turn_count == 12
-    assert compaction.level in ["soft", "medium", "hard"]
+    assert compaction.level == "hard"
     assert compaction.summary =~ "Turn"
+    assert compaction.thresholds == policy
 
     reset = Runtime.reset_conversation_compaction!(conversation.id)
     assert reset.level == nil
     assert reset.summary == nil
+    assert reset.thresholds == policy
+  end
+
+  test "compaction policy must remain ordered" do
+    agent = create_agent()
+
+    assert_raise ArgumentError, ~r/soft < medium < hard/, fn ->
+      Runtime.save_compaction_policy!(agent.id, %{"soft" => 12, "medium" => 8, "hard" => 16})
+    end
   end
 
   test "operator-driven runtime actions are logged to the safety ledger" do

@@ -2,7 +2,6 @@ defmodule HydraX.Agent.Compactor do
   @moduledoc false
   use GenServer
 
-  alias HydraX.Config
   alias HydraX.Runtime
 
   def start_link(opts) do
@@ -58,7 +57,7 @@ defmodule HydraX.Agent.Compactor do
 
   defp review_state(state) do
     turns = Runtime.list_turns(state.conversation_id)
-    thresholds = Config.compaction_thresholds()
+    thresholds = Runtime.compaction_policy(state.agent_id)
     level = level_for(length(turns), thresholds)
 
     if level do

@@ -134,6 +134,28 @@ defmodule HydraXWeb.AgentsLive do
      |> assign(:stats, stats())}
   end
 
+  def handle_event("save_compaction_policy", %{"compaction_policy" => params}, socket) do
+    agent_id = params["agent_id"] |> String.to_integer()
+
+    try do
+      Runtime.save_compaction_policy!(agent_id, %{
+        "soft" => params["soft"],
+        "medium" => params["medium"],
+        "hard" => params["hard"]
+      })
+
+      {:noreply,
+       socket
+       |> put_flash(:info, "Compaction policy updated")
+       |> assign(:agents, agents_with_runtime())
+       |> assign(:stats, stats())}
+    rescue
+      error ->
+        {:noreply,
+         put_flash(socket, :error, "Compaction policy failed: #{Exception.message(error)}")}
+    end
+  end
+
   @impl true
   def render(assigns) do
     ~H"""
@@ -251,6 +273,28 @@ defmodule HydraXWeb.AgentsLive do
                   {agent.bulletin.memory_count} memory items in bulletin scope
                 </div>
               </div>
+              <div class="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-3">
+                <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                  Compaction policy
+                </div>
+                <div class="mt-2 text-sm text-[var(--hx-mute)]">
+                  Soft {agent.compaction_policy.soft} · Medium {agent.compaction_policy.medium} · Hard {agent.compaction_policy.hard}
+                </div>
+                <% policy_form = to_form(compaction_policy_form(agent), as: :compaction_policy) %>
+                <.form
+                  for={policy_form}
+                  phx-submit="save_compaction_policy"
+                  class="mt-4 grid gap-3 md:grid-cols-3"
+                >
+                  <input type="hidden" name="compaction_policy[agent_id]" value={agent.id} />
+                  <.input field={policy_form[:soft]} type="number" label="Soft" min="1" />
+                  <.input field={policy_form[:medium]} type="number" label="Medium" min="2" />
+                  <.input field={policy_form[:hard]} type="number" label="Hard" min="3" />
+                  <div class="md:col-span-3 pt-1">
+                    <.button>Save compaction policy</.button>
+                  </div>
+                </.form>
+              </div>
             </div>
           </div>
           <div class="mt-6">
@@ -310,6 +354,15 @@ defmodule HydraXWeb.AgentsLive do
       agent
       |> Map.put(:runtime, Runtime.agent_runtime_status(agent))
       |> Map.put(:bulletin, Runtime.agent_bulletin(agent.id))
+      |> Map.put(:compaction_policy, Runtime.compaction_policy(agent.id))
     end)
+  end
+
+  defp compaction_policy_form(agent) do
+    %{
+      "soft" => agent.compaction_policy.soft,
+      "medium" => agent.compaction_policy.medium,
+      "hard" => agent.compaction_policy.hard
+    }
   end
 end

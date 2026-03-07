@@ -104,6 +104,9 @@ defmodule Mix.Tasks.HydraX.Conversations do
     Mix.shell().info("conversation=#{compaction.conversation.id}")
     Mix.shell().info("turn_count=#{compaction.turn_count}")
     Mix.shell().info("level=#{compaction.level || "idle"}")
+    Mix.shell().info("soft=#{compaction.thresholds.soft}")
+    Mix.shell().info("medium=#{compaction.thresholds.medium}")
+    Mix.shell().info("hard=#{compaction.thresholds.hard}")
     Mix.shell().info(compaction.summary || "No summary checkpoint yet")
   end
 
