@@ -71,4 +71,59 @@ defmodule HydraXWeb.JobsLiveTest do
     assert html =~ "success"
     assert html =~ "delivery delivered via telegram -&gt; 4242"
   end
+
+  test "jobs page can edit and filter jobs", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, first} =
+      Runtime.save_scheduled_job(%{
+        agent_id: agent.id,
+        name: "Alpha Prompt Job",
+        kind: "prompt",
+        interval_minutes: 30,
+        enabled: true
+      })
+
+    {:ok, _second} =
+      Runtime.save_scheduled_job(%{
+        agent_id: agent.id,
+        name: "Beta Backup Job",
+        kind: "backup",
+        interval_minutes: 240,
+        enabled: false
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/jobs")
+
+    view
+    |> element(~s(button[phx-click="edit"][phx-value-id="#{first.id}"]))
+    |> render_click()
+
+    view
+    |> form("#job-form", %{
+      scheduled_job: %{
+        name: "Alpha Prompt Job Updated",
+        kind: "prompt",
+        interval_minutes: 45,
+        prompt: "Updated prompt",
+        enabled: true,
+        delivery_enabled: false,
+        delivery_channel: "telegram",
+        delivery_target: ""
+      }
+    })
+    |> render_submit()
+
+    assert Runtime.get_scheduled_job!(first.id).name == "Alpha Prompt Job Updated"
+
+    view
+    |> form("form[phx-submit=\"filter_jobs\"]", %{
+      "filters" => %{"search" => "Alpha", "kind" => "prompt", "enabled" => "true"}
+    })
+    |> render_submit()
+
+    html = render(view)
+    assert html =~ "Alpha Prompt Job Updated"
+    refute html =~ "Beta Backup Job"
+  end
 end

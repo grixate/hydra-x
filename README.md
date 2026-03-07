@@ -118,6 +118,7 @@ Recurring heartbeat, prompt, and backup jobs are managed from `/jobs` or the CLI
 
 ```bash
 mix hydra_x.jobs
+mix hydra_x.jobs --kind prompt --enabled true --search workspace
 mix hydra_x.jobs run 1
 ```
 

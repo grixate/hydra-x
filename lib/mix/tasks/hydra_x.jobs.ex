@@ -10,16 +10,24 @@ defmodule Mix.Tasks.HydraX.Jobs do
     HydraX.Runtime.ensure_default_jobs!()
 
     {opts, positional, _invalid} =
-      OptionParser.parse(args, strict: [run: :integer], aliases: [r: :run])
+      OptionParser.parse(args,
+        strict: [run: :integer, kind: :string, enabled: :string, search: :string, limit: :integer],
+        aliases: [r: :run]
+      )
 
     case opts[:run] || parse_positional_run(positional) do
-      nil -> list_jobs()
+      nil -> list_jobs(opts)
       id -> run_job(id)
     end
   end
 
-  defp list_jobs do
-    HydraX.Runtime.list_scheduled_jobs(limit: 100)
+  defp list_jobs(opts) do
+    HydraX.Runtime.list_scheduled_jobs(
+      limit: opts[:limit] || 100,
+      kind: opts[:kind],
+      enabled: parse_enabled(opts[:enabled]),
+      search: opts[:search]
+    )
     |> Enum.each(fn job ->
       Mix.shell().info(
         "#{job.id}\t#{job.name}\t#{job.kind}\t#{if(job.enabled, do: "enabled", else: "paused")}\tnext=#{format_datetime(job.next_run_at)}" <>
@@ -50,6 +58,10 @@ defmodule Mix.Tasks.HydraX.Jobs do
 
   defp parse_positional_run(["run", id]), do: String.to_integer(id)
   defp parse_positional_run(_args), do: nil
+
+  defp parse_enabled("true"), do: true
+  defp parse_enabled("false"), do: false
+  defp parse_enabled(_), do: nil
 
   defp format_datetime(nil), do: "never"
   defp format_datetime(datetime), do: Calendar.strftime(datetime, "%Y-%m-%d %H:%M:%S UTC")

@@ -308,10 +308,18 @@ defmodule HydraX.Runtime do
   end
 
   def list_scheduled_jobs(opts \\ []) do
+    agent_id = Keyword.get(opts, :agent_id)
+    kind = Keyword.get(opts, :kind)
+    enabled = Keyword.get(opts, :enabled)
+    search = Keyword.get(opts, :search)
     limit = Keyword.get(opts, :limit, 50)
 
     ScheduledJob
     |> preload([:agent])
+    |> maybe_filter_scheduled_job_agent(agent_id)
+    |> maybe_filter_scheduled_job_kind(kind)
+    |> maybe_filter_scheduled_job_enabled(enabled)
+    |> maybe_filter_scheduled_job_search(search)
     |> order_by([job], asc: job.next_run_at, asc: job.name)
     |> limit(^limit)
     |> Repo.all()
@@ -1477,6 +1485,35 @@ defmodule HydraX.Runtime do
       query,
       [conversation],
       like(conversation.title, ^pattern) or like(conversation.external_ref, ^pattern)
+    )
+  end
+
+  defp maybe_filter_scheduled_job_agent(query, nil), do: query
+
+  defp maybe_filter_scheduled_job_agent(query, agent_id),
+    do: where(query, [job], job.agent_id == ^agent_id)
+
+  defp maybe_filter_scheduled_job_kind(query, nil), do: query
+  defp maybe_filter_scheduled_job_kind(query, ""), do: query
+  defp maybe_filter_scheduled_job_kind(query, kind), do: where(query, [job], job.kind == ^kind)
+
+  defp maybe_filter_scheduled_job_enabled(query, nil), do: query
+
+  defp maybe_filter_scheduled_job_enabled(query, enabled) when is_boolean(enabled),
+    do: where(query, [job], job.enabled == ^enabled)
+
+  defp maybe_filter_scheduled_job_enabled(query, ""), do: query
+
+  defp maybe_filter_scheduled_job_search(query, nil), do: query
+  defp maybe_filter_scheduled_job_search(query, ""), do: query
+
+  defp maybe_filter_scheduled_job_search(query, search) do
+    pattern = "%#{search}%"
+
+    where(
+      query,
+      [job],
+      like(job.name, ^pattern) or like(job.prompt, ^pattern)
     )
   end
 
