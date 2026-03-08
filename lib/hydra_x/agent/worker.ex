@@ -69,10 +69,20 @@ defmodule HydraX.Agent.Worker do
 
   def handle_event(_type, _event, _state, data), do: {:keep_state, data}
 
-  defp execute_single(%{id: id, name: name, arguments: arguments}, context, conversation, tool_policy) do
+  defp execute_single(
+         %{id: id, name: name, arguments: arguments},
+         context,
+         conversation,
+         tool_policy
+       ) do
     case Registry.find_tool(name) do
       nil ->
-        %{tool_use_id: id, tool_name: name, result: %{error: "Unknown tool: #{name}"}, is_error: true}
+        %{
+          tool_use_id: id,
+          tool_name: name,
+          result: %{error: "Unknown tool: #{name}"},
+          is_error: true
+        }
 
       tool_module ->
         if tool_enabled?(tool_module, tool_policy) do
@@ -85,7 +95,13 @@ defmodule HydraX.Agent.Worker do
 
             {:error, reason} ->
               log_tool_warning(conversation, name, arguments, reason)
-              %{tool_use_id: id, tool_name: name, result: %{error: inspect(reason)}, is_error: true}
+
+              %{
+                tool_use_id: id,
+                tool_name: name,
+                result: %{error: inspect(reason)},
+                is_error: true
+              }
           end
         else
           log_tool_warning(conversation, name, arguments, :tool_disabled)
@@ -102,9 +118,12 @@ defmodule HydraX.Agent.Worker do
 
   defp tool_enabled?(module, policy) do
     case module.name() do
+      "workspace_list" -> Map.get(policy, :workspace_list_enabled, true)
       "http_fetch" -> Map.get(policy, :http_fetch_enabled, true)
       "shell_command" -> Map.get(policy, :shell_command_enabled, true)
       "workspace_read" -> Map.get(policy, :workspace_read_enabled, true)
+      "workspace_write" -> Map.get(policy, :workspace_write_enabled, false)
+      "web_search" -> Map.get(policy, :web_search_enabled, true)
       _ -> true
     end
   end

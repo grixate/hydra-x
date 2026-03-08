@@ -198,12 +198,18 @@ defmodule HydraX.Runtime.Agents do
 
   def agent_runtime_status(%AgentProfile{} = agent) do
     pid = HydraX.Agent.pid(agent.id)
+    warmup = HydraX.Runtime.Providers.effective_provider_route(agent.id, "channel").warmup
 
     %{
       running: not is_nil(pid),
       pid: pid && inspect(pid),
       last_started_at: agent.last_started_at,
-      persisted_status: agent.status
+      persisted_status: agent.status,
+      readiness: readiness_status(not is_nil(pid), warmup["status"]),
+      warmup_status: warmup["status"],
+      warmed_at: warmup["warmed_at"],
+      last_warm_error: warmup["last_error"],
+      selected_provider_id: warmup["selected_provider_id"]
     }
   end
 
@@ -219,6 +225,7 @@ defmodule HydraX.Runtime.Agents do
         runtime_state: Map.merge(agent.runtime_state || %{}, %{"running" => true})
       })
 
+    _ = HydraX.Runtime.Providers.warm_agent_provider_routing(updated.id)
     updated
   end
 
@@ -366,4 +373,9 @@ defmodule HydraX.Runtime.Agents do
   defp map_integer("", default), do: default
   defp map_integer(value, _default) when is_integer(value), do: value
   defp map_integer(value, _default) when is_binary(value), do: String.to_integer(value)
+
+  defp readiness_status(false, _warmup_status), do: "cold"
+  defp readiness_status(true, "ready"), do: "ready"
+  defp readiness_status(true, "mock"), do: "mock"
+  defp readiness_status(true, _), do: "degraded"
 end

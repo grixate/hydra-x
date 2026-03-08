@@ -89,6 +89,63 @@ defmodule HydraX.Gateway.Adapters.Discord do
     do_send_response(content, channel_id, token, deliver)
   end
 
+  @impl true
+  def normalize_inbound(event) do
+    case handle_event(event, %{}) do
+      {:messages, messages, _state} -> {:ok, messages}
+      other -> {:error, {:unexpected_adapter_response, other}}
+    end
+  end
+
+  @impl true
+  def deliver(message, state) do
+    case send_response(message, state) do
+      :ok -> {:ok, %{channel: "discord"}}
+      {:ok, metadata} when is_map(metadata) -> {:ok, metadata}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @impl true
+  def health(state) do
+    %{
+      channel: "discord",
+      configured: true,
+      supports_threads: true,
+      supports_rich_formatting: true,
+      supports_attachments: false,
+      supports_streaming: false,
+      application_id: state[:application_id]
+    }
+  end
+
+  @impl true
+  def sync_status(state) do
+    {:ok,
+     %{
+       application_id: state.application_id,
+       webhook_secret: present?(state[:webhook_secret])
+     }}
+  end
+
+  @impl true
+  def capabilities do
+    %{
+      channel: "discord",
+      inbound: [:message, :slash_command],
+      outbound: [:text, :chunked_text],
+      threads: true,
+      attachments: false,
+      rich_formatting: true,
+      streaming: false
+    }
+  end
+
+  @impl true
+  def format_message(%{content: content, external_ref: channel_id}, _state) do
+    %{content: content, channel_id: channel_id}
+  end
+
   # -- Private --
 
   defp do_send_response(content, channel_id, _token, deliver) when is_function(deliver, 1) do
@@ -160,4 +217,6 @@ defmodule HydraX.Gateway.Adapters.Discord do
       |> Enum.map(&Enum.join/1)
     end
   end
+
+  defp present?(value), do: is_binary(value) and value != ""
 end

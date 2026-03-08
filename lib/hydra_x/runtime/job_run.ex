@@ -2,7 +2,7 @@ defmodule HydraX.Runtime.JobRun do
   use Ecto.Schema
   import Ecto.Changeset
 
-  @statuses ~w(running success error)
+  @statuses ~w(running success error timeout skipped)
 
   schema "job_runs" do
     field :status, :string, default: "running"

@@ -6,6 +6,7 @@ defmodule HydraX.Runtime.SlackAdmin do
   import Ecto.Query
 
   alias HydraX.Repo
+  alias HydraX.Gateway.Adapters.Slack
   alias HydraX.Runtime.{Helpers, SlackConfig}
 
   def enabled_slack_config do
@@ -52,5 +53,23 @@ defmodule HydraX.Runtime.SlackAdmin do
       Repo.preload(record, [:default_agent])
     end)
     |> Helpers.unwrap_transaction()
+  end
+
+  def test_slack_delivery(%SlackConfig{} = config, target, message, opts \\ []) do
+    with true <- is_binary(target) and target != "",
+         {:ok, state} <-
+           Slack.connect(%{
+             "bot_token" => config.bot_token,
+             "signing_secret" => config.signing_secret,
+             "deliver" =>
+               Keyword.get(opts, :deliver) || Application.get_env(:hydra_x, :slack_deliver)
+           }),
+         {:ok, metadata} <-
+           Slack.deliver(%{content: message, external_ref: target}, state) do
+      {:ok, %{target: target, message: message, metadata: metadata}}
+    else
+      false -> {:error, :missing_target}
+      {:error, reason} -> {:error, reason}
+    end
   end
 end

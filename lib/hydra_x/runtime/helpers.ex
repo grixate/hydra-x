@@ -21,6 +21,14 @@ defmodule HydraX.Runtime.Helpers do
   def unwrap_transaction({:error, reason}), do: {:error, reason}
 
   def audit_operator_action(message, opts) do
+    audit_event("operator", "info", message, opts)
+  end
+
+  def audit_auth_action(message, opts) do
+    audit_event("auth", Keyword.get(opts, :level, "info"), message, opts)
+  end
+
+  defp audit_event(category, level, message, opts) do
     case resolve_audit_agent(opts) do
       nil ->
         :ok
@@ -29,8 +37,8 @@ defmodule HydraX.Runtime.Helpers do
         HydraX.Safety.log_event(%{
           agent_id: agent.id,
           conversation_id: Keyword.get(opts, :conversation_id),
-          category: "operator",
-          level: "info",
+          category: category,
+          level: level,
           message: message,
           metadata: Keyword.get(opts, :metadata, %{})
         })

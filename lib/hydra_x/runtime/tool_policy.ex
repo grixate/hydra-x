@@ -4,8 +4,11 @@ defmodule HydraX.Runtime.ToolPolicy do
 
   schema "tool_policies" do
     field :scope, :string, default: "default"
+    field :workspace_list_enabled, :boolean, default: true
     field :workspace_read_enabled, :boolean, default: true
+    field :workspace_write_enabled, :boolean, default: false
     field :http_fetch_enabled, :boolean, default: true
+    field :web_search_enabled, :boolean, default: true
     field :shell_command_enabled, :boolean, default: true
     field :shell_allowlist_csv, :string, default: ""
     field :http_allowlist_csv, :string, default: ""
@@ -20,8 +23,11 @@ defmodule HydraX.Runtime.ToolPolicy do
     |> cast(attrs, [
       :scope,
       :agent_id,
+      :workspace_list_enabled,
       :workspace_read_enabled,
+      :workspace_write_enabled,
       :http_fetch_enabled,
+      :web_search_enabled,
       :shell_command_enabled,
       :shell_allowlist_csv,
       :http_allowlist_csv

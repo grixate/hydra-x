@@ -67,6 +67,62 @@ defmodule HydraX.Gateway.Adapters.Slack do
     do_send_response(content, channel_id, token, deliver)
   end
 
+  @impl true
+  def normalize_inbound(event) do
+    case handle_event(event, %{}) do
+      {:messages, messages, _state} -> {:ok, messages}
+      other -> {:error, {:unexpected_adapter_response, other}}
+    end
+  end
+
+  @impl true
+  def deliver(message, state) do
+    case send_response(message, state) do
+      :ok -> {:ok, %{channel: "slack"}}
+      {:ok, metadata} when is_map(metadata) -> {:ok, metadata}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @impl true
+  def health(state) do
+    %{
+      channel: "slack",
+      configured: true,
+      supports_threads: true,
+      supports_rich_formatting: true,
+      supports_attachments: false,
+      supports_streaming: false,
+      signing_secret: present?(state[:signing_secret])
+    }
+  end
+
+  @impl true
+  def sync_status(state) do
+    {:ok,
+     %{
+       signing_secret: present?(state.signing_secret)
+     }}
+  end
+
+  @impl true
+  def capabilities do
+    %{
+      channel: "slack",
+      inbound: [:message, :thread_reply],
+      outbound: [:text],
+      threads: true,
+      attachments: false,
+      rich_formatting: true,
+      streaming: false
+    }
+  end
+
+  @impl true
+  def format_message(%{content: content, external_ref: channel_id}, _state) do
+    %{text: content, channel: channel_id}
+  end
+
   @doc """
   Verify a Slack request signature.
 
@@ -121,4 +177,6 @@ defmodule HydraX.Gateway.Adapters.Slack do
         {:error, reason}
     end
   end
+
+  defp present?(value), do: is_binary(value) and value != ""
 end

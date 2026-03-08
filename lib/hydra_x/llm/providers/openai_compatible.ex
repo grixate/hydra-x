@@ -35,7 +35,10 @@ defmodule HydraX.LLM.Providers.OpenAICompatible do
     end
   end
 
-  defp parse_response(%{"choices" => [%{"message" => message, "finish_reason" => finish_reason} | _]}, provider_name) do
+  defp parse_response(
+         %{"choices" => [%{"message" => message, "finish_reason" => finish_reason} | _]},
+         provider_name
+       ) do
     content = message["content"]
 
     tool_calls =
@@ -198,8 +201,12 @@ defmodule HydraX.LLM.Providers.OpenAICompatible do
 
         acc =
           case delta["content"] do
-            nil -> acc
-            "" -> acc
+            nil ->
+              acc
+
+            "" ->
+              acc
+
             text ->
               send(caller_pid, {:chunk, ref, text})
               %{acc | text: acc.text <> text}

@@ -491,6 +491,230 @@ defmodule HydraX.RuntimeTest do
     assert run.metadata["delivery"]["metadata"]["provider_message_id"] == 77
   end
 
+  test "scheduled jobs can deliver run results to Discord" do
+    previous = Application.get_env(:hydra_x, :discord_deliver)
+
+    Application.put_env(:hydra_x, :discord_deliver, fn payload ->
+      send(self(), {:discord_job_delivery, payload})
+      {:ok, %{provider_message_id: "discord-job-1"}}
+    end)
+
+    on_exit(fn ->
+      if previous do
+        Application.put_env(:hydra_x, :discord_deliver, previous)
+      else
+        Application.delete_env(:hydra_x, :discord_deliver)
+      end
+    end)
+
+    agent = create_agent()
+
+    {:ok, _discord} =
+      Runtime.save_discord_config(%{
+        bot_token: "discord-test-token",
+        application_id: "discord-app",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
+    {:ok, job} =
+      Runtime.save_scheduled_job(%{
+        agent_id: agent.id,
+        name: "Discord backup delivery",
+        kind: "backup",
+        interval_minutes: 60,
+        enabled: true,
+        delivery_enabled: true,
+        delivery_channel: "discord",
+        delivery_target: "discord-channel"
+      })
+
+    assert {:ok, run} = Runtime.run_scheduled_job(job)
+    assert_receive {:discord_job_delivery, %{external_ref: "discord-channel", content: content}}
+    assert content =~ "finished with success"
+    assert run.metadata["delivery"]["status"] == "delivered"
+    assert run.metadata["delivery"]["metadata"]["provider_message_id"] == "discord-job-1"
+  end
+
+  test "scheduled jobs can be skipped outside active hours" do
+    agent = create_agent()
+    current_hour = DateTime.utc_now().hour
+    start_hour = rem(current_hour + 1, 24)
+    end_hour = rem(current_hour + 2, 24)
+
+    {:ok, job} =
+      Runtime.save_scheduled_job(%{
+        agent_id: agent.id,
+        name: "Business Hours Review",
+        kind: "backup",
+        interval_minutes: 60,
+        enabled: true,
+        active_hour_start: start_hour,
+        active_hour_end: end_hour
+      })
+
+    assert {:ok, run} = Runtime.run_scheduled_job(job)
+    assert run.status == "skipped"
+    assert run.metadata["status_reason"] == "outside_active_hours"
+  end
+
+  test "scheduled jobs retry failures and open a circuit when the threshold is hit" do
+    agent = create_agent()
+
+    blocked_root =
+      Path.join(System.tmp_dir!(), "hydra-x-backup-blocked-#{System.unique_integer([:positive])}")
+
+    File.write!(blocked_root, "not a directory")
+    previous_backup_root = System.get_env("HYDRA_X_BACKUP_ROOT")
+    System.put_env("HYDRA_X_BACKUP_ROOT", blocked_root)
+
+    on_exit(fn ->
+      restore_env("HYDRA_X_BACKUP_ROOT", previous_backup_root)
+      File.rm_rf(blocked_root)
+    end)
+
+    {:ok, job} =
+      Runtime.save_scheduled_job(%{
+        agent_id: agent.id,
+        name: "Failing Backup Job",
+        kind: "backup",
+        interval_minutes: 60,
+        enabled: true,
+        timeout_seconds: 3,
+        retry_limit: 1,
+        pause_after_failures: 1,
+        cooldown_minutes: 5
+      })
+
+    assert {:ok, run} = Runtime.run_scheduled_job(job)
+    assert run.status == "error"
+    assert run.metadata["attempt"] == 2
+    assert run.metadata["retries_used"] == 1
+
+    refreshed = Runtime.get_scheduled_job!(job.id)
+    assert refreshed.circuit_state == "open"
+    assert refreshed.consecutive_failures == 1
+    assert refreshed.paused_until
+    assert refreshed.last_failure_reason =~ "File.Error"
+  end
+
+  test "job runs can be filtered and exported" do
+    agent = create_agent()
+
+    {:ok, success_job} =
+      Runtime.save_scheduled_job(%{
+        agent_id: agent.id,
+        name: "Success Backup Job",
+        kind: "backup",
+        interval_minutes: 60,
+        enabled: true
+      })
+
+    {:ok, skipped_job} =
+      Runtime.save_scheduled_job(%{
+        agent_id: agent.id,
+        name: "Skipped Backup Job",
+        kind: "backup",
+        interval_minutes: 60,
+        enabled: true,
+        active_hour_start: rem(DateTime.utc_now().hour + 1, 24),
+        active_hour_end: rem(DateTime.utc_now().hour + 2, 24)
+      })
+
+    assert {:ok, success_run} = Runtime.run_scheduled_job(success_job)
+    assert success_run.status == "success"
+
+    assert {:ok, skipped_run} = Runtime.run_scheduled_job(skipped_job)
+    assert skipped_run.status == "skipped"
+
+    success_runs = Runtime.list_job_runs(status: "success", kind: "backup", limit: 10)
+    assert Enum.any?(success_runs, &(&1.id == success_run.id))
+    refute Enum.any?(success_runs, &(&1.id == skipped_run.id))
+
+    skipped_runs = Runtime.list_job_runs(search: "Skipped Backup Job", limit: 10)
+    assert Enum.any?(skipped_runs, &(&1.id == skipped_run.id))
+
+    output_root =
+      Path.join(System.tmp_dir!(), "hydra-x-job-runs-#{System.unique_integer([:positive])}")
+
+    on_exit(fn -> File.rm_rf(output_root) end)
+
+    assert {:ok, export} =
+             Runtime.export_job_runs(output_root, status: "success", kind: "backup", limit: 10)
+
+    assert File.read!(export.markdown_path) =~ "Hydra-X Job Runs"
+    assert File.read!(export.markdown_path) =~ "Success Backup Job"
+    assert File.read!(export.json_path) =~ "\"status\": \"success\""
+  end
+
+  test "scheduler circuits can be reset by the operator" do
+    agent = create_agent()
+
+    {:ok, job} =
+      Runtime.save_scheduled_job(%{
+        agent_id: agent.id,
+        name: "Circuit Reset Job",
+        kind: "backup",
+        interval_minutes: 60,
+        enabled: true,
+        circuit_state: "open",
+        consecutive_failures: 3,
+        paused_until: DateTime.add(DateTime.utc_now(), 600, :second),
+        last_failure_reason: "manual test"
+      })
+
+    reset = Runtime.reset_scheduled_job_circuit!(job.id)
+    assert reset.circuit_state == "closed"
+    assert reset.consecutive_failures == 0
+    assert reset.paused_until == nil
+    assert reset.last_failure_reason == nil
+  end
+
+  test "scheduled jobs can deliver run results to Slack" do
+    previous = Application.get_env(:hydra_x, :slack_deliver)
+
+    Application.put_env(:hydra_x, :slack_deliver, fn payload ->
+      send(self(), {:slack_job_delivery, payload})
+      {:ok, %{provider_message_id: "slack-job-1"}}
+    end)
+
+    on_exit(fn ->
+      if previous do
+        Application.put_env(:hydra_x, :slack_deliver, previous)
+      else
+        Application.delete_env(:hydra_x, :slack_deliver)
+      end
+    end)
+
+    agent = create_agent()
+
+    {:ok, _slack} =
+      Runtime.save_slack_config(%{
+        bot_token: "slack-test-token",
+        signing_secret: "slack-signing-secret",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
+    {:ok, job} =
+      Runtime.save_scheduled_job(%{
+        agent_id: agent.id,
+        name: "Slack backup delivery",
+        kind: "backup",
+        interval_minutes: 60,
+        enabled: true,
+        delivery_enabled: true,
+        delivery_channel: "slack",
+        delivery_target: "slack-channel"
+      })
+
+    assert {:ok, run} = Runtime.run_scheduled_job(job)
+    assert_receive {:slack_job_delivery, %{external_ref: "slack-channel", content: content}}
+    assert content =~ "finished with success"
+    assert run.metadata["delivery"]["status"] == "delivered"
+    assert run.metadata["delivery"]["metadata"]["provider_message_id"] == "slack-job-1"
+  end
+
   test "weekly scheduled jobs compute the next run after execution" do
     agent = create_agent()
 
@@ -550,7 +774,9 @@ defmodule HydraX.RuntimeTest do
   test "tool policy disables tools in the registry" do
     {:ok, _policy} =
       Runtime.save_tool_policy(%{
-        shell_command_enabled: false
+        shell_command_enabled: false,
+        workspace_write_enabled: false,
+        web_search_enabled: false
       })
 
     policy = Runtime.effective_tool_policy()
@@ -558,15 +784,26 @@ defmodule HydraX.RuntimeTest do
     tool_names = Enum.map(schemas, & &1.name)
 
     refute "shell_command" in tool_names
+    refute "workspace_write" in tool_names
+    refute "web_search" in tool_names
     assert "memory_recall" in tool_names
     assert "http_fetch" in tool_names
+    assert "workspace_list" in tool_names
 
     # Re-enable
-    {:ok, _policy} = Runtime.save_tool_policy(%{shell_command_enabled: true})
+    {:ok, _policy} =
+      Runtime.save_tool_policy(%{
+        shell_command_enabled: true,
+        workspace_write_enabled: true,
+        web_search_enabled: true
+      })
+
     policy = Runtime.effective_tool_policy()
     schemas = HydraX.Tool.Registry.available_schemas(policy)
     tool_names = Enum.map(schemas, & &1.name)
     assert "shell_command" in tool_names
+    assert "workspace_write" in tool_names
+    assert "web_search" in tool_names
   end
 
   test "provider failures return an assistant error instead of crashing the channel" do
@@ -613,11 +850,135 @@ defmodule HydraX.RuntimeTest do
 
     request_fn = fn opts ->
       assert opts[:json][:model] == "gpt-test"
-      {:ok, %{status: 200, body: %{"choices" => [%{"message" => %{"content" => "OK"}, "finish_reason" => "stop"}]}}}
+
+      {:ok,
+       %{
+         status: 200,
+         body: %{"choices" => [%{"message" => %{"content" => "OK"}, "finish_reason" => "stop"}]}
+       }}
     end
 
     assert {:ok, %{content: "OK", provider: "OpenAI Test"}} =
              Runtime.test_provider_config(provider, request_fn: request_fn)
+  end
+
+  test "router falls back through an agent provider route" do
+    previous = Application.get_env(:hydra_x, :provider_request_fn)
+
+    Application.put_env(:hydra_x, :provider_request_fn, fn opts ->
+      case opts[:url] do
+        "https://broken-route.test/v1/chat/completions" ->
+          {:error, :econnrefused}
+
+        "https://healthy-route.test/v1/chat/completions" ->
+          {:ok,
+           %{
+             status: 200,
+             body: %{
+               "choices" => [
+                 %{
+                   "message" => %{"content" => "Fallback route worked", "tool_calls" => nil},
+                   "finish_reason" => "stop"
+                 }
+               ]
+             }
+           }}
+      end
+    end)
+
+    on_exit(fn ->
+      if previous do
+        Application.put_env(:hydra_x, :provider_request_fn, previous)
+      else
+        Application.delete_env(:hydra_x, :provider_request_fn)
+      end
+    end)
+
+    agent = create_agent()
+
+    {:ok, primary} =
+      Runtime.save_provider_config(%{
+        name: "Broken Route",
+        kind: "openai_compatible",
+        base_url: "https://broken-route.test",
+        api_key: "secret",
+        model: "gpt-broken",
+        enabled: false
+      })
+
+    {:ok, fallback} =
+      Runtime.save_provider_config(%{
+        name: "Healthy Route",
+        kind: "openai_compatible",
+        base_url: "https://healthy-route.test",
+        api_key: "secret",
+        model: "gpt-healthy",
+        enabled: false
+      })
+
+    {:ok, _agent} =
+      Runtime.save_agent_provider_routing(agent.id, %{
+        "default_provider_id" => primary.id,
+        "fallback_provider_ids_csv" => Integer.to_string(fallback.id)
+      })
+
+    assert {:ok, %{content: "Fallback route worked", provider: "Healthy Route"}} =
+             HydraX.LLM.Router.complete(%{
+               messages: [%{role: "user", content: "hello"}],
+               agent_id: agent.id,
+               process_type: "channel"
+             })
+  end
+
+  test "warming an agent provider route updates runtime readiness" do
+    previous = Application.get_env(:hydra_x, :provider_test_request_fn)
+
+    Application.put_env(:hydra_x, :provider_test_request_fn, fn _opts ->
+      {:ok,
+       %{
+         status: 200,
+         body: %{
+           "choices" => [
+             %{
+               "message" => %{"content" => "OK", "tool_calls" => nil},
+               "finish_reason" => "stop"
+             }
+           ]
+         }
+       }}
+    end)
+
+    on_exit(fn ->
+      if previous do
+        Application.put_env(:hydra_x, :provider_test_request_fn, previous)
+      else
+        Application.delete_env(:hydra_x, :provider_test_request_fn)
+      end
+    end)
+
+    agent = create_agent()
+
+    {:ok, provider} =
+      Runtime.save_provider_config(%{
+        name: "Warm Provider",
+        kind: "openai_compatible",
+        base_url: "https://warm-route.test",
+        api_key: "secret",
+        model: "gpt-warm",
+        enabled: false
+      })
+
+    {:ok, _agent} =
+      Runtime.save_agent_provider_routing(agent.id, %{
+        "default_provider_id" => provider.id
+      })
+
+    {:ok, _updated, status} = Runtime.warm_agent_provider_routing(agent.id)
+    assert status["status"] == "ready"
+    assert status["selected_provider_id"] == provider.id
+
+    runtime = Runtime.agent_runtime_status(agent.id)
+    assert runtime.warmup_status == "ready"
   end
 
   test "default agent can be reassigned and workspace repaired" do

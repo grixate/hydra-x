@@ -348,4 +348,57 @@ defmodule HydraXWeb.MemoryLiveTest do
     assert Memory.get_memory!(winner.id).status == "active"
     assert Memory.get_memory!(loser.id).status == "superseded"
   end
+
+  test "memory page can ingest a file from the agent ingest directory", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+    ingest_dir = Path.join(agent.workspace_root, "ingest")
+    File.mkdir_p!(ingest_dir)
+    File.write!(Path.join(ingest_dir, "ops.md"), "# Ops\n\nHydra-X can ingest workspace files.")
+
+    {:ok, view, _html} = live(conn, ~p"/memory")
+
+    view
+    |> form("form[phx-submit=\"ingest_file\"]", %{
+      "ingest" => %{"filename" => "ops.md"}
+    })
+    |> render_submit()
+
+    html = render(view)
+    assert html =~ "Ingested ops.md"
+    assert html =~ "ops.md"
+    assert html =~ "Recent ingest runs"
+    assert html =~ "imported"
+
+    assert Enum.any?(
+             Memory.list_memories(agent_id: agent.id, status: "active", limit: 20),
+             &String.contains?(&1.content, "Hydra-X can ingest workspace files.")
+           )
+  end
+
+  test "memory page reports unchanged ingest runs", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+    ingest_dir = Path.join(agent.workspace_root, "ingest")
+    File.mkdir_p!(ingest_dir)
+    File.write!(Path.join(ingest_dir, "ops.md"), "# Ops\n\nHydra-X can ingest workspace files.")
+
+    {:ok, view, _html} = live(conn, ~p"/memory")
+
+    view
+    |> form("form[phx-submit=\"ingest_file\"]", %{
+      "ingest" => %{"filename" => "ops.md", "force" => "false"}
+    })
+    |> render_submit()
+
+    view
+    |> form("form[phx-submit=\"ingest_file\"]", %{
+      "ingest" => %{"filename" => "ops.md", "force" => "false"}
+    })
+    |> render_submit()
+
+    html = render(view)
+    assert html =~ "Ingest skipped for ops.md: unchanged document"
+    assert html =~ "status"
+    assert html =~ "skipped"
+    assert html =~ "reason unchanged_document"
+  end
 end

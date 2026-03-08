@@ -140,7 +140,7 @@ defmodule HydraX.Agent.Channel do
 
     # When no tools are available and streaming is supported, stream the response
     result =
-      if (is_nil(prompt.tools) or prompt.tools == []) do
+      if is_nil(prompt.tools) or prompt.tools == [] do
         case maybe_stream_final(prompt.messages, nil, data, 0, []) do
           {:streaming, _} = s -> s
           :not_streaming -> run_tool_loop(prompt.messages, prompt.tools, data, 0, [])
@@ -172,7 +172,11 @@ defmodule HydraX.Agent.Channel do
         Enum.each(data.pending_from, &:gen_statem.reply(&1, assistant_turn.content))
         Compactor.review(data.agent_id, data.conversation.id)
 
-        Phoenix.PubSub.broadcast(HydraX.PubSub, "conversations", {:conversation_updated, data.conversation.id})
+        Phoenix.PubSub.broadcast(
+          HydraX.PubSub,
+          "conversations",
+          {:conversation_updated, data.conversation.id}
+        )
 
         {:next_state, :ready,
          %{
@@ -219,7 +223,10 @@ defmodule HydraX.Agent.Channel do
       })
 
       finalize_streamed_response(
-        %{content: "Streaming failed. Check /health and provider settings.", provider: "stream-error"},
+        %{
+          content: "Streaming failed. Check /health and provider settings.",
+          provider: "stream-error"
+        },
         data
       )
     else
@@ -287,6 +294,8 @@ defmodule HydraX.Agent.Channel do
 
         request =
           %{messages: messages}
+          |> Map.put(:agent_id, data.agent_id)
+          |> Map.put(:process_type, "channel")
           |> maybe_put_tools(tools)
 
         case Router.complete(request) do
@@ -352,6 +361,8 @@ defmodule HydraX.Agent.Channel do
 
           request =
             %{messages: messages}
+            |> Map.put(:agent_id, data.agent_id)
+            |> Map.put(:process_type, "channel")
             |> maybe_put_tools(tools)
 
           case Router.complete_stream(request, self()) do
@@ -506,8 +517,8 @@ defmodule HydraX.Agent.Channel do
     })
   end
 
-  defp provider_name(_agent_id) do
-    case Runtime.enabled_provider() do
+  defp provider_name(agent_id) do
+    case Runtime.enabled_provider(agent_id, "channel") do
       nil -> "mock"
       provider -> provider.name || provider.kind || "configured"
     end

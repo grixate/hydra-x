@@ -35,6 +35,7 @@ defmodule HydraX.Report do
       operator: Runtime.operator_status(),
       tools: Runtime.tool_status(),
       scheduler: scheduler_snapshot(filters.job_limit),
+      ingest: Runtime.list_ingest_runs(agent.id, 10),
       observability: Runtime.observability_status(),
       safety: Runtime.safety_status(limit: filters.safety_limit),
       memory: Runtime.memory_triage_status(agent),
@@ -144,6 +145,9 @@ defmodule HydraX.Report do
     ### Recent Runs
     #{render_job_runs(snapshot.scheduler.runs)}
 
+    ## Ingest
+    #{render_ingest_runs(snapshot.ingest)}
+
     ## Conversations
     #{render_conversations(snapshot.conversations)}
 
@@ -248,6 +252,14 @@ defmodule HydraX.Report do
   defp render_job_runs(runs) do
     Enum.map_join(runs, "\n", fn run ->
       "- ##{run.id} job=#{run.scheduled_job_id} status=#{run.status} started=#{format_datetime(run.started_at)} delivery=#{render_delivery_status(run)}"
+    end)
+  end
+
+  defp render_ingest_runs([]), do: "- none"
+
+  defp render_ingest_runs(runs) do
+    Enum.map_join(runs, "\n", fn run ->
+      "- #{run.source_file} [#{run.status}] created=#{run.created_count} skipped=#{run.skipped_count} archived=#{run.archived_count} at=#{format_datetime(run.inserted_at)}"
     end)
   end
 
@@ -402,6 +414,7 @@ defmodule HydraX.Report do
         jobs: Enum.map(snapshot.scheduler.jobs, &json_job/1),
         runs: Enum.map(snapshot.scheduler.runs, &json_job_run/1)
       },
+      ingest: Enum.map(snapshot.ingest, &json_ingest_run/1),
       observability: %{
         telemetry: snapshot.observability.telemetry,
         scheduler: %{
@@ -437,6 +450,22 @@ defmodule HydraX.Report do
         }
       },
       conversations: Enum.map(snapshot.conversations, &json_conversation/1)
+    }
+  end
+
+  defp json_ingest_run(run) do
+    %{
+      id: run.id,
+      agent_id: run.agent_id,
+      source_file: run.source_file,
+      source_path: run.source_path,
+      status: run.status,
+      chunk_count: run.chunk_count,
+      created_count: run.created_count,
+      skipped_count: run.skipped_count,
+      archived_count: run.archived_count,
+      metadata: run.metadata,
+      inserted_at: run.inserted_at
     }
   end
 

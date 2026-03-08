@@ -57,9 +57,7 @@ defmodule HydraX.Ingest.Watcher do
          }}
 
       {:error, reason} ->
-        Logger.warning(
-          "Failed to start file watcher for agent #{agent_id}: #{inspect(reason)}"
-        )
+        Logger.warning("Failed to start file watcher for agent #{agent_id}: #{inspect(reason)}")
 
         {:ok,
          %{

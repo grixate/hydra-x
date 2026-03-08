@@ -15,11 +15,16 @@ defmodule HydraX.Tools.WorkspaceRead do
   def tool_schema do
     %{
       name: "workspace_read",
-      description: "Read the contents of a file from the agent workspace. Use this when the user asks to read, show, or open a file.",
+      description:
+        "Read the contents of a file from the agent workspace. Use this when the user asks to read, show, or open a file.",
       input_schema: %{
         type: "object",
         properties: %{
-          path: %{type: "string", description: "Relative path within the workspace (e.g. \"SOUL.md\", \"memory/MEMORY.md\")"}
+          path: %{
+            type: "string",
+            description:
+              "Relative path within the workspace (e.g. \"SOUL.md\", \"memory/MEMORY.md\")"
+          }
         },
         required: ["path"]
       }

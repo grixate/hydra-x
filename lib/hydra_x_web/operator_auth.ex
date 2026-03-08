@@ -11,13 +11,20 @@ defmodule HydraXWeb.OperatorAuth do
   @session_key :operator_authenticated
   @session_ts_key :operator_authenticated_at
   @session_active_key :operator_last_active_at
+  @session_recent_auth_key :operator_recent_auth_at
 
   # Session expires after 24 hours regardless of activity
   @session_max_age_seconds 24 * 60 * 60
   # Session expires after 2 hours of inactivity
   @idle_timeout_seconds 2 * 60 * 60
+  # Sensitive actions require a fresh sign-in within 15 minutes
+  @recent_auth_window_seconds 15 * 60
 
   def init(action), do: action
+
+  def session_max_age_seconds, do: @session_max_age_seconds
+  def idle_timeout_seconds, do: @idle_timeout_seconds
+  def recent_auth_window_seconds, do: @recent_auth_window_seconds
 
   def call(conn, :redirect_if_authenticated) do
     if Runtime.operator_password_configured?() and session_valid?(conn) do
@@ -43,14 +50,18 @@ defmodule HydraXWeb.OperatorAuth do
     end
   end
 
-  def log_in(conn) do
-    now = System.system_time(:second)
+  def log_in(conn, opts \\ []) do
+    now = Keyword.get(opts, :now, System.system_time(:second))
+    authenticated_at = Keyword.get(opts, :authenticated_at, now)
+    last_active_at = Keyword.get(opts, :last_active_at, now)
+    recent_auth_at = Keyword.get(opts, :recent_auth_at, now)
 
     conn
     |> configure_session(renew: true)
     |> put_session(@session_key, true)
-    |> put_session(@session_ts_key, now)
-    |> put_session(@session_active_key, now)
+    |> put_session(@session_ts_key, authenticated_at)
+    |> put_session(@session_active_key, last_active_at)
+    |> put_session(@session_recent_auth_key, recent_auth_at)
   end
 
   def log_out(conn) do
@@ -59,18 +70,45 @@ defmodule HydraXWeb.OperatorAuth do
     |> delete_session(@session_key)
     |> delete_session(@session_ts_key)
     |> delete_session(@session_active_key)
+    |> delete_session(@session_recent_auth_key)
+  end
+
+  def session_state(conn_or_session) do
+    authenticated? = session_value(conn_or_session, @session_key) == true
+    authenticated_at = session_value(conn_or_session, @session_ts_key)
+    last_active_at = session_value(conn_or_session, @session_active_key)
+    recent_auth_at = session_value(conn_or_session, @session_recent_auth_key)
+
+    %{
+      authenticated?: authenticated?,
+      authenticated_at: authenticated_at,
+      last_active_at: last_active_at,
+      recent_auth_at: recent_auth_at,
+      valid?: authenticated? and not session_expired?(authenticated_at, last_active_at),
+      recent_auth_valid?: authenticated? and recent_auth_valid?(recent_auth_at),
+      session_expires_at: expires_at(authenticated_at, @session_max_age_seconds),
+      idle_expires_at: expires_at(last_active_at, @idle_timeout_seconds),
+      recent_auth_expires_at: expires_at(recent_auth_at, @recent_auth_window_seconds)
+    }
   end
 
   def on_mount(:require_authenticated_operator, _params, session, socket) do
     configured? = Runtime.operator_password_configured?()
-    valid? = session_valid_from_map?(session)
+    session_state = session_state(session)
+    valid? = session_state.valid?
 
     cond do
       not configured? ->
-        {:cont, Component.assign(socket, :operator_authenticated, false)}
+        {:cont,
+         socket
+         |> Component.assign(:operator_authenticated, false)
+         |> Component.assign(:operator_session, session_state)}
 
       valid? ->
-        {:cont, Component.assign(socket, :operator_authenticated, true)}
+        {:cont,
+         socket
+         |> Component.assign(:operator_authenticated, true)
+         |> Component.assign(:operator_session, session_state)}
 
       true ->
         {:halt,
@@ -83,19 +121,7 @@ defmodule HydraXWeb.OperatorAuth do
   # -- Private helpers --
 
   defp session_valid?(conn) do
-    get_session(conn, @session_key) == true and
-      not session_expired?(
-        get_session(conn, @session_ts_key),
-        get_session(conn, @session_active_key)
-      )
-  end
-
-  defp session_valid_from_map?(session) do
-    Map.get(session, Atom.to_string(@session_key)) == true and
-      not session_expired?(
-        Map.get(session, Atom.to_string(@session_ts_key)),
-        Map.get(session, Atom.to_string(@session_active_key))
-      )
+    session_state(conn).valid?
   end
 
   defp session_expired?(nil, _), do: true
@@ -103,7 +129,15 @@ defmodule HydraXWeb.OperatorAuth do
 
   defp session_expired?(authenticated_at, last_active_at) do
     now = System.system_time(:second)
-    now - authenticated_at > @session_max_age_seconds or now - last_active_at > @idle_timeout_seconds
+
+    now - authenticated_at > @session_max_age_seconds or
+      now - last_active_at > @idle_timeout_seconds
+  end
+
+  defp recent_auth_valid?(nil), do: false
+
+  defp recent_auth_valid?(recent_auth_at) do
+    System.system_time(:second) - recent_auth_at <= @recent_auth_window_seconds
   end
 
   defp touch_activity(conn) do
@@ -117,4 +151,12 @@ defmodule HydraXWeb.OperatorAuth do
       conn
     end
   end
+
+  defp session_value(%Plug.Conn{} = conn, key), do: get_session(conn, key)
+
+  defp session_value(session, key) when is_map(session),
+    do: Map.get(session, Atom.to_string(key)) || Map.get(session, key)
+
+  defp expires_at(nil, _seconds), do: nil
+  defp expires_at(timestamp, seconds), do: DateTime.from_unix!(timestamp + seconds)
 end

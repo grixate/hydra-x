@@ -175,6 +175,94 @@ defmodule HydraX.GatewayTest do
              user_turn.metadata["attachments"]
   end
 
+  test "discord updates are routed into conversations and answered" do
+    agent = create_agent()
+    {:ok, pid} = HydraX.Agent.ensure_started(agent)
+    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
+
+    {:ok, _discord} =
+      Runtime.save_discord_config(%{
+        bot_token: "discord-test-token",
+        application_id: "discord-app",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
+    deliver = fn payload ->
+      send(self(), {:discord_reply, payload})
+      {:ok, %{provider_message_id: "discord-message-1"}}
+    end
+
+    assert :ok =
+             HydraX.Gateway.dispatch_discord_update(
+               %{
+                 "d" => %{
+                   "content" => "Discord ingress should reach the agent runtime.",
+                   "channel_id" => "chan-42",
+                   "author" => %{"id" => "user-1", "username" => "discord-user"}
+                 }
+               },
+               %{deliver: deliver}
+             )
+
+    assert_receive {:discord_reply, %{external_ref: "chan-42", content: content}}
+    assert content =~ "Mock response"
+
+    [conversation] = Runtime.list_conversations(agent_id: agent.id, limit: 10)
+    assert conversation.channel == "discord"
+
+    refreshed = Runtime.get_conversation!(conversation.id)
+    assert refreshed.metadata["last_delivery"]["status"] == "delivered"
+
+    assert refreshed.metadata["last_delivery"]["metadata"]["provider_message_id"] ==
+             "discord-message-1"
+  end
+
+  test "slack updates are routed into conversations and answered" do
+    agent = create_agent()
+    {:ok, pid} = HydraX.Agent.ensure_started(agent)
+    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
+
+    {:ok, _slack} =
+      Runtime.save_slack_config(%{
+        bot_token: "slack-test-token",
+        signing_secret: "slack-signing-secret",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
+    deliver = fn payload ->
+      send(self(), {:slack_reply, payload})
+      {:ok, %{provider_message_id: "slack-ts"}}
+    end
+
+    assert :ok =
+             HydraX.Gateway.dispatch_slack_update(
+               %{
+                 "type" => "event_callback",
+                 "team_id" => "team-1",
+                 "event" => %{
+                   "type" => "message",
+                   "channel" => "C123",
+                   "text" => "Slack ingress should reach the agent runtime.",
+                   "user" => "U123",
+                   "ts" => "123.456"
+                 }
+               },
+               %{deliver: deliver}
+             )
+
+    assert_receive {:slack_reply, %{external_ref: "C123", content: content}}
+    assert content =~ "Mock response"
+
+    [conversation] = Runtime.list_conversations(agent_id: agent.id, limit: 10)
+    assert conversation.channel == "slack"
+
+    refreshed = Runtime.get_conversation!(conversation.id)
+    assert refreshed.metadata["last_delivery"]["status"] == "delivered"
+    assert refreshed.metadata["last_delivery"]["metadata"]["provider_message_id"] == "slack-ts"
+  end
+
   defp create_agent do
     unique = System.unique_integer([:positive])
 

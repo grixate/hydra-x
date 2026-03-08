@@ -15,11 +15,15 @@ defmodule HydraX.Tools.HttpFetch do
   def tool_schema do
     %{
       name: "http_fetch",
-      description: "Fetch the contents of a public URL. Use this to retrieve web pages, API responses, or other HTTP resources the user asks about.",
+      description:
+        "Fetch the contents of a public URL. Use this to retrieve web pages, API responses, or other HTTP resources the user asks about.",
       input_schema: %{
         type: "object",
         properties: %{
-          url: %{type: "string", description: "The full URL to fetch (must be https:// or http://)"}
+          url: %{
+            type: "string",
+            description: "The full URL to fetch (must be https:// or http://)"
+          }
         },
         required: ["url"]
       }

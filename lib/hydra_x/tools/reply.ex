@@ -11,7 +11,8 @@ defmodule HydraX.Tools.Reply do
   def tool_schema do
     %{
       name: "reply",
-      description: "Format and send a final reply to the user. Use this tool when you want to compose a structured response.",
+      description:
+        "Format and send a final reply to the user. Use this tool when you want to compose a structured response.",
       input_schema: %{
         type: "object",
         properties: %{

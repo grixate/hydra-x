@@ -11,12 +11,16 @@ defmodule HydraX.Tools.MemoryRecall do
   def tool_schema do
     %{
       name: "memory_recall",
-      description: "Search the agent's typed memory for relevant entries. Use this when the user asks you to recall, remember, or look up something from past conversations.",
+      description:
+        "Search the agent's typed memory for relevant entries. Use this when the user asks you to recall, remember, or look up something from past conversations.",
       input_schema: %{
         type: "object",
         properties: %{
           query: %{type: "string", description: "Search query to match against stored memories"},
-          limit: %{type: "integer", description: "Maximum number of results to return (default: 5)"}
+          limit: %{
+            type: "integer",
+            description: "Maximum number of results to return (default: 5)"
+          }
         },
         required: ["query"]
       }

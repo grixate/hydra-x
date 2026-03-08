@@ -165,6 +165,100 @@ defmodule HydraXWeb.JobsLiveTest do
     assert html =~ "mon,fri @ 08:15 UTC"
   end
 
+  test "jobs page shows scheduler resilience controls and can reset circuits", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, job} =
+      Runtime.save_scheduled_job(%{
+        agent_id: agent.id,
+        name: "Circuit Breaker Job",
+        kind: "prompt",
+        interval_minutes: 15,
+        enabled: true,
+        timeout_seconds: 45,
+        retry_limit: 2,
+        retry_backoff_seconds: 5,
+        pause_after_failures: 3,
+        cooldown_minutes: 30,
+        active_hour_start: 8,
+        active_hour_end: 18,
+        circuit_state: "open",
+        consecutive_failures: 3,
+        last_failure_reason: "provider offline"
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/jobs")
+
+    html = render(view)
+    assert html =~ "Circuit Breaker Job"
+    assert html =~ "circuit open"
+    assert html =~ "timeout 45s"
+    assert html =~ "active 08:00-18:00 UTC"
+
+    view
+    |> element(~s(button[phx-click="reset_circuit"][phx-value-id="#{job.id}"]))
+    |> render_click()
+
+    refreshed = Runtime.get_scheduled_job!(job.id)
+    assert refreshed.circuit_state == "closed"
+
+    html = render(view)
+    assert html =~ "Scheduler circuit reset"
+  end
+
+  test "jobs page can filter and export the run ledger", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, success_job} =
+      Runtime.save_scheduled_job(%{
+        agent_id: agent.id,
+        name: "Ledger Success Job",
+        kind: "backup",
+        interval_minutes: 10,
+        enabled: true
+      })
+
+    {:ok, skipped_job} =
+      Runtime.save_scheduled_job(%{
+        agent_id: agent.id,
+        name: "Ledger Skipped Job",
+        kind: "backup",
+        interval_minutes: 10,
+        enabled: true,
+        active_hour_start: rem(DateTime.utc_now().hour + 1, 24),
+        active_hour_end: rem(DateTime.utc_now().hour + 2, 24)
+      })
+
+    assert {:ok, _run} = Runtime.run_scheduled_job(success_job)
+    assert {:ok, _run} = Runtime.run_scheduled_job(skipped_job)
+
+    {:ok, view, _html} = live(conn, ~p"/jobs")
+
+    view
+    |> form("form[phx-submit=\"filter_runs\"]", %{
+      "run_filters" => %{
+        "status" => "skipped",
+        "kind" => "backup",
+        "delivery_status" => "",
+        "search" => "Ledger"
+      }
+    })
+    |> render_submit()
+
+    html = render(view)
+    assert html =~ "Ledger Skipped Job"
+    assert html =~ "outside_active_hours"
+
+    view
+    |> element(~s(button[phx-click="export_runs"]))
+    |> render_click()
+
+    html = render(view)
+    assert html =~ "Job run ledger exported"
+    assert html =~ "Markdown:"
+    assert html =~ "JSON:"
+  end
+
   test "jobs page can delete jobs", %{conn: conn} do
     agent = Runtime.ensure_default_agent!()
 

@@ -128,6 +128,96 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "Delayed reply"
   end
 
+  test "health page shows Discord and Slack channel readiness", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, _discord} =
+      Runtime.save_discord_config(%{
+        bot_token: "discord-test-token",
+        application_id: "discord-app",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
+    {:ok, _slack} =
+      Runtime.save_slack_config(%{
+        bot_token: "slack-test-token",
+        signing_secret: "slack-signing-secret",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
+    {:ok, _view, html} = live(conn, ~p"/health")
+
+    assert html =~ "Additional channel readiness"
+    assert html =~ "discord"
+    assert html =~ "slack"
+    assert html =~ "discord-app"
+  end
+
+  test "health page shows open scheduler circuits", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, _job} =
+      Runtime.save_scheduled_job(%{
+        agent_id: agent.id,
+        name: "Circuit Health Job",
+        kind: "prompt",
+        interval_minutes: 30,
+        enabled: true,
+        circuit_state: "open",
+        consecutive_failures: 2,
+        last_failure_reason: "provider offline"
+      })
+
+    {:ok, _view, html} = live(conn, ~p"/health")
+
+    assert html =~ "Open circuits"
+    assert html =~ "Open scheduler circuits"
+    assert html =~ "Circuit Health Job"
+    assert html =~ "provider offline"
+  end
+
+  test "health page shows default agent provider warmup readiness", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, provider} =
+      Runtime.save_provider_config(%{
+        name: "Warm Health Provider",
+        kind: "openai_compatible",
+        base_url: "https://health-provider.test",
+        api_key: "secret",
+        model: "gpt-health",
+        enabled: false
+      })
+
+    {:ok, _agent} =
+      Runtime.save_agent_provider_routing(agent.id, %{"default_provider_id" => provider.id})
+
+    {:ok, _agent, _status} =
+      Runtime.warm_agent_provider_routing(agent.id,
+        request_fn: fn _opts ->
+          {:ok,
+           %{
+             status: 200,
+             body: %{
+               "choices" => [
+                 %{
+                   "message" => %{"content" => "OK", "tool_calls" => nil},
+                   "finish_reason" => "stop"
+                 }
+               ]
+             }
+           }}
+        end
+      )
+
+    {:ok, _view, html} = live(conn, ~p"/health")
+
+    assert html =~ "Default agent provider route warmed"
+    assert html =~ "hydra-primary: Warm Health Provider via agent_default"
+  end
+
   defp restore_env(key, nil), do: System.delete_env(key)
   defp restore_env(key, value), do: System.put_env(key, value)
 end

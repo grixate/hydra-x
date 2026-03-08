@@ -2,10 +2,10 @@ defmodule HydraX.Ingest.Parser do
   @moduledoc """
   Parses document files into chunks suitable for memory entry creation.
 
-  Supported formats: `.md`, `.txt`, `.json`
+  Supported formats: `.md`, `.txt`, `.json`, `.pdf`
   """
 
-  @supported_extensions ~w(.md .txt .json)
+  @supported_extensions ~w(.md .txt .json .pdf)
 
   @doc "Returns true if the file extension is supported."
   def supported?(path) do
@@ -21,7 +21,7 @@ defmodule HydraX.Ingest.Parser do
     ext = Path.extname(path)
 
     if ext in @supported_extensions do
-      case File.read(path) do
+      case read_content(ext, path) do
         {:ok, content} -> {:ok, do_parse(ext, content, path)}
         {:error, reason} -> {:error, reason}
       end
@@ -134,6 +134,46 @@ defmodule HydraX.Ingest.Parser do
 
       {:error, _} ->
         []
+    end
+  end
+
+  defp do_parse(".pdf", content, path) do
+    content
+    |> String.split(~r/\n\s*\n/, trim: true)
+    |> Enum.with_index()
+    |> Enum.map(fn {paragraph, idx} ->
+      trimmed = String.trim(paragraph)
+
+      %{
+        content: trimmed,
+        metadata: %{
+          "section" => "PDF segment #{idx + 1}",
+          "section_index" => idx,
+          "format" => "pdf",
+          "content_hash" => content_hash(trimmed),
+          "source_file" => Path.basename(path)
+        }
+      }
+    end)
+    |> Enum.reject(&(&1.content == ""))
+  end
+
+  defp read_content(".pdf", path), do: read_pdf_text(path)
+  defp read_content(_ext, path), do: File.read(path)
+
+  defp read_pdf_text(path) do
+    case Application.get_env(:hydra_x, :pdf_text_extractor) do
+      fun when is_function(fun, 1) ->
+        fun.(path)
+
+      _ ->
+        with executable when is_binary(executable) <- System.find_executable("pdftotext"),
+             {output, 0} <- System.cmd(executable, ["-layout", path, "-"], stderr_to_stdout: true) do
+          {:ok, output}
+        else
+          nil -> {:error, :pdf_extractor_unavailable}
+          {output, code} -> {:error, {:pdf_extract_failed, code, output}}
+        end
     end
   end
 

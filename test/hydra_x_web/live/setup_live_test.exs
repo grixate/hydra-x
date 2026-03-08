@@ -2,6 +2,8 @@ defmodule HydraXWeb.SetupLiveTest do
   use HydraXWeb.ConnCase
 
   alias HydraX.Runtime
+  alias HydraX.Safety
+  alias HydraXWeb.OperatorAuth
 
   setup do
     backup_root =
@@ -60,6 +62,39 @@ defmodule HydraXWeb.SetupLiveTest do
     assert html =~ ".tar.gz"
   end
 
+  test "setup page requires recent auth for sensitive actions when password is configured", %{
+    conn: conn
+  } do
+    assert {:ok, _secret} =
+             Runtime.save_operator_secret_password(%{
+               "password" => "hydra-password-123",
+               "password_confirmation" => "hydra-password-123"
+             })
+
+    now = System.system_time(:second)
+
+    conn =
+      conn
+      |> init_test_session(%{})
+      |> OperatorAuth.log_in(
+        authenticated_at: now,
+        last_active_at: now,
+        recent_auth_at: now - OperatorAuth.recent_auth_window_seconds() - 10
+      )
+
+    {:ok, view, _html} = live(conn, ~p"/setup")
+
+    view
+    |> element(~s(button[phx-click="export_install"]))
+    |> render_click()
+
+    assert_redirect(view, "/login?reauth=1")
+
+    [event | _] = Safety.list_events(category: "auth", limit: 5)
+    assert event.level == "warn"
+    assert event.message =~ "Blocked sensitive action pending re-authentication"
+  end
+
   test "setup page can send a Telegram delivery smoke test", %{conn: conn} do
     previous = Application.get_env(:hydra_x, :telegram_deliver)
     test_pid = self()
@@ -103,6 +138,98 @@ defmodule HydraXWeb.SetupLiveTest do
     html = render(view)
     assert html =~ "Telegram delivery test succeeded"
     assert html =~ "provider_message_id"
+  end
+
+  test "setup page can send a Discord delivery smoke test", %{conn: conn} do
+    previous = Application.get_env(:hydra_x, :discord_deliver)
+    test_pid = self()
+
+    Application.put_env(:hydra_x, :discord_deliver, fn payload ->
+      send(test_pid, {:setup_discord_test, payload})
+      {:ok, %{provider_message_id: "discord-smoke"}}
+    end)
+
+    on_exit(fn ->
+      if previous do
+        Application.put_env(:hydra_x, :discord_deliver, previous)
+      else
+        Application.delete_env(:hydra_x, :discord_deliver)
+      end
+    end)
+
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, _discord} =
+      Runtime.save_discord_config(%{
+        bot_token: "discord-test-token",
+        application_id: "discord-app",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/setup")
+
+    view
+    |> form("form[phx-submit=\"test_discord_delivery\"]", %{
+      "discord_test" => %{
+        "target" => "discord-room",
+        "message" => "Discord UI smoke test"
+      }
+    })
+    |> render_submit()
+
+    assert_receive {:setup_discord_test,
+                    %{content: "Discord UI smoke test", external_ref: "discord-room"}}
+
+    html = render(view)
+    assert html =~ "Discord delivery test succeeded"
+    assert html =~ "discord-smoke"
+  end
+
+  test "setup page can send a Slack delivery smoke test", %{conn: conn} do
+    previous = Application.get_env(:hydra_x, :slack_deliver)
+    test_pid = self()
+
+    Application.put_env(:hydra_x, :slack_deliver, fn payload ->
+      send(test_pid, {:setup_slack_test, payload})
+      {:ok, %{provider_message_id: "slack-smoke"}}
+    end)
+
+    on_exit(fn ->
+      if previous do
+        Application.put_env(:hydra_x, :slack_deliver, previous)
+      else
+        Application.delete_env(:hydra_x, :slack_deliver)
+      end
+    end)
+
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, _slack} =
+      Runtime.save_slack_config(%{
+        bot_token: "slack-test-token",
+        signing_secret: "slack-signing-secret",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/setup")
+
+    view
+    |> form("form[phx-submit=\"test_slack_delivery\"]", %{
+      "slack_test" => %{
+        "target" => "slack-room",
+        "message" => "Slack UI smoke test"
+      }
+    })
+    |> render_submit()
+
+    assert_receive {:setup_slack_test,
+                    %{content: "Slack UI smoke test", external_ref: "slack-room"}}
+
+    html = render(view)
+    assert html =~ "Slack delivery test succeeded"
+    assert html =~ "slack-smoke"
   end
 
   defp restore_env(key, nil), do: System.delete_env(key)

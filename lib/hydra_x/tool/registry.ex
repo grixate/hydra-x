@@ -1,12 +1,25 @@
 defmodule HydraX.Tool.Registry do
   @moduledoc false
 
-  alias HydraX.Tools.{HttpFetch, MemoryRecall, MemorySave, Reply, ShellCommand, WorkspaceRead}
+  alias HydraX.Tools.{
+    HttpFetch,
+    MemoryRecall,
+    MemorySave,
+    Reply,
+    ShellCommand,
+    WebSearch,
+    WorkspaceList,
+    WorkspaceRead,
+    WorkspaceWrite
+  }
 
   @all_tools [
+    {WorkspaceList, :workspace_list_enabled},
     {HttpFetch, :http_fetch_enabled},
     {ShellCommand, :shell_command_enabled},
     {WorkspaceRead, :workspace_read_enabled},
+    {WorkspaceWrite, :workspace_write_enabled},
+    {WebSearch, :web_search_enabled},
     {MemoryRecall, nil},
     {MemorySave, nil},
     {Reply, nil}

@@ -65,7 +65,10 @@ defmodule HydraX.Budget do
 
   defp estimate_content_tokens(blocks) when is_list(blocks) do
     Enum.reduce(blocks, 0, fn block, acc ->
-      acc + estimate_content_tokens(block[:content] || block[:text] || block["content"] || block["text"] || "")
+      acc +
+        estimate_content_tokens(
+          block[:content] || block[:text] || block["content"] || block["text"] || ""
+        )
     end)
   end
 

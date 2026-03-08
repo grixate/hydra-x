@@ -8,7 +8,7 @@ defmodule HydraX.Runtime.Providers do
   alias HydraX.Config
   alias HydraX.Repo
 
-  alias HydraX.Runtime.{Helpers, ProviderConfig, ToolPolicy}
+  alias HydraX.Runtime.{AgentProfile, Helpers, ProviderConfig, ToolPolicy}
 
   def list_provider_configs do
     ProviderConfig
@@ -20,6 +20,112 @@ defmodule HydraX.Runtime.Providers do
 
   def enabled_provider do
     Repo.one(from(provider in ProviderConfig, where: provider.enabled == true, limit: 1))
+  end
+
+  def enabled_provider(agent_id, process_type \\ "channel") do
+    effective_provider_route(agent_id, process_type).provider
+  end
+
+  def effective_provider_route(nil, _process_type) do
+    provider = enabled_provider()
+    %{provider: provider, fallbacks: [], source: if(provider, do: "global", else: "mock")}
+  end
+
+  def effective_provider_route(agent_id, process_type) when is_integer(agent_id) do
+    agent = Repo.get(AgentProfile, agent_id)
+    profile = provider_routing_profile(agent_id)
+    override_id = get_in(profile, ["process_overrides", to_string(process_type)])
+    default_id = profile["default_provider_id"]
+
+    primary =
+      resolve_provider_id(override_id) ||
+        resolve_provider_id(default_id) ||
+        enabled_provider()
+
+    fallbacks =
+      profile["fallback_provider_ids"]
+      |> List.wrap()
+      |> Enum.map(&resolve_provider_id/1)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.reject(&(primary && &1.id == primary.id))
+
+    %{
+      provider: primary,
+      fallbacks: fallbacks,
+      source: route_source(override_id, default_id, primary),
+      warmup: provider_routing_status(agent)
+    }
+  end
+
+  def provider_routing_profile(nil), do: default_provider_routing_profile()
+
+  def provider_routing_profile(agent_id) when is_integer(agent_id) do
+    case Repo.get(AgentProfile, agent_id) do
+      nil ->
+        default_provider_routing_profile()
+
+      agent ->
+        normalize_provider_routing_profile(
+          get_in(agent.runtime_state || %{}, ["provider_routing"])
+        )
+    end
+  end
+
+  def save_agent_provider_routing(agent_id, attrs) when is_integer(agent_id) do
+    agent = Repo.get!(AgentProfile, agent_id)
+
+    profile =
+      agent.runtime_state
+      |> Kernel.||(%{})
+      |> Map.put("provider_routing", build_provider_routing_profile(attrs, agent))
+
+    agent
+    |> AgentProfile.changeset(%{runtime_state: profile})
+    |> Repo.update()
+  end
+
+  def clear_agent_provider_routing!(agent_id) when is_integer(agent_id) do
+    agent = Repo.get!(AgentProfile, agent_id)
+    runtime_state = Map.delete(agent.runtime_state || %{}, "provider_routing")
+
+    agent
+    |> AgentProfile.changeset(%{runtime_state: runtime_state})
+    |> Repo.update!()
+  end
+
+  def warm_agent_provider_routing(agent_id, opts \\ []) when is_integer(agent_id) do
+    agent = Repo.get!(AgentProfile, agent_id)
+    process_type = Keyword.get(opts, :process_type, "channel")
+    route = effective_provider_route(agent_id, process_type)
+    providers = Enum.reject([route.provider | route.fallbacks], &is_nil/1)
+    warmed_at = DateTime.utc_now()
+
+    status =
+      case providers do
+        [] ->
+          %{
+            "status" => "mock",
+            "process_type" => process_type,
+            "warmed_at" => warmed_at,
+            "selected_provider_id" => nil,
+            "checked_provider_ids" => [],
+            "last_error" => nil
+          }
+
+        _ ->
+          do_warm_providers(providers, process_type, warmed_at, opts)
+      end
+
+    runtime_state =
+      (agent.runtime_state || %{})
+      |> Map.put("provider_routing_status", status)
+
+    {:ok, updated} =
+      agent
+      |> AgentProfile.changeset(%{runtime_state: runtime_state})
+      |> Repo.update()
+
+    {:ok, updated, status}
   end
 
   def change_provider_config(provider \\ %ProviderConfig{}, attrs \\ %{}) do
@@ -81,8 +187,11 @@ defmodule HydraX.Runtime.Providers do
         {:ok, policy} =
           save_tool_policy(%{
             scope: "default",
+            workspace_list_enabled: true,
             workspace_read_enabled: true,
+            workspace_write_enabled: false,
             http_fetch_enabled: true,
+            web_search_enabled: true,
             shell_command_enabled: true
           })
 
@@ -105,7 +214,8 @@ defmodule HydraX.Runtime.Providers do
   def save_tool_policy(%ToolPolicy{} = policy, attrs) do
     policy
     |> ToolPolicy.changeset(
-      Helpers.normalize_string_keys(attrs) |> Map.put_new("scope", "default")
+      Helpers.normalize_string_keys(attrs)
+      |> Map.put_new("scope", "default")
     )
     |> Repo.insert_or_update()
   end
@@ -161,8 +271,11 @@ defmodule HydraX.Runtime.Providers do
       end || %ToolPolicy{}
 
     %{
+      workspace_list_enabled: Map.get(policy, :workspace_list_enabled, true),
       workspace_read_enabled: Map.get(policy, :workspace_read_enabled, true),
+      workspace_write_enabled: Map.get(policy, :workspace_write_enabled, false),
       http_fetch_enabled: Map.get(policy, :http_fetch_enabled, true),
+      web_search_enabled: Map.get(policy, :web_search_enabled, true),
       shell_command_enabled: Map.get(policy, :shell_command_enabled, true),
       shell_allowlist: csv_values(policy.shell_allowlist_csv, Config.shell_allowlist()),
       http_allowlist: csv_values(policy.http_allowlist_csv, Config.http_allowlist())
@@ -190,6 +303,195 @@ defmodule HydraX.Runtime.Providers do
   end
 
   # -- Private helpers --
+
+  defp do_warm_providers([provider | rest], process_type, warmed_at, opts) do
+    case test_provider_config(provider, opts) do
+      {:ok, result} ->
+        %{
+          "status" => "ready",
+          "process_type" => process_type,
+          "warmed_at" => warmed_at,
+          "selected_provider_id" => provider.id,
+          "selected_provider_name" => provider.name,
+          "checked_provider_ids" => [provider.id],
+          "last_error" => nil,
+          "probe_content" => result.content
+        }
+
+      {:error, reason} ->
+        next = do_warm_providers(rest, process_type, warmed_at, opts)
+
+        case next["status"] do
+          "ready" ->
+            Map.update!(next, "checked_provider_ids", &[provider.id | &1])
+
+          _ ->
+            %{
+              "status" => "degraded",
+              "process_type" => process_type,
+              "warmed_at" => warmed_at,
+              "selected_provider_id" => nil,
+              "checked_provider_ids" => [provider.id],
+              "last_error" => inspect(reason)
+            }
+        end
+    end
+  end
+
+  defp do_warm_providers([], process_type, warmed_at, _opts) do
+    %{
+      "status" => "degraded",
+      "process_type" => process_type,
+      "warmed_at" => warmed_at,
+      "selected_provider_id" => nil,
+      "checked_provider_ids" => [],
+      "last_error" => "no provider could be warmed"
+    }
+  end
+
+  defp provider_routing_status(nil), do: default_provider_routing_status()
+
+  defp provider_routing_status(agent) do
+    Map.get(
+      agent.runtime_state || %{},
+      "provider_routing_status",
+      default_provider_routing_status()
+    )
+  end
+
+  defp default_provider_routing_status do
+    %{
+      "status" => "cold",
+      "process_type" => "channel",
+      "warmed_at" => nil,
+      "selected_provider_id" => nil,
+      "checked_provider_ids" => [],
+      "last_error" => nil
+    }
+  end
+
+  defp default_provider_routing_profile do
+    %{
+      "default_provider_id" => nil,
+      "fallback_provider_ids" => [],
+      "process_overrides" => %{}
+    }
+  end
+
+  defp build_provider_routing_profile(attrs, agent) do
+    attrs = Helpers.normalize_string_keys(attrs)
+
+    current =
+      normalize_provider_routing_profile(get_in(agent.runtime_state || %{}, ["provider_routing"]))
+
+    %{
+      "default_provider_id" =>
+        persisted_provider_id(attrs, "default_provider_id", current["default_provider_id"]),
+      "fallback_provider_ids" =>
+        persisted_provider_ids(
+          attrs,
+          "fallback_provider_ids_csv",
+          current["fallback_provider_ids"]
+        ),
+      "process_overrides" => %{
+        "channel" =>
+          persisted_provider_id(
+            attrs,
+            "channel_provider_id",
+            get_in(current, ["process_overrides", "channel"])
+          ),
+        "cortex" =>
+          persisted_provider_id(
+            attrs,
+            "cortex_provider_id",
+            get_in(current, ["process_overrides", "cortex"])
+          ),
+        "compactor" =>
+          persisted_provider_id(
+            attrs,
+            "compactor_provider_id",
+            get_in(current, ["process_overrides", "compactor"])
+          ),
+        "scheduler" =>
+          persisted_provider_id(
+            attrs,
+            "scheduler_provider_id",
+            get_in(current, ["process_overrides", "scheduler"])
+          )
+      }
+    }
+  end
+
+  defp normalize_provider_routing_profile(nil), do: default_provider_routing_profile()
+
+  defp normalize_provider_routing_profile(profile) when is_map(profile) do
+    %{
+      "default_provider_id" => normalize_provider_id(profile["default_provider_id"]),
+      "fallback_provider_ids" => normalize_provider_ids(profile["fallback_provider_ids"]),
+      "process_overrides" => %{
+        "channel" => normalize_provider_id(get_in(profile, ["process_overrides", "channel"])),
+        "cortex" => normalize_provider_id(get_in(profile, ["process_overrides", "cortex"])),
+        "compactor" => normalize_provider_id(get_in(profile, ["process_overrides", "compactor"])),
+        "scheduler" => normalize_provider_id(get_in(profile, ["process_overrides", "scheduler"]))
+      }
+    }
+  end
+
+  defp persisted_provider_id(attrs, key, fallback) do
+    if Map.has_key?(attrs, key) do
+      normalize_provider_id(Map.get(attrs, key))
+    else
+      fallback
+    end
+  end
+
+  defp persisted_provider_ids(attrs, key, fallback) do
+    if Map.has_key?(attrs, key) do
+      normalize_provider_ids(Map.get(attrs, key))
+    else
+      fallback
+    end
+  end
+
+  defp normalize_provider_id(nil), do: nil
+  defp normalize_provider_id(""), do: nil
+  defp normalize_provider_id(value) when is_integer(value), do: value
+
+  defp normalize_provider_id(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {int, _rest} -> int
+      :error -> nil
+    end
+  end
+
+  defp normalize_provider_ids(nil), do: []
+  defp normalize_provider_ids(""), do: []
+
+  defp normalize_provider_ids(values) when is_list(values),
+    do: Enum.map(values, &normalize_provider_id/1) |> Enum.reject(&is_nil/1)
+
+  defp normalize_provider_ids(csv) when is_binary(csv) do
+    csv
+    |> String.split(",", trim: true)
+    |> Enum.map(&String.trim/1)
+    |> Enum.map(&normalize_provider_id/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  defp resolve_provider_id(nil), do: nil
+  defp resolve_provider_id(id) when is_integer(id), do: Repo.get(ProviderConfig, id)
+
+  defp route_source(override_id, _default_id, provider)
+       when not is_nil(override_id) and not is_nil(provider),
+       do: "process_override"
+
+  defp route_source(_override_id, default_id, provider)
+       when not is_nil(default_id) and not is_nil(provider),
+       do: "agent_default"
+
+  defp route_source(_override_id, _default_id, provider) when not is_nil(provider), do: "global"
+  defp route_source(_override_id, _default_id, _provider), do: "mock"
 
   defp provider_module(%ProviderConfig{kind: "openai_compatible"}),
     do: HydraX.LLM.Providers.OpenAICompatible

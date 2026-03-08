@@ -9,7 +9,7 @@ defmodule HydraX.Runtime.Jobs do
   alias HydraX.Repo
   alias HydraX.Workspace
 
-  alias HydraX.Gateway.Adapters.Telegram
+  alias HydraX.Gateway.Adapters.{Discord, Slack, Telegram}
   alias HydraX.Telemetry
 
   alias HydraX.Runtime.{
@@ -64,7 +64,39 @@ defmodule HydraX.Runtime.Jobs do
     weekday_csv = persisted_weekday_csv(normalized_attrs, "weekday_csv", job.weekday_csv)
     cron_expression = Map.get(normalized_attrs, "cron_expression", job.cron_expression)
 
+    active_hour_start =
+      persisted_integer(normalized_attrs, "active_hour_start", job.active_hour_start)
+
+    active_hour_end = persisted_integer(normalized_attrs, "active_hour_end", job.active_hour_end)
+
+    timeout_seconds =
+      persisted_integer(normalized_attrs, "timeout_seconds", job.timeout_seconds || 120)
+
+    retry_limit = persisted_integer(normalized_attrs, "retry_limit", job.retry_limit || 0)
+
+    retry_backoff_seconds =
+      persisted_integer(
+        normalized_attrs,
+        "retry_backoff_seconds",
+        job.retry_backoff_seconds || 0
+      )
+
+    pause_after_failures =
+      persisted_integer(
+        normalized_attrs,
+        "pause_after_failures",
+        job.pause_after_failures || 0
+      )
+
+    cooldown_minutes =
+      persisted_integer(normalized_attrs, "cooldown_minutes", job.cooldown_minutes || 0)
+
     interval_minutes = interval_minutes || job.interval_minutes || 60
+    timeout_seconds = timeout_seconds || job.timeout_seconds || 120
+    retry_limit = retry_limit || job.retry_limit || 0
+    retry_backoff_seconds = retry_backoff_seconds || job.retry_backoff_seconds || 0
+    pause_after_failures = pause_after_failures || job.pause_after_failures || 0
+    cooldown_minutes = cooldown_minutes || job.cooldown_minutes || 0
 
     next_run_at =
       case Helpers.blank_to_nil(Map.get(normalized_attrs, "next_run_at")) do
@@ -91,6 +123,13 @@ defmodule HydraX.Runtime.Jobs do
       |> Map.put("cron_expression", cron_expression)
       |> Map.put("run_hour", run_hour)
       |> Map.put("run_minute", run_minute)
+      |> Map.put("active_hour_start", active_hour_start)
+      |> Map.put("active_hour_end", active_hour_end)
+      |> Map.put("timeout_seconds", timeout_seconds)
+      |> Map.put("retry_limit", retry_limit)
+      |> Map.put("retry_backoff_seconds", retry_backoff_seconds)
+      |> Map.put("pause_after_failures", pause_after_failures)
+      |> Map.put("cooldown_minutes", cooldown_minutes)
       |> Map.put("next_run_at", next_run_at)
 
     job
@@ -103,30 +142,94 @@ defmodule HydraX.Runtime.Jobs do
     Repo.delete!(job)
   end
 
+  def reset_scheduled_job_circuit!(id) do
+    job = get_scheduled_job!(id)
+
+    {:ok, updated} =
+      job
+      |> ScheduledJob.changeset(%{
+        circuit_state: "closed",
+        consecutive_failures: 0,
+        circuit_opened_at: nil,
+        paused_until: nil,
+        last_failure_at: nil,
+        last_failure_reason: nil
+      })
+      |> Repo.update()
+
+    updated
+  end
+
   def list_due_scheduled_jobs(now) do
     ScheduledJob
     |> where(
       [job],
-      job.enabled == true and not is_nil(job.next_run_at) and job.next_run_at <= ^now
+      job.enabled == true and not is_nil(job.next_run_at) and job.next_run_at <= ^now and
+        (job.circuit_state != "open" or
+           (not is_nil(job.paused_until) and job.paused_until <= ^now))
     )
     |> preload([:agent])
     |> Repo.all()
   end
 
-  def recent_job_runs(limit \\ 20) do
+  def recent_job_runs(limit_or_opts \\ 20)
+
+  def recent_job_runs(limit) when is_integer(limit) do
+    list_job_runs(limit: limit)
+  end
+
+  def recent_job_runs(opts) when is_list(opts) do
+    list_job_runs(Keyword.put_new(opts, :limit, 20))
+  end
+
+  def list_job_runs(job_id_or_opts, limit \\ nil)
+
+  def list_job_runs(job_id, limit) when is_integer(job_id) do
+    query_job_runs(scheduled_job_id: job_id, limit: limit || 20)
+  end
+
+  def list_job_runs(opts, nil) when is_list(opts) do
+    query_job_runs(opts)
+  end
+
+  defp query_job_runs(opts) do
+    status = Keyword.get(opts, :status)
+    kind = Keyword.get(opts, :kind)
+    search = Keyword.get(opts, :search)
+    delivery_status = Keyword.get(opts, :delivery_status)
+    scheduled_job_id = Keyword.get(opts, :scheduled_job_id)
+    limit = Keyword.get(opts, :limit, 20)
+    offset = Keyword.get(opts, :offset, 0)
+
     JobRun
+    |> join(:left, [run], job in assoc(run, :scheduled_job))
+    |> preload([run, job], [:agent, scheduled_job: job])
+    |> maybe_filter_job_run_status(status)
+    |> maybe_filter_job_run_kind(kind)
+    |> maybe_filter_job_run_scheduled_job(scheduled_job_id)
+    |> maybe_filter_job_run_delivery_status(delivery_status)
+    |> maybe_filter_job_run_search(search)
+    |> order_by([run, _job], desc: run.inserted_at)
+    |> limit(^limit)
+    |> offset(^offset)
+    |> Repo.all()
+  end
+
+  def recent_job_runs_by_status(status, limit \\ 20) do
+    JobRun
+    |> where([run], run.status == ^status)
     |> order_by([run], desc: run.inserted_at)
     |> limit(^limit)
     |> preload([:scheduled_job, :agent])
     |> Repo.all()
   end
 
-  def list_job_runs(job_id, limit \\ 20) do
-    JobRun
-    |> where([run], run.scheduled_job_id == ^job_id)
-    |> order_by([run], desc: run.inserted_at)
+  def open_circuit_jobs(limit \\ 20) do
+    ScheduledJob
+    |> where([job], job.circuit_state == "open")
+    |> order_by([job], desc: job.updated_at, asc: job.name)
     |> limit(^limit)
-    |> preload([:scheduled_job, :agent])
+    |> preload([:agent])
     |> Repo.all()
   end
 
@@ -169,6 +272,8 @@ defmodule HydraX.Runtime.Jobs do
   end
 
   def run_scheduled_job(%ScheduledJob{} = job) do
+    now = DateTime.utc_now()
+    job = refresh_job_for_execution(job, now)
     started_at = DateTime.utc_now()
 
     {:ok, %{job: job, run: run}} =
@@ -191,42 +296,7 @@ defmodule HydraX.Runtime.Jobs do
       )
       |> Repo.transaction()
 
-    result =
-      case execute_scheduled_job(job) do
-        {:ok, output, metadata} ->
-          finished_at = DateTime.utc_now()
-          duration_ms = DateTime.diff(finished_at, started_at, :millisecond)
-          Telemetry.scheduler_job(job.kind, :ok)
-
-          {:ok, run} =
-            run
-            |> JobRun.changeset(%{
-              status: "success",
-              finished_at: finished_at,
-              output: output,
-              metadata: Map.merge(metadata, %{"duration_ms" => duration_ms})
-            })
-            |> Repo.update()
-
-          maybe_deliver_job_run(job, run)
-
-        {:error, reason} ->
-          finished_at = DateTime.utc_now()
-          duration_ms = DateTime.diff(finished_at, started_at, :millisecond)
-          Telemetry.scheduler_job(job.kind, :error, %{reason: inspect(reason)})
-
-          {:ok, run} =
-            run
-            |> JobRun.changeset(%{
-              status: "error",
-              finished_at: finished_at,
-              output: inspect(reason),
-              metadata: %{"error" => inspect(reason), "duration_ms" => duration_ms}
-            })
-            |> Repo.update()
-
-          maybe_deliver_job_run(job, run)
-      end
+    result = finalize_job_run(job, run, started_at)
 
     Phoenix.PubSub.broadcast(HydraX.PubSub, "jobs", {:job_completed, job.id})
     result
@@ -235,7 +305,10 @@ defmodule HydraX.Runtime.Jobs do
   def scheduler_status do
     %{
       jobs: list_scheduled_jobs(limit: 50),
-      runs: recent_job_runs(20)
+      runs: recent_job_runs(20),
+      open_circuits: open_circuit_jobs(),
+      skipped_runs: recent_job_runs_by_status("skipped", 10),
+      timeout_runs: recent_job_runs_by_status("timeout", 10)
     }
   end
 
@@ -244,10 +317,12 @@ defmodule HydraX.Runtime.Jobs do
   success/error breakdown, and average duration in milliseconds.
   """
   def job_stats(limit \\ 100) do
-    runs = recent_job_runs(limit)
+    runs = recent_job_runs(limit: limit)
     total = length(runs)
     successes = Enum.count(runs, &(&1.status == "success"))
     errors = Enum.count(runs, &(&1.status == "error"))
+    timeouts = Enum.count(runs, &(&1.status == "timeout"))
+    skipped = Enum.count(runs, &(&1.status == "skipped"))
 
     durations =
       runs
@@ -257,19 +332,313 @@ defmodule HydraX.Runtime.Jobs do
     avg_duration_ms =
       case durations do
         [] -> nil
-        ds -> Enum.sum(ds) / length(ds) |> round()
+        ds -> (Enum.sum(ds) / length(ds)) |> round()
       end
 
     %{
       total: total,
       success: successes,
       error: errors,
+      timeout: timeouts,
+      skipped: skipped,
       success_rate: if(total > 0, do: Float.round(successes / total * 100, 1), else: 0.0),
       avg_duration_ms: avg_duration_ms
     }
   end
 
+  def export_job_runs(output_root, opts \\ []) when is_binary(output_root) and is_list(opts) do
+    File.mkdir_p!(output_root)
+
+    runs = list_job_runs(opts)
+    base_name = "hydra-x-job-runs-#{timestamp_slug()}"
+    markdown_path = Path.join(output_root, "#{base_name}.md")
+    json_path = Path.join(output_root, "#{base_name}.json")
+    filters = Enum.into(opts, %{})
+
+    File.write!(markdown_path, render_job_runs_markdown(runs, filters))
+
+    File.write!(
+      json_path,
+      Jason.encode_to_iodata!(render_job_runs_json(runs, filters), pretty: true)
+    )
+
+    {:ok,
+     %{
+       markdown_path: markdown_path,
+       json_path: json_path,
+       count: length(runs)
+     }}
+  end
+
   # -- Job execution --
+
+  defp refresh_job_for_execution(%ScheduledJob{} = job, now) do
+    if job.circuit_state == "open" and circuit_ready?(job, now) do
+      {:ok, refreshed} =
+        job
+        |> ScheduledJob.changeset(%{
+          circuit_state: "closed",
+          circuit_opened_at: nil,
+          paused_until: nil
+        })
+        |> Repo.update()
+
+      refreshed
+    else
+      job
+    end
+  end
+
+  defp finalize_job_run(%ScheduledJob{} = job, %JobRun{} = run, started_at) do
+    case classify_job_execution(job, started_at) do
+      {:skipped, output, metadata} ->
+        finished_at = DateTime.utc_now()
+        Telemetry.scheduler_job(job.kind, :ok, %{status: "skipped"})
+
+        {:ok, run} =
+          run
+          |> JobRun.changeset(%{
+            status: "skipped",
+            finished_at: finished_at,
+            output: output,
+            metadata: metadata
+          })
+          |> Repo.update()
+
+        {:ok, run}
+
+      {:success, output, metadata} ->
+        finished_at = DateTime.utc_now()
+        duration_ms = DateTime.diff(finished_at, started_at, :millisecond)
+        Telemetry.scheduler_job(job.kind, :ok)
+        reset_job_failure_state(job)
+
+        {:ok, run} =
+          run
+          |> JobRun.changeset(%{
+            status: "success",
+            finished_at: finished_at,
+            output: output,
+            metadata: Map.merge(metadata, %{"duration_ms" => duration_ms})
+          })
+          |> Repo.update()
+
+        maybe_deliver_job_run(job, run)
+
+      {:timeout, reason, metadata} ->
+        finished_at = DateTime.utc_now()
+        duration_ms = DateTime.diff(finished_at, started_at, :millisecond)
+        Telemetry.scheduler_job(job.kind, :error, %{reason: inspect(reason), status: "timeout"})
+        apply_job_failure_state(job, inspect(reason), finished_at)
+
+        {:ok, run} =
+          run
+          |> JobRun.changeset(%{
+            status: "timeout",
+            finished_at: finished_at,
+            output: inspect(reason),
+            metadata:
+              Map.merge(metadata, %{"error" => inspect(reason), "duration_ms" => duration_ms})
+          })
+          |> Repo.update()
+
+        maybe_deliver_job_run(job, run)
+
+      {:error, reason, metadata} ->
+        finished_at = DateTime.utc_now()
+        duration_ms = DateTime.diff(finished_at, started_at, :millisecond)
+        Telemetry.scheduler_job(job.kind, :error, %{reason: inspect(reason)})
+        apply_job_failure_state(job, inspect(reason), finished_at)
+
+        {:ok, run} =
+          run
+          |> JobRun.changeset(%{
+            status: "error",
+            finished_at: finished_at,
+            output: inspect(reason),
+            metadata:
+              Map.merge(metadata, %{"error" => inspect(reason), "duration_ms" => duration_ms})
+          })
+          |> Repo.update()
+
+        maybe_deliver_job_run(job, run)
+    end
+  end
+
+  defp classify_job_execution(%ScheduledJob{} = job, started_at) do
+    cond do
+      job.circuit_state == "open" ->
+        {:skipped, "Skipped because the scheduler circuit is open.",
+         %{
+           "status_reason" => "circuit_open",
+           "paused_until" => job.paused_until
+         }}
+
+      active_hours_allowed?(job, started_at) ->
+        execute_scheduled_job_with_policy(job)
+
+      true ->
+        {:skipped, "Skipped outside active hours.",
+         %{
+           "status_reason" => "outside_active_hours",
+           "active_hours" => format_active_hours(job)
+         }}
+    end
+  end
+
+  defp execute_scheduled_job_with_policy(%ScheduledJob{} = job) do
+    attempts_allowed = max(job.retry_limit || 0, 0) + 1
+    do_execute_job_attempt(job, 1, attempts_allowed)
+  end
+
+  defp do_execute_job_attempt(%ScheduledJob{} = job, attempt, attempts_allowed) do
+    metadata = %{
+      "attempt" => attempt,
+      "attempts_allowed" => attempts_allowed,
+      "timeout_seconds" => job.timeout_seconds || 120
+    }
+
+    case execute_scheduled_job_once(job) do
+      {:ok, output, execution_metadata} ->
+        {:success, output,
+         Map.merge(execution_metadata, Map.put(metadata, "retries_used", attempt - 1))}
+
+      {:timeout, reason} ->
+        maybe_retry_job(job, attempt, attempts_allowed, reason, metadata, :timeout)
+
+      {:error, reason} ->
+        maybe_retry_job(job, attempt, attempts_allowed, reason, metadata, :error)
+    end
+  end
+
+  defp maybe_retry_job(job, attempt, attempts_allowed, reason, metadata, status) do
+    if attempt < attempts_allowed do
+      maybe_wait_for_retry(job.retry_backoff_seconds || 0)
+      do_execute_job_attempt(job, attempt + 1, attempts_allowed)
+    else
+      merged = Map.merge(metadata, %{"retries_used" => attempt - 1})
+
+      case status do
+        :timeout -> {:timeout, reason, merged}
+        :error -> {:error, reason, merged}
+      end
+    end
+  end
+
+  defp execute_scheduled_job_once(%ScheduledJob{} = job) do
+    task =
+      Task.Supervisor.async_nolink(HydraX.TaskSupervisor, fn ->
+        execute_scheduled_job(job)
+      end)
+
+    timeout_ms = max(job.timeout_seconds || 120, 1) * 1_000
+
+    case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
+      {:ok, {:ok, output, metadata}} -> {:ok, output, metadata}
+      {:ok, {:error, reason}} -> {:error, reason}
+      {:exit, reason} -> {:error, reason}
+      nil -> {:timeout, :job_timeout}
+    end
+  end
+
+  defp maybe_wait_for_retry(0), do: :ok
+
+  defp maybe_wait_for_retry(seconds) when is_integer(seconds) and seconds > 0 do
+    Process.sleep(min(seconds, 5) * 1_000)
+  end
+
+  defp active_hours_allowed?(
+         %ScheduledJob{active_hour_start: nil, active_hour_end: nil},
+         _datetime
+       ),
+       do: true
+
+  defp active_hours_allowed?(%ScheduledJob{} = job, datetime) do
+    hour = datetime.hour
+    start_hour = job.active_hour_start || 0
+    end_hour = job.active_hour_end || 0
+
+    cond do
+      start_hour == end_hour ->
+        true
+
+      start_hour < end_hour ->
+        hour >= start_hour and hour < end_hour
+
+      true ->
+        hour >= start_hour or hour < end_hour
+    end
+  end
+
+  defp format_active_hours(%ScheduledJob{active_hour_start: nil, active_hour_end: nil}),
+    do: "always"
+
+  defp format_active_hours(%ScheduledJob{} = job) do
+    "#{pad(job.active_hour_start)}:00-#{pad(job.active_hour_end)}:00 UTC"
+  end
+
+  defp circuit_ready?(%ScheduledJob{paused_until: nil}, _now), do: false
+
+  defp circuit_ready?(%ScheduledJob{} = job, now),
+    do: DateTime.compare(job.paused_until, now) != :gt
+
+  defp reset_job_failure_state(%ScheduledJob{} = job) do
+    job
+    |> ScheduledJob.changeset(%{
+      consecutive_failures: 0,
+      circuit_state: "closed",
+      circuit_opened_at: nil,
+      paused_until: nil,
+      last_failure_at: nil,
+      last_failure_reason: nil
+    })
+    |> Repo.update()
+  end
+
+  defp apply_job_failure_state(%ScheduledJob{} = job, reason, failed_at) do
+    consecutive_failures = (job.consecutive_failures || 0) + 1
+
+    should_open? =
+      (job.pause_after_failures || 0) > 0 and
+        consecutive_failures >= (job.pause_after_failures || 0)
+
+    paused_until =
+      if should_open? and (job.cooldown_minutes || 0) > 0 do
+        DateTime.add(failed_at, (job.cooldown_minutes || 0) * 60, :second)
+      end
+
+    attrs = %{
+      consecutive_failures: consecutive_failures,
+      last_failure_at: failed_at,
+      last_failure_reason: reason,
+      circuit_state: if(should_open?, do: "open", else: job.circuit_state || "closed"),
+      circuit_opened_at: if(should_open?, do: failed_at, else: job.circuit_opened_at),
+      paused_until: paused_until
+    }
+
+    {:ok, updated} =
+      job
+      |> ScheduledJob.changeset(attrs)
+      |> Repo.update()
+
+    if should_open? do
+      HydraX.Safety.log_event(%{
+        agent_id: job.agent_id,
+        category: "scheduler",
+        level: "warn",
+        message: "Scheduler circuit opened",
+        metadata: %{
+          job_id: job.id,
+          job_name: job.name,
+          consecutive_failures: updated.consecutive_failures,
+          paused_until: updated.paused_until,
+          reason: reason
+        }
+      })
+    end
+
+    {:ok, updated}
+  end
 
   defp execute_scheduled_job(%ScheduledJob{kind: "heartbeat"} = job) do
     with {:ok, agent} <- fetch_job_agent(job),
@@ -411,6 +780,65 @@ defmodule HydraX.Runtime.Jobs do
     end
   end
 
+  defp deliver_job_run(%ScheduledJob{delivery_channel: "discord", delivery_target: target}, run) do
+    with config when not is_nil(config) <-
+           HydraX.Runtime.DiscordAdmin.enabled_discord_config(),
+         true <- is_binary(target) and target != "",
+         {:ok, state} <-
+           Discord.connect(%{
+             "bot_token" => config.bot_token,
+             "application_id" => config.application_id,
+             "webhook_secret" => config.webhook_secret,
+             "deliver" => Application.get_env(:hydra_x, :discord_deliver)
+           }),
+         {:ok, metadata} <-
+           normalize_delivery_result(
+             Discord.deliver(%{content: job_delivery_message(run), external_ref: target}, state)
+           ) do
+      {:ok,
+       %{
+         "status" => "delivered",
+         "channel" => "discord",
+         "target" => target,
+         "delivered_at" => DateTime.utc_now(),
+         "metadata" => stringify_metadata(metadata)
+       }}
+    else
+      nil -> {:error, :discord_not_configured}
+      false -> {:error, :missing_delivery_target}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp deliver_job_run(%ScheduledJob{delivery_channel: "slack", delivery_target: target}, run) do
+    with config when not is_nil(config) <-
+           HydraX.Runtime.SlackAdmin.enabled_slack_config(),
+         true <- is_binary(target) and target != "",
+         {:ok, state} <-
+           Slack.connect(%{
+             "bot_token" => config.bot_token,
+             "signing_secret" => config.signing_secret,
+             "deliver" => Application.get_env(:hydra_x, :slack_deliver)
+           }),
+         {:ok, metadata} <-
+           normalize_delivery_result(
+             Slack.deliver(%{content: job_delivery_message(run), external_ref: target}, state)
+           ) do
+      {:ok,
+       %{
+         "status" => "delivered",
+         "channel" => "slack",
+         "target" => target,
+         "delivered_at" => DateTime.utc_now(),
+         "metadata" => stringify_metadata(metadata)
+       }}
+    else
+      nil -> {:error, :slack_not_configured}
+      false -> {:error, :missing_delivery_target}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   defp deliver_job_run(%ScheduledJob{delivery_channel: channel}, _run) do
     {:error, {:unsupported_delivery_channel, channel}}
   end
@@ -514,7 +942,11 @@ defmodule HydraX.Runtime.Jobs do
 
       {:error, _} ->
         require Logger
-        Logger.warning("Invalid cron expression #{inspect(expression)}, falling back to 1h interval")
+
+        Logger.warning(
+          "Invalid cron expression #{inspect(expression)}, falling back to 1h interval"
+        )
+
         DateTime.add(from, 3600, :second)
     end
   end
@@ -616,6 +1048,112 @@ defmodule HydraX.Runtime.Jobs do
     )
   end
 
+  defp maybe_filter_job_run_status(query, nil), do: query
+  defp maybe_filter_job_run_status(query, ""), do: query
+
+  defp maybe_filter_job_run_status(query, status),
+    do: where(query, [run, _job], run.status == ^status)
+
+  defp maybe_filter_job_run_kind(query, nil), do: query
+  defp maybe_filter_job_run_kind(query, ""), do: query
+  defp maybe_filter_job_run_kind(query, kind), do: where(query, [_run, job], job.kind == ^kind)
+
+  defp maybe_filter_job_run_scheduled_job(query, nil), do: query
+
+  defp maybe_filter_job_run_scheduled_job(query, scheduled_job_id),
+    do: where(query, [run, _job], run.scheduled_job_id == ^scheduled_job_id)
+
+  defp maybe_filter_job_run_delivery_status(query, nil), do: query
+  defp maybe_filter_job_run_delivery_status(query, ""), do: query
+
+  defp maybe_filter_job_run_delivery_status(query, delivery_status) do
+    where(
+      query,
+      [run, _job],
+      fragment("json_extract(?, '$.delivery.status')", run.metadata) == ^delivery_status
+    )
+  end
+
+  defp maybe_filter_job_run_search(query, nil), do: query
+  defp maybe_filter_job_run_search(query, ""), do: query
+
+  defp maybe_filter_job_run_search(query, search) do
+    term = "%" <> String.downcase(search) <> "%"
+
+    where(
+      query,
+      [run, job],
+      like(fragment("lower(?)", run.output), ^term) or
+        like(fragment("lower(?)", job.name), ^term)
+    )
+  end
+
+  defp render_job_runs_markdown(runs, filters) do
+    """
+    # Hydra-X Job Runs
+
+    Generated at: #{DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()}
+    Filters: #{inspect(filters)}
+
+    #{Enum.map_join(runs, "\n", &render_job_run_markdown/1)}
+    """
+    |> String.trim()
+    |> Kernel.<>("\n")
+  end
+
+  defp render_job_run_markdown(run) do
+    delivery = run.metadata["delivery"] || %{}
+    reason = run.metadata["status_reason"] || run.metadata["error"] || "none"
+
+    """
+    - ##{run.id} #{run.scheduled_job && run.scheduled_job.name}
+      status=#{run.status}
+      kind=#{run.scheduled_job && run.scheduled_job.kind}
+      at=#{format_datetime(run.inserted_at)}
+      delivery=#{Map.get(delivery, "status", "none")}
+      reason=#{reason}
+    """
+    |> String.trim_trailing()
+  end
+
+  defp render_job_runs_json(runs, filters) do
+    %{
+      generated_at: DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601(),
+      filters: filters,
+      runs:
+        Enum.map(runs, fn run ->
+          %{
+            id: run.id,
+            status: run.status,
+            output: run.output,
+            inserted_at: run.inserted_at,
+            started_at: run.started_at,
+            finished_at: run.finished_at,
+            metadata: run.metadata,
+            scheduled_job:
+              if(run.scheduled_job,
+                do: %{
+                  id: run.scheduled_job.id,
+                  name: run.scheduled_job.name,
+                  kind: run.scheduled_job.kind
+                },
+                else: nil
+              )
+          }
+        end)
+    }
+  end
+
+  defp format_datetime(nil), do: "never"
+  defp format_datetime(datetime), do: Calendar.strftime(datetime, "%Y-%m-%d %H:%M:%S UTC")
+
+  defp timestamp_slug do
+    DateTime.utc_now()
+    |> DateTime.truncate(:second)
+    |> DateTime.to_iso8601()
+    |> String.replace(":", "-")
+  end
+
   # -- Numeric helpers --
 
   defp normalize_integer(nil), do: nil
@@ -657,4 +1195,8 @@ defmodule HydraX.Runtime.Jobs do
       fallback
     end
   end
+
+  defp pad(nil), do: "00"
+  defp pad(value) when value < 10, do: "0#{value}"
+  defp pad(value), do: to_string(value)
 end

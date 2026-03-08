@@ -6,6 +6,7 @@ defmodule HydraX.Runtime.DiscordAdmin do
   import Ecto.Query
 
   alias HydraX.Repo
+  alias HydraX.Gateway.Adapters.Discord
   alias HydraX.Runtime.{DiscordConfig, Helpers}
 
   def enabled_discord_config do
@@ -52,5 +53,24 @@ defmodule HydraX.Runtime.DiscordAdmin do
       Repo.preload(record, [:default_agent])
     end)
     |> Helpers.unwrap_transaction()
+  end
+
+  def test_discord_delivery(%DiscordConfig{} = config, target, message, opts \\ []) do
+    with true <- is_binary(target) and target != "",
+         {:ok, state} <-
+           Discord.connect(%{
+             "bot_token" => config.bot_token,
+             "application_id" => config.application_id,
+             "webhook_secret" => config.webhook_secret,
+             "deliver" =>
+               Keyword.get(opts, :deliver) || Application.get_env(:hydra_x, :discord_deliver)
+           }),
+         {:ok, metadata} <-
+           Discord.deliver(%{content: message, external_ref: target}, state) do
+      {:ok, %{target: target, message: message, metadata: metadata}}
+    else
+      false -> {:error, :missing_target}
+      {:error, reason} -> {:error, reason}
+    end
   end
 end

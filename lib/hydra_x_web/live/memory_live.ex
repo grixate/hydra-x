@@ -9,6 +9,7 @@ defmodule HydraXWeb.MemoryLive do
   @impl true
   def mount(params, _session, socket) do
     if connected?(socket), do: Phoenix.PubSub.subscribe(HydraX.PubSub, "memory")
+
     filters =
       default_filters()
       |> Map.put("query", Map.get(params, "q", ""))
@@ -29,12 +30,17 @@ defmodule HydraXWeb.MemoryLive do
      |> assign(:memory_types, memory_types())
      |> assign(:memory_statuses, memory_statuses())
      |> assign(:edge_kinds, edge_kinds())
+     |> assign(:ingest_agent, current_ingest_agent(filters))
+     |> assign(:ingested_files, load_ingested_files(filters))
+     |> assign(:ingest_runs, load_ingest_runs(filters))
      |> assign(:memories, memories)
      |> assign(:selected, selected)
      |> assign(:edges, load_edges(selected))
      |> assign_form(:memory_form, memory_form(selected), :memory)
      |> assign_form(:edge_form, edge_form(selected), :edge)
-     |> assign(:reconcile_form, reconcile_form(memories, selected))}
+     |> assign(:reconcile_form, reconcile_form(memories, selected))
+     |> assign(:ingest_form, to_form(%{"filename" => "", "force" => "false"}, as: :ingest))
+     |> assign(:archive_ingest_form, to_form(%{"filename" => ""}, as: :archive_ingest))}
   end
 
   @impl true
@@ -52,6 +58,9 @@ defmodule HydraXWeb.MemoryLive do
      |> assign(:filters, filters)
      |> assign(:filter_form, to_form(filters, as: :filters))
      |> assign(:memories, memories)
+     |> assign(:ingest_agent, current_ingest_agent(filters))
+     |> assign(:ingested_files, load_ingested_files(filters))
+     |> assign(:ingest_runs, load_ingest_runs(filters))
      |> assign(:selected, selected)
      |> assign(:edges, load_edges(selected))
      |> assign_form(:memory_form, memory_form(selected), :memory)
@@ -76,6 +85,9 @@ defmodule HydraXWeb.MemoryLive do
      |> assign(:filters, filters)
      |> assign(:filter_form, to_form(filters, as: :filters))
      |> assign(:memories, memories)
+     |> assign(:ingest_agent, current_ingest_agent(filters))
+     |> assign(:ingested_files, load_ingested_files(filters))
+     |> assign(:ingest_runs, load_ingest_runs(filters))
      |> assign(:selected, selected)
      |> assign(:edges, load_edges(selected))
      |> assign_form(:memory_form, memory_form(selected), :memory)
@@ -89,6 +101,68 @@ defmodule HydraXWeb.MemoryLive do
     end
 
     {:noreply, put_flash(socket, :info, "Memory markdown synced")}
+  end
+
+  def handle_event("ingest_file", %{"ingest" => params}, socket) do
+    with agent when not is_nil(agent) <- current_ingest_agent(socket.assigns.filters),
+         filename = params["filename"],
+         filename <- blank_to_nil(filename),
+         true <- is_binary(filename) or {:error, :missing_filename},
+         file_path <- Path.join([agent.workspace_root, "ingest", filename]),
+         {:ok, result} <-
+           Runtime.ingest_file(agent.id, file_path, force: truthy?(params["force"])) do
+      {:noreply,
+       socket
+       |> put_flash(
+         :info,
+         ingest_message(filename, result)
+       )
+       |> assign(:ingested_files, load_ingested_files(socket.assigns.filters))
+       |> assign(:ingest_runs, load_ingest_runs(socket.assigns.filters))
+       |> assign(:stats, stats())}
+    else
+      nil ->
+        {:noreply, put_flash(socket, :error, "Choose or create an agent first.")}
+
+      {:error, :missing_filename} ->
+        {:noreply, put_flash(socket, :error, "Enter a filename from the ingest directory.")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Ingest failed: #{inspect(reason)}")}
+
+      false ->
+        {:noreply, put_flash(socket, :error, "Enter a filename from the ingest directory.")}
+    end
+  end
+
+  def handle_event(
+        "archive_ingest_file",
+        %{"archive_ingest" => %{"filename" => filename}},
+        socket
+      ) do
+    with agent when not is_nil(agent) <- current_ingest_agent(socket.assigns.filters),
+         filename <- blank_to_nil(filename),
+         true <- is_binary(filename) or {:error, :missing_filename},
+         {:ok, count} <- Runtime.archive_file(agent.id, filename) do
+      {:noreply,
+       socket
+       |> put_flash(:info, "Archived #{count} ingest-backed memories for #{filename}")
+       |> assign(:ingested_files, load_ingested_files(socket.assigns.filters))
+       |> assign(:ingest_runs, load_ingest_runs(socket.assigns.filters))
+       |> assign(:stats, stats())}
+    else
+      nil ->
+        {:noreply, put_flash(socket, :error, "Choose or create an agent first.")}
+
+      {:error, :missing_filename} ->
+        {:noreply, put_flash(socket, :error, "Enter a filename to archive.")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Archive failed: #{inspect(reason)}")}
+
+      false ->
+        {:noreply, put_flash(socket, :error, "Enter a filename to archive.")}
+    end
   end
 
   def handle_event("select_memory", %{"id" => id}, socket) do
@@ -303,6 +377,8 @@ defmodule HydraXWeb.MemoryLive do
     {:noreply,
      socket
      |> assign(:memories, memories)
+     |> assign(:ingested_files, load_ingested_files(socket.assigns.filters))
+     |> assign(:ingest_runs, load_ingest_runs(socket.assigns.filters))
      |> assign(:selected, selected)
      |> assign(:edges, load_edges(selected))
      |> assign(:stats, stats())}
@@ -334,6 +410,96 @@ defmodule HydraXWeb.MemoryLive do
               >
                 Sync markdown view
               </button>
+            </div>
+          </div>
+
+          <div class="mt-6 rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                  Ingest queue
+                </div>
+                <div class="mt-2 text-sm text-[var(--hx-mute)]">
+                  {if @ingest_agent,
+                    do: "Agent #{@ingest_agent.name} · #{@ingest_agent.workspace_root}/ingest",
+                    else: "No agent selected"}
+                </div>
+              </div>
+            </div>
+            <div class="mt-4 grid gap-3 lg:grid-cols-2">
+              <.form for={@ingest_form} phx-submit="ingest_file" class="grid gap-3">
+                <.input field={@ingest_form[:filename]} label="Import filename from ingest/" />
+                <.input
+                  field={@ingest_form[:force]}
+                  type="checkbox"
+                  label="Force reingest even if unchanged"
+                />
+                <div class="pt-1">
+                  <.button>Run ingest</.button>
+                </div>
+              </.form>
+              <.form for={@archive_ingest_form} phx-submit="archive_ingest_file" class="grid gap-3">
+                <.input field={@archive_ingest_form[:filename]} label="Archive ingest file" />
+                <div class="pt-1">
+                  <.button>Archive file memories</.button>
+                </div>
+              </.form>
+            </div>
+            <div class="mt-4 space-y-2">
+              <p
+                :if={@ingested_files == []}
+                class="text-sm text-[var(--hx-mute)]"
+              >
+                No active ingest-backed files for the selected agent.
+              </p>
+              <div
+                :for={file <- @ingested_files}
+                class="rounded-xl border border-white/10 bg-black/10 px-3 py-3"
+              >
+                <div class="flex items-center justify-between gap-3">
+                  <div class="text-sm text-[var(--hx-accent)]">{file.file}</div>
+                  <div class="text-xs text-[var(--hx-mute)]">{file.entries} entries</div>
+                </div>
+              </div>
+            </div>
+            <div class="mt-6">
+              <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                Recent ingest runs
+              </div>
+              <div class="mt-3 space-y-2">
+                <p :if={@ingest_runs == []} class="text-sm text-[var(--hx-mute)]">
+                  No ingest history for the selected agent yet.
+                </p>
+                <div
+                  :for={run <- @ingest_runs}
+                  class="rounded-xl border border-white/10 bg-black/10 px-3 py-3"
+                >
+                  <div class="flex items-center justify-between gap-3">
+                    <div class="text-sm text-[var(--hx-accent)]">{run.source_file}</div>
+                    <div class="text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                      {run.status}
+                    </div>
+                  </div>
+                  <div class="mt-2 text-xs text-[var(--hx-mute)]">
+                    created {run.created_count} - skipped {run.skipped_count} - archived {run.archived_count} - {format_datetime(
+                      run.inserted_at
+                    )}
+                  </div>
+                  <div
+                    :if={
+                      run.metadata["reason"] || run.metadata["document_hash"] ||
+                        run.metadata["forced"]
+                    }
+                    class="mt-2 text-xs text-[var(--hx-mute)]"
+                  >
+                    <span :if={run.metadata["reason"]}>reason {run.metadata["reason"]}</span>
+                    <span :if={run.metadata["document_hash"]}>
+                      document {String.slice(run.metadata["document_hash"], 0, 12)}
+                    </span>
+                    <span :if={run.metadata["forced"]}>forced reingest</span>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -614,8 +780,36 @@ defmodule HydraXWeb.MemoryLive do
       min_importance: parse_float(filters["min_importance"], nil)
     ]
 
-    results = Memory.search(parse_integer(filters["agent_id"]), filters["query"], @memory_page_size + 1, opts)
+    results =
+      Memory.search(
+        parse_integer(filters["agent_id"]),
+        filters["query"],
+        @memory_page_size + 1,
+        opts
+      )
+
     {Enum.take(results, @memory_page_size), length(results) > @memory_page_size}
+  end
+
+  defp load_ingested_files(filters) do
+    case current_ingest_agent(filters) do
+      nil -> []
+      agent -> Runtime.list_ingested_files(agent.id)
+    end
+  end
+
+  defp load_ingest_runs(filters) do
+    case current_ingest_agent(filters) do
+      nil -> []
+      agent -> Runtime.list_ingest_runs(agent.id, 10)
+    end
+  end
+
+  defp current_ingest_agent(filters) do
+    case parse_integer(filters["agent_id"]) do
+      nil -> Runtime.get_default_agent()
+      agent_id -> Runtime.get_agent!(agent_id)
+    end
   end
 
   defp memory_types, do: ~w(Fact Preference Decision Identity Event Observation Goal Todo)
@@ -756,6 +950,19 @@ defmodule HydraXWeb.MemoryLive do
   defp blank_to_nil(nil), do: nil
   defp blank_to_nil(""), do: nil
   defp blank_to_nil(value), do: value
+
+  defp truthy?(value), do: value in [true, "true", "on", "1"]
+
+  defp ingest_message(filename, %{unchanged: true, skipped: skipped}) do
+    "Ingest skipped for #{filename}: unchanged document (#{skipped} chunks matched the last import)"
+  end
+
+  defp ingest_message(filename, result) do
+    "Ingested #{filename}: #{result.created} created, #{result.skipped} skipped, #{result.archived} archived"
+  end
+
+  defp format_datetime(nil), do: "never"
+  defp format_datetime(datetime), do: Calendar.strftime(datetime, "%Y-%m-%d %H:%M UTC")
 
   defp default_filters do
     %{"query" => "", "agent_id" => "", "type" => "", "status" => "active", "min_importance" => ""}

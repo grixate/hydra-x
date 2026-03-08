@@ -11,6 +11,7 @@ defmodule HydraXWeb.ConversationsLive do
       Phoenix.PubSub.subscribe(HydraX.PubSub, "conversations")
       Phoenix.PubSub.subscribe(HydraX.PubSub, "conversations:stream")
     end
+
     filters = default_filters()
     {conversations, has_next} = list_conversations_paginated(filters, 1)
     selected = conversations |> List.first() |> maybe_load()
@@ -480,7 +481,10 @@ defmodule HydraXWeb.ConversationsLive do
                 </div>
               </div>
 
-              <div :if={@streaming_content} class="rounded-2xl border border-[var(--hx-accent)]/30 bg-[rgba(245,110,66,0.04)] px-4 py-4">
+              <div
+                :if={@streaming_content}
+                class="rounded-2xl border border-[var(--hx-accent)]/30 bg-[rgba(245,110,66,0.04)] px-4 py-4"
+              >
                 <div class="flex items-center gap-2">
                   <span class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-accent)]">
                     assistant

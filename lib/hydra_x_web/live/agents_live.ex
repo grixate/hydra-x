@@ -156,6 +156,84 @@ defmodule HydraXWeb.AgentsLive do
     end
   end
 
+  def handle_event("save_agent_tool_policy", %{"agent_tool_policy" => params}, socket) do
+    agent_id = params["agent_id"] |> String.to_integer()
+
+    attrs =
+      params
+      |> Map.drop(["agent_id"])
+      |> normalize_checkbox_fields([
+        "workspace_list_enabled",
+        "workspace_read_enabled",
+        "workspace_write_enabled",
+        "http_fetch_enabled",
+        "web_search_enabled",
+        "shell_command_enabled"
+      ])
+
+    case Runtime.save_agent_tool_policy(agent_id, attrs) do
+      {:ok, _policy} ->
+        {:noreply,
+         socket
+         |> put_flash(:info, "Agent tool policy updated")
+         |> assign(:agents, agents_with_runtime())
+         |> assign(:stats, stats())}
+
+      {:error, changeset} ->
+        {:noreply, put_flash(socket, :error, "Tool policy failed: #{inspect(changeset.errors)}")}
+    end
+  end
+
+  def handle_event("reset_agent_tool_policy", %{"id" => id}, socket) do
+    Runtime.delete_agent_tool_policy!(String.to_integer(id))
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Agent tool policy override removed")
+     |> assign(:agents, agents_with_runtime())
+     |> assign(:stats, stats())}
+  end
+
+  def handle_event("save_provider_routing", %{"provider_routing" => params}, socket) do
+    agent_id = String.to_integer(params["agent_id"])
+
+    case Runtime.save_agent_provider_routing(agent_id, Map.drop(params, ["agent_id"])) do
+      {:ok, _agent} ->
+        {:noreply,
+         socket
+         |> put_flash(:info, "Agent provider routing updated")
+         |> assign(:agents, agents_with_runtime())
+         |> assign(:stats, stats())}
+
+      {:error, changeset} ->
+        {:noreply,
+         put_flash(socket, :error, "Provider routing failed: #{inspect(changeset.errors)}")}
+    end
+  end
+
+  def handle_event("reset_provider_routing", %{"id" => id}, socket) do
+    Runtime.clear_agent_provider_routing!(String.to_integer(id))
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Agent provider routing reset")
+     |> assign(:agents, agents_with_runtime())
+     |> assign(:stats, stats())}
+  end
+
+  def handle_event("warm_provider_route", %{"id" => id}, socket) do
+    {:ok, _agent, status} = Runtime.warm_agent_provider_routing(String.to_integer(id))
+
+    {:noreply,
+     socket
+     |> put_flash(
+       :info,
+       "Provider warmup #{status["status"]}#{if(status["selected_provider_name"], do: " via #{status["selected_provider_name"]}", else: "")}"
+     )
+     |> assign(:agents, agents_with_runtime())
+     |> assign(:stats, stats())}
+  end
+
   @impl true
   def render(assigns) do
     ~H"""
@@ -253,6 +331,14 @@ defmodule HydraXWeb.AgentsLive do
               <div :if={agent.runtime.pid} class="mt-2 font-mono text-xs text-[var(--hx-mute)]">
                 {agent.runtime.pid}
               </div>
+              <div class="mt-2 text-xs text-[var(--hx-mute)]">
+                readiness {agent.runtime.readiness} · warmup {agent.runtime.warmup_status} · selected {provider_name(
+                  agent.provider_route.provider
+                )}
+              </div>
+              <div :if={agent.runtime.last_warm_error} class="mt-1 text-xs text-amber-200/80">
+                {agent.runtime.last_warm_error}
+              </div>
               <div class="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-3">
                 <div class="flex items-center justify-between gap-3">
                   <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
@@ -292,6 +378,159 @@ defmodule HydraXWeb.AgentsLive do
                   <.input field={policy_form[:hard]} type="number" label="Hard" min="3" />
                   <div class="md:col-span-3 pt-1">
                     <.button>Save compaction policy</.button>
+                  </div>
+                </.form>
+              </div>
+              <div class="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-3">
+                <div class="flex items-center justify-between gap-3">
+                  <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                    Provider routing
+                  </div>
+                  <span class="text-xs text-[var(--hx-mute)]">
+                    {agent.provider_route.source}
+                  </span>
+                </div>
+                <div class="mt-2 text-sm text-[var(--hx-mute)]">
+                  default {provider_name(agent.provider_route.provider)} · fallbacks {fallback_summary(
+                    agent.provider_route.fallbacks
+                  )}
+                </div>
+                <% routing_form = to_form(provider_routing_form(agent), as: :provider_routing) %>
+                <.form
+                  for={routing_form}
+                  phx-submit="save_provider_routing"
+                  class="mt-4 grid gap-3 md:grid-cols-2"
+                >
+                  <input type="hidden" name="provider_routing[agent_id]" value={agent.id} />
+                  <.input
+                    field={routing_form[:default_provider_id]}
+                    type="select"
+                    label="Agent default provider"
+                    options={provider_options()}
+                  />
+                  <.input
+                    field={routing_form[:fallback_provider_ids_csv]}
+                    label="Fallback provider ids (comma separated)"
+                  />
+                  <.input
+                    field={routing_form[:channel_provider_id]}
+                    type="select"
+                    label="Channel provider override"
+                    options={provider_options()}
+                  />
+                  <.input
+                    field={routing_form[:scheduler_provider_id]}
+                    type="select"
+                    label="Scheduler provider override"
+                    options={provider_options()}
+                  />
+                  <.input
+                    field={routing_form[:cortex_provider_id]}
+                    type="select"
+                    label="Cortex provider override"
+                    options={provider_options()}
+                  />
+                  <.input
+                    field={routing_form[:compactor_provider_id]}
+                    type="select"
+                    label="Compactor provider override"
+                    options={provider_options()}
+                  />
+                  <div class="md:col-span-2 pt-1">
+                    <.button>Save provider routing</.button>
+                    <button
+                      type="button"
+                      phx-click="warm_provider_route"
+                      phx-value-id={agent.id}
+                      class="ml-3 inline-flex items-center rounded-2xl border border-white/10 bg-white/5 px-4 py-2 font-mono text-xs uppercase tracking-[0.18em] text-white transition hover:bg-white/10"
+                    >
+                      Warm route
+                    </button>
+                    <button
+                      type="button"
+                      phx-click="reset_provider_routing"
+                      phx-value-id={agent.id}
+                      class="ml-3 inline-flex items-center rounded-2xl border border-white/10 bg-white/5 px-4 py-2 font-mono text-xs uppercase tracking-[0.18em] text-white transition hover:bg-white/10"
+                    >
+                      Reset route
+                    </button>
+                  </div>
+                </.form>
+              </div>
+              <div class="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-3">
+                <div class="flex items-center justify-between gap-3">
+                  <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                    Tool policy override
+                  </div>
+                  <span class="text-xs text-[var(--hx-mute)]">
+                    {if agent.tool_policy_override, do: "override active", else: "inherits global"}
+                  </span>
+                </div>
+                <div class="mt-2 text-sm text-[var(--hx-mute)]">
+                  list {enabled_label(agent.effective_tool_policy.workspace_list_enabled)} · read {enabled_label(
+                    agent.effective_tool_policy.workspace_read_enabled
+                  )} · write {enabled_label(agent.effective_tool_policy.workspace_write_enabled)} · search {enabled_label(
+                    agent.effective_tool_policy.web_search_enabled
+                  )} · http {enabled_label(agent.effective_tool_policy.http_fetch_enabled)} · shell {enabled_label(
+                    agent.effective_tool_policy.shell_command_enabled
+                  )}
+                </div>
+                <% tool_policy_form = to_form(agent_tool_policy_form(agent), as: :agent_tool_policy) %>
+                <.form
+                  for={tool_policy_form}
+                  phx-submit="save_agent_tool_policy"
+                  class="mt-4 grid gap-3 md:grid-cols-2"
+                >
+                  <input type="hidden" name="agent_tool_policy[agent_id]" value={agent.id} />
+                  <.input
+                    field={tool_policy_form[:workspace_list_enabled]}
+                    type="checkbox"
+                    label="Workspace list"
+                  />
+                  <.input
+                    field={tool_policy_form[:workspace_read_enabled]}
+                    type="checkbox"
+                    label="Workspace read"
+                  />
+                  <.input
+                    field={tool_policy_form[:workspace_write_enabled]}
+                    type="checkbox"
+                    label="Workspace write"
+                  />
+                  <.input
+                    field={tool_policy_form[:web_search_enabled]}
+                    type="checkbox"
+                    label="Web search"
+                  />
+                  <.input
+                    field={tool_policy_form[:http_fetch_enabled]}
+                    type="checkbox"
+                    label="HTTP fetch"
+                  />
+                  <.input
+                    field={tool_policy_form[:shell_command_enabled]}
+                    type="checkbox"
+                    label="Shell commands"
+                  />
+                  <.input
+                    field={tool_policy_form[:shell_allowlist_csv]}
+                    label="Shell allowlist (comma separated)"
+                  />
+                  <.input
+                    field={tool_policy_form[:http_allowlist_csv]}
+                    label="HTTP allowlist (comma separated)"
+                  />
+                  <div class="md:col-span-2 pt-1">
+                    <.button>Save tool override</.button>
+                    <button
+                      :if={agent.tool_policy_override}
+                      type="button"
+                      phx-click="reset_agent_tool_policy"
+                      phx-value-id={agent.id}
+                      class="ml-3 inline-flex items-center rounded-2xl border border-white/10 bg-white/5 px-4 py-2 font-mono text-xs uppercase tracking-[0.18em] text-white transition hover:bg-white/10"
+                    >
+                      Reset override
+                    </button>
                   </div>
                 </.form>
               </div>
@@ -353,8 +592,11 @@ defmodule HydraXWeb.AgentsLive do
     |> Enum.map(fn agent ->
       agent
       |> Map.put(:runtime, Runtime.agent_runtime_status(agent))
+      |> Map.put(:provider_route, Runtime.effective_provider_route(agent.id, "channel"))
       |> Map.put(:bulletin, Runtime.agent_bulletin(agent.id))
       |> Map.put(:compaction_policy, Runtime.compaction_policy(agent.id))
+      |> Map.put(:tool_policy_override, Runtime.get_agent_tool_policy(agent.id))
+      |> Map.put(:effective_tool_policy, Runtime.effective_tool_policy(agent.id))
     end)
   end
 
@@ -365,4 +607,54 @@ defmodule HydraXWeb.AgentsLive do
       "hard" => agent.compaction_policy.hard
     }
   end
+
+  defp provider_routing_form(agent) do
+    profile = Runtime.provider_routing_profile(agent.id)
+
+    %{
+      "default_provider_id" => profile["default_provider_id"],
+      "fallback_provider_ids_csv" => Enum.join(profile["fallback_provider_ids"] || [], ","),
+      "channel_provider_id" => get_in(profile, ["process_overrides", "channel"]),
+      "scheduler_provider_id" => get_in(profile, ["process_overrides", "scheduler"]),
+      "cortex_provider_id" => get_in(profile, ["process_overrides", "cortex"]),
+      "compactor_provider_id" => get_in(profile, ["process_overrides", "compactor"])
+    }
+  end
+
+  defp agent_tool_policy_form(agent) do
+    policy = agent.tool_policy_override || Runtime.get_tool_policy() || %{}
+
+    %{
+      "workspace_list_enabled" => Map.get(policy, :workspace_list_enabled, true),
+      "workspace_read_enabled" => Map.get(policy, :workspace_read_enabled, true),
+      "workspace_write_enabled" => Map.get(policy, :workspace_write_enabled, false),
+      "http_fetch_enabled" => Map.get(policy, :http_fetch_enabled, true),
+      "web_search_enabled" => Map.get(policy, :web_search_enabled, true),
+      "shell_command_enabled" => Map.get(policy, :shell_command_enabled, true),
+      "shell_allowlist_csv" => Map.get(policy, :shell_allowlist_csv, ""),
+      "http_allowlist_csv" => Map.get(policy, :http_allowlist_csv, "")
+    }
+  end
+
+  defp normalize_checkbox_fields(params, fields) do
+    Enum.reduce(fields, params, fn field, acc ->
+      Map.put(acc, field, Map.get(acc, field) in ["true", "on", true])
+    end)
+  end
+
+  defp enabled_label(true), do: "on"
+  defp enabled_label(false), do: "off"
+
+  defp provider_options do
+    [{"Use global default", ""}] ++
+      Enum.map(Runtime.list_provider_configs(), fn provider ->
+        {"#{provider.name} (#{provider.model})", provider.id}
+      end)
+  end
+
+  defp provider_name(nil), do: "global/mock"
+  defp provider_name(provider), do: provider.name || provider.model || provider.kind
+
+  defp fallback_summary([]), do: "none"
+  defp fallback_summary(fallbacks), do: Enum.map_join(fallbacks, ", ", &provider_name/1)
 end

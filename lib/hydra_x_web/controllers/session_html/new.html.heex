@@ -5,7 +5,11 @@
       <h1 class="mt-3 font-display text-4xl">Operator sign-in</h1>
       <p class="mt-3 text-sm text-[var(--hx-mute)]">
         <%= if @password_configured? do %>
-          Sign in to access the management UI and operator controls.
+          <%= if @reauth? do %>
+            Sign in again to continue with sensitive control-plane actions.
+          <% else %>
+            Sign in to access the management UI and operator controls.
+          <% end %>
         <% else %>
           No operator password is configured yet. The control plane remains open until you set one on setup.
         <% end %>

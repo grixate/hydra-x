@@ -4,6 +4,7 @@ defmodule HydraX.Runtime.ScheduledJob do
 
   @kinds ~w(heartbeat prompt backup)
   @schedule_modes ~w(interval daily weekly cron)
+  @circuit_states ~w(closed open)
 
   schema "scheduled_jobs" do
     field :name, :string
@@ -18,6 +19,19 @@ defmodule HydraX.Runtime.ScheduledJob do
     field :delivery_enabled, :boolean, default: false
     field :delivery_channel, :string
     field :delivery_target, :string
+    field :active_hour_start, :integer
+    field :active_hour_end, :integer
+    field :timeout_seconds, :integer, default: 120
+    field :retry_limit, :integer, default: 0
+    field :retry_backoff_seconds, :integer, default: 0
+    field :pause_after_failures, :integer, default: 0
+    field :cooldown_minutes, :integer, default: 0
+    field :consecutive_failures, :integer, default: 0
+    field :circuit_state, :string, default: "closed"
+    field :circuit_opened_at, :utc_datetime_usec
+    field :paused_until, :utc_datetime_usec
+    field :last_failure_at, :utc_datetime_usec
+    field :last_failure_reason, :string
     field :next_run_at, :utc_datetime_usec
     field :last_run_at, :utc_datetime_usec
     field :cron_expression, :string
@@ -46,6 +60,19 @@ defmodule HydraX.Runtime.ScheduledJob do
       :delivery_enabled,
       :delivery_channel,
       :delivery_target,
+      :active_hour_start,
+      :active_hour_end,
+      :timeout_seconds,
+      :retry_limit,
+      :retry_backoff_seconds,
+      :pause_after_failures,
+      :cooldown_minutes,
+      :consecutive_failures,
+      :circuit_state,
+      :circuit_opened_at,
+      :paused_until,
+      :last_failure_at,
+      :last_failure_reason,
       :next_run_at,
       :last_run_at,
       :config
@@ -53,8 +80,10 @@ defmodule HydraX.Runtime.ScheduledJob do
     |> validate_required([:agent_id, :name, :kind, :schedule_mode])
     |> validate_inclusion(:kind, @kinds)
     |> validate_inclusion(:schedule_mode, @schedule_modes)
+    |> validate_inclusion(:circuit_state, @circuit_states)
     |> validate_schedule()
     |> validate_delivery()
+    |> validate_execution_policy()
     |> assoc_constraint(:agent)
   end
 
@@ -101,9 +130,42 @@ defmodule HydraX.Runtime.ScheduledJob do
     if get_field(changeset, :delivery_enabled) do
       changeset
       |> validate_required([:delivery_channel, :delivery_target])
-      |> validate_inclusion(:delivery_channel, ["telegram"])
+      |> validate_inclusion(:delivery_channel, ["telegram", "discord", "slack"])
     else
       changeset
+    end
+  end
+
+  defp validate_execution_policy(changeset) do
+    changeset
+    |> validate_number(:active_hour_start, greater_than_or_equal_to: 0, less_than_or_equal_to: 23)
+    |> validate_number(:active_hour_end, greater_than_or_equal_to: 0, less_than_or_equal_to: 23)
+    |> validate_number(:timeout_seconds, greater_than: 0, less_than_or_equal_to: 86_400)
+    |> validate_number(:retry_limit, greater_than_or_equal_to: 0, less_than_or_equal_to: 10)
+    |> validate_number(:retry_backoff_seconds,
+      greater_than_or_equal_to: 0,
+      less_than_or_equal_to: 86_400
+    )
+    |> validate_number(:pause_after_failures,
+      greater_than_or_equal_to: 0,
+      less_than_or_equal_to: 100
+    )
+    |> validate_number(:cooldown_minutes,
+      greater_than_or_equal_to: 0,
+      less_than_or_equal_to: 43_200
+    )
+    |> validate_number(:consecutive_failures, greater_than_or_equal_to: 0)
+    |> validate_active_hours()
+  end
+
+  defp validate_active_hours(changeset) do
+    start_hour = get_field(changeset, :active_hour_start)
+    end_hour = get_field(changeset, :active_hour_end)
+
+    if is_nil(start_hour) == is_nil(end_hour) do
+      changeset
+    else
+      add_error(changeset, :active_hour_start, "requires both start and end hours")
     end
   end
 end

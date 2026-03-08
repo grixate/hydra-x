@@ -7,6 +7,7 @@ defmodule HydraX.Runtime do
   """
 
   alias HydraX.Repo
+  alias HydraX.Runtime.Helpers
   alias HydraX.Runtime.OperatorSecret
 
   # ── Agents ──────────────────────────────────────────────────────────────
@@ -40,6 +41,13 @@ defmodule HydraX.Runtime do
   defdelegate list_provider_configs(), to: HydraX.Runtime.Providers
   defdelegate get_provider_config!(id), to: HydraX.Runtime.Providers
   defdelegate enabled_provider(), to: HydraX.Runtime.Providers
+  defdelegate enabled_provider(agent_id, process_type), to: HydraX.Runtime.Providers
+  defdelegate effective_provider_route(agent_id, process_type), to: HydraX.Runtime.Providers
+  defdelegate provider_routing_profile(agent_id), to: HydraX.Runtime.Providers
+  defdelegate save_agent_provider_routing(agent_id, attrs), to: HydraX.Runtime.Providers
+  defdelegate clear_agent_provider_routing!(agent_id), to: HydraX.Runtime.Providers
+  defdelegate warm_agent_provider_routing(agent_id), to: HydraX.Runtime.Providers
+  defdelegate warm_agent_provider_routing(agent_id, opts), to: HydraX.Runtime.Providers
   defdelegate change_provider_config(), to: HydraX.Runtime.Providers
   defdelegate change_provider_config(provider), to: HydraX.Runtime.Providers
   defdelegate change_provider_config(provider, attrs), to: HydraX.Runtime.Providers
@@ -80,7 +88,10 @@ defmodule HydraX.Runtime do
   defdelegate list_turns(conversation_id), to: HydraX.Runtime.Conversations
   defdelegate append_turn(conversation, attrs), to: HydraX.Runtime.Conversations
   defdelegate get_checkpoint(conversation_id, process_type), to: HydraX.Runtime.Conversations
-  defdelegate upsert_checkpoint(conversation_id, process_type, state), to: HydraX.Runtime.Conversations
+
+  defdelegate upsert_checkpoint(conversation_id, process_type, state),
+    to: HydraX.Runtime.Conversations
+
   defdelegate update_conversation_metadata(conversation, attrs), to: HydraX.Runtime.Conversations
 
   # ── Jobs ────────────────────────────────────────────────────────────────
@@ -95,19 +106,34 @@ defmodule HydraX.Runtime do
   defdelegate save_scheduled_job(job, attrs), to: HydraX.Runtime.Jobs
   defdelegate delete_scheduled_job!(id), to: HydraX.Runtime.Jobs
   defdelegate list_due_scheduled_jobs(now), to: HydraX.Runtime.Jobs
-  defdelegate recent_job_runs(), to: HydraX.Runtime.Jobs
-  defdelegate recent_job_runs(limit), to: HydraX.Runtime.Jobs
-  defdelegate list_job_runs(job_id), to: HydraX.Runtime.Jobs
-  defdelegate list_job_runs(job_id, limit), to: HydraX.Runtime.Jobs
+  def recent_job_runs(), do: HydraX.Runtime.Jobs.recent_job_runs()
+
+  def recent_job_runs(limit) when is_integer(limit),
+    do: HydraX.Runtime.Jobs.recent_job_runs(limit)
+
+  def recent_job_runs(opts) when is_list(opts), do: HydraX.Runtime.Jobs.recent_job_runs(opts)
+  defdelegate recent_job_runs_by_status(status), to: HydraX.Runtime.Jobs
+  defdelegate recent_job_runs_by_status(status, limit), to: HydraX.Runtime.Jobs
+  def list_job_runs(job_id) when is_integer(job_id), do: HydraX.Runtime.Jobs.list_job_runs(job_id)
+  def list_job_runs(opts) when is_list(opts), do: HydraX.Runtime.Jobs.list_job_runs(opts)
+
+  def list_job_runs(job_id, limit) when is_integer(job_id),
+    do: HydraX.Runtime.Jobs.list_job_runs(job_id, limit)
+
+  defdelegate open_circuit_jobs(), to: HydraX.Runtime.Jobs
+  defdelegate open_circuit_jobs(limit), to: HydraX.Runtime.Jobs
   defdelegate delete_old_job_runs(), to: HydraX.Runtime.Jobs
   defdelegate delete_old_job_runs(max_age_days), to: HydraX.Runtime.Jobs
   defdelegate ensure_heartbeat_job!(agent_id), to: HydraX.Runtime.Jobs
   defdelegate ensure_backup_job!(agent_id), to: HydraX.Runtime.Jobs
   defdelegate ensure_default_jobs!(), to: HydraX.Runtime.Jobs
   defdelegate run_scheduled_job(job), to: HydraX.Runtime.Jobs
+  defdelegate reset_scheduled_job_circuit!(id), to: HydraX.Runtime.Jobs
   defdelegate scheduler_status(), to: HydraX.Runtime.Jobs
   defdelegate job_stats(), to: HydraX.Runtime.Jobs
   defdelegate job_stats(limit), to: HydraX.Runtime.Jobs
+  defdelegate export_job_runs(output_root), to: HydraX.Runtime.Jobs
+  defdelegate export_job_runs(output_root, opts), to: HydraX.Runtime.Jobs
 
   # ── Telegram ────────────────────────────────────────────────────────────
 
@@ -125,7 +151,9 @@ defmodule HydraX.Runtime do
   defdelegate delete_telegram_webhook(config), to: HydraX.Runtime.TelegramAdmin
   defdelegate delete_telegram_webhook(config, opts), to: HydraX.Runtime.TelegramAdmin
   defdelegate test_telegram_delivery(config, target, message), to: HydraX.Runtime.TelegramAdmin
-  defdelegate test_telegram_delivery(config, target, message, opts), to: HydraX.Runtime.TelegramAdmin
+
+  defdelegate test_telegram_delivery(config, target, message, opts),
+    to: HydraX.Runtime.TelegramAdmin
 
   # ── Discord ───────────────────────────────────────────────────────────
 
@@ -136,6 +164,10 @@ defmodule HydraX.Runtime do
   defdelegate change_discord_config(config, attrs), to: HydraX.Runtime.DiscordAdmin
   defdelegate save_discord_config(attrs), to: HydraX.Runtime.DiscordAdmin
   defdelegate save_discord_config(config, attrs), to: HydraX.Runtime.DiscordAdmin
+  defdelegate test_discord_delivery(config, target, message), to: HydraX.Runtime.DiscordAdmin
+
+  defdelegate test_discord_delivery(config, target, message, opts),
+    to: HydraX.Runtime.DiscordAdmin
 
   # ── Slack ────────────────────────────────────────────────────────────
 
@@ -146,12 +178,17 @@ defmodule HydraX.Runtime do
   defdelegate change_slack_config(config, attrs), to: HydraX.Runtime.SlackAdmin
   defdelegate save_slack_config(attrs), to: HydraX.Runtime.SlackAdmin
   defdelegate save_slack_config(config, attrs), to: HydraX.Runtime.SlackAdmin
+  defdelegate test_slack_delivery(config, target, message), to: HydraX.Runtime.SlackAdmin
+  defdelegate test_slack_delivery(config, target, message, opts), to: HydraX.Runtime.SlackAdmin
 
   # ── Observability ───────────────────────────────────────────────────────
 
   defdelegate health_snapshot(), to: HydraX.Runtime.Observability
   defdelegate health_snapshot(opts), to: HydraX.Runtime.Observability
   defdelegate telegram_status(), to: HydraX.Runtime.Observability
+  defdelegate discord_status(), to: HydraX.Runtime.Observability
+  defdelegate slack_status(), to: HydraX.Runtime.Observability
+  defdelegate channel_statuses(), to: HydraX.Runtime.Observability
   defdelegate budget_status(), to: HydraX.Runtime.Observability
   defdelegate budget_status(agent_or_id), to: HydraX.Runtime.Observability
   defdelegate memory_triage_status(), to: HydraX.Runtime.Observability
@@ -170,8 +207,11 @@ defmodule HydraX.Runtime do
   # ── Ingest ────────────────────────────────────────────────────────────
 
   defdelegate ingest_file(agent_id, file_path), to: HydraX.Ingest.Pipeline
+  defdelegate ingest_file(agent_id, file_path, opts), to: HydraX.Ingest.Pipeline
   defdelegate archive_file(agent_id, filename), to: HydraX.Ingest.Pipeline
   defdelegate list_ingested_files(agent_id), to: HydraX.Ingest.Pipeline
+  defdelegate list_ingest_runs(agent_id), to: HydraX.Ingest.Pipeline
+  defdelegate list_ingest_runs(agent_id, limit), to: HydraX.Ingest.Pipeline
 
   # ── Operator auth (kept in facade — small, cross-cutting) ──────────────
 
@@ -189,6 +229,8 @@ defmodule HydraX.Runtime do
   end
 
   def save_operator_secret_password(attrs) when is_map(attrs) do
+    existed_before? = operator_password_configured?()
+
     attrs =
       attrs
       |> HydraX.Runtime.Helpers.normalize_string_keys()
@@ -199,21 +241,44 @@ defmodule HydraX.Runtime do
     if changeset.valid? do
       secret = Ecto.Changeset.apply_changes(changeset)
 
-      retry_on_busy(fn ->
-        Repo.insert(
-          changeset,
-          on_conflict: [
-            set: [
-              password_hash: secret.password_hash,
-              password_salt: secret.password_salt,
-              last_rotated_at: secret.last_rotated_at,
-              updated_at: DateTime.utc_now()
-            ]
-          ],
-          conflict_target: :scope,
-          returning: true
-        )
-      end)
+      result =
+        retry_on_busy(fn ->
+          Repo.insert(
+            changeset,
+            on_conflict: [
+              set: [
+                password_hash: secret.password_hash,
+                password_salt: secret.password_salt,
+                last_rotated_at: secret.last_rotated_at,
+                updated_at: DateTime.utc_now()
+              ]
+            ],
+            conflict_target: :scope,
+            returning: true
+          )
+        end)
+
+      case result do
+        {:ok, saved_secret} ->
+          action =
+            if existed_before? do
+              "Rotated operator password"
+            else
+              "Configured operator password"
+            end
+
+          Helpers.audit_auth_action(action,
+            metadata: %{
+              scope: saved_secret.scope,
+              rotated_at: saved_secret.last_rotated_at
+            }
+          )
+
+          {:ok, saved_secret}
+
+        other ->
+          other
+      end
     else
       {:error, changeset}
     end

@@ -14,10 +14,14 @@ defmodule Mix.Tasks.HydraX.Jobs do
       OptionParser.parse(args,
         strict: [
           run: :integer,
+          reset_circuit: :integer,
           kind: :string,
           enabled: :string,
+          status: :string,
+          delivery_status: :string,
           search: :string,
           limit: :integer,
+          output: :string,
           name: :string,
           agent: :string,
           prompt: :string,
@@ -26,6 +30,14 @@ defmodule Mix.Tasks.HydraX.Jobs do
           weekday_csv: :string,
           run_hour: :integer,
           run_minute: :integer,
+          cron_expression: :string,
+          active_hour_start: :integer,
+          active_hour_end: :integer,
+          timeout_seconds: :integer,
+          retry_limit: :integer,
+          retry_backoff_seconds: :integer,
+          pause_after_failures: :integer,
+          cooldown_minutes: :integer,
           delivery_enabled: :string,
           delivery_channel: :string,
           delivery_target: :string
@@ -33,17 +45,25 @@ defmodule Mix.Tasks.HydraX.Jobs do
         aliases: [r: :run]
       )
 
-    case opts[:run] || parse_positional_run(positional) do
+    case opts[:reset_circuit] || parse_positional_reset_circuit(positional) do
       nil ->
-        case positional do
-          ["create"] -> create_job(opts)
-          ["update", id] -> update_job(String.to_integer(id), opts)
-          ["delete", id] -> delete_job(String.to_integer(id))
-          _ -> list_jobs(opts)
+        case opts[:run] || parse_positional_run(positional) do
+          nil ->
+            case positional do
+              ["create"] -> create_job(opts)
+              ["update", id] -> update_job(String.to_integer(id), opts)
+              ["delete", id] -> delete_job(String.to_integer(id))
+              ["runs"] -> list_runs(opts)
+              ["export-runs"] -> export_runs(opts)
+              _ -> list_jobs(opts)
+            end
+
+          id ->
+            run_job(id)
         end
 
       id ->
-        run_job(id)
+        reset_circuit(id)
     end
   end
 
@@ -57,12 +77,48 @@ defmodule Mix.Tasks.HydraX.Jobs do
     |> Enum.each(fn job ->
       Mix.shell().info(
         "#{job.id}\t#{job.name}\t#{job.kind}\t#{schedule_summary(job)}\t#{if(job.enabled, do: "enabled", else: "paused")}\tnext=#{format_datetime(job.next_run_at)}" <>
+          "\tpolicy=#{policy_summary(job)}\tcircuit=#{job.circuit_state}" <>
           if(job.delivery_enabled,
             do: "\tdelivery=#{job.delivery_channel}:#{job.delivery_target}",
             else: ""
           )
       )
     end)
+  end
+
+  defp list_runs(opts) do
+    HydraX.Runtime.list_job_runs(
+      limit: opts[:limit] || 20,
+      status: opts[:status],
+      kind: opts[:kind],
+      search: opts[:search],
+      delivery_status: opts[:delivery_status]
+    )
+    |> Enum.each(fn run ->
+      delivery = run.metadata["delivery"] || %{}
+      reason = run.metadata["status_reason"] || run.metadata["error"] || "none"
+
+      Mix.shell().info(
+        "#{run.id}\t#{run.scheduled_job && run.scheduled_job.name}\tstatus=#{run.status}\tkind=#{run.scheduled_job && run.scheduled_job.kind}\tdelivery=#{Map.get(delivery, "status", "none")}\treason=#{reason}"
+      )
+    end)
+  end
+
+  defp export_runs(opts) do
+    output_root = opts[:output] || Path.join(HydraX.Config.install_root(), "reports")
+
+    {:ok, export} =
+      HydraX.Runtime.export_job_runs(output_root,
+        limit: opts[:limit] || 20,
+        status: opts[:status],
+        kind: opts[:kind],
+        search: opts[:search],
+        delivery_status: opts[:delivery_status]
+      )
+
+    Mix.shell().info("markdown=#{export.markdown_path}")
+    Mix.shell().info("json=#{export.json_path}")
+    Mix.shell().info("count=#{export.count}")
   end
 
   defp run_job(id) do
@@ -80,6 +136,12 @@ defmodule Mix.Tasks.HydraX.Jobs do
       {:error, reason} ->
         Mix.raise("job execution failed: #{inspect(reason)}")
     end
+  end
+
+  defp reset_circuit(id) do
+    job = HydraX.Runtime.reset_scheduled_job_circuit!(id)
+    Mix.shell().info("job=#{job.id}")
+    Mix.shell().info("circuit=#{job.circuit_state}")
   end
 
   defp delete_job(id) do
@@ -119,6 +181,14 @@ defmodule Mix.Tasks.HydraX.Jobs do
     |> maybe_put("weekday_csv", opts[:weekday_csv])
     |> maybe_put("run_hour", opts[:run_hour])
     |> maybe_put("run_minute", opts[:run_minute])
+    |> maybe_put("cron_expression", opts[:cron_expression])
+    |> maybe_put("active_hour_start", opts[:active_hour_start])
+    |> maybe_put("active_hour_end", opts[:active_hour_end])
+    |> maybe_put("timeout_seconds", opts[:timeout_seconds])
+    |> maybe_put("retry_limit", opts[:retry_limit])
+    |> maybe_put("retry_backoff_seconds", opts[:retry_backoff_seconds])
+    |> maybe_put("pause_after_failures", opts[:pause_after_failures])
+    |> maybe_put("cooldown_minutes", opts[:cooldown_minutes])
     |> maybe_put("enabled", parse_enabled(opts[:enabled]))
     |> maybe_put("delivery_enabled", parse_enabled(opts[:delivery_enabled]))
     |> maybe_put("delivery_channel", opts[:delivery_channel])
@@ -127,6 +197,9 @@ defmodule Mix.Tasks.HydraX.Jobs do
 
   defp parse_positional_run(["run", id]), do: String.to_integer(id)
   defp parse_positional_run(_args), do: nil
+
+  defp parse_positional_reset_circuit(["reset-circuit", id]), do: String.to_integer(id)
+  defp parse_positional_reset_circuit(_args), do: nil
 
   defp parse_enabled("true"), do: true
   defp parse_enabled("false"), do: false
@@ -143,7 +216,26 @@ defmodule Mix.Tasks.HydraX.Jobs do
     "#{job.weekday_csv || "mon"}@#{pad(job.run_hour)}:#{pad(job.run_minute)}"
   end
 
+  defp schedule_summary(%{schedule_mode: "cron"} = job) do
+    "cron=#{job.cron_expression || "* * * * *"}"
+  end
+
   defp schedule_summary(job), do: "every-#{job.interval_minutes}m"
+
+  defp policy_summary(job) do
+    [
+      "timeout=#{job.timeout_seconds || 120}s",
+      "retry=#{job.retry_limit || 0}",
+      if(job.active_hour_start || job.active_hour_end,
+        do: "active=#{pad(job.active_hour_start)}-#{pad(job.active_hour_end)}"
+      ),
+      if((job.pause_after_failures || 0) > 0,
+        do: "circuit=#{job.pause_after_failures}/#{job.cooldown_minutes || 0}m"
+      )
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join(",")
+  end
 
   defp pad(nil), do: "00"
   defp pad(value) when value < 10, do: "0#{value}"

@@ -43,6 +43,70 @@ defmodule HydraX.Gateway.Adapters.Telegram do
     do_send_response(content, external_ref, token, deliver)
   end
 
+  @impl true
+  def normalize_inbound(event) do
+    case handle_event(event, %{}) do
+      {:messages, messages, _state} -> {:ok, messages}
+      other -> {:error, {:unexpected_adapter_response, other}}
+    end
+  end
+
+  @impl true
+  def deliver(message, state) do
+    case send_response(message, state) do
+      :ok -> {:ok, %{channel: "telegram"}}
+      {:ok, metadata} when is_map(metadata) -> {:ok, metadata}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @impl true
+  def health(state) do
+    %{
+      channel: "telegram",
+      configured: true,
+      supports_threads: false,
+      supports_rich_formatting: false,
+      supports_attachments: true,
+      supports_streaming: false,
+      webhook_secret: present?(state[:webhook_secret])
+    }
+  end
+
+  @impl true
+  def sync_status(state) do
+    case webhook_info(state.bot_token) do
+      {:ok, info} ->
+        {:ok,
+         %{
+           webhook_url: info["url"],
+           pending_update_count: info["pending_update_count"] || 0,
+           last_error: info["last_error_message"]
+         }}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @impl true
+  def capabilities do
+    %{
+      channel: "telegram",
+      inbound: [:message, :caption, :document, :photo, :audio, :voice, :video],
+      outbound: [:text],
+      threads: false,
+      attachments: true,
+      rich_formatting: false,
+      streaming: false
+    }
+  end
+
+  @impl true
+  def format_message(%{content: content, external_ref: external_ref}, _state) do
+    %{text: content, chat_id: external_ref}
+  end
+
   def register_webhook(bot_token, url, secret, opts \\ []) do
     request_fn = Keyword.get(opts, :request_fn, &Req.post/1)
 
@@ -213,4 +277,6 @@ defmodule HydraX.Gateway.Adapters.Telegram do
   end
 
   defp maybe_add_video(attachments, _video), do: attachments
+
+  defp present?(value), do: is_binary(value) and value != ""
 end

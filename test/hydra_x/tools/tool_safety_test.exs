@@ -2,7 +2,30 @@ defmodule HydraX.Tools.ToolSafetyTest do
   use HydraX.DataCase
 
   alias HydraX.Runtime
-  alias HydraX.Tools.{HttpFetch, ShellCommand, WorkspaceRead}
+
+  alias HydraX.Tools.{
+    HttpFetch,
+    ShellCommand,
+    WebSearch,
+    WorkspaceList,
+    WorkspaceRead,
+    WorkspaceWrite
+  }
+
+  test "workspace listing stays inside the agent workspace" do
+    agent = create_agent()
+    File.mkdir_p!(Path.join(agent.workspace_root, "memory"))
+    File.write!(Path.join(agent.workspace_root, "memory/notes.md"), "Hydra notes")
+
+    assert {:ok, result} =
+             WorkspaceList.execute(%{path: "memory"}, %{workspace_root: agent.workspace_root})
+
+    assert result.path == "memory"
+    assert Enum.any?(result.entries, &(&1.name == "notes.md" and &1.type == "file"))
+
+    assert {:error, :path_outside_workspace} =
+             WorkspaceList.execute(%{path: "../secrets"}, %{workspace_root: agent.workspace_root})
+  end
 
   test "workspace reads stay inside the agent workspace" do
     agent = create_agent()
@@ -19,6 +42,25 @@ defmodule HydraX.Tools.ToolSafetyTest do
              WorkspaceRead.execute(%{path: "../secrets.txt"}, %{
                workspace_root: agent.workspace_root
              })
+  end
+
+  test "workspace writes stay inside the agent workspace" do
+    agent = create_agent()
+
+    assert {:ok, result} =
+             WorkspaceWrite.execute(
+               %{path: "memory/new-note.md", content: "Hydra write test"},
+               %{workspace_root: agent.workspace_root}
+             )
+
+    assert result.path == "memory/new-note.md"
+    assert File.read!(Path.join(agent.workspace_root, "memory/new-note.md")) == "Hydra write test"
+
+    assert {:error, :path_outside_workspace} =
+             WorkspaceWrite.execute(
+               %{path: "../outside.txt", content: "nope"},
+               %{workspace_root: agent.workspace_root}
+             )
   end
 
   test "http fetch blocks localhost style targets before issuing a request" do
@@ -54,6 +96,26 @@ defmodule HydraX.Tools.ToolSafetyTest do
              HttpFetch.execute(%{url: "https://not-example.test/data"}, %{request_fn: request_fn})
 
     refute_received :request_attempted
+  end
+
+  test "web search returns parsed search results through the dedicated endpoint" do
+    request_fn = fn _opts ->
+      {:ok,
+       %{
+         status: 200,
+         body:
+           ~s(<html><body><a class="result__a" href="https://example.com/a">Example A</a><a class="result__a" href="https://example.com/b">Example B</a></body></html>),
+         headers: []
+       }}
+    end
+
+    assert {:ok, result} =
+             WebSearch.execute(%{query: "hydra x", limit: 2}, %{request_fn: request_fn})
+
+    assert result.query == "hydra x"
+
+    assert [%{title: "Example A", url: "https://example.com/a"}, %{title: "Example B"}] =
+             result.results
   end
 
   test "shell commands run inside the workspace when allowlisted" do

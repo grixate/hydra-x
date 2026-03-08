@@ -12,6 +12,14 @@ defmodule HydraX.Runtime.Observability do
   def health_snapshot(opts \\ []) do
     provider = HydraX.Runtime.Providers.enabled_provider()
     default_agent = HydraX.Runtime.Agents.get_default_agent()
+
+    default_agent_runtime =
+      default_agent && HydraX.Runtime.Agents.agent_runtime_status(default_agent)
+
+    default_agent_route =
+      default_agent &&
+        HydraX.Runtime.Providers.effective_provider_route(default_agent.id, "channel")
+
     budget_policy = default_agent && HydraX.Budget.ensure_policy!(default_agent.id)
     memory_status = memory_triage_status(default_agent)
     safety_counts = HydraX.Safety.recent_counts()
@@ -22,6 +30,9 @@ defmodule HydraX.Runtime.Observability do
 
     agents = HydraX.Runtime.Agents.list_agents()
     telegram_config = HydraX.Runtime.TelegramAdmin.enabled_telegram_config()
+    discord_config = HydraX.Runtime.DiscordAdmin.enabled_discord_config()
+    slack_config = HydraX.Runtime.SlackAdmin.enabled_slack_config()
+    operator = operator_status()
 
     checks = [
       %{name: "database", status: :ok, detail: "SQLite repo online"},
@@ -32,39 +43,53 @@ defmodule HydraX.Runtime.Observability do
       },
       %{
         name: "providers",
-        status: if(provider, do: :ok, else: :warn),
-        detail: (provider && "#{provider.kind}: #{provider.model}") || "mock fallback"
+        status:
+          cond do
+            default_agent_runtime && default_agent_runtime.readiness == "degraded" -> :warn
+            provider -> :ok
+            true -> :warn
+          end,
+        detail:
+          provider_health_detail(
+            provider,
+            default_agent,
+            default_agent_runtime,
+            default_agent_route
+          )
       },
       %{
         name: "auth",
-        status: if(operator_password_configured?(), do: :ok, else: :warn),
+        status:
+          cond do
+            not operator.configured -> :warn
+            operator.password_stale? -> :warn
+            true -> :ok
+          end,
         detail:
-          case operator_status() do
+          case operator do
+            %{
+              configured: true,
+              last_rotated_at: rotated_at,
+              password_stale?: true,
+              password_age_days: age
+            }
+            when not is_nil(rotated_at) ->
+              "operator password set; rotated #{Calendar.strftime(rotated_at, "%Y-%m-%d %H:%M UTC")}; age #{age} days; recent-auth window #{div(operator.recent_auth_window_seconds, 60)}m"
+
             %{configured: true, last_rotated_at: rotated_at} when not is_nil(rotated_at) ->
-              "operator password set; rotated #{Calendar.strftime(rotated_at, "%Y-%m-%d %H:%M UTC")}"
+              "operator password set; rotated #{Calendar.strftime(rotated_at, "%Y-%m-%d %H:%M UTC")}; recent-auth window #{div(operator.recent_auth_window_seconds, 60)}m"
 
             %{configured: true} ->
-              "operator password set"
+              "operator password set; recent-auth window #{div(operator.recent_auth_window_seconds, 60)}m"
 
             _ ->
               "control plane open until operator password is set"
           end
       },
       %{
-        name: "telegram",
-        status: if(telegram_config, do: :ok, else: :warn),
-        detail:
-          case telegram_config do
-            %{bot_username: username, default_agent: %{name: agent_name}}
-            when is_binary(username) and username != "" ->
-              "@#{username} -> #{agent_name}"
-
-            %{default_agent: %{name: agent_name}} ->
-              "configured -> #{agent_name}"
-
-            nil ->
-              "not configured"
-          end
+        name: "channels",
+        status: if(telegram_config || discord_config || slack_config, do: :ok, else: :warn),
+        detail: channel_health_detail(channel_statuses())
       },
       %{
         name: "budget",
@@ -162,6 +187,7 @@ defmodule HydraX.Runtime.Observability do
            List.first(HydraX.Runtime.TelegramAdmin.list_telegram_configs()) do
       nil ->
         %{
+          channel: "telegram",
           configured: false,
           enabled: false,
           bot_username: nil,
@@ -178,6 +204,7 @@ defmodule HydraX.Runtime.Observability do
 
       config ->
         %{
+          channel: "telegram",
           configured: true,
           enabled: config.enabled,
           bot_username: config.bot_username,
@@ -192,6 +219,68 @@ defmodule HydraX.Runtime.Observability do
           gateway_events: diagnostics.gateway_events
         }
     end
+  end
+
+  def discord_status do
+    case HydraX.Runtime.DiscordAdmin.enabled_discord_config() ||
+           List.first(HydraX.Runtime.DiscordAdmin.list_discord_configs()) do
+      nil ->
+        %{
+          channel: "discord",
+          configured: false,
+          enabled: false,
+          binding: nil,
+          default_agent_name: nil,
+          recent_failures: recent_channel_failures("discord"),
+          gateway_events: recent_gateway_events("discord")
+        }
+
+      config ->
+        %{
+          channel: "discord",
+          configured: true,
+          enabled: config.enabled,
+          binding: config.application_id,
+          default_agent_name: config.default_agent && config.default_agent.name,
+          recent_failures: recent_channel_failures("discord"),
+          gateway_events: recent_gateway_events("discord")
+        }
+    end
+  end
+
+  def slack_status do
+    case HydraX.Runtime.SlackAdmin.enabled_slack_config() ||
+           List.first(HydraX.Runtime.SlackAdmin.list_slack_configs()) do
+      nil ->
+        %{
+          channel: "slack",
+          configured: false,
+          enabled: false,
+          binding: nil,
+          default_agent_name: nil,
+          recent_failures: recent_channel_failures("slack"),
+          gateway_events: recent_gateway_events("slack")
+        }
+
+      config ->
+        %{
+          channel: "slack",
+          configured: true,
+          enabled: config.enabled,
+          binding: "bot token configured",
+          default_agent_name: config.default_agent && config.default_agent.name,
+          recent_failures: recent_channel_failures("slack"),
+          gateway_events: recent_gateway_events("slack")
+        }
+    end
+  end
+
+  def channel_statuses do
+    %{
+      telegram: telegram_status(),
+      discord: discord_status(),
+      slack: slack_status()
+    }
   end
 
   def budget_status(agent_or_id \\ nil)
@@ -247,10 +336,28 @@ defmodule HydraX.Runtime.Observability do
   def operator_status do
     case Repo.get_by(OperatorSecret, scope: "control_plane") do
       nil ->
-        %{configured: false, last_rotated_at: nil}
+        %{
+          configured: false,
+          last_rotated_at: nil,
+          password_age_days: nil,
+          password_stale?: false,
+          session_max_age_seconds: HydraXWeb.OperatorAuth.session_max_age_seconds(),
+          idle_timeout_seconds: HydraXWeb.OperatorAuth.idle_timeout_seconds(),
+          recent_auth_window_seconds: HydraXWeb.OperatorAuth.recent_auth_window_seconds()
+        }
 
       secret ->
-        %{configured: true, last_rotated_at: secret.last_rotated_at}
+        age_days = password_age_days(secret.last_rotated_at)
+
+        %{
+          configured: true,
+          last_rotated_at: secret.last_rotated_at,
+          password_age_days: age_days,
+          password_stale?: age_days >= 90,
+          session_max_age_seconds: HydraXWeb.OperatorAuth.session_max_age_seconds(),
+          idle_timeout_seconds: HydraXWeb.OperatorAuth.idle_timeout_seconds(),
+          recent_auth_window_seconds: HydraXWeb.OperatorAuth.recent_auth_window_seconds()
+        }
     end
   end
 
@@ -258,8 +365,11 @@ defmodule HydraX.Runtime.Observability do
     policy = HydraX.Runtime.Providers.effective_tool_policy()
 
     %{
+      workspace_list_enabled: policy.workspace_list_enabled,
       workspace_guard: policy.workspace_read_enabled,
+      workspace_write_enabled: policy.workspace_write_enabled,
       url_guard: policy.http_fetch_enabled,
+      web_search_enabled: policy.web_search_enabled,
       shell_command_enabled: policy.shell_command_enabled,
       shell_allowlist: policy.shell_allowlist,
       http_allowlist: policy.http_allowlist
@@ -296,10 +406,22 @@ defmodule HydraX.Runtime.Observability do
     tool_policy = HydraX.Runtime.Providers.effective_tool_policy()
     backup_root = Config.backup_root()
     telegram = telegram_status()
+    discord = discord_status()
+    slack = slack_status()
     backups = backup_status()
     public_url = Config.public_base_url()
     local_url? = local_public_url?(public_url)
     memory_status = memory_triage_status()
+    default_agent = HydraX.Runtime.Agents.get_default_agent()
+
+    default_agent_runtime =
+      default_agent && HydraX.Runtime.Agents.agent_runtime_status(default_agent)
+
+    default_agent_route =
+      default_agent &&
+        HydraX.Runtime.Providers.effective_provider_route(default_agent.id, "channel")
+
+    operator = operator_status()
 
     items = [
       %{
@@ -312,6 +434,31 @@ defmodule HydraX.Runtime.Observability do
             do: "control plane requires login",
             else: "set a password on /setup before exposing the node"
           )
+      },
+      %{
+        id: "operator_rotation",
+        label: "Operator password rotated recently",
+        required: false,
+        status:
+          cond do
+            not operator.configured -> :warn
+            operator.password_stale? -> :warn
+            true -> :ok
+          end,
+        detail:
+          cond do
+            not operator.configured ->
+              "set and rotate the control-plane password before public preview"
+
+            operator.password_age_days == 0 ->
+              "rotated today"
+
+            operator.password_age_days ->
+              "#{operator.password_age_days} days since last rotation"
+
+            true ->
+              "rotation timestamp unavailable"
+          end
       },
       %{
         id: "public_url",
@@ -362,6 +509,32 @@ defmodule HydraX.Runtime.Observability do
         }
       ),
       %{
+        id: "default_agent_provider",
+        label: "Default agent provider route warmed",
+        required: false,
+        status:
+          case default_agent_runtime do
+            %{readiness: "ready"} -> :ok
+            %{readiness: "mock"} -> :warn
+            %{readiness: "degraded"} -> :warn
+            _ -> :warn
+          end,
+        detail:
+          case {default_agent, default_agent_runtime, default_agent_route} do
+            {nil, _, _} ->
+              "no default agent configured"
+
+            {agent, %{readiness: readiness} = runtime, route} ->
+              provider_label =
+                case route.provider do
+                  nil -> "mock"
+                  provider -> provider.name || provider.model || provider.kind
+                end
+
+              "#{agent.slug}: #{provider_label} via #{route.source}; runtime #{readiness}; warmup #{runtime.warmup_status}"
+          end
+      },
+      %{
         id: "telegram",
         label: "Telegram ingress configured",
         required: false,
@@ -372,6 +545,40 @@ defmodule HydraX.Runtime.Observability do
               (telegram.bot_username && "@#{telegram.bot_username}") || "configured"
 
             telegram.configured ->
+              "saved but disabled"
+
+            true ->
+              "not configured"
+          end
+      },
+      %{
+        id: "discord",
+        label: "Discord ingress configured",
+        required: false,
+        status: if(discord.configured and discord.enabled, do: :ok, else: :warn),
+        detail:
+          cond do
+            discord.configured and discord.enabled ->
+              "configured#{agent_suffix(discord.default_agent_name)}"
+
+            discord.configured ->
+              "saved but disabled"
+
+            true ->
+              "not configured"
+          end
+      },
+      %{
+        id: "slack",
+        label: "Slack ingress configured",
+        required: false,
+        status: if(slack.configured and slack.enabled, do: :ok, else: :warn),
+        detail:
+          cond do
+            slack.configured and slack.enabled ->
+              "configured#{agent_suffix(slack.default_agent_name)}"
+
+            slack.configured ->
               "saved but disabled"
 
             true ->
@@ -409,12 +616,14 @@ defmodule HydraX.Runtime.Observability do
         label: "Tool policy reviewed",
         required: false,
         status:
-          if(tool_policy.shell_command_enabled or tool_policy.http_allowlist != [],
+          if(
+            tool_policy.shell_command_enabled or tool_policy.http_allowlist != [] or
+              tool_policy.workspace_write_enabled,
             do: :ok,
             else: :warn
           ),
         detail:
-          "shell #{enabled_text(tool_policy.shell_command_enabled)}; http allowlist #{describe_allowlist(tool_policy.http_allowlist)}"
+          "list #{enabled_text(tool_policy.workspace_list_enabled)}; read #{enabled_text(tool_policy.workspace_read_enabled)}; write #{enabled_text(tool_policy.workspace_write_enabled)}; search #{enabled_text(tool_policy.web_search_enabled)}; shell #{enabled_text(tool_policy.shell_command_enabled)}; http allowlist #{describe_allowlist(tool_policy.http_allowlist)}"
       }
     ]
 
@@ -467,6 +676,17 @@ defmodule HydraX.Runtime.Observability do
 
   defp operator_password_configured? do
     not is_nil(Repo.get_by(OperatorSecret, scope: "control_plane"))
+  end
+
+  defp password_age_days(nil), do: nil
+
+  defp password_age_days(rotated_at) do
+    rotated_at
+    |> DateTime.diff(DateTime.utc_now(), :second)
+    |> Kernel.*(-1)
+    |> Kernel./(86_400)
+    |> floor()
+    |> max(0)
   end
 
   defp do_budget_status(agent) do
@@ -548,6 +768,52 @@ defmodule HydraX.Runtime.Observability do
     }
   end
 
+  defp recent_channel_failures(channel) do
+    HydraX.Runtime.Conversations.list_conversations(channel: channel, limit: 50)
+    |> Enum.filter(&failed_channel_delivery?/1)
+    |> Enum.take(5)
+  end
+
+  defp recent_gateway_events(channel) do
+    HydraX.Telemetry.Store.snapshot()
+    |> Map.get(:recent_events, [])
+    |> Enum.filter(fn event ->
+      event.namespace == "gateway" and event.bucket == channel
+    end)
+    |> Enum.take(5)
+  end
+
+  defp failed_channel_delivery?(conversation) do
+    case last_delivery(conversation) do
+      %{"status" => "failed"} -> true
+      %{status: "failed"} -> true
+      %{"status" => "dead_letter"} -> true
+      %{status: "dead_letter"} -> true
+      _ -> false
+    end
+  end
+
+  defp channel_health_detail(statuses) do
+    statuses
+    |> Map.values()
+    |> Enum.map(fn status ->
+      cond do
+        status.configured and status.enabled ->
+          "#{status.channel}: enabled#{agent_suffix(status.default_agent_name)}"
+
+        status.configured ->
+          "#{status.channel}: disabled"
+
+        true ->
+          "#{status.channel}: not configured"
+      end
+    end)
+    |> Enum.join(" · ")
+  end
+
+  defp agent_suffix(nil), do: ""
+  defp agent_suffix(name), do: " -> #{name}"
+
   defp failed_telegram_delivery?(conversation) do
     delivery = last_delivery(conversation)
 
@@ -575,7 +841,21 @@ defmodule HydraX.Runtime.Observability do
         hosts -> Enum.join(hosts, ", ")
       end
 
-    "workspace read #{enabled_text(tool_status.workspace_guard)}; http fetch #{enabled_text(tool_status.url_guard)}; shell #{enabled_text(tool_status.shell_command_enabled)}; shell allowlist: #{shell}; http allowlist: #{http}"
+    "workspace list #{enabled_text(tool_status.workspace_list_enabled)}; workspace read #{enabled_text(tool_status.workspace_guard)}; workspace write #{enabled_text(tool_status.workspace_write_enabled)}; web search #{enabled_text(tool_status.web_search_enabled)}; http fetch #{enabled_text(tool_status.url_guard)}; shell #{enabled_text(tool_status.shell_command_enabled)}; shell allowlist: #{shell}; http allowlist: #{http}"
+  end
+
+  defp provider_health_detail(provider, nil, _runtime, _route) do
+    (provider && "#{provider.kind}: #{provider.model}") || "mock fallback"
+  end
+
+  defp provider_health_detail(provider, agent, runtime, route) do
+    provider_label =
+      case route && route.provider do
+        nil -> (provider && "#{provider.kind}: #{provider.model}") || "mock fallback"
+        selected -> "#{selected.name || selected.kind}: #{selected.model}"
+      end
+
+    "#{provider_label} -> #{agent.slug} (#{runtime.readiness}/#{runtime.warmup_status})"
   end
 
   defp telemetry_summary(telemetry) do

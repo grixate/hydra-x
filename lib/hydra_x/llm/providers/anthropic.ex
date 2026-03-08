@@ -223,15 +223,24 @@ defmodule HydraX.LLM.Providers.Anthropic do
 
   defp parse_sse_line("data: " <> json_data, acc, caller_pid, ref) do
     case Jason.decode(json_data) do
-      {:ok, %{"type" => "content_block_delta", "delta" => %{"type" => "text_delta", "text" => text}}} ->
+      {:ok,
+       %{"type" => "content_block_delta", "delta" => %{"type" => "text_delta", "text" => text}}} ->
         send(caller_pid, {:chunk, ref, text})
         %{acc | text: acc.text <> text}
 
-      {:ok, %{"type" => "content_block_delta", "delta" => %{"type" => "input_json_delta", "partial_json" => partial}}} ->
+      {:ok,
+       %{
+         "type" => "content_block_delta",
+         "delta" => %{"type" => "input_json_delta", "partial_json" => partial}
+       }} ->
         # Accumulate tool input JSON
         update_tool_input(acc, partial)
 
-      {:ok, %{"type" => "content_block_start", "content_block" => %{"type" => "tool_use", "id" => id, "name" => name}}} ->
+      {:ok,
+       %{
+         "type" => "content_block_start",
+         "content_block" => %{"type" => "tool_use", "id" => id, "name" => name}
+       }} ->
         %{acc | current_tool: %{id: id, name: name, input_json: ""}}
 
       {:ok, %{"type" => "content_block_stop"}} ->

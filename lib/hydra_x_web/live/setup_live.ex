@@ -2,12 +2,25 @@ defmodule HydraXWeb.SetupLive do
   use HydraXWeb, :live_view
 
   alias HydraX.Runtime
-  alias HydraX.Runtime.{AgentProfile, ProviderConfig, TelegramConfig, ToolPolicy}
+  alias HydraX.Runtime.Helpers
+
+  alias HydraX.Runtime.{
+    AgentProfile,
+    DiscordConfig,
+    ProviderConfig,
+    SlackConfig,
+    TelegramConfig,
+    ToolPolicy
+  }
+
   alias HydraXWeb.AppShell
+  alias HydraXWeb.OperatorAuth
 
   @impl true
-  def mount(_params, _session, socket) do
+  def mount(_params, session, socket) do
     agent = Runtime.get_default_agent() || %AgentProfile{}
+    operator_status = Runtime.operator_status()
+    operator_session = OperatorAuth.session_state(session)
 
     provider =
       Runtime.enabled_provider() || List.first(Runtime.list_provider_configs()) ||
@@ -17,6 +30,14 @@ defmodule HydraXWeb.SetupLive do
       Runtime.enabled_telegram_config() || List.first(Runtime.list_telegram_configs()) ||
         %TelegramConfig{default_agent_id: agent.id}
 
+    discord =
+      Runtime.enabled_discord_config() || List.first(Runtime.list_discord_configs()) ||
+        %DiscordConfig{default_agent_id: agent.id}
+
+    slack =
+      Runtime.enabled_slack_config() || List.first(Runtime.list_slack_configs()) ||
+        %SlackConfig{default_agent_id: agent.id}
+
     tool_policy = Runtime.get_tool_policy() || %ToolPolicy{}
 
     {:ok,
@@ -24,8 +45,12 @@ defmodule HydraXWeb.SetupLive do
      |> assign(:page_title, "Setup")
      |> assign(:current, "setup")
      |> assign(:operator_secret, Runtime.get_operator_secret())
+     |> assign(:operator_status, operator_status)
+     |> assign(:operator_session, operator_session)
      |> assign(:provider_test_result, nil)
      |> assign(:telegram_test_result, nil)
+     |> assign(:discord_test_result, nil)
+     |> assign(:slack_test_result, nil)
      |> assign(:install_export, nil)
      |> assign(:backup_export, nil)
      |> assign(:readiness_report, Runtime.readiness_report())
@@ -33,12 +58,18 @@ defmodule HydraXWeb.SetupLive do
      |> assign(:agent, agent)
      |> assign(:provider, provider)
      |> assign(:telegram, telegram)
+     |> assign(:discord, discord)
+     |> assign(:slack, slack)
      |> assign(:tool_policy, tool_policy)
      |> assign_form(:operator_form, Runtime.change_operator_secret())
      |> assign_form(:agent_form, Runtime.change_agent(agent))
      |> assign_form(:provider_form, Runtime.change_provider_config(provider))
      |> assign_form(:telegram_form, Runtime.change_telegram_config(telegram))
+     |> assign_form(:discord_form, Runtime.change_discord_config(discord))
+     |> assign_form(:slack_form, Runtime.change_slack_config(slack))
      |> assign(:telegram_test_form, to_form(default_telegram_test(), as: :telegram_test))
+     |> assign(:discord_test_form, to_form(default_channel_test("discord"), as: :discord_test))
+     |> assign(:slack_test_form, to_form(default_channel_test("slack"), as: :slack_test))
      |> assign_form(:tool_policy_form, Runtime.change_tool_policy(tool_policy))}
   end
 
@@ -62,18 +93,21 @@ defmodule HydraXWeb.SetupLive do
   end
 
   def handle_event("save_provider", %{"provider_config" => params}, socket) do
-    case Runtime.save_provider_config(socket.assigns.provider, params) do
-      {:ok, provider} ->
-        {:noreply,
-         socket
-         |> put_flash(:info, "Provider updated")
-         |> assign(:provider, provider)
-         |> assign(:readiness_report, Runtime.readiness_report())
-         |> assign(:stats, stats())
-         |> assign_form(:provider_form, Runtime.change_provider_config(provider))}
-
-      {:error, changeset} ->
+    with {:ok, socket} <- require_recent_auth(socket, "save provider secrets"),
+         {:ok, provider} <- Runtime.save_provider_config(socket.assigns.provider, params) do
+      {:noreply,
+       socket
+       |> put_flash(:info, "Provider updated")
+       |> assign(:provider, provider)
+       |> assign(:readiness_report, Runtime.readiness_report())
+       |> assign(:stats, stats())
+       |> assign_form(:provider_form, Runtime.change_provider_config(provider))}
+    else
+      {:error, %Ecto.Changeset{} = changeset} ->
         {:noreply, assign_form(socket, :provider_form, changeset)}
+
+      {:reauth, socket} ->
+        {:noreply, socket}
     end
   end
 
@@ -102,33 +136,81 @@ defmodule HydraXWeb.SetupLive do
   def handle_event("save_telegram", %{"telegram_config" => params}, socket) do
     params = Map.put_new(params, "default_agent_id", socket.assigns.agent.id)
 
-    case Runtime.save_telegram_config(socket.assigns.telegram, params) do
-      {:ok, telegram} ->
-        {:noreply,
-         socket
-         |> put_flash(:info, "Telegram updated")
-         |> assign(:telegram, telegram)
-         |> assign(:readiness_report, Runtime.readiness_report())
-         |> assign(:stats, stats())
-         |> assign_form(:telegram_form, Runtime.change_telegram_config(telegram))}
-
-      {:error, changeset} ->
+    with {:ok, socket} <- require_recent_auth(socket, "save Telegram credentials"),
+         {:ok, telegram} <- Runtime.save_telegram_config(socket.assigns.telegram, params) do
+      {:noreply,
+       socket
+       |> put_flash(:info, "Telegram updated")
+       |> assign(:telegram, telegram)
+       |> assign(:readiness_report, Runtime.readiness_report())
+       |> assign(:stats, stats())
+       |> assign_form(:telegram_form, Runtime.change_telegram_config(telegram))}
+    else
+      {:error, %Ecto.Changeset{} = changeset} ->
         {:noreply, assign_form(socket, :telegram_form, changeset)}
+
+      {:reauth, socket} ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("save_discord", %{"discord_config" => params}, socket) do
+    params = Map.put_new(params, "default_agent_id", socket.assigns.agent.id)
+
+    with {:ok, socket} <- require_recent_auth(socket, "save Discord credentials"),
+         {:ok, discord} <- Runtime.save_discord_config(socket.assigns.discord, params) do
+      {:noreply,
+       socket
+       |> put_flash(:info, "Discord updated")
+       |> assign(:discord, discord)
+       |> assign(:readiness_report, Runtime.readiness_report())
+       |> assign(:stats, stats())
+       |> assign_form(:discord_form, Runtime.change_discord_config(discord))}
+    else
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:noreply, assign_form(socket, :discord_form, changeset)}
+
+      {:reauth, socket} ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("save_slack", %{"slack_config" => params}, socket) do
+    params = Map.put_new(params, "default_agent_id", socket.assigns.agent.id)
+
+    with {:ok, socket} <- require_recent_auth(socket, "save Slack credentials"),
+         {:ok, slack} <- Runtime.save_slack_config(socket.assigns.slack, params) do
+      {:noreply,
+       socket
+       |> put_flash(:info, "Slack updated")
+       |> assign(:slack, slack)
+       |> assign(:readiness_report, Runtime.readiness_report())
+       |> assign(:stats, stats())
+       |> assign_form(:slack_form, Runtime.change_slack_config(slack))}
+    else
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:noreply, assign_form(socket, :slack_form, changeset)}
+
+      {:reauth, socket} ->
+        {:noreply, socket}
     end
   end
 
   def handle_event("save_tool_policy", %{"tool_policy" => params}, socket) do
-    case Runtime.save_tool_policy(socket.assigns.tool_policy, params) do
-      {:ok, tool_policy} ->
-        {:noreply,
-         socket
-         |> put_flash(:info, "Tool policy updated")
-         |> assign(:tool_policy, tool_policy)
-         |> assign(:readiness_report, Runtime.readiness_report())
-         |> assign_form(:tool_policy_form, Runtime.change_tool_policy(tool_policy))}
-
-      {:error, changeset} ->
+    with {:ok, socket} <- require_recent_auth(socket, "save tool policy"),
+         {:ok, tool_policy} <- Runtime.save_tool_policy(socket.assigns.tool_policy, params) do
+      {:noreply,
+       socket
+       |> put_flash(:info, "Tool policy updated")
+       |> assign(:tool_policy, tool_policy)
+       |> assign(:readiness_report, Runtime.readiness_report())
+       |> assign_form(:tool_policy_form, Runtime.change_tool_policy(tool_policy))}
+    else
+      {:error, %Ecto.Changeset{} = changeset} ->
         {:noreply, assign_form(socket, :tool_policy_form, changeset)}
+
+      {:reauth, socket} ->
+        {:noreply, socket}
     end
   end
 
@@ -205,38 +287,93 @@ defmodule HydraXWeb.SetupLive do
     end
   end
 
-  def handle_event("save_operator_password", %{"operator_secret" => params}, socket) do
-    case Runtime.save_operator_secret_password(params) do
-      {:ok, secret} ->
+  def handle_event("test_discord_delivery", %{"discord_test" => params}, socket) do
+    case Runtime.test_discord_delivery(
+           socket.assigns.discord,
+           params["target"],
+           params["message"]
+         ) do
+      {:ok, result} ->
         {:noreply,
          socket
-         |> put_flash(:info, "Operator password updated")
-         |> assign(:operator_secret, secret)
-         |> assign(:readiness_report, Runtime.readiness_report())
-         |> assign_form(:operator_form, Runtime.change_operator_secret(secret))}
+         |> assign(:discord_test_result, %{status: :ok, content: inspect(result.metadata)})
+         |> put_flash(:info, "Discord delivery test succeeded")}
 
-      {:error, changeset} ->
+      {:error, reason} ->
+        {:noreply,
+         socket
+         |> assign(:discord_test_result, %{status: :error, content: inspect(reason)})
+         |> put_flash(:error, "Discord delivery test failed")}
+    end
+  end
+
+  def handle_event("test_slack_delivery", %{"slack_test" => params}, socket) do
+    case Runtime.test_slack_delivery(
+           socket.assigns.slack,
+           params["target"],
+           params["message"]
+         ) do
+      {:ok, result} ->
+        {:noreply,
+         socket
+         |> assign(:slack_test_result, %{status: :ok, content: inspect(result.metadata)})
+         |> put_flash(:info, "Slack delivery test succeeded")}
+
+      {:error, reason} ->
+        {:noreply,
+         socket
+         |> assign(:slack_test_result, %{status: :error, content: inspect(reason)})
+         |> put_flash(:error, "Slack delivery test failed")}
+    end
+  end
+
+  def handle_event("save_operator_password", %{"operator_secret" => params}, socket) do
+    with {:ok, socket} <- require_recent_auth(socket, "rotate operator password"),
+         {:ok, secret} <- Runtime.save_operator_secret_password(params) do
+      {:noreply,
+       socket
+       |> put_flash(:info, "Operator password updated")
+       |> assign(:operator_secret, secret)
+       |> assign(:operator_status, Runtime.operator_status())
+       |> assign(:operator_session, refresh_recent_auth(socket.assigns.operator_session))
+       |> assign(:readiness_report, Runtime.readiness_report())
+       |> assign_form(:operator_form, Runtime.change_operator_secret(secret))}
+    else
+      {:error, %Ecto.Changeset{} = changeset} ->
         {:noreply, assign_form(socket, :operator_form, changeset)}
+
+      {:reauth, socket} ->
+        {:noreply, socket}
     end
   end
 
   def handle_event("export_install", _params, socket) do
-    {:ok, export} = HydraX.Install.export_snapshot()
+    with {:ok, socket} <- require_recent_auth(socket, "export install bundle") do
+      {:ok, export} = HydraX.Install.export_snapshot()
 
-    {:noreply,
-     socket
-     |> assign(:install_export, export)
-     |> put_flash(:info, "Install bundle exported")}
+      {:noreply,
+       socket
+       |> assign(:install_export, export)
+       |> put_flash(:info, "Install bundle exported")}
+    else
+      {:reauth, socket} ->
+        {:noreply, socket}
+    end
   end
 
   def handle_event("create_backup_bundle", _params, socket) do
-    {:ok, manifest} = HydraX.Backup.create_bundle(HydraX.Config.backup_root())
+    with {:ok, socket} <- require_recent_auth(socket, "create backup bundle") do
+      {:ok, manifest} = HydraX.Backup.create_bundle(HydraX.Config.backup_root())
 
-    {:noreply,
-     socket
-     |> assign(:backup_export, manifest)
-     |> assign(:readiness_report, Runtime.readiness_report())
-     |> put_flash(:info, "Backup bundle created")}
+      {:noreply,
+       socket
+       |> assign(:backup_export, manifest)
+       |> assign(:readiness_report, Runtime.readiness_report())
+       |> put_flash(:info, "Backup bundle created")}
+    else
+      {:reauth, socket} ->
+        {:noreply, socket}
+    end
   end
 
   @impl true
@@ -351,6 +488,19 @@ defmodule HydraXWeb.SetupLive do
               "%Y-%m-%d %H:%M:%S UTC"
             )}.
           </div>
+          <div class="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-4 text-sm text-[var(--hx-mute)]">
+            Sensitive actions require a fresh sign-in every {div(
+              @operator_status.recent_auth_window_seconds,
+              60
+            )} minutes.
+            Session max age is {div(@operator_status.session_max_age_seconds, 3600)} hours and idle timeout is {div(
+              @operator_status.idle_timeout_seconds,
+              60
+            )} minutes.
+            <span :if={@operator_status.password_age_days != nil}>
+              Password age: {@operator_status.password_age_days} days.
+            </span>
+          </div>
           <.form
             for={@operator_form}
             id="operator-form"
@@ -451,9 +601,19 @@ defmodule HydraXWeb.SetupLive do
             class="mt-6 grid gap-4 xl:grid-cols-2"
           >
             <.input
+              field={@tool_policy_form[:workspace_list_enabled]}
+              type="checkbox"
+              label="Enable workspace directory listing"
+            />
+            <.input
               field={@tool_policy_form[:workspace_read_enabled]}
               type="checkbox"
               label="Enable workspace file reads"
+            />
+            <.input
+              field={@tool_policy_form[:workspace_write_enabled]}
+              type="checkbox"
+              label="Enable workspace file writes"
             />
             <.input
               field={@tool_policy_form[:http_fetch_enabled]}
@@ -461,11 +621,15 @@ defmodule HydraXWeb.SetupLive do
               label="Enable outbound HTTP fetches"
             />
             <.input
+              field={@tool_policy_form[:web_search_enabled]}
+              type="checkbox"
+              label="Enable dedicated web search"
+            />
+            <.input
               field={@tool_policy_form[:shell_command_enabled]}
               type="checkbox"
               label="Enable shell commands"
             />
-            <div></div>
             <.input
               field={@tool_policy_form[:shell_allowlist_csv]}
               label="Shell allowlist (comma separated)"
@@ -579,6 +743,97 @@ defmodule HydraXWeb.SetupLive do
           </div>
         </article>
       </section>
+
+      <section class="mt-6 grid gap-6 xl:grid-cols-2">
+        <article class="glass-panel p-6">
+          <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">
+            Discord channel
+          </div>
+          <h2 class="mt-3 font-display text-4xl">Webhook + outbound delivery</h2>
+          <p class="mt-3 max-w-3xl text-sm text-[var(--hx-mute)]">
+            Configure Discord so inbound interactions route into the default agent and outbound
+            replies or scheduled jobs can be delivered back to a channel.
+          </p>
+          <.form
+            for={@discord_form}
+            id="discord-form"
+            phx-submit="save_discord"
+            class="mt-6 grid gap-4"
+          >
+            <.input field={@discord_form[:application_id]} label="Application ID" />
+            <.input field={@discord_form[:bot_token]} type="password" label="Bot token" />
+            <.input field={@discord_form[:webhook_secret]} label="Webhook secret (optional)" />
+            <.input field={@discord_form[:enabled]} type="checkbox" label="Enable Discord ingress" />
+            <div class="pt-2">
+              <.button>Save Discord settings</.button>
+            </div>
+          </.form>
+          <.form
+            for={@discord_test_form}
+            phx-submit="test_discord_delivery"
+            class="mt-6 grid gap-4 xl:grid-cols-[1fr_2fr_auto]"
+          >
+            <.input field={@discord_test_form[:target]} label="Test channel id" />
+            <.input field={@discord_test_form[:message]} label="Test message" />
+            <div class="self-end pt-2">
+              <.button>Send Discord test</.button>
+            </div>
+          </.form>
+          <div
+            :if={@discord_test_result}
+            class="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-4 text-sm text-[var(--hx-mute)]"
+          >
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Discord test result
+            </div>
+            <p class="mt-3 whitespace-pre-wrap">{@discord_test_result.content}</p>
+          </div>
+        </article>
+
+        <article class="glass-panel p-6">
+          <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">
+            Slack channel
+          </div>
+          <h2 class="mt-3 font-display text-4xl">Events API + outbound delivery</h2>
+          <p class="mt-3 max-w-3xl text-sm text-[var(--hx-mute)]">
+            Configure Slack event ingress and outbound delivery so replies and scheduled jobs can
+            target a Slack channel without leaving the control plane.
+          </p>
+          <.form
+            for={@slack_form}
+            id="slack-form"
+            phx-submit="save_slack"
+            class="mt-6 grid gap-4"
+          >
+            <.input field={@slack_form[:bot_token]} type="password" label="Bot token" />
+            <.input field={@slack_form[:signing_secret]} type="password" label="Signing secret" />
+            <.input field={@slack_form[:enabled]} type="checkbox" label="Enable Slack ingress" />
+            <div class="pt-2">
+              <.button>Save Slack settings</.button>
+            </div>
+          </.form>
+          <.form
+            for={@slack_test_form}
+            phx-submit="test_slack_delivery"
+            class="mt-6 grid gap-4 xl:grid-cols-[1fr_2fr_auto]"
+          >
+            <.input field={@slack_test_form[:target]} label="Test channel id" />
+            <.input field={@slack_test_form[:message]} label="Test message" />
+            <div class="self-end pt-2">
+              <.button>Send Slack test</.button>
+            </div>
+          </.form>
+          <div
+            :if={@slack_test_result}
+            class="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-4 text-sm text-[var(--hx-mute)]"
+          >
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Slack test result
+            </div>
+            <p class="mt-3 whitespace-pre-wrap">{@slack_test_result.content}</p>
+          </div>
+        </article>
+      </section>
     </AppShell.shell>
     """
   end
@@ -601,5 +856,43 @@ defmodule HydraXWeb.SetupLive do
 
   defp default_telegram_test do
     %{"chat_id" => "", "message" => "Hydra-X Telegram smoke test"}
+  end
+
+  defp default_channel_test(channel) do
+    %{"target" => "", "message" => "Hydra-X #{String.capitalize(channel)} smoke test"}
+  end
+
+  defp require_recent_auth(socket, action) do
+    cond do
+      not Runtime.operator_password_configured?() ->
+        {:ok, socket}
+
+      socket.assigns.operator_session.recent_auth_valid? ->
+        {:ok, socket}
+
+      true ->
+        Helpers.audit_auth_action("Blocked sensitive action pending re-authentication",
+          level: "warn",
+          agent: socket.assigns.agent,
+          metadata: %{action: action}
+        )
+
+        {:reauth,
+         socket
+         |> put_flash(:error, "Sign in again to #{action}.")
+         |> push_navigate(to: "/login?reauth=1")}
+    end
+  end
+
+  defp refresh_recent_auth(session_state) do
+    now = System.system_time(:second)
+
+    session_state
+    |> Map.put(:recent_auth_at, now)
+    |> Map.put(:recent_auth_valid?, true)
+    |> Map.put(
+      :recent_auth_expires_at,
+      DateTime.from_unix!(now + OperatorAuth.recent_auth_window_seconds())
+    )
   end
 end

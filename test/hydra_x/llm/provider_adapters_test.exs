@@ -19,7 +19,11 @@ defmodule HydraX.LLM.ProviderAdaptersTest do
       assert opts[:json][:model] == "gpt-test"
       assert [%{role: "user", content: "hello"}] = opts[:json][:messages]
 
-      {:ok, %{status: 200, body: %{"choices" => [%{"message" => %{"content" => "hi"}, "finish_reason" => "stop"}]}}}
+      {:ok,
+       %{
+         status: 200,
+         body: %{"choices" => [%{"message" => %{"content" => "hi"}, "finish_reason" => "stop"}]}
+       }}
     end
 
     assert {:ok, %{content: "hi", provider: "OpenAI Test"}} =
@@ -46,7 +50,11 @@ defmodule HydraX.LLM.ProviderAdaptersTest do
       assert opts[:json][:system] == "You are terse."
       assert [%{role: "user", content: "hello"}] = opts[:json][:messages]
 
-      {:ok, %{status: 200, body: %{"content" => [%{"type" => "text", "text" => "hi"}], "stop_reason" => "end_turn"}}}
+      {:ok,
+       %{
+         status: 200,
+         body: %{"content" => [%{"type" => "text", "text" => "hi"}], "stop_reason" => "end_turn"}
+       }}
     end
 
     assert {:ok, %{content: "hi", provider: "Anthropic Test"}} =

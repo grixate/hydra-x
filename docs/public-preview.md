@@ -1,6 +1,6 @@
 # Hydra-X Public Preview Checklist
 
-This repository is now beyond the initial skeleton. Use this checklist before exposing a node to external operators or Telegram traffic.
+This repository is now beyond the initial skeleton. Use this checklist before exposing a node to external operators or external channel traffic.
 
 ## Boot
 
@@ -17,37 +17,40 @@ This repository is now beyond the initial skeleton. Use this checklist before ex
 3. Set an operator password before exposing the app beyond localhost.
 4. Configure the primary provider or stay on the mock fallback for dry-runs.
 5. Use `/settings/providers` or `mix hydra_x.providers` to edit, activate, test, and remove provider configs before exposing live traffic.
-6. Review the tool policy section and decide whether HTTP fetches or shell commands should be enabled.
-7. Use `/agents` or `mix hydra_x.agents` to verify the intended default agent, confirm the runtime is actually up for each active agent, repair any workspace scaffold drift, and refresh the bulletin for each operator-facing agent before going live.
+6. Review the tool policy section and decide whether workspace writes, dedicated web search, HTTP fetches, or shell commands should be enabled.
+7. Use `/agents` or `mix hydra_x.agents` to verify the intended default agent, confirm the runtime is actually up for each active agent, repair any workspace scaffold drift, refresh the bulletin, and warm the agent provider route before going live.
 8. Use `/conversations` or `mix hydra_x.conversations start ...` to confirm the control plane can run a real operator-driven chat before exposing external channels.
 9. Use the conversations filters to confirm archived threads, Telegram threads, and active control-plane threads can be triaged quickly once the list grows.
 10. Export one transcript, review one compaction summary, tune one agent compaction policy from `/agents` or `mix hydra_x.agents compaction ...`, and archive one completed thread from `/conversations` or `mix hydra_x.conversations export|compact|archive ...` to verify operator lifecycle workflows before preview.
 11. Use `/memory` or `mix hydra_x.memory` to verify that critical operator facts, goals, and decisions can be curated, filtered, reconciled, marked as conflicted, resolved, deleted, and synced back into the workspace markdown view.
+12. Use `/memory` or `mix hydra_x.ingest` to manually ingest at least one file from the workspace `ingest/` directory and verify it appears in both the ingest-backed file list and the recent ingest history.
 
-## Telegram
+## External Channels
 
-1. Save the Telegram bot token and optional webhook secret on `/setup`.
-2. Register the webhook from the UI or with `mix hydra_x.telegram.webhook register`.
-3. Refresh webhook status from the UI or with `mix hydra_x.telegram.webhook sync`.
-4. Send a Telegram smoke test from `/setup` or with `mix hydra_x.telegram.webhook test <chat_id> "<message>"`.
-5. Confirm `/health` shows the expected webhook URL, pending update count, and no Telegram error.
+1. Save the Telegram, Discord, and Slack credentials you intend to use on `/setup`.
+2. For Telegram, register the webhook from the UI or with `mix hydra_x.telegram.webhook register`.
+3. For Telegram, refresh webhook status from the UI or with `mix hydra_x.telegram.webhook sync`.
+4. Send at least one smoke test for each enabled channel from `/setup`.
+5. Confirm `/health` shows the expected Telegram webhook URL and that Discord/Slack are marked configured for the intended default agent.
+6. If preview will only use one external channel, explicitly disable the others so readiness reflects the actual exposure plan.
 
 ## Scheduler
 
 1. Open `/jobs` and confirm the default heartbeat and backup jobs exist.
-2. Add any additional prompt jobs needed for preview operations, using interval, daily, or weekly UTC schedules depending on the operational cadence.
-3. If a job should report back to Telegram, enable delivery and set the target chat id before the first run.
-4. Run each job once manually before relying on the recurring scheduler.
-5. Use the jobs filters or `mix hydra_x.jobs --kind ... --enabled ...` to inspect only the relevant schedule slice, `mix hydra_x.jobs create|update ...` for CLI schedule management, and `mix hydra_x.jobs run <id>` for CLI execution.
+2. Add any additional prompt jobs needed for preview operations, using interval, daily, weekly, or cron UTC schedules depending on the operational cadence.
+3. Configure timeout, retry, active-hour, and circuit cooldown settings for any job that could fail noisily or run outside operator hours.
+4. If a job should report back to Telegram, Discord, or Slack, enable delivery and set the target channel id before the first run.
+5. Run each job once manually before relying on the recurring scheduler.
+6. Use the jobs filters or `mix hydra_x.jobs --kind ... --enabled ...` to inspect only the relevant schedule slice, `mix hydra_x.jobs runs --status ... --kind ...` to review the persisted run ledger, `mix hydra_x.jobs create|update ...` for CLI schedule management, `mix hydra_x.jobs run <id>` for CLI execution, `mix hydra_x.jobs export-runs` for operator handoff/debug bundles, and `mix hydra_x.jobs reset-circuit <id>` if an operator has intentionally recovered a paused job.
 
 ## Safety And Observability
 
-1. Check `/health` for provider, Telegram, tool policy, scheduler, and recent safety events.
+1. Check `/health` for provider warmup, channel readiness, tool policy, scheduler circuits, and recent safety events.
 2. Export one operator report from `/health` or `mix hydra_x.report` so you have a portable markdown/JSON runtime snapshot before opening preview traffic.
 3. Open `/safety` or run `mix hydra_x.safety --level error` to review the latest operator-facing incidents and recent control-plane audit actions directly, then acknowledge or resolve anything already triaged.
 4. Review the runtime counters section to confirm provider requests, tool executions, gateway deliveries, scheduler jobs, OTP alarms, and backup manifests are visible.
 5. If outbound fetches should be restricted, set `HYDRA_X_HTTP_ALLOWLIST` or configure the persisted tool policy in `/setup`.
-6. If shell access is not needed, disable it in `/setup`.
+6. If workspace writes, web search, or shell access are not needed, disable them in `/setup`.
 7. Open `/budget` or run `mix hydra_x.budget` to confirm the active agent has the intended hard-limit action and token ceilings before preview traffic starts.
 
 ## Recovery
@@ -60,4 +63,4 @@ This repository is now beyond the initial skeleton. Use this checklist before ex
 6. Use `mix hydra_x.healthcheck --only-warn` and `mix hydra_x.doctor --required-only --only-warn` when you want just the unresolved blockers instead of the full report.
 7. Use `mix hydra_x.report --required-only --only-warn` after recovery when you want a portable operator snapshot to attach to the incident or deploy notes.
 8. Use `/conversations`, `/memory`, and `/jobs` to verify persisted state after recovery.
-9. Use `/conversations` or `mix hydra_x.conversations retry-delivery <id>` to retry any failed Telegram delivery before clearing the incident.
+9. Use `/conversations` or `mix hydra_x.conversations retry-delivery <id>` to retry any failed channel delivery before clearing the incident.

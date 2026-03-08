@@ -20,6 +20,8 @@ defmodule HydraXWeb.HealthLive do
      |> assign(:readiness_report, Runtime.readiness_report())
      |> assign(:memory_status, Runtime.memory_triage_status())
      |> assign(:telegram_status, Runtime.telegram_status())
+     |> assign(:discord_status, Runtime.discord_status())
+     |> assign(:slack_status, Runtime.slack_status())
      |> assign(:safety_status, Runtime.safety_status())
      |> assign(:observability_status, Runtime.observability_status())
      |> assign(:operator_status, Runtime.operator_status())
@@ -267,6 +269,58 @@ defmodule HydraXWeb.HealthLive do
       </section>
 
       <section class="glass-panel mt-6 p-6">
+        <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">Discord + Slack</div>
+        <h2 class="mt-3 font-display text-4xl">Additional channel readiness</h2>
+        <div class="mt-6 grid gap-3 lg:grid-cols-2">
+          <article
+            :for={status <- [@discord_status, @slack_status]}
+            class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4"
+          >
+            <div class="flex items-center justify-between gap-4">
+              <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                {status.channel}
+              </div>
+              <span class={[
+                "rounded-full border px-3 py-1 font-mono text-xs uppercase tracking-[0.18em]",
+                if(status.configured and status.enabled,
+                  do: "border-emerald-400/20 bg-emerald-400/10 text-emerald-300",
+                  else: "border-amber-400/20 bg-amber-400/10 text-amber-300"
+                )
+              ]}>
+                {if(status.configured and status.enabled, do: "ready", else: "pending")}
+              </span>
+            </div>
+            <p class="mt-3 text-sm text-[var(--hx-mute)]">
+              {if status.configured, do: "configured", else: "not configured"}
+              {if status.default_agent_name, do: " -> #{status.default_agent_name}", else: ""}
+            </p>
+            <p :if={status.binding} class="mt-2 break-all text-xs text-[var(--hx-mute)]">
+              binding: {status.binding}
+            </p>
+            <div class="mt-3 space-y-2">
+              <p
+                :if={status.recent_failures == []}
+                class="text-xs text-[var(--hx-mute)]"
+              >
+                No recent delivery failures.
+              </p>
+              <div
+                :for={failure <- status.recent_failures}
+                class="rounded-xl border border-white/10 bg-black/10 px-3 py-3"
+              >
+                <div class="flex items-center justify-between gap-3">
+                  <div class="text-sm text-[var(--hx-accent)]">##{failure.id} {failure.title}</div>
+                  <div class="text-xs text-[var(--hx-mute)]">
+                    {format_datetime(failure.updated_at)}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="glass-panel mt-6 p-6">
         <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">Operator auth</div>
         <h2 class="mt-3 font-display text-4xl">Control-plane lock state</h2>
         <div class="mt-6 grid gap-3 lg:grid-cols-2">
@@ -290,6 +344,27 @@ defmodule HydraXWeb.HealthLive do
                 else: "not set"}
             </p>
           </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Password age
+            </div>
+            <p class="mt-3 text-sm text-[var(--hx-mute)]">
+              {if @operator_status.password_age_days != nil,
+                do: "#{@operator_status.password_age_days} days",
+                else: "not set"}
+            </p>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Session policy
+            </div>
+            <p class="mt-3 text-sm text-[var(--hx-mute)]">
+              Max {div(@operator_status.session_max_age_seconds, 3600)}h, idle {div(
+                @operator_status.idle_timeout_seconds,
+                60
+              )}m, recent auth {div(@operator_status.recent_auth_window_seconds, 60)}m
+            </p>
+          </article>
         </div>
       </section>
 
@@ -297,6 +372,14 @@ defmodule HydraXWeb.HealthLive do
         <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">Guarded tools</div>
         <h2 class="mt-3 font-display text-4xl">Execution policy</h2>
         <div class="mt-6 grid gap-3 lg:grid-cols-3">
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Workspace listing
+            </div>
+            <div class="mt-3 font-display text-4xl">
+              {if @tool_status.workspace_list_enabled, do: "on", else: "off"}
+            </div>
+          </article>
           <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
             <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
               Workspace guard
@@ -307,10 +390,26 @@ defmodule HydraXWeb.HealthLive do
           </article>
           <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
             <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Workspace writes
+            </div>
+            <div class="mt-3 font-display text-4xl">
+              {if @tool_status.workspace_write_enabled, do: "on", else: "off"}
+            </div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
               URL guard
             </div>
             <div class="mt-3 font-display text-4xl">
               {if @tool_status.url_guard, do: "on", else: "off"}
+            </div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Web search
+            </div>
+            <div class="mt-3 font-display text-4xl">
+              {if @tool_status.web_search_enabled, do: "on", else: "off"}
             </div>
           </article>
           <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
@@ -345,7 +444,7 @@ defmodule HydraXWeb.HealthLive do
       <section class="glass-panel mt-6 p-6">
         <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">Scheduler</div>
         <h2 class="mt-3 font-display text-4xl">Heartbeat and job execution</h2>
-        <div class="mt-6 grid gap-3 lg:grid-cols-3">
+        <div class="mt-6 grid gap-3 lg:grid-cols-5">
           <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
             <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
               Configured jobs
@@ -366,6 +465,31 @@ defmodule HydraXWeb.HealthLive do
               {@scheduler_status.runs |> List.first() |> then(&(&1 && &1.status)) || "none"}
             </p>
           </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Open circuits
+            </div>
+            <div class="mt-3 font-display text-4xl">{length(@scheduler_status.open_circuits)}</div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Skipped runs
+            </div>
+            <div class="mt-3 font-display text-4xl">{length(@scheduler_status.skipped_runs)}</div>
+          </article>
+        </div>
+        <div :if={@scheduler_status.open_circuits != []} class="mt-4 space-y-2">
+          <div class="font-mono text-xs uppercase tracking-[0.18em] text-amber-200">
+            Open scheduler circuits
+          </div>
+          <div
+            :for={job <- @scheduler_status.open_circuits}
+            class="rounded-2xl border border-amber-400/20 bg-amber-400/10 px-4 py-3 text-sm text-amber-100"
+          >
+            {job.name} · failures {job.consecutive_failures} · {job.last_failure_reason || "unknown"} · {if job.paused_until,
+              do: "paused until #{Calendar.strftime(job.paused_until, "%Y-%m-%d %H:%M UTC")}",
+              else: "manual reset required"}
+          </div>
         </div>
       </section>
 

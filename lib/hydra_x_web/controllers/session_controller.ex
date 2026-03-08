@@ -2,15 +2,17 @@ defmodule HydraXWeb.SessionController do
   use HydraXWeb, :controller
 
   alias HydraX.Runtime
+  alias HydraX.Runtime.Helpers
   alias HydraX.Runtime.OperatorSecret
   alias HydraXWeb.OperatorAuth
 
   @max_attempts 5
   @window_seconds 60
 
-  def new(conn, _params) do
+  def new(conn, params) do
     render(conn, :new,
       password_configured?: Runtime.operator_password_configured?(),
+      reauth?: params["reauth"] == "1",
       changeset: OperatorSecret.changeset(%OperatorSecret{}, %{})
     )
   end
@@ -19,8 +21,14 @@ defmodule HydraXWeb.SessionController do
     ip = client_ip(conn)
 
     if rate_limited?(ip) do
+      Helpers.audit_auth_action("Blocked operator login due to rate limit",
+        level: "warn",
+        metadata: %{ip: ip, window_seconds: @window_seconds, max_attempts: @max_attempts}
+      )
+
       render(conn, :new,
         password_configured?: Runtime.operator_password_configured?(),
+        reauth?: false,
         changeset:
           OperatorSecret.changeset(%OperatorSecret{}, %{})
           |> Ecto.Changeset.add_error(:password, "too many attempts, try again later")
@@ -29,6 +37,10 @@ defmodule HydraXWeb.SessionController do
       case Runtime.authenticate_operator(params["password"] || "") do
         :ok ->
           clear_attempts(ip)
+
+          Helpers.audit_auth_action("Operator login succeeded",
+            metadata: %{ip: ip}
+          )
 
           conn
           |> OperatorAuth.log_in()
@@ -42,9 +54,16 @@ defmodule HydraXWeb.SessionController do
 
         {:error, :unauthorized} ->
           record_attempt(ip)
+          attempts = current_attempts(ip)
+
+          Helpers.audit_auth_action("Operator login failed",
+            level: "warn",
+            metadata: %{ip: ip, attempts: attempts, window_seconds: @window_seconds}
+          )
 
           render(conn, :new,
             password_configured?: true,
+            reauth?: false,
             changeset:
               OperatorSecret.changeset(%OperatorSecret{}, %{})
               |> Ecto.Changeset.add_error(:password, "is invalid")
@@ -54,6 +73,10 @@ defmodule HydraXWeb.SessionController do
   end
 
   def delete(conn, _params) do
+    Helpers.audit_auth_action("Operator logged out",
+      metadata: %{ip: client_ip(conn)}
+    )
+
     conn
     |> OperatorAuth.log_out()
     |> put_flash(:info, "Signed out.")
@@ -112,6 +135,15 @@ defmodule HydraXWeb.SessionController do
   defp clear_attempts(ip) do
     ensure_table()
     :ets.delete(:login_rate_limit, ip)
+  end
+
+  defp current_attempts(ip) do
+    ensure_table()
+
+    case :ets.lookup(:login_rate_limit, ip) do
+      [{^ip, attempts, _window_start}] -> attempts
+      _ -> 0
+    end
   end
 
   defp client_ip(conn) do
