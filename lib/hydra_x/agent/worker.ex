@@ -5,7 +5,7 @@ defmodule HydraX.Agent.Worker do
   alias HydraX.Runtime
   alias HydraX.Safety
   alias HydraX.Telemetry
-  alias HydraX.Tools.{HttpFetch, MemoryRecall, MemorySave, ShellCommand, WorkspaceRead}
+  alias HydraX.Tool.Registry
 
   def start_link(args) do
     :gen_statem.start_link(__MODULE__, args, [])
@@ -19,11 +19,15 @@ defmodule HydraX.Agent.Worker do
     }
   end
 
-  def run(agent_id, conversation, analysis, messages) do
+  @doc """
+  Execute a list of tool calls from the LLM response.
+  Returns a list of `%{tool_use_id, tool_name, result}` maps.
+  """
+  def execute_tool_calls(agent_id, conversation, tool_calls) do
     {:ok, pid} =
       DynamicSupervisor.start_child(
         HydraX.Agent.worker_supervisor(agent_id),
-        {__MODULE__, %{conversation: conversation, analysis: analysis, messages: messages}}
+        {__MODULE__, %{conversation: conversation, tool_calls: tool_calls}}
       )
 
     :gen_statem.call(pid, :run, 15_000)
@@ -42,198 +46,80 @@ defmodule HydraX.Agent.Worker do
         {:call, from},
         :run,
         :ready,
-        %{conversation: conversation, analysis: analysis, messages: messages} = data
+        %{conversation: conversation, tool_calls: tool_calls} = data
       ) do
-    full_text = Enum.map_join(messages, "\n", & &1.content)
     agent = Runtime.get_agent!(conversation.agent_id)
     tool_policy = Runtime.effective_tool_policy()
 
     context = %{
       workspace_root: agent.workspace_root,
       http_allowlist: tool_policy.http_allowlist,
-      shell_allowlist: tool_policy.shell_allowlist
+      shell_allowlist: tool_policy.shell_allowlist,
+      agent_id: conversation.agent_id,
+      conversation_id: conversation.id
     }
 
     results =
-      []
-      |> maybe_save_memory(analysis, conversation, full_text)
-      |> maybe_recall_memory(analysis, conversation)
-      |> maybe_read_workspace(analysis, conversation, context, tool_policy)
-      |> maybe_fetch_url(analysis, conversation, context, tool_policy)
-      |> maybe_run_shell(analysis, conversation, context, tool_policy)
+      Enum.map(tool_calls, fn tool_call ->
+        execute_single(tool_call, context, conversation, tool_policy)
+      end)
 
     {:stop_and_reply, :normal, [{:reply, from, results}], data}
   end
 
   def handle_event(_type, _event, _state, data), do: {:keep_state, data}
 
-  defp maybe_save_memory(results, %{should_save_memory: false}, _conversation, _text), do: results
+  defp execute_single(%{id: id, name: name, arguments: arguments}, context, conversation, tool_policy) do
+    case Registry.find_tool(name) do
+      nil ->
+        %{tool_use_id: id, tool_name: name, result: %{error: "Unknown tool: #{name}"}, is_error: true}
 
-  defp maybe_save_memory(results, analysis, conversation, text) do
-    {:ok, result} =
-      MemorySave.execute(
-        %{
-          agent_id: conversation.agent_id,
-          conversation_id: conversation.id,
-          type: analysis.memory_type,
-          content: String.trim(text)
-        },
-        %{}
-      )
+      tool_module ->
+        if tool_enabled?(tool_module, tool_policy) do
+          params = enrich_params(arguments, name, context)
 
-    [
-      %{tool: MemorySave.name(), type: result.type, content: result.content, id: result.id}
-      | results
-    ]
-  end
+          case tool_module.execute(params, context) do
+            {:ok, result} ->
+              Telemetry.tool_execution(name, :ok)
+              %{tool_use_id: id, tool_name: name, result: result, is_error: false}
 
-  defp maybe_recall_memory(results, %{should_recall_memory: false}, _conversation), do: results
+            {:error, reason} ->
+              log_tool_warning(conversation, name, arguments, reason)
+              %{tool_use_id: id, tool_name: name, result: %{error: inspect(reason)}, is_error: true}
+          end
+        else
+          log_tool_warning(conversation, name, arguments, :tool_disabled)
 
-  defp maybe_recall_memory(results, analysis, conversation) do
-    {:ok, %{results: memories}} =
-      MemoryRecall.execute(
-        %{agent_id: conversation.agent_id, query: analysis.query, limit: 5},
-        %{}
-      )
-
-    [%{tool: MemoryRecall.name(), results: memories} | results]
-  end
-
-  defp maybe_read_workspace(
-         results,
-         %{should_read_workspace: false},
-         _conversation,
-         _context,
-         _policy
-       ),
-       do: results
-
-  defp maybe_read_workspace(results, %{workspace_path: nil}, _conversation, _context, _policy),
-    do: results
-
-  defp maybe_read_workspace(results, analysis, conversation, context, policy) do
-    if policy.workspace_read_enabled do
-      case WorkspaceRead.execute(%{path: analysis.workspace_path}, context) do
-        {:ok, result} ->
-          Telemetry.tool_execution(WorkspaceRead.name(), :ok)
-          [%{tool: WorkspaceRead.name(), path: result.path, excerpt: result.excerpt} | results]
-
-        {:error, reason} ->
-          log_tool_warning(
-            conversation,
-            WorkspaceRead.name(),
-            %{path: analysis.workspace_path},
-            reason
-          )
-
-          [
-            %{tool: WorkspaceRead.name(), path: analysis.workspace_path, error: inspect(reason)}
-            | results
-          ]
-      end
-    else
-      log_tool_warning(
-        conversation,
-        WorkspaceRead.name(),
-        %{path: analysis.workspace_path},
-        :tool_disabled
-      )
-
-      [
-        %{
-          tool: WorkspaceRead.name(),
-          path: analysis.workspace_path,
-          error: inspect(:tool_disabled)
-        }
-        | results
-      ]
+          %{
+            tool_use_id: id,
+            tool_name: name,
+            result: %{error: "Tool #{name} is disabled by policy"},
+            is_error: true
+          }
+        end
     end
   end
 
-  defp maybe_fetch_url(results, %{should_fetch_url: false}, _conversation, _context, _policy),
-    do: results
-
-  defp maybe_fetch_url(results, %{url: nil}, _conversation, _context, _policy), do: results
-
-  defp maybe_fetch_url(results, analysis, conversation, context, policy) do
-    if policy.http_fetch_enabled do
-      case HttpFetch.execute(%{url: analysis.url}, context) do
-        {:ok, result} ->
-          Telemetry.tool_execution(HttpFetch.name(), :ok, %{url: result.url})
-
-          [
-            %{
-              tool: HttpFetch.name(),
-              url: result.url,
-              excerpt: result.excerpt,
-              status: result.status
-            }
-            | results
-          ]
-
-        {:error, reason} ->
-          log_tool_warning(conversation, HttpFetch.name(), %{url: analysis.url}, reason)
-          [%{tool: HttpFetch.name(), url: analysis.url, error: inspect(reason)} | results]
-      end
-    else
-      log_tool_warning(conversation, HttpFetch.name(), %{url: analysis.url}, :tool_disabled)
-      [%{tool: HttpFetch.name(), url: analysis.url, error: inspect(:tool_disabled)} | results]
+  defp tool_enabled?(module, policy) do
+    case module.name() do
+      "http_fetch" -> Map.get(policy, :http_fetch_enabled, true)
+      "shell_command" -> Map.get(policy, :shell_command_enabled, true)
+      "workspace_read" -> Map.get(policy, :workspace_read_enabled, true)
+      _ -> true
     end
   end
 
-  defp maybe_run_shell(results, %{should_run_shell: false}, _conversation, _context, _policy),
-    do: results
-
-  defp maybe_run_shell(results, %{shell_command: nil}, _conversation, _context, _policy),
-    do: results
-
-  defp maybe_run_shell(results, analysis, conversation, context, policy) do
-    if policy.shell_command_enabled do
-      case ShellCommand.execute(%{command: analysis.shell_command}, context) do
-        {:ok, result} ->
-          Telemetry.tool_execution(ShellCommand.name(), :ok, %{command: result.command})
-
-          [
-            %{
-              tool: ShellCommand.name(),
-              command: result.command,
-              output: result.output,
-              exit_status: result.exit_status
-            }
-            | results
-          ]
-
-        {:error, reason} ->
-          log_tool_warning(
-            conversation,
-            ShellCommand.name(),
-            %{command: analysis.shell_command},
-            reason
-          )
-
-          [
-            %{tool: ShellCommand.name(), command: analysis.shell_command, error: inspect(reason)}
-            | results
-          ]
-      end
-    else
-      log_tool_warning(
-        conversation,
-        ShellCommand.name(),
-        %{command: analysis.shell_command},
-        :tool_disabled
-      )
-
-      [
-        %{
-          tool: ShellCommand.name(),
-          command: analysis.shell_command,
-          error: inspect(:tool_disabled)
-        }
-        | results
-      ]
-    end
+  defp enrich_params(arguments, "memory_save", context) do
+    arguments
+    |> Map.put(:agent_id, context.agent_id)
+    |> Map.put(:conversation_id, context.conversation_id)
   end
+
+  defp enrich_params(arguments, "memory_recall", context) do
+    Map.put(arguments, :agent_id, context.agent_id)
+  end
+
+  defp enrich_params(arguments, _name, _context), do: arguments
 
   defp log_tool_warning(conversation, tool_name, params, reason) do
     Telemetry.tool_execution(tool_name, :error, %{reason: inspect(reason)})

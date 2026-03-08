@@ -33,7 +33,7 @@ defmodule HydraX.GatewayTest do
              )
 
     assert_receive {:telegram_reply, %{external_ref: "42", content: content}}
-    assert content =~ "Saved memory"
+    assert content =~ "Mock response"
 
     [conversation] = Runtime.list_conversations(agent_id: agent.id, limit: 10)
     assert conversation.channel == "telegram"

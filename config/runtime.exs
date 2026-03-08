@@ -20,6 +20,13 @@ if System.get_env("PHX_SERVER") do
   config :hydra_x, HydraXWeb.Endpoint, server: true
 end
 
+# Cluster configuration (disabled by default)
+# Enable with HYDRA_CLUSTER_ENABLED=true for multi-node awareness.
+# Note: SQLite is single-writer; true multi-node requires PostgreSQL.
+if System.get_env("HYDRA_CLUSTER_ENABLED") == "true" do
+  config :hydra_x, :cluster_enabled, true
+end
+
 if config_env() == :prod do
   database_path =
     System.get_env("DATABASE_PATH") ||

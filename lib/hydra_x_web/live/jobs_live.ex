@@ -7,9 +7,12 @@ defmodule HydraXWeb.JobsLive do
 
   @impl true
   def mount(_params, _session, socket) do
+    if connected?(socket), do: Phoenix.PubSub.subscribe(HydraX.PubSub, "jobs")
     agent = Runtime.ensure_default_agent!()
     Runtime.ensure_default_jobs!()
     filters = default_filters()
+
+    {jobs, has_next} = list_jobs_paginated(filters, 1)
 
     {:ok,
      socket
@@ -18,8 +21,10 @@ defmodule HydraXWeb.JobsLive do
      |> assign(:stats, stats())
      |> assign(:agent, agent)
      |> assign(:filters, filters)
+     |> assign(:page, 1)
+     |> assign(:has_next, has_next)
      |> assign(:filter_form, to_form(filters, as: :filters))
-     |> assign(:jobs, list_jobs(filters))
+     |> assign(:jobs, jobs)
      |> assign(:runs, Runtime.recent_job_runs(20))
      |> assign(:editing_job, %ScheduledJob{})
      |> assign(
@@ -126,11 +131,35 @@ defmodule HydraXWeb.JobsLive do
       default_filters()
       |> Map.merge(params)
 
+    {jobs, has_next} = list_jobs_paginated(filters, 1)
+
     {:noreply,
      socket
      |> assign(:filters, filters)
+     |> assign(:page, 1)
+     |> assign(:has_next, has_next)
      |> assign(:filter_form, to_form(filters, as: :filters))
-     |> assign(:jobs, list_jobs(filters))}
+     |> assign(:jobs, jobs)}
+  end
+
+  def handle_event("paginate", %{"page" => page}, socket) do
+    page = safe_page_number(page)
+    {jobs, has_next} = list_jobs_paginated(socket.assigns.filters, page)
+
+    {:noreply,
+     socket
+     |> assign(:page, page)
+     |> assign(:has_next, has_next)
+     |> assign(:jobs, jobs)}
+  end
+
+  @impl true
+  def handle_info({:job_completed, _job_id}, socket) do
+    {:noreply,
+     socket
+     |> assign(:jobs, list_jobs(socket.assigns.filters))
+     |> assign(:runs, Runtime.recent_job_runs(20))
+     |> assign(:stats, stats())}
   end
 
   @impl true
@@ -240,6 +269,7 @@ defmodule HydraXWeb.JobsLive do
               No scheduled jobs yet.
             </div>
           </div>
+          <.pagination page={@page} has_next={@has_next} />
         </article>
 
         <article class="glass-panel p-6">
@@ -353,13 +383,28 @@ defmodule HydraXWeb.JobsLive do
     %{"search" => "", "kind" => "", "enabled" => ""}
   end
 
+  @jobs_page_size 25
+
   defp list_jobs(filters) do
     Runtime.list_scheduled_jobs(
-      limit: 50,
+      limit: @jobs_page_size,
       kind: blank_to_nil(filters["kind"]),
       enabled: parse_enabled(filters["enabled"]),
       search: blank_to_nil(filters["search"])
     )
+  end
+
+  defp list_jobs_paginated(filters, page) do
+    results =
+      Runtime.list_scheduled_jobs(
+        limit: @jobs_page_size + 1,
+        offset: (page - 1) * @jobs_page_size,
+        kind: blank_to_nil(filters["kind"]),
+        enabled: parse_enabled(filters["enabled"]),
+        search: blank_to_nil(filters["search"])
+      )
+
+    {Enum.take(results, @jobs_page_size), length(results) > @jobs_page_size}
   end
 
   defp format_datetime(nil), do: "never"
@@ -395,6 +440,16 @@ defmodule HydraXWeb.JobsLive do
   defp pad(nil), do: "00"
   defp pad(value) when value < 10, do: "0#{value}"
   defp pad(value), do: to_string(value)
+
+  defp safe_page_number(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {n, ""} when n > 0 -> n
+      _ -> 1
+    end
+  end
+
+  defp safe_page_number(value) when is_integer(value) and value > 0, do: value
+  defp safe_page_number(_), do: 1
 
   defp stats do
     %{

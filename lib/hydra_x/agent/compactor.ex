@@ -2,6 +2,8 @@ defmodule HydraX.Agent.Compactor do
   @moduledoc false
   use GenServer
 
+  alias HydraX.Budget
+  alias HydraX.LLM.Router
   alias HydraX.Runtime
 
   def start_link(opts) do
@@ -61,11 +63,9 @@ defmodule HydraX.Agent.Compactor do
     level = level_for(length(turns), thresholds)
 
     if level do
-      summary =
-        turns
-        |> Enum.take(max(length(turns) - 3, 0))
-        |> Enum.map_join("\n", fn turn -> "#{turn.role}: #{turn.content}" end)
-        |> String.slice(0, 800)
+      # Summarize all turns except the most recent 3 (those stay in full context)
+      older_turns = Enum.take(turns, max(length(turns) - 3, 0))
+      summary = summarize_turns(older_turns, state)
 
       Runtime.upsert_checkpoint(state.conversation_id, "compactor", %{
         "level" => level,
@@ -76,6 +76,53 @@ defmodule HydraX.Agent.Compactor do
 
     state
   end
+
+  defp summarize_turns([], _state), do: nil
+
+  defp summarize_turns(turns, state) do
+    transcript =
+      turns
+      |> Enum.map_join("\n", fn turn -> "#{turn.role}: #{turn.content}" end)
+
+    messages = [
+      %{
+        role: "user",
+        content: """
+        Summarize the following conversation concisely. Preserve key facts, decisions, \
+        user preferences, and any commitments made. Omit small talk and redundant exchanges. \
+        Keep the summary under 600 words.
+
+        #{transcript}
+        """
+      }
+    ]
+
+    estimated_tokens = Budget.estimate_prompt_tokens(messages)
+
+    case Budget.preflight(state.agent_id, state.conversation_id, estimated_tokens) do
+      {:ok, _} ->
+        case Router.complete(%{messages: messages}) do
+          {:ok, response} ->
+            output_tokens = Budget.estimate_tokens(response.content || "")
+
+            Budget.record_usage(state.agent_id, state.conversation_id,
+              tokens_in: estimated_tokens,
+              tokens_out: output_tokens,
+              metadata: %{provider: response.provider, purpose: "compaction"}
+            )
+
+            response.content || fallback_summary(transcript)
+
+          {:error, _reason} ->
+            fallback_summary(transcript)
+        end
+
+      {:error, _} ->
+        fallback_summary(transcript)
+    end
+  end
+
+  defp fallback_summary(transcript), do: String.slice(transcript, 0, 800)
 
   defp level_for(count, thresholds) when count >= thresholds.hard, do: "hard"
   defp level_for(count, thresholds) when count >= thresholds.medium, do: "medium"

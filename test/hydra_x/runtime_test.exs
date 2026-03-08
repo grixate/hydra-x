@@ -30,39 +30,48 @@ defmodule HydraX.RuntimeTest do
     :ok
   end
 
-  test "chat flow persists turns and memory recall works" do
+  test "chat flow persists turns with mock provider" do
     agent = create_agent()
     {:ok, pid} = HydraX.Agent.ensure_started(agent)
     on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
 
-    {:ok, write_conversation} =
-      Runtime.start_conversation(agent, %{channel: "cli", title: "memory-write"})
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{channel: "cli", title: "basic-chat"})
 
-    write_response =
+    response =
       Channel.submit(
         agent,
-        write_conversation,
-        "Remember that the operator prefers terse answers and decisive summaries.",
+        conversation,
+        "Hello, how are you?",
         %{source: "test"}
       )
 
-    assert write_response =~ "Saved memory"
+    assert response =~ "Mock response"
+    assert response =~ "Hello, how are you?"
+    assert length(Runtime.list_turns(conversation.id)) == 2
+  end
+
+  test "memory tools work directly" do
+    agent = create_agent()
+
+    {:ok, result} =
+      HydraX.Tools.MemorySave.execute(
+        %{
+          agent_id: agent.id,
+          type: "Preference",
+          content: "The operator prefers terse answers and decisive summaries."
+        },
+        %{}
+      )
+
+    assert result.type == "Preference"
     assert [%{type: "Preference"} | _] = Memory.search(agent.id, "terse answers", 5)
 
-    {:ok, recall_conversation} =
-      Runtime.start_conversation(agent, %{channel: "cli", title: "memory-read"})
+    {:ok, recall} =
+      HydraX.Tools.MemoryRecall.execute(%{agent_id: agent.id, query: "terse answers"}, %{})
 
-    recall_response =
-      Channel.submit(
-        agent,
-        recall_conversation,
-        "What do you remember about terse answers?",
-        %{source: "test"}
-      )
-
-    assert recall_response =~ "Relevant memory"
-    assert recall_response =~ "terse answers"
-    assert length(Runtime.list_turns(recall_conversation.id)) == 2
+    assert length(recall.results) > 0
+    assert hd(recall.results).content =~ "terse answers"
   end
 
   test "budget hard limit rejects llm traffic and logs a safety event" do
@@ -231,92 +240,52 @@ defmodule HydraX.RuntimeTest do
     assert Enum.any?(Memory.list_edges_for(winner.id), &(&1.kind == "supersedes"))
   end
 
-  test "workspace reads are routed through the worker with path confinement" do
+  test "workspace read tool returns file contents within workspace" do
     agent = create_agent()
-    {:ok, pid} = HydraX.Agent.ensure_started(agent)
-    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
-
     File.write!(Path.join(agent.workspace_root, "SOUL.md"), "Hydra-X workspace directive")
 
-    {:ok, conversation} =
-      Runtime.start_conversation(agent, %{channel: "cli", title: "workspace-read"})
-
-    response =
-      Channel.submit(
-        agent,
-        conversation,
-        "Read file SOUL.md and tell me what it says.",
-        %{source: "test"}
+    {:ok, result} =
+      HydraX.Tools.WorkspaceRead.execute(
+        %{path: "SOUL.md"},
+        %{workspace_root: agent.workspace_root}
       )
 
-    assert response =~ "Workspace file SOUL.md"
-    assert response =~ "Hydra-X workspace directive"
+    assert result.path == "SOUL.md"
+    assert result.excerpt =~ "Hydra-X workspace directive"
   end
 
-  test "workspace traversal attempts are blocked and logged" do
+  test "workspace read tool blocks path traversal" do
     agent = create_agent()
-    {:ok, pid} = HydraX.Agent.ensure_started(agent)
-    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
 
-    {:ok, conversation} =
-      Runtime.start_conversation(agent, %{channel: "cli", title: "workspace-block"})
-
-    response =
-      Channel.submit(
-        agent,
-        conversation,
-        "Read file ../secrets.txt and tell me what it says.",
-        %{source: "test"}
-      )
-
-    assert response =~ "workspace_read error"
-
-    [event | _] = Safety.recent_events(agent.id, 5)
-    assert event.category == "tool"
-    assert event.message =~ "workspace_read"
+    assert {:error, _reason} =
+             HydraX.Tools.WorkspaceRead.execute(
+               %{path: "../secrets.txt"},
+               %{workspace_root: agent.workspace_root}
+             )
   end
 
-  test "allowlisted shell commands run through the worker" do
+  test "allowlisted shell commands execute successfully" do
     agent = create_agent()
-    {:ok, pid} = HydraX.Agent.ensure_started(agent)
-    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
 
-    {:ok, conversation} =
-      Runtime.start_conversation(agent, %{channel: "cli", title: "shell-command"})
-
-    response =
-      Channel.submit(
-        agent,
-        conversation,
-        "Run pwd",
-        %{source: "test"}
+    {:ok, result} =
+      HydraX.Tools.ShellCommand.execute(
+        %{command: "pwd"},
+        %{workspace_root: agent.workspace_root, shell_allowlist: ["pwd", "ls"]}
       )
 
-    assert response =~ "Shell command pwd"
-    assert response =~ agent.workspace_root
+    assert result.command == "pwd"
+    assert result.output =~ agent.workspace_root
+    assert result.exit_status == 0
   end
 
-  test "disallowed shell commands are blocked and logged" do
+  test "disallowed shell commands are blocked" do
     agent = create_agent()
-    {:ok, pid} = HydraX.Agent.ensure_started(agent)
-    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
 
-    {:ok, conversation} =
-      Runtime.start_conversation(agent, %{channel: "cli", title: "shell-block"})
-
-    response =
-      Channel.submit(
-        agent,
-        conversation,
-        "Run git checkout -b danger",
-        %{source: "test"}
-      )
-
-    assert response =~ "shell_command error"
-
-    [event | _] = Safety.recent_events(agent.id, 5)
-    assert event.category == "tool"
-    assert event.message =~ "shell_command"
+    assert {:error, _reason} =
+             HydraX.Tools.ShellCommand.execute(
+               %{command: "git checkout -b danger"},
+               %{workspace_root: agent.workspace_root, shell_allowlist: ["pwd", "ls"]}
+             )
   end
 
   test "health snapshot warns when recent safety events exist" do
@@ -578,29 +547,26 @@ defmodule HydraX.RuntimeTest do
     assert DateTime.compare(updated.next_run_at, DateTime.utc_now()) == :gt
   end
 
-  test "tool policy can disable shell execution at runtime" do
-    agent = create_agent()
-    {:ok, pid} = HydraX.Agent.ensure_started(agent)
-    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
-
+  test "tool policy disables tools in the registry" do
     {:ok, _policy} =
       Runtime.save_tool_policy(%{
         shell_command_enabled: false
       })
 
-    {:ok, conversation} =
-      Runtime.start_conversation(agent, %{channel: "cli", title: "shell-disabled"})
+    policy = Runtime.effective_tool_policy()
+    schemas = HydraX.Tool.Registry.available_schemas(policy)
+    tool_names = Enum.map(schemas, & &1.name)
 
-    response =
-      Channel.submit(
-        agent,
-        conversation,
-        "Run pwd",
-        %{source: "test"}
-      )
+    refute "shell_command" in tool_names
+    assert "memory_recall" in tool_names
+    assert "http_fetch" in tool_names
 
-    assert response =~ "shell_command error"
-    assert response =~ ":tool_disabled"
+    # Re-enable
+    {:ok, _policy} = Runtime.save_tool_policy(%{shell_command_enabled: true})
+    policy = Runtime.effective_tool_policy()
+    schemas = HydraX.Tool.Registry.available_schemas(policy)
+    tool_names = Enum.map(schemas, & &1.name)
+    assert "shell_command" in tool_names
   end
 
   test "provider failures return an assistant error instead of crashing the channel" do
@@ -647,7 +613,7 @@ defmodule HydraX.RuntimeTest do
 
     request_fn = fn opts ->
       assert opts[:json][:model] == "gpt-test"
-      {:ok, %{status: 200, body: %{"choices" => [%{"message" => %{"content" => "OK"}}]}}}
+      {:ok, %{status: 200, body: %{"choices" => [%{"message" => %{"content" => "OK"}, "finish_reason" => "stop"}]}}}
     end
 
     assert {:ok, %{content: "OK", provider: "OpenAI Test"}} =

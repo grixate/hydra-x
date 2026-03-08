@@ -3,7 +3,7 @@ defmodule HydraX.Runtime.ScheduledJob do
   import Ecto.Changeset
 
   @kinds ~w(heartbeat prompt backup)
-  @schedule_modes ~w(interval daily weekly)
+  @schedule_modes ~w(interval daily weekly cron)
 
   schema "scheduled_jobs" do
     field :name, :string
@@ -20,6 +20,7 @@ defmodule HydraX.Runtime.ScheduledJob do
     field :delivery_target, :string
     field :next_run_at, :utc_datetime_usec
     field :last_run_at, :utc_datetime_usec
+    field :cron_expression, :string
     field :config, :map, default: %{}
 
     belongs_to :agent, HydraX.Runtime.AgentProfile
@@ -40,6 +41,7 @@ defmodule HydraX.Runtime.ScheduledJob do
       :weekday_csv,
       :run_hour,
       :run_minute,
+      :cron_expression,
       :enabled,
       :delivery_enabled,
       :delivery_channel,
@@ -70,10 +72,28 @@ defmodule HydraX.Runtime.ScheduledJob do
         |> validate_number(:run_hour, greater_than_or_equal_to: 0, less_than_or_equal_to: 23)
         |> validate_number(:run_minute, greater_than_or_equal_to: 0, less_than_or_equal_to: 59)
 
+      "cron" ->
+        changeset
+        |> validate_required([:cron_expression])
+        |> validate_cron_expression()
+
       _ ->
         changeset
         |> validate_required([:interval_minutes])
         |> validate_number(:interval_minutes, greater_than: 0)
+    end
+  end
+
+  defp validate_cron_expression(changeset) do
+    case get_field(changeset, :cron_expression) do
+      nil ->
+        changeset
+
+      expression ->
+        case Crontab.CronExpression.Parser.parse(expression) do
+          {:ok, _} -> changeset
+          {:error, _} -> add_error(changeset, :cron_expression, "is not a valid cron expression")
+        end
     end
   end
 

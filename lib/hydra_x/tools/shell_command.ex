@@ -13,6 +13,21 @@ defmodule HydraX.Tools.ShellCommand do
   def description, do: "Run a small allowlisted command inside the agent workspace"
 
   @impl true
+  def tool_schema do
+    %{
+      name: "shell_command",
+      description: "Run an allowlisted shell command in the agent workspace. Only specific commands are permitted (e.g. ls, cat, head, rg, git status). Use this when the user asks to run a command, list files, search code, or check git status.",
+      input_schema: %{
+        type: "object",
+        properties: %{
+          command: %{type: "string", description: "The shell command to run (e.g. \"ls\", \"cat README.md\", \"rg TODO\", \"git status\")"}
+        },
+        required: ["command"]
+      }
+    }
+  end
+
+  @impl true
   def execute(params, context) do
     runner = context[:runner] || (&System.cmd/3)
     allowlist = Map.get(context, :shell_allowlist, HydraX.Config.shell_allowlist())

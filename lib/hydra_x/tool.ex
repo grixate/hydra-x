@@ -5,5 +5,6 @@ defmodule HydraX.Tool do
 
   @callback name() :: String.t()
   @callback description() :: String.t()
+  @callback tool_schema() :: map()
   @callback execute(map(), map()) :: {:ok, map()} | {:error, term()}
 end

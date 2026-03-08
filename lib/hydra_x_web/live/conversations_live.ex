@@ -7,8 +7,12 @@ defmodule HydraXWeb.ConversationsLive do
 
   @impl true
   def mount(_params, _session, socket) do
+    if connected?(socket) do
+      Phoenix.PubSub.subscribe(HydraX.PubSub, "conversations")
+      Phoenix.PubSub.subscribe(HydraX.PubSub, "conversations:stream")
+    end
     filters = default_filters()
-    conversations = list_conversations(filters)
+    {conversations, has_next} = list_conversations_paginated(filters, 1)
     selected = conversations |> List.first() |> maybe_load()
     agents = Runtime.list_agents()
 
@@ -19,13 +23,16 @@ defmodule HydraXWeb.ConversationsLive do
      |> assign(:stats, stats())
      |> assign(:agents, agents)
      |> assign(:filters, filters)
+     |> assign(:page, 1)
+     |> assign(:has_next, has_next)
      |> assign(:filter_form, to_form(filters, as: :filters))
      |> assign(:conversations, conversations)
      |> assign(:selected, selected)
      |> assign(:compaction, selected && Runtime.conversation_compaction(selected.id))
      |> assign(:new_form, to_form(default_new_conversation(agents), as: :conversation))
      |> assign(:reply_form, to_form(%{"message" => ""}, as: :reply))
-     |> assign(:rename_form, rename_form(selected))}
+     |> assign(:rename_form, rename_form(selected))
+     |> assign(:streaming_content, nil)}
   end
 
   @impl true
@@ -161,7 +168,7 @@ defmodule HydraXWeb.ConversationsLive do
       default_filters()
       |> Map.merge(params)
 
-    conversations = list_conversations(filters)
+    {conversations, has_next} = list_conversations_paginated(filters, 1)
 
     selected =
       maybe_refresh_selection(
@@ -174,7 +181,31 @@ defmodule HydraXWeb.ConversationsLive do
     {:noreply,
      socket
      |> assign(:filters, filters)
+     |> assign(:page, 1)
+     |> assign(:has_next, has_next)
      |> assign(:filter_form, to_form(filters, as: :filters))
+     |> assign(:conversations, conversations)
+     |> assign(:selected, selected)
+     |> assign(:compaction, selected && Runtime.conversation_compaction(selected.id))
+     |> assign(:rename_form, rename_form(selected))}
+  end
+
+  def handle_event("paginate", %{"page" => page}, socket) do
+    page = safe_page_number(page)
+    {conversations, has_next} = list_conversations_paginated(socket.assigns.filters, page)
+
+    selected =
+      maybe_refresh_selection(
+        conversations,
+        socket.assigns.selected && socket.assigns.selected.id
+      )
+
+    selected = selected || conversations |> List.first() |> maybe_load()
+
+    {:noreply,
+     socket
+     |> assign(:page, page)
+     |> assign(:has_next, has_next)
      |> assign(:conversations, conversations)
      |> assign(:selected, selected)
      |> assign(:compaction, selected && Runtime.conversation_compaction(selected.id))
@@ -206,6 +237,41 @@ defmodule HydraXWeb.ConversationsLive do
      |> assign(:compaction, compaction)
      |> assign(:conversations, list_conversations(socket.assigns.filters))
      |> assign(:rename_form, rename_form(selected))
+     |> assign(:stats, stats())}
+  end
+
+  def handle_info({:stream_chunk, conversation_id, delta}, socket) do
+    if socket.assigns.selected && socket.assigns.selected.id == conversation_id do
+      current = socket.assigns.streaming_content || ""
+      {:noreply, assign(socket, :streaming_content, current <> delta)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_info({:stream_done, conversation_id}, socket) do
+    if socket.assigns.selected && socket.assigns.selected.id == conversation_id do
+      {:noreply, assign(socket, :streaming_content, nil)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  @impl true
+  def handle_info({:conversation_updated, _conversation_id}, socket) do
+    conversations = list_conversations(socket.assigns.filters)
+
+    selected =
+      if socket.assigns.selected do
+        Runtime.get_conversation!(socket.assigns.selected.id)
+      end
+
+    {:noreply,
+     socket
+     |> assign(:conversations, conversations)
+     |> assign(:selected, selected)
+     |> assign(:compaction, selected && Runtime.conversation_compaction(selected.id))
+     |> assign(:streaming_content, nil)
      |> assign(:stats, stats())}
   end
 
@@ -289,6 +355,7 @@ defmodule HydraXWeb.ConversationsLive do
               </div>
             </.link>
           </div>
+          <.pagination page={@page} has_next={@has_next} />
         </article>
 
         <article class="glass-panel p-6">
@@ -412,6 +479,18 @@ defmodule HydraXWeb.ConversationsLive do
                   </span>
                 </div>
               </div>
+
+              <div :if={@streaming_content} class="rounded-2xl border border-[var(--hx-accent)]/30 bg-[rgba(245,110,66,0.04)] px-4 py-4">
+                <div class="flex items-center gap-2">
+                  <span class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-accent)]">
+                    assistant
+                  </span>
+                  <span class="inline-flex items-center gap-1 text-xs text-[var(--hx-accent)]">
+                    <span class="animate-pulse">●</span> streaming
+                  </span>
+                </div>
+                <p class="mt-3 whitespace-pre-wrap text-sm leading-6">{@streaming_content}</p>
+              </div>
             </div>
           </div>
 
@@ -512,13 +591,28 @@ defmodule HydraXWeb.ConversationsLive do
     %{"search" => "", "status" => "", "channel" => ""}
   end
 
+  @page_size 25
+
   defp list_conversations(filters) do
     Runtime.list_conversations(
-      limit: 50,
+      limit: @page_size,
       search: blank_to_nil(filters["search"]),
       status: blank_to_nil(filters["status"]),
       channel: blank_to_nil(filters["channel"])
     )
+  end
+
+  defp list_conversations_paginated(filters, page) do
+    results =
+      Runtime.list_conversations(
+        limit: @page_size + 1,
+        offset: (page - 1) * @page_size,
+        search: blank_to_nil(filters["search"]),
+        status: blank_to_nil(filters["status"]),
+        channel: blank_to_nil(filters["channel"])
+      )
+
+    {Enum.take(results, @page_size), length(results) > @page_size}
   end
 
   defp blank_to_nil(nil), do: nil
@@ -545,6 +639,16 @@ defmodule HydraXWeb.ConversationsLive do
 
   defp format_reason(reason) when is_binary(reason), do: reason
   defp format_reason(reason), do: inspect(reason)
+
+  defp safe_page_number(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {n, ""} when n > 0 -> n
+      _ -> 1
+    end
+  end
+
+  defp safe_page_number(value) when is_integer(value) and value > 0, do: value
+  defp safe_page_number(_), do: 1
 
   defp stats do
     %{

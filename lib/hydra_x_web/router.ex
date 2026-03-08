@@ -48,6 +48,8 @@ defmodule HydraXWeb.Router do
     pipe_through :api
 
     post "/telegram/webhook", TelegramWebhookController, :create
+    post "/discord/webhook", DiscordWebhookController, :create
+    post "/slack/webhook", SlackWebhookController, :create
   end
 
   # Other scopes may use custom stacks.

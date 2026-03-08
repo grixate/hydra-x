@@ -132,7 +132,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
 
     html = render(view)
     assert html =~ "Reply sent"
-    assert html =~ "Relevant memory"
+    assert html =~ "Mock response"
   end
 
   test "conversations page can rename and archive a conversation", %{conn: conn} do

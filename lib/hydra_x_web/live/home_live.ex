@@ -7,6 +7,13 @@ defmodule HydraXWeb.HomeLive do
 
   @impl true
   def mount(_params, _session, socket) do
+    if connected?(socket) do
+      Phoenix.PubSub.subscribe(HydraX.PubSub, "conversations")
+      Phoenix.PubSub.subscribe(HydraX.PubSub, "memory")
+      Phoenix.PubSub.subscribe(HydraX.PubSub, "safety:events")
+      Phoenix.PubSub.subscribe(HydraX.PubSub, "jobs")
+    end
+
     conversations = Runtime.list_conversations(limit: 5)
 
     {:ok,
@@ -19,6 +26,18 @@ defmodule HydraXWeb.HomeLive do
      |> assign(:safety_status, Runtime.safety_status())
      |> assign(:observability_status, Runtime.observability_status())
      |> assign(:conversations, conversations)}
+  end
+
+  @impl true
+  def handle_info(_event, socket) do
+    {:noreply,
+     socket
+     |> assign(:stats, stats())
+     |> assign(:health, Runtime.health_snapshot())
+     |> assign(:memory_status, Runtime.memory_triage_status())
+     |> assign(:safety_status, Runtime.safety_status())
+     |> assign(:observability_status, Runtime.observability_status())
+     |> assign(:conversations, Runtime.list_conversations(limit: 5))}
   end
 
   @impl true

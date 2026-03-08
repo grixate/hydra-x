@@ -11,9 +11,15 @@ defmodule HydraX.Safety do
   def log_event(attrs) do
     attrs = Map.put_new(attrs, :status, "open")
 
-    %Event{}
-    |> Event.changeset(attrs)
-    |> Repo.insert()
+    result =
+      %Event{}
+      |> Event.changeset(attrs)
+      |> Repo.insert()
+
+    with {:ok, event} <- result do
+      Phoenix.PubSub.broadcast(HydraX.PubSub, "safety:events", {:safety_event, event.id})
+      {:ok, event}
+    end
   end
 
   def recent_events(agent_id, limit \\ 20) do
@@ -35,6 +41,7 @@ defmodule HydraX.Safety do
     agent_id = Keyword.get(opts, :agent_id)
     status = Keyword.get(opts, :status)
     limit = Keyword.get(opts, :limit, 20)
+    offset = Keyword.get(opts, :offset, 0)
 
     Event
     |> maybe_filter_agent(agent_id)
@@ -43,6 +50,7 @@ defmodule HydraX.Safety do
     |> maybe_filter_status(status)
     |> order_by([event], desc: event.inserted_at)
     |> limit(^limit)
+    |> offset(^offset)
     |> preload([:conversation, :agent])
     |> Repo.all()
   end
