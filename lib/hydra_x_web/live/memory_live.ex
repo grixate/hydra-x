@@ -8,11 +8,12 @@ defmodule HydraXWeb.MemoryLive do
 
   @impl true
   def mount(params, _session, socket) do
+    if connected?(socket), do: Phoenix.PubSub.subscribe(HydraX.PubSub, "memory")
     filters =
       default_filters()
       |> Map.put("query", Map.get(params, "q", ""))
 
-    memories = load_memories(filters)
+    {memories, has_next} = load_memories_paginated(filters, 1)
     selected = List.first(memories)
 
     {:ok,
@@ -21,6 +22,8 @@ defmodule HydraXWeb.MemoryLive do
      |> assign(:current, "memory")
      |> assign(:stats, stats())
      |> assign(:filters, filters)
+     |> assign(:page, 1)
+     |> assign(:has_next, has_next)
      |> assign(:filter_form, to_form(filters, as: :filters))
      |> assign(:agents, Runtime.list_agents())
      |> assign(:memory_types, memory_types())
@@ -265,6 +268,46 @@ defmodule HydraXWeb.MemoryLive do
        put_flash(socket, :error, "Memory reconciliation failed: #{Exception.message(error)}")}
   end
 
+  def handle_event("paginate", %{"page" => page}, socket) do
+    page = safe_page_number(page)
+    {memories, has_next} = load_memories_paginated(socket.assigns.filters, page)
+
+    selected =
+      if socket.assigns.selected do
+        maybe_refresh_selection(memories, socket.assigns.selected.id)
+      end
+
+    selected = selected || List.first(memories)
+
+    {:noreply,
+     socket
+     |> assign(:page, page)
+     |> assign(:has_next, has_next)
+     |> assign(:memories, memories)
+     |> assign(:selected, selected)
+     |> assign(:edges, load_edges(selected))
+     |> assign_form(:memory_form, memory_form(selected), :memory)
+     |> assign_form(:edge_form, edge_form(selected), :edge)
+     |> assign(:reconcile_form, reconcile_form(memories, selected))}
+  end
+
+  @impl true
+  def handle_info({:memory_updated, _agent_id}, socket) do
+    memories = load_memories(socket.assigns.filters)
+
+    selected =
+      if socket.assigns.selected do
+        maybe_refresh_selection(memories, socket.assigns.selected.id)
+      end
+
+    {:noreply,
+     socket
+     |> assign(:memories, memories)
+     |> assign(:selected, selected)
+     |> assign(:edges, load_edges(selected))
+     |> assign(:stats, stats())}
+  end
+
   @impl true
   def render(assigns) do
     ~H"""
@@ -398,6 +441,7 @@ defmodule HydraXWeb.MemoryLive do
               No memories match the current query.
             </div>
           </div>
+          <.pagination page={@page} has_next={@has_next} />
         </article>
 
         <article class="glass-panel p-6">
@@ -544,16 +588,34 @@ defmodule HydraXWeb.MemoryLive do
     """
   end
 
+  @memory_page_size 50
+
   defp load_memories(filters) do
     opts = [
-      limit: 100,
+      limit: @memory_page_size,
       agent_id: parse_integer(filters["agent_id"]),
       type: blank_to_nil(filters["type"]),
       status: blank_to_nil(filters["status"]) || "active",
       min_importance: parse_float(filters["min_importance"], nil)
     ]
 
-    Memory.search(parse_integer(filters["agent_id"]), filters["query"], 100, opts)
+    Memory.search(parse_integer(filters["agent_id"]), filters["query"], @memory_page_size, opts)
+  end
+
+  defp load_memories_paginated(filters, page) do
+    offset = (page - 1) * @memory_page_size
+
+    opts = [
+      limit: @memory_page_size + 1,
+      offset: offset,
+      agent_id: parse_integer(filters["agent_id"]),
+      type: blank_to_nil(filters["type"]),
+      status: blank_to_nil(filters["status"]) || "active",
+      min_importance: parse_float(filters["min_importance"], nil)
+    ]
+
+    results = Memory.search(parse_integer(filters["agent_id"]), filters["query"], @memory_page_size + 1, opts)
+    {Enum.take(results, @memory_page_size), length(results) > @memory_page_size}
   end
 
   defp memory_types, do: ~w(Fact Preference Decision Identity Event Observation Goal Todo)
@@ -701,6 +763,16 @@ defmodule HydraXWeb.MemoryLive do
 
   defp format_status_option("all"), do: "All statuses"
   defp format_status_option(status), do: status |> String.replace("_", " ") |> String.capitalize()
+
+  defp safe_page_number(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {n, ""} when n > 0 -> n
+      _ -> 1
+    end
+  end
+
+  defp safe_page_number(value) when is_integer(value) and value > 0, do: value
+  defp safe_page_number(_), do: 1
 
   defp status_badge_class("active"),
     do: "border-emerald-400/30 bg-emerald-400/10 text-emerald-200"

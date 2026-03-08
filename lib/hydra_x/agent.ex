@@ -75,12 +75,15 @@ defmodule HydraX.Agent do
 
   @impl true
   def init(agent) do
+    ingest_path = Path.join(agent.workspace_root || "", "ingest")
+
     children = [
       {DynamicSupervisor, strategy: :one_for_one, name: channel_supervisor(agent.id)},
       {DynamicSupervisor, strategy: :one_for_one, name: branch_supervisor(agent.id)},
       {DynamicSupervisor, strategy: :one_for_one, name: worker_supervisor(agent.id)},
       {DynamicSupervisor, strategy: :one_for_one, name: compactor_supervisor(agent.id)},
-      {HydraX.Agent.Cortex, agent_id: agent.id}
+      {HydraX.Agent.Cortex, agent_id: agent.id},
+      {HydraX.Ingest.Watcher, agent_id: agent.id, ingest_path: ingest_path}
     ]
 
     Supervisor.init(children, strategy: :one_for_all)

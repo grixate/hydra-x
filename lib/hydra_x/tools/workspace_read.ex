@@ -12,6 +12,21 @@ defmodule HydraX.Tools.WorkspaceRead do
   def description, do: "Read a file from the agent workspace without leaving the workspace root"
 
   @impl true
+  def tool_schema do
+    %{
+      name: "workspace_read",
+      description: "Read the contents of a file from the agent workspace. Use this when the user asks to read, show, or open a file.",
+      input_schema: %{
+        type: "object",
+        properties: %{
+          path: %{type: "string", description: "Relative path within the workspace (e.g. \"SOUL.md\", \"memory/MEMORY.md\")"}
+        },
+        required: ["path"]
+      }
+    }
+  end
+
+  @impl true
   def execute(params, context) do
     with workspace_root when is_binary(workspace_root) <- context[:workspace_root],
          path when is_binary(path) <- params[:path] || params["path"],

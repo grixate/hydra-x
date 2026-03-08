@@ -8,6 +8,27 @@ defmodule HydraX.Tools.MemorySave do
   def description, do: "Persist a typed memory entry"
 
   @impl true
+  def tool_schema do
+    %{
+      name: "memory_save",
+      description: "Save a new typed memory entry. Use this when the user asks you to remember something, or when important information should be persisted for future conversations.",
+      input_schema: %{
+        type: "object",
+        properties: %{
+          content: %{type: "string", description: "The content to remember"},
+          type: %{
+            type: "string",
+            enum: ["Fact", "Preference", "Decision", "Identity", "Event", "Observation", "Goal", "Todo"],
+            description: "The type of memory (default: Fact)"
+          },
+          importance: %{type: "number", description: "Importance score from 0.0 to 1.0 (default: 0.7)"}
+        },
+        required: ["content"]
+      }
+    }
+  end
+
+  @impl true
   def execute(params, _context) do
     attrs = %{
       agent_id: params.agent_id || params["agent_id"],

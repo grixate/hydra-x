@@ -52,11 +52,24 @@ defmodule HydraX.Budget do
     |> max(1)
   end
 
+  def estimate_tokens(nil), do: 1
+
   def estimate_prompt_tokens(messages) do
     messages
-    |> Enum.map(fn message -> estimate_tokens(message.content || "") end)
+    |> Enum.map(fn message -> estimate_content_tokens(message.content) end)
     |> Enum.sum()
   end
+
+  defp estimate_content_tokens(content) when is_binary(content), do: estimate_tokens(content)
+  defp estimate_content_tokens(nil), do: 1
+
+  defp estimate_content_tokens(blocks) when is_list(blocks) do
+    Enum.reduce(blocks, 0, fn block, acc ->
+      acc + estimate_content_tokens(block[:content] || block[:text] || block["content"] || block["text"] || "")
+    end)
+  end
+
+  defp estimate_content_tokens(_), do: 1
 
   def preflight(agent_id, conversation_id, estimated_tokens) do
     policy = ensure_policy!(agent_id)

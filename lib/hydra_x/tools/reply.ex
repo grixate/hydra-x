@@ -8,6 +8,21 @@ defmodule HydraX.Tools.Reply do
   def description, do: "Formats a final assistant reply"
 
   @impl true
+  def tool_schema do
+    %{
+      name: "reply",
+      description: "Format and send a final reply to the user. Use this tool when you want to compose a structured response.",
+      input_schema: %{
+        type: "object",
+        properties: %{
+          reply: %{type: "string", description: "The reply text to send to the user"}
+        },
+        required: ["reply"]
+      }
+    }
+  end
+
+  @impl true
   def execute(params, _context) do
     {:ok, %{reply: Map.get(params, :reply) || Map.get(params, "reply", "")}}
   end

@@ -12,6 +12,21 @@ defmodule HydraX.Tools.HttpFetch do
   def description, do: "Fetch a public HTTP(S) resource after SSRF checks"
 
   @impl true
+  def tool_schema do
+    %{
+      name: "http_fetch",
+      description: "Fetch the contents of a public URL. Use this to retrieve web pages, API responses, or other HTTP resources the user asks about.",
+      input_schema: %{
+        type: "object",
+        properties: %{
+          url: %{type: "string", description: "The full URL to fetch (must be https:// or http://)"}
+        },
+        required: ["url"]
+      }
+    }
+  end
+
+  @impl true
   def execute(params, context) do
     request_fn = context[:request_fn] || (&Req.get/1)
     allowlist = Map.get(context, :http_allowlist, HydraX.Config.http_allowlist())

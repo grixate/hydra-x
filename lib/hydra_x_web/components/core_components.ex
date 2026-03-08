@@ -465,4 +465,47 @@ defmodule HydraXWeb.CoreComponents do
   def translate_errors(errors, field) when is_list(errors) do
     for {^field, {msg, opts}} <- errors, do: translate_error({msg, opts})
   end
+
+  @doc """
+  Renders pagination controls with previous/next buttons.
+
+  ## Assigns
+
+    * `:page` - current page number (1-based)
+    * `:has_next` - whether there are more items
+    * `:event` - the event name to send (default "paginate")
+  """
+  attr :page, :integer, required: true
+  attr :has_next, :boolean, required: true
+  attr :event, :string, default: "paginate"
+
+  def pagination(assigns) do
+    ~H"""
+    <div class="mt-4 flex items-center justify-between gap-4">
+      <button
+        :if={@page > 1}
+        type="button"
+        phx-click={@event}
+        phx-value-page={@page - 1}
+        class="btn btn-outline border-white/10 bg-white/5 text-white hover:bg-white/10"
+      >
+        Previous
+      </button>
+      <span :if={@page <= 1} />
+      <span class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+        Page {@page}
+      </span>
+      <button
+        :if={@has_next}
+        type="button"
+        phx-click={@event}
+        phx-value-page={@page + 1}
+        class="btn btn-outline border-white/10 bg-white/5 text-white hover:bg-white/10"
+      >
+        Next
+      </button>
+      <span :if={!@has_next} />
+    </div>
+    """
+  end
 end

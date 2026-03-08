@@ -6,6 +6,7 @@ defmodule HydraXWeb.SafetyLive do
 
   @impl true
   def mount(_params, _session, socket) do
+    if connected?(socket), do: Phoenix.PubSub.subscribe(HydraX.PubSub, "safety:events")
     filters = default_filters()
 
     {:ok,
@@ -13,6 +14,7 @@ defmodule HydraXWeb.SafetyLive do
      |> assign(:page_title, "Safety")
      |> assign(:current, "safety")
      |> assign(:stats, stats())
+     |> assign(:page, 1)
      |> assign_safety(filters)}
   end
 
@@ -22,7 +24,13 @@ defmodule HydraXWeb.SafetyLive do
       default_filters()
       |> Map.merge(params)
 
-    {:noreply, socket |> assign(:stats, stats()) |> assign_safety(filters)}
+    {:noreply, socket |> assign(:stats, stats()) |> assign_safety(filters, 1)}
+  end
+
+  @impl true
+  def handle_event("paginate", %{"page" => page}, socket) do
+    page = safe_page_number(page)
+    {:noreply, assign_safety(socket, socket.assigns.filters, page)}
   end
 
   @impl true
@@ -54,6 +62,14 @@ defmodule HydraXWeb.SafetyLive do
     {:noreply,
      socket
      |> put_flash(:info, "Safety event reopened")
+     |> assign(:stats, stats())
+     |> assign_safety(socket.assigns.filters)}
+  end
+
+  @impl true
+  def handle_info({:safety_event, _event_id}, socket) do
+    {:noreply,
+     socket
      |> assign(:stats, stats())
      |> assign_safety(socket.assigns.filters)}
   end
@@ -239,13 +255,16 @@ defmodule HydraXWeb.SafetyLive do
               No safety events match the current filter.
             </div>
           </div>
+          <.pagination page={@page} has_next={@has_next} />
         </article>
       </section>
     </AppShell.shell>
     """
   end
 
-  defp assign_safety(socket, filters) do
+  defp assign_safety(socket, filters, page \\ nil) do
+    page = page || socket.assigns[:page] || 1
+
     limit =
       filters["limit"]
       |> to_string()
@@ -255,17 +274,25 @@ defmodule HydraXWeb.SafetyLive do
         _ -> 25
       end
 
+    offset = (page - 1) * limit
+
     safety =
       Runtime.safety_status(
-        limit: limit,
+        limit: limit + 1,
+        offset: offset,
         level: blank_to_nil(filters["level"]),
         category: blank_to_nil(filters["category"]),
         status: blank_to_nil(filters["status"])
       )
 
+    has_next = length(safety.recent_events) > limit
+    trimmed_safety = %{safety | recent_events: Enum.take(safety.recent_events, limit)}
+
     socket
     |> assign(:filters, Map.put(filters, "limit", to_string(limit)))
-    |> assign(:safety, safety)
+    |> assign(:page, page)
+    |> assign(:has_next, has_next)
+    |> assign(:safety, trimmed_safety)
     |> assign(:form, to_form(filters, as: :filters))
   end
 
@@ -286,6 +313,16 @@ defmodule HydraXWeb.SafetyLive do
   defp status_class("resolved"), do: "border-emerald-400/30 bg-emerald-400/10 text-emerald-200"
   defp status_class("acknowledged"), do: "border-amber-400/30 bg-amber-400/10 text-amber-200"
   defp status_class(_), do: "border-rose-400/30 bg-rose-400/10 text-rose-200"
+
+  defp safe_page_number(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {n, ""} when n > 0 -> n
+      _ -> 1
+    end
+  end
+
+  defp safe_page_number(value) when is_integer(value) and value > 0, do: value
+  defp safe_page_number(_), do: 1
 
   defp stats do
     %{

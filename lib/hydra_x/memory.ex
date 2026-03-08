@@ -28,6 +28,7 @@ defmodule HydraX.Memory do
     status = Keyword.get(opts, :status)
     min_importance = Keyword.get(opts, :min_importance)
     limit = Keyword.get(opts, :limit, 100)
+    offset = Keyword.get(opts, :offset, 0)
 
     Entry
     |> maybe_filter_agent(agent_id)
@@ -37,6 +38,7 @@ defmodule HydraX.Memory do
     |> order_by([entry], desc: entry.importance, desc: entry.updated_at)
     |> preload([:conversation])
     |> limit(^limit)
+    |> offset(^offset)
     |> Repo.all()
   end
 
@@ -109,6 +111,7 @@ defmodule HydraX.Memory do
 
     with {:ok, entry} <- result do
       maybe_refresh_cortex(entry.agent_id)
+      broadcast_memory(entry.agent_id)
       {:ok, entry}
     end
   end
@@ -125,6 +128,7 @@ defmodule HydraX.Memory do
 
     with {:ok, updated} <- result do
       maybe_refresh_cortex(updated.agent_id)
+      broadcast_memory(updated.agent_id)
       {:ok, updated}
     end
   end
@@ -132,6 +136,8 @@ defmodule HydraX.Memory do
   def delete_memory!(id) do
     entry = get_memory!(id)
     Repo.delete!(entry)
+    broadcast_memory(entry.agent_id)
+    entry
   end
 
   def reconcile_memory!(source_id, target_id, mode, opts \\ []) do
@@ -196,6 +202,7 @@ defmodule HydraX.Memory do
 
     with {:ok, reconciled} <- unwrap_transaction(result) do
       maybe_refresh_cortex(reconciled.target.agent_id)
+      broadcast_memory(reconciled.target.agent_id)
       {:ok, reconciled}
     end
   end
@@ -251,6 +258,7 @@ defmodule HydraX.Memory do
     with {:ok, conflicted} <- unwrap_transaction(result) do
       log_conflict_event(conflicted, reason)
       maybe_refresh_cortex(conflicted.target.agent_id)
+      broadcast_memory(conflicted.target.agent_id)
       {:ok, conflicted}
     end
   end
@@ -320,6 +328,7 @@ defmodule HydraX.Memory do
 
     with {:ok, resolved} <- unwrap_transaction(result) do
       maybe_refresh_cortex(resolved.winner.agent_id)
+      broadcast_memory(resolved.winner.agent_id)
       {:ok, resolved}
     end
   end
@@ -383,6 +392,10 @@ defmodule HydraX.Memory do
     if Registry.lookup(HydraX.ProcessRegistry, {:cortex, agent_id}) != [] do
       HydraX.Agent.Cortex.refresh(agent_id)
     end
+  end
+
+  defp broadcast_memory(agent_id) do
+    Phoenix.PubSub.broadcast(HydraX.PubSub, "memory", {:memory_updated, agent_id})
   end
 
   defp log_conflict_event(%{source: source, target: target}, reason) do

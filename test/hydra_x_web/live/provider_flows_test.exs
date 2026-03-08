@@ -9,7 +9,7 @@ defmodule HydraXWeb.ProviderFlowsTest do
     previous = Application.get_env(:hydra_x, :provider_test_request_fn)
 
     Application.put_env(:hydra_x, :provider_test_request_fn, fn _opts ->
-      {:ok, %{status: 200, body: %{"choices" => [%{"message" => %{"content" => "OK"}}]}}}
+      {:ok, %{status: 200, body: %{"choices" => [%{"message" => %{"content" => "OK"}, "finish_reason" => "stop"}]}}}
     end)
 
     on_exit(fn ->

@@ -3,7 +3,7 @@ defmodule HydraX.Gateway do
   Routes inbound adapter messages into agent conversations.
   """
 
-  alias HydraX.Gateway.Adapters.Telegram
+  alias HydraX.Gateway.Adapters.{Discord, Slack, Telegram}
   alias HydraX.Runtime
   alias HydraX.Runtime.Conversation
   alias HydraX.Safety
@@ -17,6 +17,30 @@ defmodule HydraX.Gateway do
       :ok
     else
       nil -> {:error, :telegram_not_configured}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def dispatch_discord_update(event, opts \\ %{}) do
+    with config when not is_nil(config) <- Runtime.enabled_discord_config(),
+         {:ok, state} <- Discord.connect(discord_adapter_config(config, opts)),
+         {:messages, messages, _state} <- Discord.handle_event(event, state) do
+      Enum.each(messages, &route_channel_message(&1, state, config, Discord))
+      :ok
+    else
+      nil -> {:error, :discord_not_configured}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def dispatch_slack_update(event, opts \\ %{}) do
+    with config when not is_nil(config) <- Runtime.enabled_slack_config(),
+         {:ok, state} <- Slack.connect(slack_adapter_config(config, opts)),
+         {:messages, messages, _state} <- Slack.handle_event(event, state) do
+      Enum.each(messages, &route_channel_message(&1, state, config, Slack))
+      :ok
+    else
+      nil -> {:error, :slack_not_configured}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -47,6 +71,9 @@ defmodule HydraX.Gateway do
     end
   end
 
+  @max_retries 3
+  @retry_backoffs [5_000, 30_000, 120_000]
+
   defp route_message(message, state, config) do
     agent = config.default_agent || Runtime.ensure_default_agent!()
     {:ok, _pid} = HydraX.Agent.ensure_started(agent)
@@ -67,6 +94,112 @@ defmodule HydraX.Gateway do
       Telegram.send_response(%{content: response, external_ref: message.external_ref}, state)
 
     record_delivery_result(agent.id, conversation, message, delivery_result)
+
+    case delivery_result do
+      {:error, _reason} ->
+        schedule_retry(agent.id, conversation.id, message, config, 0)
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp schedule_retry(_agent_id, _conversation_id, _message, _config, attempt)
+       when attempt >= @max_retries,
+       do: :ok
+
+  defp schedule_retry(agent_id, conversation_id, message, config, attempt) do
+    delay = Enum.at(@retry_backoffs, attempt, List.last(@retry_backoffs))
+
+    Task.Supervisor.start_child(HydraX.TaskSupervisor, fn ->
+      Process.sleep(delay)
+      execute_retry(agent_id, conversation_id, message, config, attempt)
+    end)
+  end
+
+  defp execute_retry(agent_id, conversation_id, message, config, attempt) do
+    conversation = Runtime.get_conversation!(conversation_id)
+
+    with {:ok, state} <- Telegram.connect(adapter_config(config, %{})),
+         %{content: content} <- latest_assistant_turn(conversation) do
+      result =
+        Telegram.send_response(%{content: content, external_ref: message.external_ref}, state)
+
+      record_delivery_result(agent_id, conversation, message, result, retry: true)
+
+      case result do
+        {:error, _reason} ->
+          next_attempt = attempt + 1
+
+          if next_attempt >= @max_retries do
+            mark_dead_letter(agent_id, conversation, message)
+          else
+            schedule_retry(agent_id, conversation_id, message, config, next_attempt)
+          end
+
+        _ ->
+          :ok
+      end
+    end
+  rescue
+    _error -> :ok
+  end
+
+  defp mark_dead_letter(agent_id, conversation, message) do
+    Safety.log_event(%{
+      agent_id: agent_id,
+      conversation_id: conversation.id,
+      category: "gateway",
+      level: "error",
+      message: "Telegram delivery dead-lettered after #{@max_retries} retries",
+      metadata: %{
+        channel: message.channel,
+        external_ref: message.external_ref
+      }
+    })
+
+    delivery =
+      conversation
+      |> delivery_payload(message, retry: true)
+      |> Map.put("status", "dead_letter")
+      |> Map.put("dead_lettered_at", DateTime.utc_now())
+
+    Runtime.update_conversation_metadata(conversation, %{"last_delivery" => delivery})
+  end
+
+  # Generic channel message routing (used by Discord and Slack)
+  defp route_channel_message(message, state, config, adapter_mod) do
+    agent = config.default_agent || Runtime.ensure_default_agent!()
+    {:ok, _pid} = HydraX.Agent.ensure_started(agent)
+
+    conversation =
+      Runtime.find_conversation(agent.id, message.channel, message.external_ref) ||
+        start_channel_conversation(agent, message)
+
+    response =
+      HydraX.Agent.Channel.submit(
+        agent,
+        conversation,
+        message.content,
+        Map.merge(message.metadata || %{}, %{source: message.channel})
+      )
+
+    delivery_result =
+      adapter_mod.send_response(%{content: response, external_ref: message.external_ref}, state)
+
+    record_delivery_result(agent.id, conversation, message, delivery_result)
+  end
+
+  defp start_channel_conversation(agent, message) do
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{
+        channel: message.channel,
+        external_ref: message.external_ref,
+        title: "#{String.capitalize(message.channel)} #{message.external_ref}",
+        metadata: %{source: message.channel}
+      })
+
+    conversation
   end
 
   defp start_telegram_conversation(agent, message) do
@@ -87,6 +220,23 @@ defmodule HydraX.Gateway do
       "bot_username" => config.bot_username,
       "webhook_secret" => config.webhook_secret,
       "deliver" => Map.get(opts, :deliver) || Application.get_env(:hydra_x, :telegram_deliver)
+    }
+  end
+
+  defp discord_adapter_config(config, opts) do
+    %{
+      "bot_token" => config.bot_token,
+      "application_id" => config.application_id,
+      "webhook_secret" => config.webhook_secret,
+      "deliver" => Map.get(opts, :deliver) || Application.get_env(:hydra_x, :discord_deliver)
+    }
+  end
+
+  defp slack_adapter_config(config, opts) do
+    %{
+      "bot_token" => config.bot_token,
+      "signing_secret" => config.signing_secret,
+      "deliver" => Map.get(opts, :deliver) || Application.get_env(:hydra_x, :slack_deliver)
     }
   end
 
