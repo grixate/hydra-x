@@ -5,6 +5,7 @@ defmodule HydraX.Runtime.Observability do
 
   alias HydraX.Config
   alias HydraX.Memory
+  alias HydraX.Security.LoginThrottle
 
   alias HydraX.Repo
   alias HydraX.Runtime.{AgentProfile, OperatorSecret}
@@ -32,6 +33,7 @@ defmodule HydraX.Runtime.Observability do
     telegram_config = HydraX.Runtime.TelegramAdmin.enabled_telegram_config()
     discord_config = HydraX.Runtime.DiscordAdmin.enabled_discord_config()
     slack_config = HydraX.Runtime.SlackAdmin.enabled_slack_config()
+    webchat_config = HydraX.Runtime.WebchatAdmin.enabled_webchat_config()
     operator = operator_status()
 
     checks = [
@@ -88,7 +90,11 @@ defmodule HydraX.Runtime.Observability do
       },
       %{
         name: "channels",
-        status: if(telegram_config || discord_config || slack_config, do: :ok, else: :warn),
+        status:
+          if(telegram_config || discord_config || slack_config || webchat_config,
+            do: :ok,
+            else: :warn
+          ),
         detail: channel_health_detail(channel_statuses())
       },
       %{
@@ -275,11 +281,39 @@ defmodule HydraX.Runtime.Observability do
     end
   end
 
+  def webchat_status do
+    case HydraX.Runtime.WebchatAdmin.enabled_webchat_config() ||
+           List.first(HydraX.Runtime.WebchatAdmin.list_webchat_configs()) do
+      nil ->
+        %{
+          channel: "webchat",
+          configured: false,
+          enabled: false,
+          binding: "/webchat",
+          default_agent_name: nil,
+          recent_failures: recent_channel_failures("webchat"),
+          gateway_events: recent_gateway_events("webchat")
+        }
+
+      config ->
+        %{
+          channel: "webchat",
+          configured: true,
+          enabled: config.enabled,
+          binding: "/webchat",
+          default_agent_name: config.default_agent && config.default_agent.name,
+          recent_failures: recent_channel_failures("webchat"),
+          gateway_events: recent_gateway_events("webchat")
+        }
+    end
+  end
+
   def channel_statuses do
     %{
       telegram: telegram_status(),
       discord: discord_status(),
-      slack: slack_status()
+      slack: slack_status(),
+      webchat: webchat_status()
     }
   end
 
@@ -341,6 +375,9 @@ defmodule HydraX.Runtime.Observability do
           last_rotated_at: nil,
           password_age_days: nil,
           password_stale?: false,
+          login_max_attempts: LoginThrottle.max_attempts(),
+          login_window_seconds: LoginThrottle.window_seconds(),
+          blocked_login_ips: LoginThrottle.summary().blocked_ips,
           session_max_age_seconds: HydraXWeb.OperatorAuth.session_max_age_seconds(),
           idle_timeout_seconds: HydraXWeb.OperatorAuth.idle_timeout_seconds(),
           recent_auth_window_seconds: HydraXWeb.OperatorAuth.recent_auth_window_seconds()
@@ -354,6 +391,9 @@ defmodule HydraX.Runtime.Observability do
           last_rotated_at: secret.last_rotated_at,
           password_age_days: age_days,
           password_stale?: age_days >= 90,
+          login_max_attempts: LoginThrottle.max_attempts(),
+          login_window_seconds: LoginThrottle.window_seconds(),
+          blocked_login_ips: LoginThrottle.summary().blocked_ips,
           session_max_age_seconds: HydraXWeb.OperatorAuth.session_max_age_seconds(),
           idle_timeout_seconds: HydraXWeb.OperatorAuth.idle_timeout_seconds(),
           recent_auth_window_seconds: HydraXWeb.OperatorAuth.recent_auth_window_seconds()
@@ -371,6 +411,10 @@ defmodule HydraX.Runtime.Observability do
       url_guard: policy.http_fetch_enabled,
       web_search_enabled: policy.web_search_enabled,
       shell_command_enabled: policy.shell_command_enabled,
+      workspace_write_channels: policy.workspace_write_channels,
+      http_fetch_channels: policy.http_fetch_channels,
+      web_search_channels: policy.web_search_channels,
+      shell_command_channels: policy.shell_command_channels,
       shell_allowlist: policy.shell_allowlist,
       http_allowlist: policy.http_allowlist
     }
@@ -408,6 +452,7 @@ defmodule HydraX.Runtime.Observability do
     telegram = telegram_status()
     discord = discord_status()
     slack = slack_status()
+    webchat = webchat_status()
     backups = backup_status()
     public_url = Config.public_base_url()
     local_url? = local_public_url?(public_url)
@@ -585,6 +630,23 @@ defmodule HydraX.Runtime.Observability do
               "not configured"
           end
       },
+      %{
+        id: "webchat",
+        label: "Webchat ingress configured",
+        required: false,
+        status: if(webchat.configured and webchat.enabled, do: :ok, else: :warn),
+        detail:
+          cond do
+            webchat.configured and webchat.enabled ->
+              "configured#{agent_suffix(webchat.default_agent_name)} at /webchat"
+
+            webchat.configured ->
+              "saved but disabled"
+
+            true ->
+              "not configured"
+          end
+      },
       (
         readiness_jobs = HydraX.Runtime.Jobs.list_scheduled_jobs(limit: 5)
 
@@ -623,7 +685,7 @@ defmodule HydraX.Runtime.Observability do
             else: :warn
           ),
         detail:
-          "list #{enabled_text(tool_policy.workspace_list_enabled)}; read #{enabled_text(tool_policy.workspace_read_enabled)}; write #{enabled_text(tool_policy.workspace_write_enabled)}; search #{enabled_text(tool_policy.web_search_enabled)}; shell #{enabled_text(tool_policy.shell_command_enabled)}; http allowlist #{describe_allowlist(tool_policy.http_allowlist)}"
+          "list #{enabled_text(tool_policy.workspace_list_enabled)}; read #{enabled_text(tool_policy.workspace_read_enabled)}; write #{enabled_text(tool_policy.workspace_write_enabled)} via #{describe_channels(tool_policy.workspace_write_channels)}; search #{enabled_text(tool_policy.web_search_enabled)} via #{describe_channels(tool_policy.web_search_channels)}; shell #{enabled_text(tool_policy.shell_command_enabled)} via #{describe_channels(tool_policy.shell_command_channels)}; http via #{describe_channels(tool_policy.http_fetch_channels)} allowlist #{describe_allowlist(tool_policy.http_allowlist)}"
       }
     ]
 
@@ -841,8 +903,11 @@ defmodule HydraX.Runtime.Observability do
         hosts -> Enum.join(hosts, ", ")
       end
 
-    "workspace list #{enabled_text(tool_status.workspace_list_enabled)}; workspace read #{enabled_text(tool_status.workspace_guard)}; workspace write #{enabled_text(tool_status.workspace_write_enabled)}; web search #{enabled_text(tool_status.web_search_enabled)}; http fetch #{enabled_text(tool_status.url_guard)}; shell #{enabled_text(tool_status.shell_command_enabled)}; shell allowlist: #{shell}; http allowlist: #{http}"
+    "workspace list #{enabled_text(tool_status.workspace_list_enabled)}; workspace read #{enabled_text(tool_status.workspace_guard)}; workspace write/patch #{enabled_text(tool_status.workspace_write_enabled)} via #{describe_channels(tool_status.workspace_write_channels)}; web search #{enabled_text(tool_status.web_search_enabled)} via #{describe_channels(tool_status.web_search_channels)}; http fetch #{enabled_text(tool_status.url_guard)} via #{describe_channels(tool_status.http_fetch_channels)}; shell #{enabled_text(tool_status.shell_command_enabled)} via #{describe_channels(tool_status.shell_command_channels)}; shell allowlist: #{shell}; http allowlist: #{http}"
   end
+
+  defp describe_channels([]), do: "none"
+  defp describe_channels(channels), do: Enum.join(channels, ", ")
 
   defp provider_health_detail(provider, nil, _runtime, _route) do
     (provider && "#{provider.kind}: #{provider.model}") || "mock fallback"

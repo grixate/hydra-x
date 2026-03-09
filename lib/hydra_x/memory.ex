@@ -51,57 +51,70 @@ defmodule HydraX.Memory do
     do: list_memories(Keyword.merge(opts, agent_id: agent_id, limit: limit))
 
   def search(agent_id, query, limit, opts) do
-    search_opts = %{
-      type: Keyword.get(opts, :type),
-      status: Keyword.get(opts, :status),
-      min_importance: Keyword.get(opts, :min_importance)
-    }
-
-    try do
-      sql = """
-      SELECT m.*
-      FROM memory_search ms
-      JOIN memory_entries m ON m.id = ms.rowid
-      WHERE ms.content MATCH ?
-        AND (? IS NULL OR m.agent_id = ?)
-        AND (? IS NULL OR m.type = ?)
-        AND (? IS NULL OR m.status = ?)
-        AND (? IS NULL OR m.importance >= ?)
-      ORDER BY rank
-      LIMIT ?
-      """
-
-      {:ok, %{rows: rows, columns: columns}} =
-        SQL.query(Repo, sql, [
-          fts_query(query),
-          agent_id,
-          agent_id,
-          search_opts.type,
-          search_opts.type,
-          search_opts.status,
-          search_opts.status,
-          search_opts.min_importance,
-          search_opts.min_importance,
-          limit
-        ])
-
-      rows
-      |> Enum.map(&Enum.zip(columns, &1))
-      |> Enum.map(&Map.new/1)
-      |> Enum.map(&Repo.load(Entry, &1))
-    rescue
-      _ ->
-        Entry
-        |> maybe_filter_agent(agent_id)
-        |> maybe_filter_type(search_opts.type)
-        |> maybe_filter_status(search_opts.status)
-        |> maybe_filter_min_importance(search_opts.min_importance)
-        |> where([entry], like(entry.content, ^"%#{query}%"))
-        |> order_by([entry], desc: entry.importance)
-        |> limit(^limit)
-        |> Repo.all()
-    end
+    search_ranked(agent_id, query, limit, opts)
+    |> Enum.map(& &1.entry)
   end
+
+  def search_ranked(agent_id, "", limit, opts) do
+    list_memories(Keyword.merge(opts, agent_id: agent_id, limit: limit))
+    |> Enum.with_index(1)
+    |> Enum.map(fn {entry, index} ->
+      %{
+        entry: entry,
+        score: round_score(1.0 - index * 0.01 + importance_boost(entry)),
+        lexical_rank: nil,
+        semantic_rank: nil,
+        reasons: ["recent memory list", importance_reason(entry)]
+      }
+    end)
+  end
+
+  def search_ranked(agent_id, nil, limit, opts), do: search_ranked(agent_id, "", limit, opts)
+
+  def search_ranked(agent_id, query, limit, opts) do
+    search_opts = search_opts(opts)
+    lexical_results = lexical_search(agent_id, query, max(limit * 3, 12), search_opts)
+    semantic_results = semantic_search(agent_id, query, max(limit * 4, 20), search_opts)
+
+    lexical_ranks =
+      lexical_results
+      |> Enum.with_index(1)
+      |> Map.new(fn {entry, rank} -> {entry.id, {entry, rank}} end)
+
+    semantic_ranks =
+      semantic_results
+      |> Enum.with_index(1)
+      |> Map.new(fn {entry, rank} -> {entry.id, {entry, rank}} end)
+
+    lexical_ranks
+    |> Map.keys()
+    |> Kernel.++(Map.keys(semantic_ranks))
+    |> Enum.uniq()
+    |> Enum.map(fn id ->
+      {entry, lexical_rank} =
+        Map.get_lazy(lexical_ranks, id, fn -> Map.fetch!(semantic_ranks, id) end)
+
+      semantic_rank =
+        case Map.get(semantic_ranks, id) do
+          {_entry, rank} -> rank
+          nil -> nil
+        end
+
+      %{
+        entry: entry,
+        score:
+          hybrid_score(entry, lexical_rank, semantic_rank, query)
+          |> round_score(),
+        lexical_rank: lexical_rank,
+        semantic_rank: semantic_rank,
+        reasons: hybrid_reasons(entry, lexical_rank, semantic_rank, query)
+      }
+    end)
+    |> Enum.sort_by(&{-&1.score, lexical_rank_order(&1.lexical_rank), lexical_rank_order(&1.semantic_rank), -&1.entry.importance})
+    |> Enum.take(limit)
+  end
+
+  def search_ranked(agent_id, query, limit), do: search_ranked(agent_id, query, limit, [])
 
   def create_memory(attrs) do
     result =
@@ -488,6 +501,177 @@ defmodule HydraX.Memory do
     |> String.split(~r/\s+/, trim: true)
     |> Enum.map_join(" OR ", &"\"#{&1}\"")
   end
+
+  defp search_opts(opts) do
+    %{
+      type: Keyword.get(opts, :type),
+      status: Keyword.get(opts, :status),
+      min_importance: Keyword.get(opts, :min_importance)
+    }
+  end
+
+  defp lexical_search(agent_id, query, limit, search_opts) do
+    try do
+      sql = """
+      SELECT m.*
+      FROM memory_search ms
+      JOIN memory_entries m ON m.id = ms.rowid
+      WHERE ms.content MATCH ?
+        AND (? IS NULL OR m.agent_id = ?)
+        AND (? IS NULL OR m.type = ?)
+        AND (? IS NULL OR m.status = ?)
+        AND (? IS NULL OR m.importance >= ?)
+      ORDER BY rank
+      LIMIT ?
+      """
+
+      {:ok, %{rows: rows, columns: columns}} =
+        SQL.query(Repo, sql, [
+          fts_query(query),
+          agent_id,
+          agent_id,
+          search_opts.type,
+          search_opts.type,
+          search_opts.status,
+          search_opts.status,
+          search_opts.min_importance,
+          search_opts.min_importance,
+          limit
+        ])
+
+      rows
+      |> Enum.map(&Enum.zip(columns, &1))
+      |> Enum.map(&Map.new/1)
+      |> Enum.map(&Repo.load(Entry, &1))
+    rescue
+      _ ->
+        Entry
+        |> maybe_filter_agent(agent_id)
+        |> maybe_filter_type(search_opts.type)
+        |> maybe_filter_status(search_opts.status)
+        |> maybe_filter_min_importance(search_opts.min_importance)
+        |> where([entry], like(entry.content, ^"%#{query}%"))
+        |> order_by([entry], desc: entry.importance, desc: entry.updated_at)
+        |> limit(^limit)
+        |> Repo.all()
+    end
+  end
+
+  defp semantic_search(agent_id, query, limit, search_opts) do
+    terms = query_terms(query)
+
+    Entry
+    |> maybe_filter_agent(agent_id)
+    |> maybe_filter_type(search_opts.type)
+    |> maybe_filter_status(search_opts.status)
+    |> maybe_filter_min_importance(search_opts.min_importance)
+    |> order_by([entry], desc: entry.importance, desc: entry.updated_at)
+    |> limit(^max(limit * 4, 80))
+    |> Repo.all()
+    |> Enum.map(fn entry ->
+      {entry, semantic_similarity(entry, terms)}
+    end)
+    |> Enum.filter(fn {_entry, score} -> score > 0 end)
+    |> Enum.sort_by(fn {entry, score} -> {-score, -entry.importance} end)
+    |> Enum.take(limit)
+    |> Enum.map(&elem(&1, 0))
+  end
+
+  defp query_terms(query) do
+    query
+    |> String.downcase()
+    |> String.split(~r/[^a-z0-9]+/u, trim: true)
+    |> Enum.reject(&(String.length(&1) < 3))
+    |> Enum.uniq()
+  end
+
+  defp semantic_similarity(_entry, []), do: 0.0
+
+  defp semantic_similarity(entry, query_terms) do
+    haystack_terms =
+      [
+        entry.type,
+        entry.content,
+        get_in(entry.metadata || %{}, ["source_file"]),
+        get_in(entry.metadata || %{}, ["source_section"]),
+        get_in(entry.metadata || %{}, ["conflict_reason"])
+      ]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join(" ")
+      |> query_terms()
+
+    overlap =
+      MapSet.intersection(MapSet.new(query_terms), MapSet.new(haystack_terms))
+      |> MapSet.size()
+
+    if overlap == 0 do
+      0.0
+    else
+      overlap / max(length(query_terms), 1)
+    end
+  end
+
+  defp hybrid_score(entry, lexical_rank, semantic_rank, query) do
+    reciprocal_rank(lexical_rank) +
+      reciprocal_rank(semantic_rank) +
+      importance_boost(entry) +
+      recency_boost(entry) +
+      exact_phrase_boost(entry, query)
+  end
+
+  defp reciprocal_rank(nil), do: 0.0
+  defp reciprocal_rank(rank), do: 1.0 / (60 + rank)
+
+  defp importance_boost(entry), do: entry.importance * 0.2
+
+  defp recency_boost(%{updated_at: nil}), do: 0.0
+
+  defp recency_boost(entry) do
+    age_days = DateTime.diff(DateTime.utc_now(), entry.updated_at, :day)
+
+    cond do
+      age_days <= 1 -> 0.06
+      age_days <= 7 -> 0.04
+      age_days <= 30 -> 0.02
+      true -> 0.0
+    end
+  end
+
+  defp exact_phrase_boost(_entry, query) when query in [nil, ""], do: 0.0
+
+  defp exact_phrase_boost(entry, query) do
+    if String.contains?(String.downcase(entry.content || ""), String.downcase(query)),
+      do: 0.08,
+      else: 0.0
+  end
+
+  defp hybrid_reasons(entry, lexical_rank, semantic_rank, query) do
+    []
+    |> maybe_add_reason(not is_nil(lexical_rank), "lexical match")
+    |> maybe_add_reason(not is_nil(semantic_rank), "semantic overlap")
+    |> maybe_add_reason(entry.importance >= 0.8, importance_reason(entry))
+    |> maybe_add_reason(entry.status == "conflicted", "unresolved conflict")
+    |> maybe_add_reason(
+      is_binary(query) and query != "" and exact_phrase_boost(entry, query) > 0,
+      "exact phrase"
+    )
+  end
+
+  defp importance_reason(entry) do
+    cond do
+      entry.importance >= 0.9 -> "high importance"
+      entry.importance >= 0.7 -> "important memory"
+      true -> "memory match"
+    end
+  end
+
+  defp maybe_add_reason(reasons, true, reason), do: reasons ++ [reason]
+  defp maybe_add_reason(reasons, false, _reason), do: reasons
+
+  defp lexical_rank_order(nil), do: 9_999
+  defp lexical_rank_order(rank), do: rank
+
+  defp round_score(score), do: Float.round(score, 4)
 
   defp unwrap_transaction({:ok, result}), do: {:ok, result}
   defp unwrap_transaction({:error, error}), do: {:error, error}

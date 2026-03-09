@@ -232,6 +232,31 @@ defmodule HydraXWeb.SetupLiveTest do
     assert html =~ "slack-smoke"
   end
 
+  test "setup page can save Webchat settings", %{conn: conn} do
+    Runtime.ensure_default_agent!()
+
+    {:ok, view, _html} = live(conn, ~p"/setup")
+
+    view
+    |> form("form[phx-submit=\"save_webchat\"]", %{
+      "webchat_config" => %{
+        "title" => "Hydra-X Browser",
+        "subtitle" => "Public ingress",
+        "welcome_prompt" => "Welcome to the browser channel.",
+        "composer_placeholder" => "Start typing",
+        "enabled" => "true"
+      }
+    })
+    |> render_submit()
+
+    html = render(view)
+    assert html =~ "Webchat updated"
+    assert html =~ "/webchat"
+    assert html =~ "Hydra-X Browser"
+
+    assert %{enabled: true, title: "Hydra-X Browser"} = Runtime.enabled_webchat_config()
+  end
+
   defp restore_env(key, nil), do: System.delete_env(key)
   defp restore_env(key, value), do: System.put_env(key, value)
 end

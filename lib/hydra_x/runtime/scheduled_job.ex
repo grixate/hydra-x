@@ -2,7 +2,7 @@ defmodule HydraX.Runtime.ScheduledJob do
   use Ecto.Schema
   import Ecto.Changeset
 
-  @kinds ~w(heartbeat prompt backup)
+  @kinds ~w(heartbeat prompt backup ingest maintenance)
   @schedule_modes ~w(interval daily weekly cron)
   @circuit_states ~w(closed open)
 
@@ -130,7 +130,7 @@ defmodule HydraX.Runtime.ScheduledJob do
     if get_field(changeset, :delivery_enabled) do
       changeset
       |> validate_required([:delivery_channel, :delivery_target])
-      |> validate_inclusion(:delivery_channel, ["telegram", "discord", "slack"])
+      |> validate_inclusion(:delivery_channel, ["telegram", "discord", "slack", "webchat"])
     else
       changeset
     end

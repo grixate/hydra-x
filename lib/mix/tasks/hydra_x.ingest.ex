@@ -9,7 +9,7 @@ defmodule Mix.Tasks.HydraX.Ingest do
 
     {opts, positional, _invalid} =
       OptionParser.parse(args,
-        strict: [agent: :string, force: :boolean, status: :string]
+        strict: [agent: :string, force: :boolean, status: :string, file: :string]
       )
 
     agent = resolve_agent(opts[:agent])
@@ -20,6 +20,7 @@ defmodule Mix.Tasks.HydraX.Ingest do
         {:ok, result} = HydraX.Runtime.ingest_file(agent.id, path, force: opts[:force] || false)
         Mix.shell().info("file=#{Path.basename(path)}")
         Mix.shell().info("created=#{result.created}")
+        Mix.shell().info("restored=#{Map.get(result, :restored, 0)}")
         Mix.shell().info("skipped=#{result.skipped}")
         Mix.shell().info("archived=#{result.archived}")
         Mix.shell().info("unchanged=#{result.unchanged}")
@@ -32,9 +33,12 @@ defmodule Mix.Tasks.HydraX.Ingest do
       ["history"] ->
         HydraX.Runtime.list_ingest_runs(agent.id, 20)
         |> maybe_filter_run_status(opts[:status])
+        |> maybe_filter_run_file(opts[:file])
         |> Enum.each(fn run ->
+          restored = get_in(run.metadata || %{}, ["restored_count"]) || 0
+
           Mix.shell().info(
-            "#{run.source_file}\tstatus=#{run.status}\tcreated=#{run.created_count}\tskipped=#{run.skipped_count}\tarchived=#{run.archived_count}\tat=#{format_datetime(run.inserted_at)}"
+            "#{run.source_file}\tstatus=#{run.status}\tcreated=#{run.created_count}\trestored=#{restored}\tskipped=#{run.skipped_count}\tarchived=#{run.archived_count}\tat=#{format_datetime(run.inserted_at)}"
           )
         end)
 
@@ -63,6 +67,10 @@ defmodule Mix.Tasks.HydraX.Ingest do
   defp maybe_filter_run_status(runs, nil), do: runs
   defp maybe_filter_run_status(runs, ""), do: runs
   defp maybe_filter_run_status(runs, status), do: Enum.filter(runs, &(&1.status == status))
+
+  defp maybe_filter_run_file(runs, nil), do: runs
+  defp maybe_filter_run_file(runs, ""), do: runs
+  defp maybe_filter_run_file(runs, file), do: Enum.filter(runs, &(&1.source_file == file))
 
   defp format_datetime(nil), do: "never"
   defp format_datetime(datetime), do: Calendar.strftime(datetime, "%Y-%m-%d %H:%M:%S UTC")

@@ -2,7 +2,7 @@ defmodule HydraX.Agent.Channel do
   @moduledoc false
   @behaviour :gen_statem
 
-  alias HydraX.Agent.{Compactor, PromptBuilder, Worker}
+  alias HydraX.Agent.{Compactor, Planner, PromptBuilder, Worker}
   alias HydraX.Budget
   alias HydraX.Cluster
   alias HydraX.Config
@@ -12,7 +12,7 @@ defmodule HydraX.Agent.Channel do
   alias HydraX.Telemetry
 
   @max_tool_rounds 5
-  @streamable_channels ~w(control_plane cli)
+  @streamable_channels ~w(control_plane cli webchat)
 
   def start_link(opts) do
     conversation = Keyword.fetch!(opts, :conversation)
@@ -137,6 +137,23 @@ defmodule HydraX.Agent.Channel do
     tool_policy = Runtime.effective_tool_policy(data.agent_id)
 
     prompt = PromptBuilder.build(agent, history, bulletin, summary, %{tool_policy: tool_policy})
+    plan = Planner.build(data.conversation, data.coalesce_buffer, prompt.tools || [])
+
+    update_channel_checkpoint(data.conversation.id, %{
+      "status" => "planned",
+      "plan" => plan,
+      "latest_user_turn_id" => latest_turn_id(data.coalesce_buffer),
+      "tool_rounds" => 0,
+      "tool_results" => [],
+      "execution_events" => [
+        execution_event("planned", %{
+          "summary" => "Planned #{length(plan["steps"] || [])} execution steps",
+          "step_count" => length(plan["steps"] || []),
+          "mode" => plan["mode"]
+        })
+      ],
+      "updated_at" => DateTime.utc_now()
+    })
 
     # When no tools are available and streaming is supported, stream the response
     result =
@@ -164,8 +181,16 @@ defmodule HydraX.Agent.Channel do
             metadata: response_metadata
           })
 
-        Runtime.upsert_checkpoint(data.conversation.id, "channel", %{
+        update_channel_checkpoint(data.conversation.id, %{
+          "status" => "completed",
           "assistant_turn_id" => assistant_turn.id,
+          "provider" => response_metadata[:provider] || response_metadata["provider"],
+          "tool_rounds" =>
+            response_metadata[:tool_rounds] || response_metadata["tool_rounds"] || 0,
+          "tool_results" =>
+            summarize_tool_results(
+              response_metadata[:tool_results] || response_metadata["tool_results"] || []
+            ),
           "updated_at" => DateTime.utc_now()
         })
 
@@ -252,8 +277,34 @@ defmodule HydraX.Agent.Channel do
       {:ok, %{tool_calls: tool_calls, stop_reason: "tool_use"} = response}
       when is_list(tool_calls) and tool_calls != [] ->
         # LLM wants to call tools — execute them and loop
+        append_channel_event(data.conversation.id, "provider_tool_request", %{
+          "round" => round + 1,
+          "provider" => response.provider,
+          "tool_count" => length(tool_calls)
+        })
+
         tool_results =
           Worker.execute_tool_calls(data.agent_id, data.conversation, tool_calls)
+
+        update_channel_checkpoint(data.conversation.id, %{
+          "status" => "executing_tools",
+          "tool_rounds" => round + 1,
+          "active_tool_calls" =>
+            Enum.map(tool_calls, fn call ->
+              %{"id" => call.id, "name" => call.name}
+            end),
+          "tool_results" => summarize_tool_results(all_tool_results ++ tool_results),
+          "updated_at" => DateTime.utc_now()
+        })
+
+        Enum.each(tool_results, fn result ->
+          append_channel_event(data.conversation.id, "tool_result", %{
+            "round" => round + 1,
+            "tool_name" => result.tool_name,
+            "is_error" => result[:is_error] || false,
+            "summary" => summarize_tool_result_payload(result.result)
+          })
+        end)
 
         # Build the next messages: append assistant's tool_use, then user's tool_results
         next_messages =
@@ -271,6 +322,13 @@ defmodule HydraX.Agent.Channel do
 
       {:ok, response} ->
         # Final response — no more tool calls
+        append_channel_event(data.conversation.id, "provider_completed", %{
+          "round" => round,
+          "provider" => response.provider,
+          "stop_reason" => response.stop_reason,
+          "content_length" => String.length(response.content || "")
+        })
+
         content = response.content || ""
 
         {content,
@@ -298,6 +356,12 @@ defmodule HydraX.Agent.Channel do
           |> Map.put(:process_type, "channel")
           |> maybe_put_tools(tools)
 
+        append_channel_event(data.conversation.id, "provider_requested", %{
+          "provider" => provider_name(data.agent_id),
+          "estimated_input_tokens" => estimated_input_tokens,
+          "tooling" => if(is_list(tools) and tools != [], do: "tool_capable", else: "direct")
+        })
+
         case Router.complete(request) do
           {:ok, response} ->
             Telemetry.provider_request(:ok, response.provider)
@@ -308,6 +372,12 @@ defmodule HydraX.Agent.Channel do
               tokens_out: output_tokens,
               metadata: %{provider: response.provider}
             )
+
+            append_channel_event(data.conversation.id, "provider_succeeded", %{
+              "provider" => response.provider,
+              "output_tokens" => output_tokens,
+              "stop_reason" => response.stop_reason
+            })
 
             {:ok, response}
 
@@ -323,6 +393,11 @@ defmodule HydraX.Agent.Channel do
               level: "error",
               message: "LLM provider request failed",
               metadata: %{reason: inspect(reason)}
+            })
+
+            append_channel_event(data.conversation.id, "provider_failed", %{
+              "provider" => provider_name(data.agent_id),
+              "reason" => inspect(reason)
             })
 
             {:error_response,
@@ -367,6 +442,12 @@ defmodule HydraX.Agent.Channel do
 
           case Router.complete_stream(request, self()) do
             {:ok, ref} ->
+              append_channel_event(data.conversation.id, "stream_started", %{
+                "provider" => provider_name(data.agent_id),
+                "estimated_input_tokens" => estimated_input_tokens,
+                "round" => round
+              })
+
               # Return streaming state to be merged into gen_statem data
               {:streaming,
                %{
@@ -419,6 +500,12 @@ defmodule HydraX.Agent.Channel do
       metadata: %{provider: response.provider}
     )
 
+    append_channel_event(data.conversation.id, "stream_completed", %{
+      "provider" => response.provider,
+      "output_tokens" => output_tokens,
+      "round" => round
+    })
+
     Telemetry.provider_request(:ok, response.provider)
 
     metadata = %{
@@ -436,8 +523,12 @@ defmodule HydraX.Agent.Channel do
         metadata: metadata
       })
 
-    Runtime.upsert_checkpoint(data.conversation.id, "channel", %{
+    update_channel_checkpoint(data.conversation.id, %{
+      "status" => "completed",
       "assistant_turn_id" => assistant_turn.id,
+      "provider" => response.provider,
+      "tool_rounds" => round,
+      "tool_results" => summarize_tool_results(all_tool_results),
       "updated_at" => DateTime.utc_now()
     })
 
@@ -522,5 +613,74 @@ defmodule HydraX.Agent.Channel do
       nil -> "mock"
       provider -> provider.name || provider.kind || "configured"
     end
+  end
+
+  defp latest_turn_id([]), do: nil
+  defp latest_turn_id(turns), do: turns |> List.last() |> then(&(&1 && &1.id))
+
+  defp update_channel_checkpoint(conversation_id, attrs) do
+    existing = Runtime.get_checkpoint(conversation_id, "channel")
+    state = Map.merge((existing && existing.state) || %{}, attrs)
+    Runtime.upsert_checkpoint(conversation_id, "channel", state)
+  end
+
+  defp append_channel_event(conversation_id, phase, details) when is_map(details) do
+    existing = Runtime.get_checkpoint(conversation_id, "channel")
+    state = (existing && existing.state) || %{}
+
+    events =
+      state
+      |> Map.get("execution_events", [])
+      |> List.wrap()
+      |> Kernel.++([execution_event(phase, details)])
+      |> Enum.take(-15)
+
+    Runtime.upsert_checkpoint(conversation_id, "channel", Map.put(state, "execution_events", events))
+  end
+
+  defp execution_event(phase, details) do
+    %{
+      "phase" => phase,
+      "at" => DateTime.utc_now(),
+      "details" => details
+    }
+  end
+
+  defp summarize_tool_results(results) do
+    Enum.map(results, fn result ->
+      %{
+        "tool_use_id" => result.tool_use_id,
+        "tool_name" => result.tool_name,
+        "is_error" => result[:is_error] || false,
+        "summary" => summarize_tool_result_payload(result.result)
+      }
+    end)
+  end
+
+  defp summarize_tool_result_payload(%{error: error}) when is_binary(error), do: error
+  defp summarize_tool_result_payload(%{"error" => error}) when is_binary(error), do: error
+
+  defp summarize_tool_result_payload(%{path: path}) when is_binary(path),
+    do: "path=#{path}"
+
+  defp summarize_tool_result_payload(%{"path" => path}) when is_binary(path),
+    do: "path=#{path}"
+
+  defp summarize_tool_result_payload(%{query: query}) when is_binary(query),
+    do: "query=#{query}"
+
+  defp summarize_tool_result_payload(%{"query" => query}) when is_binary(query),
+    do: "query=#{query}"
+
+  defp summarize_tool_result_payload(%{command: command}) when is_binary(command),
+    do: "command=#{command}"
+
+  defp summarize_tool_result_payload(%{"command" => command}) when is_binary(command),
+    do: "command=#{command}"
+
+  defp summarize_tool_result_payload(payload) do
+    payload
+    |> inspect(limit: 12, printable_limit: 120)
+    |> String.slice(0, 180)
   end
 end

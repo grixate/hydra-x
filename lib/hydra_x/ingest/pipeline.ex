@@ -21,7 +21,7 @@ defmodule HydraX.Ingest.Pipeline do
   Options:
   - `:force` - reprocess even when the parsed document hash is unchanged
 
-  Returns `{:ok, %{created: count, skipped: count, archived: count, unchanged: boolean}}`.
+  Returns `{:ok, %{created: count, restored: count, skipped: count, archived: count, unchanged: boolean}}`.
   """
   def ingest_file(agent_id, file_path, opts \\ []) do
     filename = Path.basename(file_path)
@@ -30,8 +30,10 @@ defmodule HydraX.Ingest.Pipeline do
     case Parser.parse(file_path) do
       {:ok, chunks} ->
         document_hash = document_hash(chunks)
+        existing = existing_hashes(agent_id, filename)
 
-        if not force? and latest_document_hash(agent_id, filename) == document_hash do
+        if not force? and latest_document_hash(agent_id, filename) == document_hash and
+             MapSet.size(existing) > 0 do
           record_run!(agent_id, %{
             source_file: filename,
             source_path: Path.expand(file_path),
@@ -47,48 +49,58 @@ defmodule HydraX.Ingest.Pipeline do
             }
           })
 
-          {:ok, %{created: 0, skipped: length(chunks), archived: 0, unchanged: true}}
+          {:ok,
+           %{created: 0, restored: 0, skipped: length(chunks), archived: 0, unchanged: true}}
         else
-          existing = existing_hashes(agent_id, filename)
           new_hashes = MapSet.new(chunks, fn c -> c.metadata["content_hash"] end)
 
           archived = archive_stale_entries(agent_id, filename, existing, new_hashes)
 
-          {created, skipped} =
-            Enum.reduce(chunks, {0, 0}, fn chunk, {created_count, skipped_count} ->
+          {created, restored, skipped} =
+            Enum.reduce(chunks, {0, 0, 0}, fn chunk,
+                                              {created_count, restored_count, skipped_count} ->
               hash = chunk.metadata["content_hash"]
 
               if MapSet.member?(existing, hash) do
-                {created_count, skipped_count + 1}
+                {created_count, restored_count, skipped_count + 1}
               else
-                attrs = %{
-                  agent_id: agent_id,
-                  type: @entry_type,
-                  status: "active",
-                  content: chunk.content,
-                  importance: @default_importance,
-                  metadata:
-                    Map.merge(chunk.metadata, %{
-                      "source" => "ingest",
-                      "ingested_at" => DateTime.utc_now() |> DateTime.to_iso8601(),
-                      "document_hash" => document_hash,
-                      "source_path" => Path.expand(file_path)
-                    })
-                }
+                case archived_entry(agent_id, filename, hash) do
+                  nil ->
+                    attrs = memory_attrs(agent_id, file_path, document_hash, chunk)
 
-                case Memory.create_memory(attrs) do
-                  {:ok, _entry} ->
-                    {created_count + 1, skipped_count}
+                    case Memory.create_memory(attrs) do
+                      {:ok, _entry} ->
+                        {created_count + 1, restored_count, skipped_count}
 
-                  {:error, reason} ->
-                    Logger.warning("Failed to ingest chunk from #{filename}: #{inspect(reason)}")
-                    {created_count, skipped_count}
+                      {:error, reason} ->
+                        Logger.warning("Failed to ingest chunk from #{filename}: #{inspect(reason)}")
+                        {created_count, restored_count, skipped_count}
+                    end
+
+                  entry ->
+                    case Memory.update_memory(entry, %{
+                           status: "active",
+                           content: chunk.content,
+                           metadata:
+                             memory_metadata(file_path, document_hash, chunk)
+                             |> Map.put("restored_at", DateTime.utc_now() |> DateTime.to_iso8601())
+                         }) do
+                      {:ok, _entry} ->
+                        {created_count, restored_count + 1, skipped_count}
+
+                      {:error, reason} ->
+                        Logger.warning(
+                          "Failed to restore archived ingest chunk from #{filename}: #{inspect(reason)}"
+                        )
+
+                        {created_count, restored_count, skipped_count}
+                    end
                 end
               end
             end)
 
           Logger.info(
-            "Ingest complete: #{filename} → #{created} created, #{skipped} skipped, #{archived} archived"
+            "Ingest complete: #{filename} → #{created} created, #{restored} restored, #{skipped} skipped, #{archived} archived"
           )
 
           record_run!(agent_id, %{
@@ -103,11 +115,19 @@ defmodule HydraX.Ingest.Pipeline do
               "source" => "manual_or_watcher_ingest",
               "document_hash" => document_hash,
               "content_hashes" => Enum.map(chunks, & &1.metadata["content_hash"]),
-              "forced" => force?
+              "forced" => force?,
+              "restored_count" => restored
             }
           })
 
-          {:ok, %{created: created, skipped: skipped, archived: archived, unchanged: false}}
+          {:ok,
+           %{
+             created: created,
+             restored: restored,
+             skipped: skipped,
+             archived: archived,
+             unchanged: false
+           }}
         end
 
       {:error, reason} ->
@@ -202,6 +222,37 @@ defmodule HydraX.Ingest.Pipeline do
     |> select([e], fragment("json_extract(?, '$.content_hash')", e.metadata))
     |> HydraX.Repo.all()
     |> MapSet.new()
+  end
+
+  defp archived_entry(agent_id, filename, hash) do
+    HydraX.Memory.Entry
+    |> where([e], e.agent_id == ^agent_id and e.status == "archived")
+    |> where([e], fragment("json_extract(?, '$.source')", e.metadata) == "ingest")
+    |> where([e], fragment("json_extract(?, '$.source_file')", e.metadata) == ^filename)
+    |> where([e], fragment("json_extract(?, '$.content_hash')", e.metadata) == ^hash)
+    |> order_by([e], desc: e.updated_at)
+    |> limit(1)
+    |> HydraX.Repo.one()
+  end
+
+  defp memory_attrs(agent_id, file_path, document_hash, chunk) do
+    %{
+      agent_id: agent_id,
+      type: @entry_type,
+      status: "active",
+      content: chunk.content,
+      importance: @default_importance,
+      metadata: memory_metadata(file_path, document_hash, chunk)
+    }
+  end
+
+  defp memory_metadata(file_path, document_hash, chunk) do
+    Map.merge(chunk.metadata, %{
+      "source" => "ingest",
+      "ingested_at" => DateTime.utc_now() |> DateTime.to_iso8601(),
+      "document_hash" => document_hash,
+      "source_path" => Path.expand(file_path)
+    })
   end
 
   defp archive_stale_entries(agent_id, filename, existing_hashes, new_hashes) do

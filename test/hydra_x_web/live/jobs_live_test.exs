@@ -165,6 +165,48 @@ defmodule HydraXWeb.JobsLiveTest do
     assert html =~ "mon,fri @ 08:15 UTC"
   end
 
+  test "jobs page can create and run an ingest scheduled job", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+    ingest_dir = Path.join(agent.workspace_root, "ingest")
+    File.mkdir_p!(ingest_dir)
+    File.write!(Path.join(ingest_dir, "scheduled.md"), "# Scheduled\n\nJobs page ingest works.")
+
+    {:ok, view, _html} = live(conn, ~p"/jobs")
+
+    view
+    |> form("#job-form", %{
+      scheduled_job: %{
+        name: "Ingest queue sweep",
+        kind: "ingest",
+        interval_minutes: 30,
+        enabled: true,
+        delivery_enabled: false,
+        delivery_channel: "telegram",
+        delivery_target: ""
+      }
+    })
+    |> render_submit()
+
+    [job | _] =
+      Runtime.list_scheduled_jobs(limit: 10)
+      |> Enum.filter(&(&1.name == "Ingest queue sweep"))
+
+    view
+    |> element(~s(button[phx-click="trigger"][phx-value-id="#{job.id}"]))
+    |> render_click()
+
+    [run | _] =
+      Runtime.list_job_runs(limit: 5, kind: "ingest", search: "Ingest queue sweep")
+
+    assert run.status == "success"
+    assert run.output =~ "scheduled.md"
+
+    html = render(view)
+    assert html =~ "Ingest queue sweep"
+    assert html =~ "Job executed"
+    assert html =~ "success"
+  end
+
   test "jobs page shows scheduler resilience controls and can reset circuits", %{conn: conn} do
     agent = Runtime.ensure_default_agent!()
 

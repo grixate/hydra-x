@@ -9,6 +9,7 @@ defmodule HydraX.Tool.Registry do
     ShellCommand,
     WebSearch,
     WorkspaceList,
+    WorkspacePatch,
     WorkspaceRead,
     WorkspaceWrite
   }
@@ -19,6 +20,7 @@ defmodule HydraX.Tool.Registry do
     {ShellCommand, :shell_command_enabled},
     {WorkspaceRead, :workspace_read_enabled},
     {WorkspaceWrite, :workspace_write_enabled},
+    {WorkspacePatch, :workspace_write_enabled},
     {WebSearch, :web_search_enabled},
     {MemoryRecall, nil},
     {MemorySave, nil},

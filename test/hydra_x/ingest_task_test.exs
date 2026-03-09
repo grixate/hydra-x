@@ -81,6 +81,40 @@ defmodule HydraX.IngestTaskTest do
     assert history_output =~ "status=skipped"
   end
 
+  test "ingest task restores archived chunks on reimport and can filter history by file" do
+    Mix.Task.reenable("hydra_x.ingest")
+    agent = create_agent()
+    ingest_dir = Path.join(agent.workspace_root, "ingest")
+    File.mkdir_p!(ingest_dir)
+    File.write!(Path.join(ingest_dir, "ops.md"), "# Ops\n\nHydra-X restore path works.")
+
+    capture_io(fn ->
+      Mix.Tasks.HydraX.Ingest.run(["import", "ops.md", "--agent", agent.slug])
+    end)
+
+    assert {:ok, _count} = HydraX.Runtime.archive_file(agent.id, "ops.md")
+
+    Mix.Task.reenable("hydra_x.ingest")
+
+    restored_output =
+      capture_io(fn ->
+        Mix.Tasks.HydraX.Ingest.run(["import", "ops.md", "--agent", agent.slug])
+      end)
+
+    assert restored_output =~ "restored=1"
+    assert restored_output =~ "created=0"
+
+    Mix.Task.reenable("hydra_x.ingest")
+
+    history_output =
+      capture_io(fn ->
+        Mix.Tasks.HydraX.Ingest.run(["history", "--agent", agent.slug, "--file", "ops.md"])
+      end)
+
+    assert history_output =~ "ops.md"
+    assert history_output =~ "restored=1"
+  end
+
   test "ingest task can import a pdf with an injected text extractor" do
     previous = Application.get_env(:hydra_x, :pdf_text_extractor)
     agent = create_agent()

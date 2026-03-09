@@ -30,6 +30,7 @@ defmodule HydraXWeb.ConversationsLive do
      |> assign(:conversations, conversations)
      |> assign(:selected, selected)
      |> assign(:compaction, selected && Runtime.conversation_compaction(selected.id))
+     |> assign(:channel_state, selected && Runtime.conversation_channel_state(selected.id))
      |> assign(:new_form, to_form(default_new_conversation(agents), as: :conversation))
      |> assign(:reply_form, to_form(%{"message" => ""}, as: :reply))
      |> assign(:rename_form, rename_form(selected))
@@ -47,7 +48,8 @@ defmodule HydraXWeb.ConversationsLive do
     {:noreply,
      socket
      |> assign(:selected, selected)
-     |> assign(:compaction, selected && Runtime.conversation_compaction(selected.id))}
+     |> assign(:compaction, selected && Runtime.conversation_compaction(selected.id))
+     |> assign(:channel_state, selected && Runtime.conversation_channel_state(selected.id))}
   end
 
   @impl true
@@ -64,6 +66,7 @@ defmodule HydraXWeb.ConversationsLive do
          |> assign(:conversations, list_conversations(socket.assigns.filters))
          |> assign(:selected, selected)
          |> assign(:compaction, Runtime.conversation_compaction(selected.id))
+         |> assign(:channel_state, Runtime.conversation_channel_state(selected.id))
          |> assign(:rename_form, rename_form(selected))}
 
       {:error, reason} ->
@@ -82,6 +85,7 @@ defmodule HydraXWeb.ConversationsLive do
      |> assign(:conversations, conversations)
      |> assign(:selected, selected)
      |> assign(:compaction, selected && Runtime.conversation_compaction(selected.id))
+     |> assign(:channel_state, selected && Runtime.conversation_channel_state(selected.id))
      |> assign(:rename_form, rename_form(selected))
      |> assign(:stats, stats())}
   end
@@ -113,6 +117,7 @@ defmodule HydraXWeb.ConversationsLive do
        |> assign(:conversations, conversations)
        |> assign(:selected, selected)
        |> assign(:compaction, Runtime.conversation_compaction(selected.id))
+       |> assign(:channel_state, Runtime.conversation_channel_state(selected.id))
        |> assign(:stats, stats())
        |> assign(:rename_form, rename_form(selected))
        |> assign(:reply_form, to_form(%{"message" => ""}, as: :reply))}
@@ -134,6 +139,7 @@ defmodule HydraXWeb.ConversationsLive do
          |> assign(:conversations, list_conversations(socket.assigns.filters))
          |> assign(:selected, selected)
          |> assign(:compaction, Runtime.conversation_compaction(selected.id))
+         |> assign(:channel_state, Runtime.conversation_channel_state(selected.id))
          |> assign(:stats, stats())
          |> assign(:rename_form, rename_form(selected))
          |> assign(:reply_form, to_form(%{"message" => ""}, as: :reply))}
@@ -156,6 +162,7 @@ defmodule HydraXWeb.ConversationsLive do
          |> assign(:conversations, list_conversations(socket.assigns.filters))
          |> assign(:selected, refreshed)
          |> assign(:compaction, Runtime.conversation_compaction(refreshed.id))
+         |> assign(:channel_state, Runtime.conversation_channel_state(refreshed.id))
          |> assign(:rename_form, rename_form(refreshed))
          |> assign(:stats, stats())}
 
@@ -188,6 +195,7 @@ defmodule HydraXWeb.ConversationsLive do
      |> assign(:conversations, conversations)
      |> assign(:selected, selected)
      |> assign(:compaction, selected && Runtime.conversation_compaction(selected.id))
+     |> assign(:channel_state, selected && Runtime.conversation_channel_state(selected.id))
      |> assign(:rename_form, rename_form(selected))}
   end
 
@@ -210,6 +218,7 @@ defmodule HydraXWeb.ConversationsLive do
      |> assign(:conversations, conversations)
      |> assign(:selected, selected)
      |> assign(:compaction, selected && Runtime.conversation_compaction(selected.id))
+     |> assign(:channel_state, selected && Runtime.conversation_channel_state(selected.id))
      |> assign(:rename_form, rename_form(selected))}
   end
 
@@ -222,6 +231,7 @@ defmodule HydraXWeb.ConversationsLive do
      |> put_flash(:info, "Conversation compaction reviewed")
      |> assign(:selected, selected)
      |> assign(:compaction, compaction)
+     |> assign(:channel_state, Runtime.conversation_channel_state(selected.id))
      |> assign(:conversations, list_conversations(socket.assigns.filters))
      |> assign(:rename_form, rename_form(selected))
      |> assign(:stats, stats())}
@@ -236,6 +246,7 @@ defmodule HydraXWeb.ConversationsLive do
      |> put_flash(:info, "Conversation summary reset")
      |> assign(:selected, selected)
      |> assign(:compaction, compaction)
+     |> assign(:channel_state, Runtime.conversation_channel_state(selected.id))
      |> assign(:conversations, list_conversations(socket.assigns.filters))
      |> assign(:rename_form, rename_form(selected))
      |> assign(:stats, stats())}
@@ -272,6 +283,7 @@ defmodule HydraXWeb.ConversationsLive do
      |> assign(:conversations, conversations)
      |> assign(:selected, selected)
      |> assign(:compaction, selected && Runtime.conversation_compaction(selected.id))
+     |> assign(:channel_state, selected && Runtime.conversation_channel_state(selected.id))
      |> assign(:streaming_content, nil)
      |> assign(:stats, stats())}
   end
@@ -448,6 +460,76 @@ defmodule HydraXWeb.ConversationsLive do
                   Policy thresholds: {compaction_thresholds_label(@compaction.thresholds)}
                 </div>
               </div>
+              <div class="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+                <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                  Execution plan
+                </div>
+                <div class="mt-3 flex flex-wrap gap-2 text-xs">
+                  <span class="rounded-full border border-white/10 px-3 py-1 font-mono uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                    status {(@channel_state && @channel_state.status) || "idle"}
+                  </span>
+                  <span
+                    :if={@channel_state && @channel_state.provider}
+                    class="rounded-full border border-white/10 px-3 py-1 font-mono uppercase tracking-[0.18em] text-[var(--hx-mute)]"
+                  >
+                    provider {@channel_state.provider}
+                  </span>
+                  <span class="rounded-full border border-white/10 px-3 py-1 font-mono uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                    tool rounds {(@channel_state && @channel_state.tool_rounds) || 0}
+                  </span>
+                </div>
+                <p class="mt-3 text-sm text-[var(--hx-mute)]">
+                  {channel_plan_summary(@channel_state)}
+                </p>
+                <div :if={channel_steps(@channel_state) != []} class="mt-3 space-y-2">
+                  <div
+                    :for={step <- channel_steps(@channel_state)}
+                    class="rounded-xl border border-white/10 bg-black/10 px-3 py-3"
+                  >
+                    <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--hx-accent)]">
+                      {step["kind"]}
+                      {if step["name"], do: " · #{step["name"]}", else: ""}
+                    </div>
+                    <p class="mt-2 text-sm text-[var(--hx-mute)]">
+                      {step["reason"] || step["label"]}
+                    </p>
+                  </div>
+                </div>
+                <div :if={channel_tool_results(@channel_state) != []} class="mt-3 space-y-2">
+                  <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                    Tool execution
+                  </div>
+                  <div
+                    :for={result <- channel_tool_results(@channel_state)}
+                    class="rounded-xl border border-white/10 bg-black/10 px-3 py-3"
+                  >
+                    <div class="flex items-center justify-between gap-3">
+                      <div class="text-sm text-[var(--hx-accent)]">{result["tool_name"]}</div>
+                      <div class="text-xs text-[var(--hx-mute)]">
+                        {if result["is_error"], do: "error", else: "ok"}
+                      </div>
+                    </div>
+                    <p class="mt-2 text-sm text-[var(--hx-mute)]">{result["summary"]}</p>
+                  </div>
+                </div>
+                <div :if={channel_execution_events(@channel_state) != []} class="mt-3 space-y-2">
+                  <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                    Execution events
+                  </div>
+                  <div
+                    :for={event <- channel_execution_events(@channel_state)}
+                    class="rounded-xl border border-white/10 bg-black/10 px-3 py-3"
+                  >
+                    <div class="flex items-center justify-between gap-3">
+                      <div class="text-sm text-[var(--hx-accent)]">{event["phase"]}</div>
+                      <div class="text-xs text-[var(--hx-mute)]">{format_event_time(event["at"])}</div>
+                    </div>
+                    <p class="mt-2 text-sm text-[var(--hx-mute)]">
+                      {channel_event_summary(event)}
+                    </p>
+                  </div>
+                </div>
+              </div>
               <.form for={@rename_form} phx-submit="rename_conversation" class="mt-4 space-y-2">
                 <.input field={@rename_form[:title]} label="Title" />
                 <div class="pt-1">
@@ -594,6 +676,74 @@ defmodule HydraXWeb.ConversationsLive do
   defp default_filters do
     %{"search" => "", "status" => "", "channel" => ""}
   end
+
+  defp channel_steps(nil), do: []
+  defp channel_steps(%{plan: %{"steps" => steps}}) when is_list(steps), do: steps
+  defp channel_steps(_), do: []
+
+  defp channel_tool_results(nil), do: []
+  defp channel_tool_results(%{tool_results: results}) when is_list(results), do: results
+  defp channel_tool_results(_), do: []
+
+  defp channel_execution_events(nil), do: []
+
+  defp channel_execution_events(%{execution_events: events}) when is_list(events),
+    do: Enum.reverse(events)
+
+  defp channel_execution_events(_), do: []
+
+  defp channel_plan_summary(nil), do: "No execution checkpoint yet."
+  defp channel_plan_summary(%{plan: plan}) when plan == %{}, do: "No execution checkpoint yet."
+
+  defp channel_plan_summary(%{plan: %{"mode" => mode, "latest_message" => message}}) do
+    message = message || "No user message captured yet."
+
+    case mode do
+      "direct" -> "Direct-response turn. Latest message: #{message}"
+      "tool_capable" -> "Tool-capable turn. Latest message: #{message}"
+      _ -> message
+    end
+  end
+
+  defp channel_event_summary(%{"phase" => phase, "details" => details}) when is_map(details) do
+    case phase do
+      "planned" ->
+        details["summary"] || "Execution plan prepared"
+
+      "provider_requested" ->
+        "requested #{details["provider"] || "provider"} (#{details["tooling"] || "direct"})"
+
+      "provider_tool_request" ->
+        "provider requested #{details["tool_count"] || 0} tool calls in round #{details["round"] || 0}"
+
+      "tool_result" ->
+        "#{details["tool_name"] || "tool"} #{if(details["is_error"], do: "failed", else: "succeeded")}: #{details["summary"] || "completed"}"
+
+      "provider_succeeded" ->
+        "provider #{details["provider"] || "unknown"} returned #{details["stop_reason"] || "response"}"
+
+      "provider_completed" ->
+        "final response via #{details["provider"] || "unknown"}"
+
+      "provider_failed" ->
+        "provider request failed: #{details["reason"] || "unknown"}"
+
+      "stream_started" ->
+        "stream opened via #{details["provider"] || "unknown"}"
+
+      "stream_completed" ->
+        "stream completed via #{details["provider"] || "unknown"}"
+
+      _ ->
+        inspect(details)
+    end
+  end
+
+  defp channel_event_summary(_event), do: "Execution event recorded"
+
+  defp format_event_time(%DateTime{} = dt), do: Calendar.strftime(dt, "%H:%M:%S")
+  defp format_event_time(value) when is_binary(value), do: String.slice(value, 11, 8)
+  defp format_event_time(_value), do: "now"
 
   @page_size 25
 

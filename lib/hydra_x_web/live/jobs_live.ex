@@ -224,7 +224,9 @@ defmodule HydraXWeb.JobsLive do
                   {"All kinds", ""},
                   {"Heartbeat", "heartbeat"},
                   {"Prompt", "prompt"},
-                  {"Backup", "backup"}
+                  {"Backup", "backup"},
+                  {"Ingest", "ingest"},
+                  {"Maintenance", "maintenance"}
                 ]}
               />
               <.input
@@ -348,7 +350,13 @@ defmodule HydraXWeb.JobsLive do
               field={@form[:kind]}
               type="select"
               label="Kind"
-              options={[{"Heartbeat", "heartbeat"}, {"Prompt", "prompt"}, {"Backup", "backup"}]}
+              options={[
+                {"Heartbeat", "heartbeat"},
+                {"Prompt", "prompt"},
+                {"Backup", "backup"},
+                {"Ingest", "ingest"},
+                {"Maintenance", "maintenance"}
+              ]}
             />
             <.input
               field={@form[:schedule_mode]}
@@ -427,7 +435,8 @@ defmodule HydraXWeb.JobsLive do
               options={[
                 {"Telegram", "telegram"},
                 {"Discord", "discord"},
-                {"Slack", "slack"}
+                {"Slack", "slack"},
+                {"Webchat", "webchat"}
               ]}
             />
             <.input field={@form[:delivery_target]} label="Delivery target" />
@@ -473,7 +482,9 @@ defmodule HydraXWeb.JobsLive do
                   {"All kinds", ""},
                   {"Heartbeat", "heartbeat"},
                   {"Prompt", "prompt"},
-                  {"Backup", "backup"}
+                  {"Backup", "backup"},
+                  {"Ingest", "ingest"},
+                  {"Maintenance", "maintenance"}
                 ]}
               />
               <.input

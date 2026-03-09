@@ -14,6 +14,15 @@
           No operator password is configured yet. The control plane remains open until you set one on setup.
         <% end %>
       </p>
+      <p :if={@password_configured?} class="mt-2 text-xs text-[var(--hx-mute)]">
+        Login throttle: <%= @throttle.max_attempts %> attempts per <%= @throttle.window_seconds %>s window.
+        <span :if={@throttle.rate_limited?}>
+          Retry in approximately <%= @throttle.retry_after_seconds %>s.
+        </span>
+      </p>
+      <p :if={@throttle.rate_limited?} class="mt-3 text-sm text-[var(--hx-accent)]">
+        Too many attempts, try again later.
+      </p>
 
       <.form
         :if={@password_configured?}

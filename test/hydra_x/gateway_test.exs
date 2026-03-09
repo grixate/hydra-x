@@ -263,6 +263,37 @@ defmodule HydraX.GatewayTest do
     assert refreshed.metadata["last_delivery"]["metadata"]["provider_message_id"] == "slack-ts"
   end
 
+  test "webchat messages are routed into conversations and answered" do
+    agent = create_agent()
+    {:ok, pid} = HydraX.Agent.ensure_started(agent)
+    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
+
+    {:ok, _webchat} =
+      Runtime.save_webchat_config(%{
+        title: "Hydra-X Browser",
+        subtitle: "Public runtime ingress",
+        welcome_prompt: "Welcome to Hydra-X.",
+        composer_placeholder: "Ask a question",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
+    assert :ok =
+             HydraX.Gateway.dispatch_webchat_message(%{
+               "session_id" => "webchat-session-42",
+               "content" => "Webchat should reach the runtime."
+             })
+
+    [conversation] = Runtime.list_conversations(agent_id: agent.id, limit: 10)
+    assert conversation.channel == "webchat"
+    assert Runtime.list_turns(conversation.id) |> length() == 2
+
+    refreshed = Runtime.get_conversation!(conversation.id)
+    assert refreshed.metadata["last_delivery"]["status"] == "delivered"
+    assert refreshed.metadata["last_delivery"]["external_ref"] == "webchat-session-42"
+    assert refreshed.metadata["last_delivery"]["metadata"]["streaming"] == true
+  end
+
   defp create_agent do
     unique = System.unique_integer([:positive])
 

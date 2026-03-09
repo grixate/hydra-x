@@ -2,6 +2,7 @@ defmodule HydraX.Runtime.OperatorAuthTest do
   use HydraX.DataCase
 
   alias HydraX.Runtime
+  alias HydraX.Security.LoginThrottle
   alias HydraX.Safety
 
   test "operator password can be stored and authenticated" do
@@ -26,6 +27,9 @@ defmodule HydraX.Runtime.OperatorAuthTest do
     assert operator.configured
     assert operator.password_age_days == 0
     refute operator.password_stale?
+    assert operator.login_max_attempts == LoginThrottle.max_attempts()
+    assert operator.login_window_seconds == LoginThrottle.window_seconds()
+    assert operator.blocked_login_ips == 0
 
     [event | _] = Safety.list_events(category: "auth", limit: 5)
     assert event.level == "info"

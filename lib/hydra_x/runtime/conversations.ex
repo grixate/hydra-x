@@ -99,6 +99,24 @@ defmodule HydraX.Runtime.Conversations do
     }
   end
 
+  def conversation_channel_state(id) when is_integer(id) do
+    checkpoint = get_checkpoint(id, "channel")
+    state = (checkpoint && checkpoint.state) || %{}
+
+    %{
+      checkpoint_id: checkpoint && checkpoint.id,
+      status: state["status"],
+      updated_at: state["updated_at"],
+      plan: state["plan"] || %{},
+      execution_events: state["execution_events"] || [],
+      provider: state["provider"],
+      tool_rounds: state["tool_rounds"] || 0,
+      tool_results: state["tool_results"] || [],
+      assistant_turn_id: state["assistant_turn_id"],
+      latest_user_turn_id: state["latest_user_turn_id"]
+    }
+  end
+
   def review_conversation_compaction!(id) when is_integer(id) do
     conversation = get_conversation!(id)
 

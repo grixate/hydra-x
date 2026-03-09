@@ -2,8 +2,14 @@ defmodule HydraXWeb.SessionControllerTest do
   use HydraXWeb.ConnCase
 
   alias HydraX.Runtime
+  alias HydraX.Security.LoginThrottle
   alias HydraX.Safety
   alias HydraXWeb.OperatorAuth
+
+  setup do
+    LoginThrottle.reset!()
+    :ok
+  end
 
   test "protected routes stay open until an operator password is configured", %{conn: conn} do
     conn = get(conn, ~p"/setup")
@@ -61,6 +67,35 @@ defmodule HydraXWeb.SessionControllerTest do
     [event | _] = Safety.list_events(category: "auth", limit: 5)
     assert event.level == "warn"
     assert event.message =~ "Operator login failed"
+  end
+
+  test "login is blocked after too many failures from the same IP", %{conn: conn} do
+    assert {:ok, _secret} =
+             Runtime.save_operator_secret_password(%{
+               "password" => "hydra-password-123",
+               "password_confirmation" => "hydra-password-123"
+             })
+
+    Enum.each(1..5, fn _attempt ->
+      conn =
+        post(conn, ~p"/login", %{
+          "operator_secret" => %{"password" => "bad-password"}
+        })
+
+      assert html_response(conn, 200) =~ "Operator sign-in"
+    end)
+
+    blocked_conn =
+      post(conn, ~p"/login", %{
+        "operator_secret" => %{"password" => "bad-password"}
+      })
+
+    html = html_response(blocked_conn, 200)
+    assert html =~ "Too many attempts, try again later."
+    assert html =~ "Login throttle: 5 attempts per 60s window."
+
+    [event | _] = Safety.list_events(category: "auth", limit: 5)
+    assert event.message =~ "Blocked operator login due to rate limit"
   end
 
   test "logout is audited", %{conn: conn} do

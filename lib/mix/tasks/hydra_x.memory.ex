@@ -196,9 +196,10 @@ defmodule Mix.Tasks.HydraX.Memory do
             status: opts[:status] || "active",
             min_importance: opts[:min_importance]
           )
+          |> Enum.map(&%{entry: &1, score: nil, reasons: []})
 
         query ->
-          HydraX.Memory.search(
+          HydraX.Memory.search_ranked(
             agent_id,
             query,
             opts[:limit] || 50,
@@ -209,7 +210,9 @@ defmodule Mix.Tasks.HydraX.Memory do
       end
 
     memories
-    |> Enum.each(fn memory ->
+    |> Enum.each(fn ranked ->
+      memory = ranked.entry
+
       Mix.shell().info(
         Enum.join(
           [
@@ -218,6 +221,8 @@ defmodule Mix.Tasks.HydraX.Memory do
             memory.type,
             memory.status,
             Float.to_string(memory.importance),
+            if(is_float(ranked.score), do: Float.to_string(ranked.score), else: "-"),
+            Enum.join(ranked.reasons || [], ", "),
             memory.content
           ],
           "\t"

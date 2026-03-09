@@ -49,14 +49,15 @@ defmodule HydraX.Agent.Worker do
         %{conversation: conversation, tool_calls: tool_calls} = data
       ) do
     agent = Runtime.get_agent!(conversation.agent_id)
-    tool_policy = Runtime.effective_tool_policy()
+    tool_policy = Runtime.effective_tool_policy(agent.id)
 
     context = %{
       workspace_root: agent.workspace_root,
       http_allowlist: tool_policy.http_allowlist,
       shell_allowlist: tool_policy.shell_allowlist,
       agent_id: conversation.agent_id,
-      conversation_id: conversation.id
+      conversation_id: conversation.id,
+      current_channel: conversation.channel
     }
 
     results =
@@ -85,7 +86,7 @@ defmodule HydraX.Agent.Worker do
         }
 
       tool_module ->
-        if tool_enabled?(tool_module, tool_policy) do
+        if tool_enabled?(tool_module, tool_policy, conversation.channel) do
           params = enrich_params(arguments, name, context)
 
           case tool_module.execute(params, context) do
@@ -119,12 +120,40 @@ defmodule HydraX.Agent.Worker do
   defp tool_enabled?(module, policy) do
     case module.name() do
       "workspace_list" -> Map.get(policy, :workspace_list_enabled, true)
-      "http_fetch" -> Map.get(policy, :http_fetch_enabled, true)
-      "shell_command" -> Map.get(policy, :shell_command_enabled, true)
       "workspace_read" -> Map.get(policy, :workspace_read_enabled, true)
-      "workspace_write" -> Map.get(policy, :workspace_write_enabled, false)
+      "http_fetch" -> Map.get(policy, :http_fetch_enabled, true)
       "web_search" -> Map.get(policy, :web_search_enabled, true)
+      "shell_command" -> Map.get(policy, :shell_command_enabled, true)
+      "workspace_write" -> Map.get(policy, :workspace_write_enabled, false)
+      "workspace_patch" -> Map.get(policy, :workspace_write_enabled, false)
       _ -> true
+    end
+  end
+
+  defp tool_enabled?(module, policy, channel) do
+    case module.name() do
+      "workspace_write" ->
+        Map.get(policy, :workspace_write_enabled, false) and
+          channel_allowed?(channel, Map.get(policy, :workspace_write_channels, []))
+
+      "workspace_patch" ->
+        Map.get(policy, :workspace_write_enabled, false) and
+          channel_allowed?(channel, Map.get(policy, :workspace_write_channels, []))
+
+      "http_fetch" ->
+        Map.get(policy, :http_fetch_enabled, true) and
+          channel_allowed?(channel, Map.get(policy, :http_fetch_channels, []))
+
+      "web_search" ->
+        Map.get(policy, :web_search_enabled, true) and
+          channel_allowed?(channel, Map.get(policy, :web_search_channels, []))
+
+      "shell_command" ->
+        Map.get(policy, :shell_command_enabled, true) and
+          channel_allowed?(channel, Map.get(policy, :shell_command_channels, []))
+
+      _ ->
+        tool_enabled?(module, policy)
     end
   end
 
@@ -156,4 +185,9 @@ defmodule HydraX.Agent.Worker do
       }
     })
   end
+
+  defp channel_allowed?(channel, channels) when is_binary(channel) and is_list(channels),
+    do: channel in channels
+
+  defp channel_allowed?(_, _), do: false
 end

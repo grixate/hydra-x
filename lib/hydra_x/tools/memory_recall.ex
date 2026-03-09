@@ -29,8 +29,8 @@ defmodule HydraX.Tools.MemoryRecall do
 
   @impl true
   def execute(params, _context) do
-    memories =
-      HydraX.Memory.search(
+    ranked_memories =
+      HydraX.Memory.search_ranked(
         params[:agent_id] || params["agent_id"],
         params[:query] || params["query"] || "",
         params[:limit] || params["limit"] || 5
@@ -39,12 +39,18 @@ defmodule HydraX.Tools.MemoryRecall do
     {:ok,
      %{
        results:
-         Enum.map(memories, fn memory ->
+         Enum.map(ranked_memories, fn ranked ->
+           memory = ranked.entry
+
            %{
              id: memory.id,
              type: memory.type,
              content: memory.content,
-             importance: memory.importance
+             importance: memory.importance,
+             score: ranked.score,
+             reasons: ranked.reasons,
+             lexical_rank: ranked.lexical_rank,
+             semantic_rank: ranked.semantic_rank
            }
          end)
      }}

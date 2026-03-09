@@ -118,6 +118,10 @@ defmodule HydraXWeb.ConversationsLiveTest do
     assert html =~ "Conversation started"
     assert html =~ "UI Chat"
     assert html =~ "Remember that the UI can drive conversations."
+    assert html =~ "Execution plan"
+    assert html =~ "Execution events"
+    assert html =~ "Tool-capable turn"
+    assert html =~ "provider_requested"
 
     [conversation | _] = Runtime.list_conversations(limit: 5)
 
@@ -133,6 +137,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
     html = render(view)
     assert html =~ "Reply sent"
     assert html =~ "Mock response"
+    assert html =~ "status completed"
   end
 
   test "conversations page can rename and archive a conversation", %{conn: conn} do

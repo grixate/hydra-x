@@ -401,4 +401,43 @@ defmodule HydraXWeb.MemoryLiveTest do
     assert html =~ "skipped"
     assert html =~ "reason unchanged_document"
   end
+
+  test "memory page shows ingest provenance and restored runs after reimport", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+    ingest_dir = Path.join(agent.workspace_root, "ingest")
+    File.mkdir_p!(ingest_dir)
+    File.write!(Path.join(ingest_dir, "ops.md"), "# Ops\n\nHydra-X can restore archived ingest chunks.")
+
+    {:ok, view, _html} = live(conn, ~p"/memory")
+
+    view
+    |> form("form[phx-submit=\"ingest_file\"]", %{
+      "ingest" => %{"filename" => "ops.md", "force" => "false"}
+    })
+    |> render_submit()
+
+    assert {:ok, _count} = Runtime.archive_file(agent.id, "ops.md")
+
+    view
+    |> form("form[phx-submit=\"ingest_file\"]", %{
+      "ingest" => %{"filename" => "ops.md", "force" => "false"}
+    })
+    |> render_submit()
+
+    restored =
+      Memory.list_memories(agent_id: agent.id, status: "active", limit: 20)
+      |> Enum.find(&String.contains?(&1.content, "restore archived ingest chunks"))
+
+    view
+    |> element(~s(button[phx-click="select_memory"][phx-value-id="#{restored.id}"]))
+    |> render_click()
+
+    html = render(view)
+    assert html =~ "1 restored"
+    assert html =~ "Ingest provenance"
+    assert html =~ "Source file"
+    assert html =~ "ops.md"
+    assert html =~ "Recent runs for this source"
+    assert html =~ "restored 1"
+  end
 end

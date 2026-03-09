@@ -475,6 +475,12 @@ defmodule HydraXWeb.AgentsLive do
                     agent.effective_tool_policy.shell_command_enabled
                   )}
                 </div>
+                <div class="mt-2 text-xs text-[var(--hx-mute)]">
+                  write via {channel_summary(agent.effective_tool_policy.workspace_write_channels)} ·
+                  http via {channel_summary(agent.effective_tool_policy.http_fetch_channels)} ·
+                  search via {channel_summary(agent.effective_tool_policy.web_search_channels)} ·
+                  shell via {channel_summary(agent.effective_tool_policy.shell_command_channels)}
+                </div>
                 <% tool_policy_form = to_form(agent_tool_policy_form(agent), as: :agent_tool_policy) %>
                 <.form
                   for={tool_policy_form}
@@ -495,7 +501,7 @@ defmodule HydraXWeb.AgentsLive do
                   <.input
                     field={tool_policy_form[:workspace_write_enabled]}
                     type="checkbox"
-                    label="Workspace write"
+                    label="Workspace write/patch"
                   />
                   <.input
                     field={tool_policy_form[:web_search_enabled]}
@@ -519,6 +525,22 @@ defmodule HydraXWeb.AgentsLive do
                   <.input
                     field={tool_policy_form[:http_allowlist_csv]}
                     label="HTTP allowlist (comma separated)"
+                  />
+                  <.input
+                    field={tool_policy_form[:workspace_write_channels_csv]}
+                    label="Workspace write channels"
+                  />
+                  <.input
+                    field={tool_policy_form[:http_fetch_channels_csv]}
+                    label="HTTP fetch channels"
+                  />
+                  <.input
+                    field={tool_policy_form[:web_search_channels_csv]}
+                    label="Web search channels"
+                  />
+                  <.input
+                    field={tool_policy_form[:shell_command_channels_csv]}
+                    label="Shell channels"
                   />
                   <div class="md:col-span-2 pt-1">
                     <.button>Save tool override</.button>
@@ -632,7 +654,11 @@ defmodule HydraXWeb.AgentsLive do
       "web_search_enabled" => Map.get(policy, :web_search_enabled, true),
       "shell_command_enabled" => Map.get(policy, :shell_command_enabled, true),
       "shell_allowlist_csv" => Map.get(policy, :shell_allowlist_csv, ""),
-      "http_allowlist_csv" => Map.get(policy, :http_allowlist_csv, "")
+      "http_allowlist_csv" => Map.get(policy, :http_allowlist_csv, ""),
+      "workspace_write_channels_csv" => Map.get(policy, :workspace_write_channels_csv, ""),
+      "http_fetch_channels_csv" => Map.get(policy, :http_fetch_channels_csv, ""),
+      "web_search_channels_csv" => Map.get(policy, :web_search_channels_csv, ""),
+      "shell_command_channels_csv" => Map.get(policy, :shell_command_channels_csv, "")
     }
   end
 
@@ -657,4 +683,7 @@ defmodule HydraXWeb.AgentsLive do
 
   defp fallback_summary([]), do: "none"
   defp fallback_summary(fallbacks), do: Enum.map_join(fallbacks, ", ", &provider_name/1)
+
+  defp channel_summary([]), do: "none"
+  defp channel_summary(channels), do: Enum.join(channels, ", ")
 end

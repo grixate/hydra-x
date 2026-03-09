@@ -10,7 +10,8 @@ defmodule HydraXWeb.SetupLive do
     ProviderConfig,
     SlackConfig,
     TelegramConfig,
-    ToolPolicy
+    ToolPolicy,
+    WebchatConfig
   }
 
   alias HydraXWeb.AppShell
@@ -38,6 +39,10 @@ defmodule HydraXWeb.SetupLive do
       Runtime.enabled_slack_config() || List.first(Runtime.list_slack_configs()) ||
         %SlackConfig{default_agent_id: agent.id}
 
+    webchat =
+      Runtime.enabled_webchat_config() || List.first(Runtime.list_webchat_configs()) ||
+        %WebchatConfig{default_agent_id: agent.id}
+
     tool_policy = Runtime.get_tool_policy() || %ToolPolicy{}
 
     {:ok,
@@ -60,6 +65,7 @@ defmodule HydraXWeb.SetupLive do
      |> assign(:telegram, telegram)
      |> assign(:discord, discord)
      |> assign(:slack, slack)
+     |> assign(:webchat, webchat)
      |> assign(:tool_policy, tool_policy)
      |> assign_form(:operator_form, Runtime.change_operator_secret())
      |> assign_form(:agent_form, Runtime.change_agent(agent))
@@ -67,6 +73,7 @@ defmodule HydraXWeb.SetupLive do
      |> assign_form(:telegram_form, Runtime.change_telegram_config(telegram))
      |> assign_form(:discord_form, Runtime.change_discord_config(discord))
      |> assign_form(:slack_form, Runtime.change_slack_config(slack))
+     |> assign_form(:webchat_form, Runtime.change_webchat_config(webchat))
      |> assign(:telegram_test_form, to_form(default_telegram_test(), as: :telegram_test))
      |> assign(:discord_test_form, to_form(default_channel_test("discord"), as: :discord_test))
      |> assign(:slack_test_form, to_form(default_channel_test("slack"), as: :slack_test))
@@ -190,6 +197,27 @@ defmodule HydraXWeb.SetupLive do
     else
       {:error, %Ecto.Changeset{} = changeset} ->
         {:noreply, assign_form(socket, :slack_form, changeset)}
+
+      {:reauth, socket} ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("save_webchat", %{"webchat_config" => params}, socket) do
+    params = Map.put_new(params, "default_agent_id", socket.assigns.agent.id)
+
+    with {:ok, socket} <- require_recent_auth(socket, "save Webchat settings"),
+         {:ok, webchat} <- Runtime.save_webchat_config(socket.assigns.webchat, params) do
+      {:noreply,
+       socket
+       |> put_flash(:info, "Webchat updated")
+       |> assign(:webchat, webchat)
+       |> assign(:readiness_report, Runtime.readiness_report())
+       |> assign(:stats, stats())
+       |> assign_form(:webchat_form, Runtime.change_webchat_config(webchat))}
+    else
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:noreply, assign_form(socket, :webchat_form, changeset)}
 
       {:reauth, socket} ->
         {:noreply, socket}
@@ -613,7 +641,7 @@ defmodule HydraXWeb.SetupLive do
             <.input
               field={@tool_policy_form[:workspace_write_enabled]}
               type="checkbox"
-              label="Enable workspace file writes"
+              label="Enable workspace file writes and patch edits"
             />
             <.input
               field={@tool_policy_form[:http_fetch_enabled]}
@@ -637,6 +665,22 @@ defmodule HydraXWeb.SetupLive do
             <.input
               field={@tool_policy_form[:http_allowlist_csv]}
               label="HTTP allowlist (comma separated, blank = public hosts)"
+            />
+            <.input
+              field={@tool_policy_form[:workspace_write_channels_csv]}
+              label="Workspace write channels (comma separated)"
+            />
+            <.input
+              field={@tool_policy_form[:http_fetch_channels_csv]}
+              label="HTTP fetch channels (comma separated)"
+            />
+            <.input
+              field={@tool_policy_form[:web_search_channels_csv]}
+              label="Web search channels (comma separated)"
+            />
+            <.input
+              field={@tool_policy_form[:shell_command_channels_csv]}
+              label="Shell channels (comma separated)"
             />
             <div class="xl:col-span-2 pt-2">
               <.button>Save tool policy</.button>
@@ -834,6 +878,60 @@ defmodule HydraXWeb.SetupLive do
           </div>
         </article>
       </section>
+
+      <section class="mt-6">
+        <article class="glass-panel p-6">
+          <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">
+            Webchat channel
+          </div>
+          <h2 class="mt-3 font-display text-4xl">Public browser ingress</h2>
+          <p class="mt-3 max-w-3xl text-sm text-[var(--hx-mute)]">
+            Enable a session-backed browser channel at
+            <span class="mx-1 font-mono text-[var(--hx-accent)]">/webchat</span>
+            so visitors can chat with the default agent without going through Telegram, Discord,
+            or Slack.
+          </p>
+          <div class="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-4 text-sm text-[var(--hx-mute)]">
+            <div>Public route</div>
+            <div class="mt-2 break-all font-mono text-xs text-[var(--hx-accent)]">
+              /webchat
+            </div>
+            <div class="mt-2 text-xs">
+              {if @webchat.enabled, do: "Webchat is enabled", else: "Webchat is disabled"}
+              {if webchat_agent_name(@webchat),
+                do: " -> #{webchat_agent_name(@webchat)}",
+                else: ""}
+            </div>
+          </div>
+          <.form
+            for={@webchat_form}
+            id="webchat-form"
+            phx-submit="save_webchat"
+            class="mt-6 grid gap-4 xl:grid-cols-2"
+          >
+            <.input field={@webchat_form[:title]} label="Title" />
+            <.input field={@webchat_form[:subtitle]} label="Subtitle" />
+            <.input
+              field={@webchat_form[:composer_placeholder]}
+              label="Composer placeholder"
+            />
+            <.input
+              field={@webchat_form[:enabled]}
+              type="checkbox"
+              label="Enable public Webchat ingress"
+            />
+            <.input
+              field={@webchat_form[:welcome_prompt]}
+              type="textarea"
+              label="Welcome prompt"
+              class="xl:col-span-2"
+            />
+            <div class="xl:col-span-2 pt-2">
+              <.button>Save Webchat settings</.button>
+            </div>
+          </.form>
+        </article>
+      </section>
     </AppShell.shell>
     """
   end
@@ -857,6 +955,9 @@ defmodule HydraXWeb.SetupLive do
   defp default_telegram_test do
     %{"chat_id" => "", "message" => "Hydra-X Telegram smoke test"}
   end
+
+  defp webchat_agent_name(%{default_agent: %{name: name}}), do: name
+  defp webchat_agent_name(_), do: nil
 
   defp default_channel_test(channel) do
     %{"target" => "", "message" => "Hydra-X #{String.capitalize(channel)} smoke test"}

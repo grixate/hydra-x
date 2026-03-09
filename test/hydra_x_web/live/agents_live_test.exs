@@ -182,7 +182,11 @@ defmodule HydraXWeb.AgentsLiveTest do
         "web_search_enabled" => "false",
         "shell_command_enabled" => "false",
         "shell_allowlist_csv" => "pwd,ls",
-        "http_allowlist_csv" => "example.com"
+        "http_allowlist_csv" => "example.com",
+        "workspace_write_channels_csv" => "cli,control_plane",
+        "http_fetch_channels_csv" => "cli,scheduler",
+        "web_search_channels_csv" => "cli",
+        "shell_command_channels_csv" => "cli"
       }
     })
     |> render_submit()
@@ -196,6 +200,8 @@ defmodule HydraXWeb.AgentsLiveTest do
     refute policy.web_search_enabled
     refute policy.shell_command_enabled
     assert policy.http_allowlist == ["example.com"]
+    assert policy.workspace_write_channels == ["cli", "control_plane"]
+    assert policy.shell_command_channels == ["cli"]
 
     view
     |> element(~s(button[phx-click="reset_agent_tool_policy"][phx-value-id="#{agent.id}"]))

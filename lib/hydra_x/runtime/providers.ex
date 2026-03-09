@@ -192,7 +192,11 @@ defmodule HydraX.Runtime.Providers do
             workspace_write_enabled: false,
             http_fetch_enabled: true,
             web_search_enabled: true,
-            shell_command_enabled: true
+            shell_command_enabled: true,
+            workspace_write_channels_csv: Enum.join(default_workspace_write_channels(), ","),
+            http_fetch_channels_csv: Enum.join(default_network_tool_channels(), ","),
+            web_search_channels_csv: Enum.join(default_network_tool_channels(), ","),
+            shell_command_channels_csv: Enum.join(default_shell_channels(), ",")
           })
 
         policy
@@ -277,6 +281,14 @@ defmodule HydraX.Runtime.Providers do
       http_fetch_enabled: Map.get(policy, :http_fetch_enabled, true),
       web_search_enabled: Map.get(policy, :web_search_enabled, true),
       shell_command_enabled: Map.get(policy, :shell_command_enabled, true),
+      workspace_write_channels:
+        csv_values(policy.workspace_write_channels_csv, default_workspace_write_channels()),
+      http_fetch_channels:
+        csv_values(policy.http_fetch_channels_csv, default_network_tool_channels()),
+      web_search_channels:
+        csv_values(policy.web_search_channels_csv, default_network_tool_channels()),
+      shell_command_channels:
+        csv_values(policy.shell_command_channels_csv, default_shell_channels()),
       shell_allowlist: csv_values(policy.shell_allowlist_csv, Config.shell_allowlist()),
       http_allowlist: csv_values(policy.http_allowlist_csv, Config.http_allowlist())
     }
@@ -520,4 +532,8 @@ defmodule HydraX.Runtime.Providers do
     |> String.split(",", trim: true)
     |> Enum.map(&String.trim/1)
   end
+
+  defp default_workspace_write_channels, do: ~w(control_plane cli scheduler)
+  defp default_network_tool_channels, do: ~w(control_plane cli scheduler)
+  defp default_shell_channels, do: ~w(control_plane cli scheduler)
 end

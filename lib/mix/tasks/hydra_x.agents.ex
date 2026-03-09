@@ -114,7 +114,11 @@ defmodule Mix.Tasks.HydraX.Agents do
           web_search: :string,
           shell: :string,
           shell_allowlist: :string,
-          http_allowlist: :string
+          http_allowlist: :string,
+          workspace_write_channels: :string,
+          http_fetch_channels: :string,
+          web_search_channels: :string,
+          shell_channels: :string
         ]
       )
 
@@ -137,6 +141,10 @@ defmodule Mix.Tasks.HydraX.Agents do
           |> maybe_put_boolean("shell_command_enabled", opts[:shell])
           |> maybe_put("shell_allowlist_csv", opts[:shell_allowlist])
           |> maybe_put("http_allowlist_csv", opts[:http_allowlist])
+          |> maybe_put("workspace_write_channels_csv", opts[:workspace_write_channels])
+          |> maybe_put("http_fetch_channels_csv", opts[:http_fetch_channels])
+          |> maybe_put("web_search_channels_csv", opts[:web_search_channels])
+          |> maybe_put("shell_command_channels_csv", opts[:shell_channels])
 
         {:ok, _policy} = HydraX.Runtime.save_agent_tool_policy(agent_id, attrs)
         print_tool_policy(agent_id)
@@ -157,6 +165,10 @@ defmodule Mix.Tasks.HydraX.Agents do
     Mix.shell().info("web_search=#{policy.web_search_enabled}")
     Mix.shell().info("http_fetch=#{policy.http_fetch_enabled}")
     Mix.shell().info("shell=#{policy.shell_command_enabled}")
+    Mix.shell().info("workspace_write_channels=#{Enum.join(policy.workspace_write_channels, ",")}")
+    Mix.shell().info("http_fetch_channels=#{Enum.join(policy.http_fetch_channels, ",")}")
+    Mix.shell().info("web_search_channels=#{Enum.join(policy.web_search_channels, ",")}")
+    Mix.shell().info("shell_channels=#{Enum.join(policy.shell_command_channels, ",")}")
     Mix.shell().info("shell_allowlist=#{Enum.join(policy.shell_allowlist, ",")}")
     Mix.shell().info("http_allowlist=#{Enum.join(policy.http_allowlist, ",")}")
   end

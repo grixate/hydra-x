@@ -8,6 +8,7 @@ defmodule HydraX.Tools.ToolSafetyTest do
     ShellCommand,
     WebSearch,
     WorkspaceList,
+    WorkspacePatch,
     WorkspaceRead,
     WorkspaceWrite
   }
@@ -59,6 +60,57 @@ defmodule HydraX.Tools.ToolSafetyTest do
     assert {:error, :path_outside_workspace} =
              WorkspaceWrite.execute(
                %{path: "../outside.txt", content: "nope"},
+               %{workspace_root: agent.workspace_root}
+             )
+  end
+
+  test "workspace patch performs targeted edits inside the workspace" do
+    agent = create_agent()
+    path = Path.join(agent.workspace_root, "memory/patch-note.md")
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, "alpha\nbeta\nbeta\n")
+
+    assert {:ok, result} =
+             WorkspacePatch.execute(
+               %{path: "memory/patch-note.md", search: "beta", replace: "gamma"},
+               %{workspace_root: agent.workspace_root}
+             )
+
+    assert result.path == "memory/patch-note.md"
+    assert result.replacements == 1
+    assert File.read!(path) == "alpha\ngamma\nbeta\n"
+
+    assert {:ok, result} =
+             WorkspacePatch.execute(
+               %{
+                 path: "memory/patch-note.md",
+                 search: "beta",
+                 replace: "delta",
+                 replace_all: true
+               },
+               %{workspace_root: agent.workspace_root}
+             )
+
+    assert result.replacements == 1
+    assert File.read!(path) == "alpha\ngamma\ndelta\n"
+  end
+
+  test "workspace patch blocks traversal and missing search text" do
+    agent = create_agent()
+
+    assert {:error, :path_outside_workspace} =
+             WorkspacePatch.execute(
+               %{path: "../outside.txt", search: "a", replace: "b"},
+               %{workspace_root: agent.workspace_root}
+             )
+
+    file_path = Path.join(agent.workspace_root, "memory/no-match.md")
+    File.mkdir_p!(Path.dirname(file_path))
+    File.write!(file_path, "unchanged")
+
+    assert {:error, :search_not_found} =
+             WorkspacePatch.execute(
+               %{path: "memory/no-match.md", search: "missing", replace: "value"},
                %{workspace_root: agent.workspace_root}
              )
   end

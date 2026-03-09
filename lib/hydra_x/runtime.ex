@@ -82,6 +82,7 @@ defmodule HydraX.Runtime do
   defdelegate save_conversation(conversation, attrs), to: HydraX.Runtime.Conversations
   defdelegate archive_conversation!(id), to: HydraX.Runtime.Conversations
   defdelegate conversation_compaction(id), to: HydraX.Runtime.Conversations
+  defdelegate conversation_channel_state(id), to: HydraX.Runtime.Conversations
   defdelegate review_conversation_compaction!(id), to: HydraX.Runtime.Conversations
   defdelegate reset_conversation_compaction!(id), to: HydraX.Runtime.Conversations
   defdelegate export_conversation_transcript!(id), to: HydraX.Runtime.Conversations
@@ -181,6 +182,16 @@ defmodule HydraX.Runtime do
   defdelegate test_slack_delivery(config, target, message), to: HydraX.Runtime.SlackAdmin
   defdelegate test_slack_delivery(config, target, message, opts), to: HydraX.Runtime.SlackAdmin
 
+  # ── Webchat ──────────────────────────────────────────────────────────
+
+  defdelegate enabled_webchat_config(), to: HydraX.Runtime.WebchatAdmin
+  defdelegate list_webchat_configs(), to: HydraX.Runtime.WebchatAdmin
+  defdelegate change_webchat_config(), to: HydraX.Runtime.WebchatAdmin
+  defdelegate change_webchat_config(config), to: HydraX.Runtime.WebchatAdmin
+  defdelegate change_webchat_config(config, attrs), to: HydraX.Runtime.WebchatAdmin
+  defdelegate save_webchat_config(attrs), to: HydraX.Runtime.WebchatAdmin
+  defdelegate save_webchat_config(config, attrs), to: HydraX.Runtime.WebchatAdmin
+
   # ── Observability ───────────────────────────────────────────────────────
 
   defdelegate health_snapshot(), to: HydraX.Runtime.Observability
@@ -188,7 +199,9 @@ defmodule HydraX.Runtime do
   defdelegate telegram_status(), to: HydraX.Runtime.Observability
   defdelegate discord_status(), to: HydraX.Runtime.Observability
   defdelegate slack_status(), to: HydraX.Runtime.Observability
+  defdelegate webchat_status(), to: HydraX.Runtime.Observability
   defdelegate channel_statuses(), to: HydraX.Runtime.Observability
+  def channel_capabilities, do: HydraX.Gateway.channel_capabilities()
   defdelegate budget_status(), to: HydraX.Runtime.Observability
   defdelegate budget_status(agent_or_id), to: HydraX.Runtime.Observability
   defdelegate memory_triage_status(), to: HydraX.Runtime.Observability

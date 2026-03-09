@@ -2,6 +2,7 @@ defmodule HydraX.RuntimeTest do
   use HydraX.DataCase
 
   alias HydraX.Agent.Channel
+  alias HydraX.Agent.Worker
   alias HydraX.Budget
   alias HydraX.Memory
   alias HydraX.Runtime
@@ -49,6 +50,13 @@ defmodule HydraX.RuntimeTest do
     assert response =~ "Mock response"
     assert response =~ "Hello, how are you?"
     assert length(Runtime.list_turns(conversation.id)) == 2
+
+    channel_state = Runtime.conversation_channel_state(conversation.id)
+    assert channel_state.status == "completed"
+    assert channel_state.plan["mode"] == "tool_capable"
+    assert channel_state.provider == "mock"
+    assert Enum.any?(channel_state.execution_events, &(&1["phase"] == "provider_requested"))
+    assert Enum.any?(channel_state.execution_events, &(&1["phase"] == "provider_completed"))
   end
 
   test "memory tools work directly" do
@@ -72,6 +80,36 @@ defmodule HydraX.RuntimeTest do
 
     assert length(recall.results) > 0
     assert hd(recall.results).content =~ "terse answers"
+    assert hd(recall.results).score > 0
+    assert Enum.any?(hd(recall.results).reasons, &(&1 in ["lexical match", "semantic overlap"]))
+  end
+
+  test "hybrid memory search favors exact lexical matches over weaker semantic overlap" do
+    agent = create_agent()
+
+    {:ok, exact} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Fact",
+        content: "Hydra-X uses Discord delivery retries for failed notifications.",
+        importance: 0.6,
+        last_seen_at: DateTime.utc_now()
+      })
+
+    {:ok, semantic} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Observation",
+        content: "Notification delivery on chat channels should retry when a transport fails.",
+        importance: 0.9,
+        last_seen_at: DateTime.utc_now()
+      })
+
+    [top | _rest] = Memory.search_ranked(agent.id, "Discord delivery retries", 5)
+
+    assert top.entry.id == exact.id
+    assert top.lexical_rank == 1
+    assert semantic.id in Enum.map(Memory.search(agent.id, "Discord delivery retries", 5), & &1.id)
   end
 
   test "budget hard limit rejects llm traffic and logs a safety event" do
@@ -771,6 +809,73 @@ defmodule HydraX.RuntimeTest do
     assert DateTime.compare(updated.next_run_at, DateTime.utc_now()) == :gt
   end
 
+  test "ingest scheduled jobs import supported files from the workspace ingest directory" do
+    agent = create_agent()
+    ingest_dir = Path.join(agent.workspace_root, "ingest")
+    File.mkdir_p!(ingest_dir)
+    File.write!(Path.join(ingest_dir, "ops.md"), "# Ops\n\nScheduled ingest works.")
+
+    {:ok, job} =
+      Runtime.save_scheduled_job(%{
+        agent_id: agent.id,
+        name: "Workspace ingest",
+        kind: "ingest",
+        interval_minutes: 60,
+        enabled: true
+      })
+
+    assert {:ok, run} = Runtime.run_scheduled_job(job)
+    assert run.status == "success"
+    assert run.output =~ "Ingested 1 files: ops.md"
+    assert run.metadata["created"] == 1
+    assert run.metadata["file_count"] == 1
+
+    assert Enum.any?(
+             HydraX.Memory.list_memories(agent_id: agent.id, status: "active", limit: 20),
+             &String.contains?(&1.content, "Scheduled ingest works.")
+           )
+  end
+
+  test "maintenance scheduled jobs refresh reports and clean up runtime state" do
+    agent = create_agent()
+
+    {:ok, old_job} =
+      Runtime.save_scheduled_job(%{
+        agent_id: agent.id,
+        name: "Old backup",
+        kind: "backup",
+        interval_minutes: 60,
+        enabled: true
+      })
+
+    assert {:ok, run} = Runtime.run_scheduled_job(old_job)
+
+    old_timestamp =
+      DateTime.add(DateTime.utc_now(), -31 * 86_400, :second)
+      |> DateTime.truncate(:microsecond)
+
+    run
+    |> Ecto.Changeset.change(inserted_at: old_timestamp)
+    |> HydraX.Repo.update!()
+
+    {:ok, job} =
+      Runtime.save_scheduled_job(%{
+        agent_id: agent.id,
+        name: "Maintenance sweep",
+        kind: "maintenance",
+        interval_minutes: 60,
+        enabled: true
+      })
+
+    assert {:ok, maintenance_run} = Runtime.run_scheduled_job(job)
+    assert maintenance_run.status == "success"
+    assert maintenance_run.output =~ "Maintenance completed"
+    assert maintenance_run.metadata["deleted_old_runs"] >= 1
+    assert is_binary(maintenance_run.metadata["report_markdown_path"])
+    assert File.exists?(maintenance_run.metadata["report_markdown_path"])
+    assert File.exists?(maintenance_run.metadata["report_json_path"])
+  end
+
   test "tool policy disables tools in the registry" do
     {:ok, _policy} =
       Runtime.save_tool_policy(%{
@@ -785,6 +890,7 @@ defmodule HydraX.RuntimeTest do
 
     refute "shell_command" in tool_names
     refute "workspace_write" in tool_names
+    refute "workspace_patch" in tool_names
     refute "web_search" in tool_names
     assert "memory_recall" in tool_names
     assert "http_fetch" in tool_names
@@ -803,7 +909,44 @@ defmodule HydraX.RuntimeTest do
     tool_names = Enum.map(schemas, & &1.name)
     assert "shell_command" in tool_names
     assert "workspace_write" in tool_names
+    assert "workspace_patch" in tool_names
     assert "web_search" in tool_names
+  end
+
+  test "tool policy can restrict dangerous tools by conversation channel" do
+    agent = create_agent()
+    {:ok, pid} = HydraX.Agent.ensure_started(agent)
+    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
+
+    {:ok, _policy} =
+      Runtime.save_agent_tool_policy(agent.id, %{
+        "shell_command_enabled" => true,
+        "shell_command_channels_csv" => "cli,control_plane",
+        "workspace_write_enabled" => true,
+        "workspace_write_channels_csv" => "cli"
+      })
+
+    {:ok, telegram_conversation} =
+      Runtime.start_conversation(agent, %{channel: "telegram", title: "telegram-tool-policy"})
+
+    {:ok, cli_conversation} =
+      Runtime.start_conversation(agent, %{channel: "cli", title: "cli-tool-policy"})
+
+    [telegram_result] =
+      Worker.execute_tool_calls(agent.id, telegram_conversation, [
+        %{id: "shell-1", name: "shell_command", arguments: %{command: "pwd"}}
+      ])
+
+    assert telegram_result.is_error
+    assert telegram_result.result.error =~ "disabled by policy"
+
+    [cli_result] =
+      Worker.execute_tool_calls(agent.id, cli_conversation, [
+        %{id: "shell-2", name: "shell_command", arguments: %{command: "pwd"}}
+      ])
+
+    refute cli_result.is_error
+    assert cli_result.result.output =~ agent.workspace_root
   end
 
   test "provider failures return an assistant error instead of crashing the channel" do

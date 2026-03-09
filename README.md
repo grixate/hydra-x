@@ -1,14 +1,14 @@
 # Hydra-X
 
-Hydra-X is a self-hosted Elixir agent runtime with a Phoenix control plane. The current repository now includes the staged foundation plus a working multi-channel runtime for agents, channels, workers, cortex, compaction, typed memory, ingest, scheduler jobs, and operator-facing CLI/UI surfaces.
+Hydra-X is a self-hosted Elixir agent runtime with a Phoenix control plane. The current repository now includes the staged foundation plus a working multi-channel runtime for agents, channels, workers, cortex, compaction, typed memory, ingest, scheduler jobs, public Webchat, and operator-facing CLI/UI surfaces.
 
 ## What is implemented
 
 - Phoenix + LiveView application with SQLite persistence
 - Agent runtime supervision tree:
-  `HydraX.Agent`, `Channel`, `Worker`, `Cortex`, `Compactor`
-- Typed memory storage with SQLite FTS-backed search and markdown export
-- Ingest pipeline for markdown, text, and JSON workspace content with archive tracking
+  `HydraX.Agent`, `Channel`, `Worker`, `Cortex`, `Compactor`, with persisted execution checkpoints for channel turns
+- Typed memory storage with SQLite FTS-backed search, hybrid-ranked recall, and markdown export
+- Ingest pipeline for markdown, text, JSON, and PDF workspace content with archive tracking, restore-on-reimport, and provenance visibility
 - Workspace scaffold contract:
   `SOUL.md`, `IDENTITY.md`, `USER.md`, `TOOLS.md`, `HEARTBEAT.md`, `memory/`, `skills/`, `ingest/`
 - Stable behaviours:
@@ -22,11 +22,11 @@ Hydra-X is a self-hosted Elixir agent runtime with a Phoenix control plane. The 
 - Budget guardrails:
   persisted token policies, preflight enforcement, usage accounting, and safety event logging
 - Control-plane auth:
-  session-based browser login once an operator password is configured on `/setup`
+  session-based browser login once an operator password is configured on `/setup`, with recent-auth checks for sensitive actions and failed-login throttling
 - Guarded tools:
-  workspace-confined file listing/reads/writes, dedicated web search, outbound HTTP fetches with basic SSRF checks, allowlisted shell commands, and a persisted tool policy surface
+  workspace-confined file listing/reads/writes/targeted patch edits, dedicated web search, outbound HTTP fetches with basic SSRF checks, allowlisted shell commands, and a persisted tool policy surface
 - Scheduler:
-  recurring heartbeat/prompt/backup jobs with persisted run history, CLI/UI controls, cron support, active-hour/timeout/retry/circuit controls, and optional Telegram/Discord/Slack delivery-back
+  recurring heartbeat/prompt/backup/ingest/maintenance jobs with persisted run history, CLI/UI controls, cron support, active-hour/timeout/retry/circuit controls, and optional Telegram/Discord/Slack/Webchat delivery-back
 - Agent provider routing:
   per-agent provider defaults, process-specific overrides, fallback order, and warmup/readiness state surfaced in `/agents` and `/health`
 - Observability:
@@ -85,7 +85,7 @@ The repository also includes a thin command wrapper:
 ./hydra_x report
 ```
 
-If you want to lock the management UI, set an operator password on `/setup`. After that, browser access requires signing in at `/login`.
+If you want to lock the management UI, set an operator password on `/setup`. After that, browser access requires signing in at `/login`, and repeated failed sign-in attempts from the same IP are temporarily blocked by the login throttle window.
 
 Provider lifecycle can be managed from `/settings/providers` or the CLI:
 
@@ -143,16 +143,21 @@ Ingest-backed workspace files can now be managed from `/memory` or the CLI:
 mix hydra_x.ingest --agent hydra-primary
 mix hydra_x.ingest import ops.md --agent hydra-primary
 mix hydra_x.ingest history --agent hydra-primary
+mix hydra_x.ingest history --agent hydra-primary --file ops.md
 mix hydra_x.ingest archive ops.md --agent hydra-primary
 ```
 
-Recurring heartbeat, prompt, and backup jobs are managed from `/jobs` or the CLI:
+`/memory` now exposes source provenance for ingest-backed memories, including source file/path, section metadata, content/document hashes, and the recent ingest runs for the same file.
+
+Recurring heartbeat, prompt, backup, ingest, and maintenance jobs are managed from `/jobs` or the CLI:
 
 ```bash
 mix hydra_x.jobs
 mix hydra_x.jobs --kind prompt --enabled true --search workspace
 mix hydra_x.jobs create --name "Morning review" --kind prompt --schedule_mode daily --run_hour 6 --run_minute 30
 mix hydra_x.jobs create --name "Weekly review" --kind prompt --schedule_mode weekly --weekday_csv mon,fri --run_hour 8 --run_minute 15
+mix hydra_x.jobs create --name "Ingest sweep" --kind ingest --schedule_mode interval --interval_minutes 30
+mix hydra_x.jobs create --name "Maintenance sweep" --kind maintenance --schedule_mode daily --run_hour 2 --run_minute 0
 mix hydra_x.jobs update 12 --timeout_seconds 45 --retry_limit 2 --retry_backoff_seconds 5 --pause_after_failures 3 --cooldown_minutes 30
 mix hydra_x.jobs reset-circuit 12
 mix hydra_x.jobs update 12 --enabled false --weekday_csv wed --run_hour 9 --run_minute 0
@@ -162,9 +167,11 @@ mix hydra_x.jobs export-runs --status error --output tmp/reports
 mix hydra_x.jobs delete 1
 ```
 
-Jobs now support fixed intervals plus daily, weekly, and cron UTC schedules. They also support timeout, retry, active-hour, and cooldown-based circuit settings from `/jobs` or the CLI.
+Jobs now support fixed intervals plus daily, weekly, and cron UTC schedules. They also support timeout, retry, active-hour, and cooldown-based circuit settings from `/jobs` or the CLI. `ingest` jobs process supported files from the agent workspace `ingest/` directory, and `maintenance` jobs prune old run history, refresh the agent bulletin, and export a fresh operator report snapshot.
 
-Discord and Slack can now be configured from `/setup` as well, and scheduled jobs can deliver to those channels using the same delivery controls.
+Discord, Slack, and Webchat can now be configured from `/setup` as well, and scheduled jobs can deliver to those channels using the same delivery controls.
+
+Webchat is exposed publicly at `/webchat` and uses a session-backed browser conversation mapped into the same agent runtime as the other channels.
 
 Failed Telegram deliveries can be retried from `/conversations` or the CLI:
 
@@ -183,6 +190,8 @@ mix hydra_x.conversations export 42
 mix hydra_x.conversations archive 42
 mix hydra_x.conversations compact 42
 mix hydra_x.conversations reset-compact 42
+
+`/conversations` now also shows the latest persisted channel execution checkpoint for each selected thread, including the planned turn mode, suggested tools, executed tool summaries, and final provider status.
 ```
 
 Recent safety events and operator action audits can be reviewed from `/safety` or the CLI:
@@ -268,4 +277,4 @@ mix hydra_x.serve
 
 ## Current scope
 
-This is not the full roadmap yet. The repo now has a working multi-channel monolith with ingest, cron scheduling, operator reporting, and cluster-awareness scaffolding. Webchat, richer tooling, hybrid recall, deeper orchestration, stronger security isolation, and true multi-node clustering remain future stages.
+This is not the full roadmap yet. The repo now has a working multi-channel monolith with ingest, hybrid recall, cron scheduling, operator reporting, public Webchat, targeted workspace patch tooling, persisted execution checkpoints, and cluster-awareness scaffolding. Browser automation, stronger secret isolation, MCP or installable-skill packaging, and true multi-node clustering remain future stages.

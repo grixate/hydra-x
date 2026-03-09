@@ -3,11 +3,20 @@ defmodule HydraX.Gateway do
   Routes inbound adapter messages into agent conversations.
   """
 
-  alias HydraX.Gateway.Adapters.{Discord, Slack, Telegram}
+  alias HydraX.Gateway.Adapters.{Discord, Slack, Telegram, Webchat}
   alias HydraX.Runtime
   alias HydraX.Runtime.Conversation
   alias HydraX.Safety
   alias HydraX.Telemetry
+
+  def channel_capabilities do
+    %{
+      "telegram" => Telegram.capabilities(),
+      "discord" => Discord.capabilities(),
+      "slack" => Slack.capabilities(),
+      "webchat" => Webchat.capabilities()
+    }
+  end
 
   def dispatch_telegram_update(update, opts \\ %{}) do
     dispatch_channel_update(
@@ -36,6 +45,16 @@ defmodule HydraX.Gateway do
       slack_adapter_config(Runtime.enabled_slack_config(), opts),
       event,
       :slack_not_configured
+    )
+  end
+
+  def dispatch_webchat_message(payload, opts \\ %{}) do
+    dispatch_channel_update(
+      Runtime.enabled_webchat_config(),
+      Webchat,
+      webchat_adapter_config(Runtime.enabled_webchat_config(), opts),
+      payload,
+      :webchat_not_configured
     )
   end
 
@@ -213,6 +232,16 @@ defmodule HydraX.Gateway do
     }
   end
 
+  defp webchat_adapter_config(config, _opts) do
+    %{
+      "enabled" => config && config.enabled,
+      "title" => config && config.title,
+      "subtitle" => config && config.subtitle,
+      "welcome_prompt" => config && config.welcome_prompt,
+      "composer_placeholder" => config && config.composer_placeholder
+    }
+  end
+
   defp record_delivery_result(agent_id, conversation, message, result, opts \\ [])
 
   defp record_delivery_result(_agent_id, conversation, message, {:ok, metadata}, opts)
@@ -292,9 +321,14 @@ defmodule HydraX.Gateway do
     external_ref = Map.get(delivery, "external_ref") || Map.get(delivery, :external_ref)
 
     cond do
-      channel not in ~w(telegram discord slack) -> {:error, {:unsupported_channel, channel}}
-      not (is_binary(external_ref) and external_ref != "") -> {:error, :missing_external_ref}
-      true -> :ok
+      channel not in ~w(telegram discord slack webchat) ->
+        {:error, {:unsupported_channel, channel}}
+
+      not (is_binary(external_ref) and external_ref != "") ->
+        {:error, :missing_external_ref}
+
+      true ->
+        :ok
     end
   end
 
@@ -383,6 +417,16 @@ defmodule HydraX.Gateway do
             slack_adapter_config(config, opts),
             :slack_not_configured
           )
+
+        "webchat" ->
+          config = Runtime.enabled_webchat_config()
+
+          maybe_retry_adapter(
+            Webchat,
+            config,
+            webchat_adapter_config(config, opts),
+            :webchat_not_configured
+          )
       end
     end
   end
@@ -395,8 +439,10 @@ defmodule HydraX.Gateway do
   defp retry_adapter_config(Telegram, config), do: adapter_config(config, %{})
   defp retry_adapter_config(Discord, config), do: discord_adapter_config(config, %{})
   defp retry_adapter_config(Slack, config), do: slack_adapter_config(config, %{})
+  defp retry_adapter_config(Webchat, config), do: webchat_adapter_config(config, %{})
 
   defp adapter_channel(Telegram), do: "Telegram"
   defp adapter_channel(Discord), do: "Discord"
   defp adapter_channel(Slack), do: "Slack"
+  defp adapter_channel(Webchat), do: "Webchat"
 end

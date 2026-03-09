@@ -3,6 +3,7 @@ defmodule HydraXWeb.HealthLiveTest do
 
   alias HydraX.Memory
   alias HydraX.Runtime
+  alias HydraX.Security.LoginThrottle
   alias HydraX.Telemetry
 
   setup do
@@ -37,6 +38,38 @@ defmodule HydraXWeb.HealthLiveTest do
     html = render(view)
     assert html =~ "Operator password configured"
     refute html =~ "Primary provider configured"
+  end
+
+  test "health page shows operator login throttle policy", %{conn: conn} do
+    LoginThrottle.reset!()
+    LoginThrottle.record_attempt("127.0.0.1")
+    LoginThrottle.record_attempt("127.0.0.1")
+    LoginThrottle.record_attempt("127.0.0.1")
+    LoginThrottle.record_attempt("127.0.0.1")
+    LoginThrottle.record_attempt("127.0.0.1")
+
+    {:ok, _view, html} = live(conn, ~p"/health")
+
+    assert html =~ "Login throttle"
+    assert html =~ "5 attempts per 60s window"
+    assert html =~ "blocked IPs 1"
+  end
+
+  test "health page shows tool channel policy", %{conn: conn} do
+    {:ok, _policy} =
+      Runtime.save_tool_policy(%{
+        "workspace_write_channels_csv" => "cli,control_plane",
+        "http_fetch_channels_csv" => "cli,scheduler",
+        "web_search_channels_csv" => "cli",
+        "shell_command_channels_csv" => "cli"
+      })
+
+    {:ok, _view, html} = live(conn, ~p"/health")
+
+    assert html =~ "Tool channel policy"
+    assert html =~ "write cli, control_plane"
+    assert html =~ "http cli, scheduler"
+    assert html =~ "shell cli"
   end
 
   test "health page can export an operator report", %{conn: conn} do
@@ -153,6 +186,25 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "discord"
     assert html =~ "slack"
     assert html =~ "discord-app"
+    assert html =~ "capabilities:"
+  end
+
+  test "health page shows Webchat readiness", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, _webchat} =
+      Runtime.save_webchat_config(%{
+        title: "Hydra-X Browser",
+        subtitle: "Public ingress",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
+    {:ok, _view, html} = live(conn, ~p"/health")
+
+    assert html =~ "Additional channel readiness"
+    assert html =~ "webchat"
+    assert html =~ "/webchat"
   end
 
   test "health page shows open scheduler circuits", %{conn: conn} do

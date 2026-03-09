@@ -35,6 +35,7 @@ defmodule HydraXWeb.MemoryLive do
      |> assign(:ingest_runs, load_ingest_runs(filters))
      |> assign(:memories, memories)
      |> assign(:selected, selected)
+     |> assign(:selected_ingest_runs, selected_ingest_runs(selected))
      |> assign(:edges, load_edges(selected))
      |> assign_form(:memory_form, memory_form(selected), :memory)
      |> assign_form(:edge_form, edge_form(selected), :edge)
@@ -62,6 +63,7 @@ defmodule HydraXWeb.MemoryLive do
      |> assign(:ingested_files, load_ingested_files(filters))
      |> assign(:ingest_runs, load_ingest_runs(filters))
      |> assign(:selected, selected)
+     |> assign(:selected_ingest_runs, selected_ingest_runs(selected))
      |> assign(:edges, load_edges(selected))
      |> assign_form(:memory_form, memory_form(selected), :memory)
      |> assign_form(:edge_form, edge_form(selected), :edge)
@@ -89,6 +91,7 @@ defmodule HydraXWeb.MemoryLive do
      |> assign(:ingested_files, load_ingested_files(filters))
      |> assign(:ingest_runs, load_ingest_runs(filters))
      |> assign(:selected, selected)
+     |> assign(:selected_ingest_runs, selected_ingest_runs(selected))
      |> assign(:edges, load_edges(selected))
      |> assign_form(:memory_form, memory_form(selected), :memory)
      |> assign_form(:edge_form, edge_form(selected), :edge)
@@ -119,6 +122,7 @@ defmodule HydraXWeb.MemoryLive do
        )
        |> assign(:ingested_files, load_ingested_files(socket.assigns.filters))
        |> assign(:ingest_runs, load_ingest_runs(socket.assigns.filters))
+       |> assign(:selected_ingest_runs, selected_ingest_runs(socket.assigns.selected))
        |> assign(:stats, stats())}
     else
       nil ->
@@ -149,6 +153,7 @@ defmodule HydraXWeb.MemoryLive do
        |> put_flash(:info, "Archived #{count} ingest-backed memories for #{filename}")
        |> assign(:ingested_files, load_ingested_files(socket.assigns.filters))
        |> assign(:ingest_runs, load_ingest_runs(socket.assigns.filters))
+       |> assign(:selected_ingest_runs, selected_ingest_runs(socket.assigns.selected))
        |> assign(:stats, stats())}
     else
       nil ->
@@ -171,6 +176,7 @@ defmodule HydraXWeb.MemoryLive do
     {:noreply,
      socket
      |> assign(:selected, memory)
+     |> assign(:selected_ingest_runs, selected_ingest_runs(memory))
      |> assign(:edges, load_edges(memory))
      |> assign_form(:memory_form, memory_form(memory), :memory)
      |> assign_form(:edge_form, edge_form(memory), :edge)
@@ -181,6 +187,7 @@ defmodule HydraXWeb.MemoryLive do
     {:noreply,
      socket
      |> assign(:selected, nil)
+     |> assign(:selected_ingest_runs, [])
      |> assign(:edges, [])
      |> assign_form(:memory_form, memory_form(nil), :memory)
      |> assign_form(:edge_form, edge_form(nil), :edge)
@@ -203,6 +210,7 @@ defmodule HydraXWeb.MemoryLive do
      |> put_flash(:info, "Memory deleted")
      |> assign(:memories, memories)
      |> assign(:selected, selected)
+     |> assign(:selected_ingest_runs, selected_ingest_runs(selected))
      |> assign(:edges, load_edges(selected))
      |> assign(:stats, stats())
      |> assign_form(:memory_form, memory_form(selected), :memory)
@@ -228,6 +236,7 @@ defmodule HydraXWeb.MemoryLive do
          |> put_flash(:info, "Memory saved")
          |> assign(:memories, memories)
          |> assign(:selected, selected)
+         |> assign(:selected_ingest_runs, selected_ingest_runs(selected))
          |> assign(:edges, load_edges(selected))
          |> assign(:stats, stats())
          |> assign_form(:memory_form, memory_form(selected), :memory)
@@ -327,6 +336,7 @@ defmodule HydraXWeb.MemoryLive do
          |> assign(:filter_form, to_form(filters, as: :filters))
          |> assign(:memories, memories)
          |> assign(:selected, selected)
+         |> assign(:selected_ingest_runs, selected_ingest_runs(selected))
          |> assign(:edges, load_edges(selected))
          |> assign(:stats, stats())
          |> assign_form(:memory_form, memory_form(selected), :memory)
@@ -359,6 +369,7 @@ defmodule HydraXWeb.MemoryLive do
      |> assign(:has_next, has_next)
      |> assign(:memories, memories)
      |> assign(:selected, selected)
+     |> assign(:selected_ingest_runs, selected_ingest_runs(selected))
      |> assign(:edges, load_edges(selected))
      |> assign_form(:memory_form, memory_form(selected), :memory)
      |> assign_form(:edge_form, edge_form(selected), :edge)
@@ -380,6 +391,7 @@ defmodule HydraXWeb.MemoryLive do
      |> assign(:ingested_files, load_ingested_files(socket.assigns.filters))
      |> assign(:ingest_runs, load_ingest_runs(socket.assigns.filters))
      |> assign(:selected, selected)
+     |> assign(:selected_ingest_runs, selected_ingest_runs(selected))
      |> assign(:edges, load_edges(selected))
      |> assign(:stats, stats())}
   end
@@ -481,7 +493,7 @@ defmodule HydraXWeb.MemoryLive do
                     </div>
                   </div>
                   <div class="mt-2 text-xs text-[var(--hx-mute)]">
-                    created {run.created_count} - skipped {run.skipped_count} - archived {run.archived_count} - {format_datetime(
+                    created {run.created_count} - restored {ingest_run_restored_count(run)} - skipped {run.skipped_count} - archived {run.archived_count} - {format_datetime(
                       run.inserted_at
                     )}
                   </div>
@@ -651,6 +663,45 @@ defmodule HydraXWeb.MemoryLive do
           </.form>
 
           <div :if={@selected} class="mt-8">
+            <div
+              :if={ingest_backed_memory?(@selected)}
+              class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4"
+            >
+              <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">
+                Ingest provenance
+              </div>
+              <dl class="mt-4 grid gap-3 text-sm text-[var(--hx-mute)] md:grid-cols-2">
+                <div :for={{label, value} <- memory_provenance(@selected)}>
+                  <dt class="font-mono text-[11px] uppercase tracking-[0.18em]">{label}</dt>
+                  <dd class="mt-1 break-all text-white">{value}</dd>
+                </div>
+              </dl>
+              <div class="mt-5">
+                <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                  Recent runs for this source
+                </div>
+                <div class="mt-3 space-y-2">
+                  <div
+                    :for={run <- @selected_ingest_runs}
+                    class="rounded-xl border border-white/10 bg-black/10 px-3 py-3"
+                  >
+                    <div class="flex items-center justify-between gap-3">
+                      <div class="text-xs uppercase tracking-[0.18em] text-[var(--hx-accent)]">
+                        {run.status}
+                      </div>
+                      <div class="text-xs text-[var(--hx-mute)]">{format_datetime(run.inserted_at)}</div>
+                    </div>
+                    <div class="mt-2 text-xs text-[var(--hx-mute)]">
+                      created {run.created_count} - restored {ingest_run_restored_count(run)} - skipped {run.skipped_count} - archived {run.archived_count}
+                    </div>
+                  </div>
+                  <p :if={@selected_ingest_runs == []} class="text-sm text-[var(--hx-mute)]">
+                    No recent ingest runs recorded for this source file.
+                  </p>
+                </div>
+              </div>
+            </div>
+
             <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">
               Link selected memory
             </div>
@@ -802,6 +853,20 @@ defmodule HydraXWeb.MemoryLive do
     case current_ingest_agent(filters) do
       nil -> []
       agent -> Runtime.list_ingest_runs(agent.id, 10)
+    end
+  end
+
+  defp selected_ingest_runs(nil), do: []
+
+  defp selected_ingest_runs(memory) do
+    source_file = get_in(memory.metadata || %{}, ["source_file"])
+
+    with true <- ingest_backed_memory?(memory),
+         source_file when is_binary(source_file) <- source_file do
+      Runtime.list_ingest_runs(memory.agent_id, 8)
+      |> Enum.filter(&(&1.source_file == source_file))
+    else
+      _ -> []
     end
   end
 
@@ -958,8 +1023,29 @@ defmodule HydraXWeb.MemoryLive do
   end
 
   defp ingest_message(filename, result) do
-    "Ingested #{filename}: #{result.created} created, #{result.skipped} skipped, #{result.archived} archived"
+    "Ingested #{filename}: #{result.created} created, #{Map.get(result, :restored, 0)} restored, #{result.skipped} skipped, #{result.archived} archived"
   end
+
+  defp ingest_backed_memory?(nil), do: false
+  defp ingest_backed_memory?(memory), do: get_in(memory.metadata || %{}, ["source"]) == "ingest"
+
+  defp memory_provenance(memory) do
+    metadata = memory.metadata || %{}
+
+    [
+      {"Source file", metadata["source_file"] || "unknown"},
+      {"Source path", metadata["source_path"] || "unknown"},
+      {"Section", metadata["section"] || "n/a"},
+      {"Section index", stringify_provenance(metadata["section_index"])},
+      {"Content hash", metadata["content_hash"] || "unknown"},
+      {"Document hash", metadata["document_hash"] || "unknown"}
+    ]
+  end
+
+  defp ingest_run_restored_count(run), do: get_in(run.metadata || %{}, ["restored_count"]) || 0
+
+  defp stringify_provenance(nil), do: "n/a"
+  defp stringify_provenance(value), do: to_string(value)
 
   defp format_datetime(nil), do: "never"
   defp format_datetime(datetime), do: Calendar.strftime(datetime, "%Y-%m-%d %H:%M UTC")

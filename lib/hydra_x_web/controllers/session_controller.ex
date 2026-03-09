@@ -4,14 +4,11 @@ defmodule HydraXWeb.SessionController do
   alias HydraX.Runtime
   alias HydraX.Runtime.Helpers
   alias HydraX.Runtime.OperatorSecret
+  alias HydraX.Security.LoginThrottle
   alias HydraXWeb.OperatorAuth
 
-  @max_attempts 5
-  @window_seconds 60
-
   def new(conn, params) do
-    render(conn, :new,
-      password_configured?: Runtime.operator_password_configured?(),
+    render_login(conn,
       reauth?: params["reauth"] == "1",
       changeset: OperatorSecret.changeset(%OperatorSecret{}, %{})
     )
@@ -19,16 +16,22 @@ defmodule HydraXWeb.SessionController do
 
   def create(conn, %{"operator_secret" => params}) do
     ip = client_ip(conn)
+    throttle = LoginThrottle.state(ip)
 
-    if rate_limited?(ip) do
+    if throttle.rate_limited? do
       Helpers.audit_auth_action("Blocked operator login due to rate limit",
         level: "warn",
-        metadata: %{ip: ip, window_seconds: @window_seconds, max_attempts: @max_attempts}
+        metadata: %{
+          ip: ip,
+          window_seconds: throttle.window_seconds,
+          max_attempts: throttle.max_attempts,
+          retry_after_seconds: throttle.retry_after_seconds
+        }
       )
 
-      render(conn, :new,
-        password_configured?: Runtime.operator_password_configured?(),
+      render_login(conn,
         reauth?: false,
+        throttle: throttle,
         changeset:
           OperatorSecret.changeset(%OperatorSecret{}, %{})
           |> Ecto.Changeset.add_error(:password, "too many attempts, try again later")
@@ -36,7 +39,7 @@ defmodule HydraXWeb.SessionController do
     else
       case Runtime.authenticate_operator(params["password"] || "") do
         :ok ->
-          clear_attempts(ip)
+          LoginThrottle.clear_attempts(ip)
 
           Helpers.audit_auth_action("Operator login succeeded",
             metadata: %{ip: ip}
@@ -50,20 +53,24 @@ defmodule HydraXWeb.SessionController do
         {:error, :not_configured} ->
           conn
           |> put_flash(:info, "No operator password is configured yet. Set one on /setup.")
-          |> redirect(to: "/setup")
+            |> redirect(to: "/setup")
 
         {:error, :unauthorized} ->
-          record_attempt(ip)
-          attempts = current_attempts(ip)
+          LoginThrottle.record_attempt(ip)
+          attempts = LoginThrottle.current_attempts(ip)
 
           Helpers.audit_auth_action("Operator login failed",
             level: "warn",
-            metadata: %{ip: ip, attempts: attempts, window_seconds: @window_seconds}
+            metadata: %{
+              ip: ip,
+              attempts: attempts,
+              window_seconds: LoginThrottle.window_seconds()
+            }
           )
 
-          render(conn, :new,
-            password_configured?: true,
+          render_login(conn,
             reauth?: false,
+            throttle: LoginThrottle.state(ip),
             changeset:
               OperatorSecret.changeset(%OperatorSecret{}, %{})
               |> Ecto.Changeset.add_error(:password, "is invalid")
@@ -83,67 +90,15 @@ defmodule HydraXWeb.SessionController do
     |> redirect(to: "/login")
   end
 
-  # -- Rate limiting --
+  defp render_login(conn, opts) do
+    throttle = Keyword.get(opts, :throttle, LoginThrottle.state(client_ip(conn)))
 
-  defp ensure_table do
-    if :ets.whereis(:login_rate_limit) == :undefined do
-      :ets.new(:login_rate_limit, [:set, :public, :named_table])
-    end
-  end
-
-  defp rate_limited?(ip) do
-    ensure_table()
-    sweep_expired_entries()
-    now = System.system_time(:second)
-
-    case :ets.lookup(:login_rate_limit, ip) do
-      [{^ip, attempts, window_start}] when now - window_start < @window_seconds ->
-        attempts >= @max_attempts
-
-      _ ->
-        false
-    end
-  end
-
-  # Remove expired entries to prevent unbounded ETS table growth.
-  # Runs on every rate-limit check — cheap O(n) scan for a table that
-  # will only ever have a handful of entries (one per distinct IP).
-  defp sweep_expired_entries do
-    now = System.system_time(:second)
-
-    :ets.tab2list(:login_rate_limit)
-    |> Enum.each(fn {ip, _attempts, window_start} ->
-      if now - window_start >= @window_seconds do
-        :ets.delete(:login_rate_limit, ip)
-      end
-    end)
-  end
-
-  defp record_attempt(ip) do
-    ensure_table()
-    now = System.system_time(:second)
-
-    case :ets.lookup(:login_rate_limit, ip) do
-      [{^ip, attempts, window_start}] when now - window_start < @window_seconds ->
-        :ets.insert(:login_rate_limit, {ip, attempts + 1, window_start})
-
-      _ ->
-        :ets.insert(:login_rate_limit, {ip, 1, now})
-    end
-  end
-
-  defp clear_attempts(ip) do
-    ensure_table()
-    :ets.delete(:login_rate_limit, ip)
-  end
-
-  defp current_attempts(ip) do
-    ensure_table()
-
-    case :ets.lookup(:login_rate_limit, ip) do
-      [{^ip, attempts, _window_start}] -> attempts
-      _ -> 0
-    end
+    render(conn, :new,
+      password_configured?: Runtime.operator_password_configured?(),
+      reauth?: Keyword.get(opts, :reauth?, false),
+      changeset: Keyword.fetch!(opts, :changeset),
+      throttle: throttle
+    )
   end
 
   defp client_ip(conn) do

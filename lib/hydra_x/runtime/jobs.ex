@@ -9,7 +9,7 @@ defmodule HydraX.Runtime.Jobs do
   alias HydraX.Repo
   alias HydraX.Workspace
 
-  alias HydraX.Gateway.Adapters.{Discord, Slack, Telegram}
+  alias HydraX.Gateway.Adapters.{Discord, Slack, Telegram, Webchat}
   alias HydraX.Telemetry
 
   alias HydraX.Runtime.{
@@ -673,6 +673,78 @@ defmodule HydraX.Runtime.Jobs do
     end
   end
 
+  defp execute_scheduled_job(%ScheduledJob{kind: "ingest"} = job) do
+    with {:ok, agent} <- fetch_job_agent(job) do
+      ingest_dir = Path.join(agent.workspace_root, "ingest")
+      File.mkdir_p!(ingest_dir)
+
+      files =
+        ingest_dir
+        |> File.ls!()
+        |> Enum.map(&Path.join(ingest_dir, &1))
+        |> Enum.filter(&(File.regular?(&1) and HydraX.Ingest.Parser.supported?(&1)))
+
+      if files == [] do
+        {:ok, "No supported ingest files found in #{ingest_dir}",
+         %{"file_count" => 0, "created" => 0, "restored" => 0, "skipped" => 0}}
+      else
+        {summary, imported_files} =
+          Enum.reduce(files, {%{created: 0, restored: 0, skipped: 0, archived: 0}, []}, fn file,
+                                                                                              {acc,
+                                                                                               names} ->
+            case HydraX.Ingest.Pipeline.ingest_file(agent.id, file) do
+              {:ok, result} ->
+                merged = %{
+                  created: acc.created + result.created,
+                  restored: acc.restored + Map.get(result, :restored, 0),
+                  skipped: acc.skipped + result.skipped,
+                  archived: acc.archived + result.archived
+                }
+
+                {merged, [Path.basename(file) | names]}
+
+              {:error, reason} ->
+                throw({:ingest_error, Path.basename(file), reason})
+            end
+          end)
+
+        output =
+          "Ingested #{length(imported_files)} files: #{Enum.reverse(imported_files) |> Enum.join(", ")}"
+
+        {:ok, output,
+         %{
+           "file_count" => length(imported_files),
+           "files" => Enum.reverse(imported_files),
+           "created" => summary.created,
+           "restored" => summary.restored,
+           "skipped" => summary.skipped,
+           "archived" => summary.archived
+         }}
+      end
+    else
+      {:error, reason} -> {:error, reason}
+    end
+  catch
+    {:ingest_error, file, reason} ->
+      {:error, {:ingest_failed, file, reason}}
+  end
+
+  defp execute_scheduled_job(%ScheduledJob{kind: "maintenance"} = job) do
+    with {:ok, agent} <- fetch_job_agent(job),
+         deleted_runs <- delete_old_job_runs(30),
+         bulletin <- HydraX.Runtime.Agents.refresh_agent_bulletin!(agent.id),
+         {:ok, report} <- HydraX.Report.export_snapshot(Path.join(Config.install_root(), "reports")) do
+      {:ok,
+       "Maintenance completed for #{agent.slug}: deleted #{deleted_runs} old runs and refreshed bulletin.",
+       %{
+         "deleted_old_runs" => deleted_runs,
+         "bulletin_memory_count" => bulletin.memory_count,
+         "report_markdown_path" => report.markdown_path,
+         "report_json_path" => report.json_path
+       }}
+    end
+  end
+
   defp run_job_prompt(agent, job, prompt) do
     with {:ok, _pid} <- HydraX.Agent.ensure_started(agent),
          {:ok, conversation} <-
@@ -834,6 +906,37 @@ defmodule HydraX.Runtime.Jobs do
        }}
     else
       nil -> {:error, :slack_not_configured}
+      false -> {:error, :missing_delivery_target}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp deliver_job_run(%ScheduledJob{delivery_channel: "webchat", delivery_target: target}, run) do
+    with config when not is_nil(config) <-
+           HydraX.Runtime.WebchatAdmin.enabled_webchat_config(),
+         true <- is_binary(target) and target != "",
+         {:ok, state} <-
+           Webchat.connect(%{
+             "enabled" => config.enabled,
+             "title" => config.title,
+             "subtitle" => config.subtitle,
+             "welcome_prompt" => config.welcome_prompt,
+             "composer_placeholder" => config.composer_placeholder
+           }),
+         {:ok, metadata} <-
+           normalize_delivery_result(
+             Webchat.deliver(%{content: job_delivery_message(run), external_ref: target}, state)
+           ) do
+      {:ok,
+       %{
+         "status" => "delivered",
+         "channel" => "webchat",
+         "target" => target,
+         "delivered_at" => DateTime.utc_now(),
+         "metadata" => stringify_metadata(metadata)
+       }}
+    else
+      nil -> {:error, :webchat_not_configured}
       false -> {:error, :missing_delivery_target}
       {:error, reason} -> {:error, reason}
     end

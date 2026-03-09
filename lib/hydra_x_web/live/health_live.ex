@@ -22,6 +22,8 @@ defmodule HydraXWeb.HealthLive do
      |> assign(:telegram_status, Runtime.telegram_status())
      |> assign(:discord_status, Runtime.discord_status())
      |> assign(:slack_status, Runtime.slack_status())
+     |> assign(:webchat_status, Runtime.webchat_status())
+     |> assign(:channel_capabilities, Runtime.channel_capabilities())
      |> assign(:safety_status, Runtime.safety_status())
      |> assign(:observability_status, Runtime.observability_status())
      |> assign(:operator_status, Runtime.operator_status())
@@ -269,11 +271,13 @@ defmodule HydraXWeb.HealthLive do
       </section>
 
       <section class="glass-panel mt-6 p-6">
-        <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">Discord + Slack</div>
+        <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">
+          Discord + Slack + Webchat
+        </div>
         <h2 class="mt-3 font-display text-4xl">Additional channel readiness</h2>
         <div class="mt-6 grid gap-3 lg:grid-cols-2">
           <article
-            :for={status <- [@discord_status, @slack_status]}
+            :for={status <- [@discord_status, @slack_status, @webchat_status]}
             class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4"
           >
             <div class="flex items-center justify-between gap-4">
@@ -296,6 +300,10 @@ defmodule HydraXWeb.HealthLive do
             </p>
             <p :if={status.binding} class="mt-2 break-all text-xs text-[var(--hx-mute)]">
               binding: {status.binding}
+            </p>
+            <p class="mt-2 text-xs text-[var(--hx-mute)]">
+              capabilities:
+              {capability_summary(@channel_capabilities[status.channel])}
             </p>
             <div class="mt-3 space-y-2">
               <p
@@ -363,6 +371,17 @@ defmodule HydraXWeb.HealthLive do
                 @operator_status.idle_timeout_seconds,
                 60
               )}m, recent auth {div(@operator_status.recent_auth_window_seconds, 60)}m
+            </p>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Login throttle
+            </div>
+            <p class="mt-3 text-sm text-[var(--hx-mute)]">
+              {@operator_status.login_max_attempts} attempts per {@operator_status.login_window_seconds}s window
+              <span :if={@operator_status.blocked_login_ips > 0}>
+                · blocked IPs {@operator_status.blocked_login_ips}
+              </span>
             </p>
           </article>
         </div>
@@ -436,6 +455,17 @@ defmodule HydraXWeb.HealthLive do
               {if @tool_status.http_allowlist == [],
                 do: "all public hosts allowed",
                 else: Enum.join(@tool_status.http_allowlist, ", ")}
+            </p>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4 lg:col-span-3">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Tool channel policy
+            </div>
+            <p class="mt-3 text-sm text-[var(--hx-mute)]">
+              write {channel_summary(@tool_status.workspace_write_channels)} ·
+              http {channel_summary(@tool_status.http_fetch_channels)} ·
+              search {channel_summary(@tool_status.web_search_channels)} ·
+              shell {channel_summary(@tool_status.shell_command_channels)}
             </p>
           </article>
         </div>
@@ -732,6 +762,19 @@ defmodule HydraXWeb.HealthLive do
 
   defp format_datetime(nil), do: "unknown"
   defp format_datetime(value), do: Calendar.strftime(value, "%Y-%m-%d %H:%M:%S UTC")
+  defp channel_summary([]), do: "none"
+  defp channel_summary(channels), do: Enum.join(channels, ", ")
+  defp capability_summary(nil), do: "unknown"
+
+  defp capability_summary(capabilities) do
+    [
+      if(capabilities[:threads], do: "threads", else: "no-threads"),
+      if(capabilities[:attachments], do: "attachments", else: "no-attachments"),
+      if(capabilities[:rich_formatting], do: "rich", else: "plain"),
+      if(capabilities[:streaming], do: "streaming", else: "non-streaming")
+    ]
+    |> Enum.join(" · ")
+  end
 
   defp stats do
     %{
