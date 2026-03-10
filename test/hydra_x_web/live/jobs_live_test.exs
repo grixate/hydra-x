@@ -63,7 +63,7 @@ defmodule HydraXWeb.JobsLiveTest do
     |> element(~s(button[phx-click="trigger"][phx-value-id="#{job.id}"]))
     |> render_click()
 
-    assert_receive {:job_delivery, %{external_ref: "4242", content: content}}
+    assert_receive {:job_delivery, %{chat_id: "4242", text: content}}
     assert content =~ "finished with success"
 
     html = render(view)

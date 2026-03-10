@@ -403,6 +403,15 @@ defmodule HydraXWeb.ConversationsLive do
               <p :if={delivery_reason(@selected)} class="mt-3 text-sm text-[var(--hx-mute)]">
                 {delivery_reason(@selected)}
               </p>
+              <div
+                :if={formatted_delivery_payload(@selected)}
+                class="mt-3 rounded-2xl border border-white/10 bg-black/10 px-4 py-4"
+              >
+                <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                  Native payload preview
+                </div>
+                <pre class="mt-3 overflow-x-auto whitespace-pre-wrap text-xs leading-6 text-[var(--hx-mute)]">{formatted_delivery_payload(@selected)}</pre>
+              </div>
               <div :if={retryable_delivery?(@selected)} class="mt-4">
                 <button
                   type="button"
@@ -506,14 +515,49 @@ defmodule HydraXWeb.ConversationsLive do
                       </div>
                       <div class={[
                         "rounded-full border px-2 py-1 font-mono text-[10px] uppercase tracking-[0.18em]",
-                        step_status_class(step["status"], @channel_state && @channel_state.current_step_index == index)
+                        step_status_class(
+                          step["status"],
+                          @channel_state && @channel_state.current_step_index == index
+                        )
                       ]}>
-                        {step_status_label(step["status"], @channel_state && @channel_state.current_step_index == index)}
+                        {step_status_label(
+                          step["status"],
+                          @channel_state && @channel_state.current_step_index == index
+                        )}
                       </div>
                     </div>
                     <p class="mt-2 text-sm text-[var(--hx-mute)]">
                       {step["reason"] || step["label"]}
                     </p>
+                    <p :if={step["summary"]} class="mt-2 text-sm text-white/80">
+                      {step["summary"]}
+                    </p>
+                    <p :if={step["output_excerpt"]} class="mt-2 text-sm text-[var(--hx-mute)]">
+                      {step["output_excerpt"]}
+                    </p>
+                    <div :if={step_detail_labels(step) != []} class="mt-3 flex flex-wrap gap-2 text-xs">
+                      <span
+                        :for={label <- step_detail_labels(step)}
+                        class="rounded-full border border-white/10 px-2 py-1 font-mono uppercase tracking-[0.18em] text-[var(--hx-mute)]"
+                      >
+                        {label}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                <div :if={channel_skill_hints(@channel_state) != []} class="mt-3 space-y-2">
+                  <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                    Skill hints
+                  </div>
+                  <div
+                    :for={hint <- channel_skill_hints(@channel_state)}
+                    class="rounded-xl border border-white/10 bg-black/10 px-3 py-3"
+                  >
+                    <div class="flex items-center justify-between gap-3">
+                      <div class="text-sm text-[var(--hx-accent)]">{hint["name"]}</div>
+                      <div class="text-xs text-[var(--hx-mute)]">{hint["slug"]}</div>
+                    </div>
+                    <p class="mt-2 text-sm text-[var(--hx-mute)]">{hint["reason"]}</p>
                   </div>
                 </div>
                 <div :if={channel_tool_results(@channel_state) != []} class="mt-3 space-y-2">
@@ -647,29 +691,53 @@ defmodule HydraXWeb.ConversationsLive do
     reply_context =
       delivery["reply_context"] || delivery[:reply_context] || %{}
 
+    payload =
+      delivery["formatted_payload"] || delivery[:formatted_payload] || %{}
+
     []
-    |> maybe_add_delivery_label("reply #{reply_context["reply_to_message_id"] || reply_context[:reply_to_message_id]}")
-    |> maybe_add_delivery_label("thread #{reply_context["thread_ts"] || reply_context[:thread_ts]}")
-    |> maybe_add_delivery_label("source #{reply_context["source_message_id"] || reply_context[:source_message_id]}")
+    |> maybe_add_delivery_label(
+      "reply #{reply_context["reply_to_message_id"] || reply_context[:reply_to_message_id]}"
+    )
+    |> maybe_add_delivery_label(
+      "thread #{reply_context["thread_ts"] || reply_context[:thread_ts]}"
+    )
+    |> maybe_add_delivery_label(
+      "source #{reply_context["source_message_id"] || reply_context[:source_message_id]}"
+    )
+    |> maybe_add_delivery_label(chunk_count_label(payload))
   end
 
   defp delivery_context_labels(_), do: []
 
-  defp maybe_add_delivery_label(labels, value) when value in ["reply ", "thread ", "source "], do: labels
+  defp maybe_add_delivery_label(labels, value) when value in ["reply ", "thread ", "source "],
+    do: labels
+
   defp maybe_add_delivery_label(labels, ""), do: labels
   defp maybe_add_delivery_label(labels, value), do: labels ++ [value]
+
+  defp chunk_count_label(payload) when is_map(payload) do
+    case payload["chunk_count"] || payload[:chunk_count] do
+      count when is_integer(count) and count > 1 -> "chunks #{count}"
+      _ -> nil
+    end
+  end
+
+  defp chunk_count_label(_payload), do: nil
 
   defp retryable_delivery?(conversation) do
     case last_delivery(conversation) do
       %{"status" => status, "channel" => channel}
-      when status in ["failed", "dead_letter"] and channel in ["telegram", "discord", "slack", "webchat"] ->
+      when status in ["failed", "dead_letter"] and
+             channel in ["telegram", "discord", "slack", "webchat"] ->
         true
 
       %{status: status, channel: channel}
-      when status in ["failed", "dead_letter"] and channel in ["telegram", "discord", "slack", "webchat"] ->
+      when status in ["failed", "dead_letter"] and
+             channel in ["telegram", "discord", "slack", "webchat"] ->
         true
 
-      _ -> false
+      _ ->
+        false
     end
   end
 
@@ -681,6 +749,17 @@ defmodule HydraXWeb.ConversationsLive do
     end
   end
 
+  defp formatted_delivery_payload(conversation) do
+    with delivery when is_map(delivery) <- last_delivery(conversation),
+         payload when is_map(payload) <-
+           delivery["formatted_payload"] || delivery[:formatted_payload],
+         false <- map_size(payload) == 0 do
+      Jason.encode!(payload, pretty: true)
+    else
+      _ -> nil
+    end
+  end
+
   defp turn_attachments(turn) do
     metadata = turn.metadata || %{}
     metadata["attachments"] || metadata[:attachments] || []
@@ -689,11 +768,38 @@ defmodule HydraXWeb.ConversationsLive do
   defp attachment_label(attachment) do
     kind = attachment["kind"] || attachment[:kind] || "attachment"
     file_name = attachment["file_name"] || attachment[:file_name]
+    ref = attachment_ref_label(attachment)
 
-    if is_binary(file_name) and file_name != "" do
-      "#{kind}: #{file_name}"
-    else
-      kind
+    base =
+      if is_binary(file_name) and file_name != "" do
+        "#{kind}: #{file_name}"
+      else
+        kind
+      end
+
+    case ref do
+      nil -> base
+      value -> "#{base} · #{value}"
+    end
+  end
+
+  defp attachment_ref_label(attachment) do
+    ref =
+      attachment["download_ref"] || attachment[:download_ref] ||
+        attachment["source_url"] || attachment[:source_url]
+
+    cond do
+      not is_binary(ref) or ref == "" ->
+        nil
+
+      String.starts_with?(ref, "http://") or String.starts_with?(ref, "https://") ->
+        uri = URI.parse(ref)
+        host = uri.host || "external"
+        path = uri.path || ""
+        "#{host}#{String.slice(path, 0, 24)}"
+
+      true ->
+        String.slice(ref, 0, 36)
     end
   end
 
@@ -734,6 +840,10 @@ defmodule HydraXWeb.ConversationsLive do
   defp channel_steps(%{steps: steps}) when is_list(steps), do: steps
   defp channel_steps(%{plan: %{"steps" => steps}}) when is_list(steps), do: steps
   defp channel_steps(_), do: []
+
+  defp channel_skill_hints(nil), do: []
+  defp channel_skill_hints(%{plan: %{"skill_hints" => hints}}) when is_list(hints), do: hints
+  defp channel_skill_hints(_), do: []
 
   defp channel_tool_results(nil), do: []
   defp channel_tool_results(%{tool_results: results}) when is_list(results), do: results
@@ -798,15 +908,55 @@ defmodule HydraXWeb.ConversationsLive do
 
   defp channel_event_summary(_event), do: "Execution event recorded"
 
+  defp step_detail_labels(step) when is_map(step) do
+    []
+    |> maybe_add_step_label(step_attempt_label(step["attempt_count"]))
+    |> maybe_add_step_label(if(step["cached"], do: "cached", else: nil))
+    |> maybe_add_step_label(step["safety_classification"])
+    |> maybe_add_step_label(step_started_label(step["last_started_at"] || step["started_at"]))
+    |> maybe_add_step_label(step_finished_label(step))
+    |> maybe_add_step_label(step_updated_label(step["updated_at"]))
+  end
+
+  defp step_detail_labels(_), do: []
+
+  defp maybe_add_step_label(labels, nil), do: labels
+  defp maybe_add_step_label(labels, ""), do: labels
+  defp maybe_add_step_label(labels, label), do: labels ++ [label]
+
+  defp step_updated_label(nil), do: nil
+  defp step_updated_label(value), do: "updated #{format_event_time(value)}"
+
+  defp step_attempt_label(nil), do: nil
+  defp step_attempt_label(0), do: nil
+  defp step_attempt_label(1), do: "attempt 1"
+  defp step_attempt_label(value) when is_integer(value), do: "attempt #{value}"
+
+  defp step_started_label(nil), do: nil
+  defp step_started_label(value), do: "started #{format_event_time(value)}"
+
+  defp step_finished_label(%{"completed_at" => value}) when not is_nil(value),
+    do: "finished #{format_event_time(value)}"
+
+  defp step_finished_label(%{"failed_at" => value}) when not is_nil(value),
+    do: "failed #{format_event_time(value)}"
+
+  defp step_finished_label(_step), do: nil
+
   defp format_event_time(%DateTime{} = dt), do: Calendar.strftime(dt, "%H:%M:%S")
   defp format_event_time(value) when is_binary(value), do: String.slice(value, 11, 8)
   defp format_event_time(_value), do: "now"
 
   defp step_status_label("running", true), do: "current"
-  defp step_status_label(status, _current?) when status in ["pending", "running", "completed", "failed"], do: status
+
+  defp step_status_label(status, _current?)
+       when status in ["pending", "running", "completed", "failed"], do: status
+
   defp step_status_label(_status, _current?), do: "pending"
 
-  defp step_status_class("completed", _), do: "border-emerald-400/20 bg-emerald-400/10 text-emerald-200"
+  defp step_status_class("completed", _),
+    do: "border-emerald-400/20 bg-emerald-400/10 text-emerald-200"
+
   defp step_status_class("failed", _), do: "border-rose-400/20 bg-rose-400/10 text-rose-200"
   defp step_status_class("running", true), do: "border-cyan-400/20 bg-cyan-400/10 text-cyan-200"
   defp step_status_class("running", _), do: "border-cyan-400/20 bg-cyan-400/10 text-cyan-200"
@@ -851,11 +1001,12 @@ defmodule HydraXWeb.ConversationsLive do
 
   defp compaction_label(compaction) do
     level = compaction.level || "idle"
-    "#{compaction.turn_count} turns · #{level}"
+    ratio = round((compaction.token_ratio || 0.0) * 100)
+    "#{compaction.turn_count} turns · #{compaction.estimated_tokens || 0}/#{compaction.conversation_limit_tokens || 0} tokens · #{ratio}% · #{level}"
   end
 
   defp compaction_thresholds_label(%{soft: soft, medium: medium, hard: hard}) do
-    "soft #{soft} · medium #{medium} · hard #{hard}"
+    "soft #{soft} or 80% · medium #{medium} or 90% · hard #{hard} or 95%"
   end
 
   defp format_reason(reason) when is_binary(reason), do: reason

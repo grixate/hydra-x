@@ -36,7 +36,7 @@ defmodule HydraX.TelegramWebhookTaskTest do
         Mix.Tasks.HydraX.Telegram.Webhook.run(["test", "777", "Task smoke test"])
       end)
 
-    assert_receive {:telegram_task_test, %{content: "Task smoke test", external_ref: "777"}}
+    assert_receive {:telegram_task_test, %{text: "Task smoke test", chat_id: "777"}}
     assert output =~ "Delivered test message to 777"
     assert output =~ "provider_message_id"
   end

@@ -2,6 +2,17 @@ defmodule HydraX.LLM.Providers.OpenAICompatible do
   @behaviour HydraX.LLM.Provider
 
   @impl true
+  def capabilities do
+    %{
+      tool_calls: true,
+      streaming: true,
+      system_prompt: true,
+      fallbacks: true,
+      mock: false
+    }
+  end
+
+  @impl true
   def complete(%{provider_config: nil} = request), do: HydraX.LLM.Providers.Mock.complete(request)
 
   def complete(request) do
@@ -127,6 +138,37 @@ defmodule HydraX.LLM.Providers.OpenAICompatible do
     end)
 
     {:ok, ref}
+  end
+
+  @impl true
+  def healthcheck(nil, _opts), do: HydraX.LLM.Providers.Mock.healthcheck(nil, [])
+
+  def healthcheck(provider, opts) do
+    request =
+      %{
+        provider_config: provider,
+        messages: [
+          %{role: "system", content: "You are a terse provider connectivity probe."},
+          %{role: "user", content: "Reply with OK if you can read this request."}
+        ],
+        request_options:
+          Keyword.get(opts, :request_options, receive_timeout: 10_000, retry: false)
+      }
+      |> maybe_put_request_fn(opts)
+
+    case complete(request) do
+      {:ok, response} ->
+        {:ok,
+         %{
+           status: :ok,
+           detail: "reachable via chat completions",
+           sample: response.content,
+           capabilities: capabilities()
+         }}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   defp stream_request(base_url, provider, body, request_options, caller_pid, ref) do
@@ -269,6 +311,13 @@ defmodule HydraX.LLM.Providers.OpenAICompatible do
 
       %{id: tool.id, name: tool.name, arguments: arguments}
     end)
+  end
+
+  defp maybe_put_request_fn(request, opts) do
+    case Keyword.get(opts, :request_fn) do
+      nil -> request
+      request_fn -> Map.put(request, :request_fn, request_fn)
+    end
   end
 
   defp auth_headers(nil), do: []

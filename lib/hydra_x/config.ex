@@ -99,6 +99,26 @@ defmodule HydraX.Config do
     |> String.split(",", trim: true)
   end
 
+  @spec embedding_backend() :: String.t()
+  def embedding_backend do
+    System.get_env("HYDRA_X_EMBEDDING_BACKEND", "local_hash_v1")
+  end
+
+  @spec embedding_model() :: String.t()
+  def embedding_model do
+    System.get_env("HYDRA_X_EMBEDDING_MODEL", "text-embedding-3-small")
+  end
+
+  @spec embedding_url() :: String.t() | nil
+  def embedding_url do
+    System.get_env("HYDRA_X_EMBEDDING_URL")
+  end
+
+  @spec embedding_api_key() :: String.t() | nil
+  def embedding_api_key do
+    System.get_env("HYDRA_X_EMBEDDING_API_KEY")
+  end
+
   defp endpoint_base_url do
     endpoint = Application.get_env(:hydra_x, HydraXWeb.Endpoint, [])
     url = Keyword.get(endpoint, :url, [])

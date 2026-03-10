@@ -5,6 +5,7 @@ defmodule HydraX.Runtime.Observability do
 
   import Ecto.Query
 
+  alias HydraX.Cluster
   alias HydraX.Config
   alias HydraX.Memory
   alias HydraX.Security.Secrets
@@ -51,6 +52,7 @@ defmodule HydraX.Runtime.Observability do
     mcp_servers = HydraX.Runtime.MCPServers.list_mcp_servers()
     mcp_statuses = HydraX.Runtime.MCPServers.mcp_statuses()
     operator = operator_status()
+    cluster = cluster_status()
 
     checks = [
       %{name: "database", status: :ok, detail: "SQLite repo online"},
@@ -108,6 +110,7 @@ defmodule HydraX.Runtime.Observability do
         name: "secrets",
         status:
           cond do
+            secrets.unresolved_env_records > 0 -> :warn
             secrets.plaintext_records > 0 -> :warn
             secrets.total_records > 0 -> :ok
             true -> :warn
@@ -132,6 +135,11 @@ defmodule HydraX.Runtime.Observability do
             true -> :warn
           end,
         detail: mcp_health_detail(mcp_statuses)
+      },
+      %{
+        name: "cluster",
+        status: if(cluster.enabled, do: :warn, else: :ok),
+        detail: cluster_detail(cluster)
       },
       %{
         name: "budget",
@@ -380,6 +388,30 @@ defmodule HydraX.Runtime.Observability do
   def memory_triage_status(nil),
     do: do_memory_triage_status(HydraX.Runtime.Agents.get_default_agent())
 
+  def provider_status do
+    provider = HydraX.Runtime.Providers.enabled_provider()
+    default_agent = HydraX.Runtime.Agents.get_default_agent()
+    runtime = default_agent && HydraX.Runtime.Agents.agent_runtime_status(default_agent)
+
+    route =
+      default_agent &&
+        HydraX.Runtime.Providers.effective_provider_route(default_agent.id, "channel")
+
+    selected = (route && route.provider) || provider
+
+    %{
+      configured: not is_nil(selected),
+      name: (selected && (selected.name || selected.kind)) || "mock fallback",
+      kind: (selected && selected.kind) || "mock",
+      model: selected && selected.model,
+      route_source: (route && route.source) || if(provider, do: "global", else: "mock"),
+      fallback_count: (route && length(route.fallbacks)) || 0,
+      readiness: (runtime && runtime.readiness) || if(provider, do: "configured", else: "mock"),
+      warmup_status: (runtime && runtime.warmup_status) || "n/a",
+      capabilities: HydraX.Runtime.Providers.provider_capabilities(selected)
+    }
+  end
+
   def safety_status(opts \\ []) do
     counts = HydraX.Safety.recent_counts()
     statuses = HydraX.Safety.status_counts()
@@ -490,9 +522,19 @@ defmodule HydraX.Runtime.Observability do
         Enum.count(secret_values, fn value ->
           value not in [nil, ""] and Secrets.encrypted?(value)
         end),
+      env_backed_records:
+        Enum.count(secret_values, fn value ->
+          value not in [nil, ""] and Secrets.env_reference?(value)
+        end),
+      unresolved_env_records:
+        Enum.count(secret_values, fn value ->
+          value not in [nil, ""] and Secrets.unresolved_env_reference?(value)
+        end),
       plaintext_records:
         Enum.count(secret_values, fn value ->
-          value not in [nil, ""] and not Secrets.encrypted?(value)
+          value not in [nil, ""] and
+            not Secrets.encrypted?(value) and
+            not Secrets.env_reference?(value)
         end),
       key_source: Secrets.key_source()
     }
@@ -508,9 +550,14 @@ defmodule HydraX.Runtime.Observability do
         total_jobs: length(HydraX.Runtime.Jobs.list_scheduled_jobs(limit: 100)),
         recent_runs: HydraX.Runtime.Jobs.recent_job_runs(10)
       },
+      cluster: cluster_status(),
       system: system_status(),
       backups: backup_status()
     }
+  end
+
+  def cluster_status do
+    Cluster.status()
   end
 
   def system_status do
@@ -547,6 +594,7 @@ defmodule HydraX.Runtime.Observability do
         HydraX.Runtime.Providers.effective_provider_route(default_agent.id, "channel")
 
     operator = operator_status()
+    cluster = cluster_status()
 
     items = [
       %{
@@ -780,6 +828,19 @@ defmodule HydraX.Runtime.Observability do
         required: false,
         status: if(secrets.plaintext_records > 0, do: :warn, else: :ok),
         detail: secret_detail(secrets)
+      },
+      %{
+        id: "cluster",
+        label: "Cluster posture matches single-node persistence",
+        required: false,
+        status: if(cluster.enabled, do: :warn, else: :ok),
+        detail:
+          if(cluster.enabled,
+            do:
+              "cluster awareness is enabled, but SQLite still blocks production multi-node failover",
+            else:
+              "single-node mode is active; enable clustering only after moving coordination to PostgreSQL"
+          )
       }
     ]
 
@@ -811,6 +872,7 @@ defmodule HydraX.Runtime.Observability do
       database_path: Config.repo_database_path(),
       workspace_root: Config.workspace_root(),
       backup_root: Config.backup_root(),
+      cluster: cluster_status(),
       http_allowlist: Config.http_allowlist(),
       shell_allowlist: Config.shell_allowlist(),
       readiness: readiness_report()
@@ -977,6 +1039,22 @@ defmodule HydraX.Runtime.Observability do
     |> Enum.join(" · ")
   end
 
+  defp cluster_detail(cluster) do
+    base =
+      "#{cluster.mode} · node #{cluster.node_id} · nodes #{cluster.node_count} · persistence #{cluster.persistence}"
+
+    cond do
+      cluster.enabled and cluster.leader_node ->
+        "#{base} · leader #{cluster.leader_node} · PostgreSQL migration still required for real multi-node"
+
+      cluster.enabled ->
+        "#{base} · no leader registered yet · PostgreSQL migration still required for real multi-node"
+
+      true ->
+        "#{base} · federation intentionally disabled"
+    end
+  end
+
   defp agent_suffix(nil), do: ""
   defp agent_suffix(name), do: " -> #{name}"
 
@@ -1015,7 +1093,7 @@ defmodule HydraX.Runtime.Observability do
   end
 
   defp secret_detail(secrets) do
-    "encrypted #{secrets.encrypted_records}/#{secrets.total_records}; plaintext #{secrets.plaintext_records}; key source #{secrets.key_source}"
+    "encrypted #{secrets.encrypted_records}/#{secrets.total_records}; env-backed #{secrets.env_backed_records}; unresolved env #{secrets.unresolved_env_records}; plaintext #{secrets.plaintext_records}; key source #{secrets.key_source}"
   end
 
   defp provider_secret_values do
@@ -1053,7 +1131,9 @@ defmodule HydraX.Runtime.Observability do
   defp describe_channels(channels), do: Enum.join(channels, ", ")
 
   defp provider_health_detail(provider, nil, _runtime, _route) do
-    (provider && "#{provider.kind}: #{provider.model}") || "mock fallback"
+    provider_label = (provider && "#{provider.kind}: #{provider.model}") || "mock fallback"
+    capabilities = provider_capability_summary(provider)
+    [provider_label, capabilities] |> Enum.join(" · ")
   end
 
   defp provider_health_detail(provider, agent, runtime, route) do
@@ -1063,7 +1143,19 @@ defmodule HydraX.Runtime.Observability do
         selected -> "#{selected.name || selected.kind}: #{selected.model}"
       end
 
-    "#{provider_label} -> #{agent.slug} (#{runtime.readiness}/#{runtime.warmup_status})"
+    capabilities = provider_capability_summary((route && route.provider) || provider)
+
+    "#{provider_label} -> #{agent.slug} (#{runtime.readiness}/#{runtime.warmup_status}) · #{capabilities}"
+  end
+
+  defp provider_capability_summary(provider) do
+    HydraX.Runtime.Providers.provider_capabilities(provider)
+    |> Enum.filter(fn {_key, value} -> value end)
+    |> Enum.map(fn {key, _value} -> key |> to_string() |> String.replace("_", "-") end)
+    |> case do
+      [] -> "capabilities none"
+      values -> "capabilities " <> Enum.join(values, ", ")
+    end
   end
 
   defp telemetry_summary(telemetry) do

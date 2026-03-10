@@ -7,16 +7,22 @@ Hydra-X is a self-hosted Elixir agent runtime with a Phoenix control plane. The 
 - Phoenix + LiveView application with SQLite persistence
 - Agent runtime supervision tree:
   `HydraX.Agent`, `Channel`, `Worker`, `Cortex`, `Compactor`, with persisted execution checkpoints for channel turns and replay-safe cached tool reuse during channel recovery
-- Typed memory storage with SQLite FTS-backed search, hybrid-ranked and vector-weighted recall, and markdown export
+- Typed memory storage with SQLite FTS-backed search, hybrid-ranked recall, pluggable embeddings (local by default, OpenAI-compatible optional), and markdown export
 - Structured bulletins:
   goals, todos, decisions, and context are prioritized into sectioned operator bulletins instead of a flat memory list
+- Token-aware compaction:
+  conversation compaction now reacts to both turn thresholds and estimated token pressure against the per-conversation budget, with soft/medium/hard trigger points at 80/90/95%
 - Ingest pipeline for markdown, text, JSON, and PDF workspace content with archive tracking, restore-on-reimport, and provenance visibility
 - Workspace scaffold contract:
   `SOUL.md`, `IDENTITY.md`, `USER.md`, `TOOLS.md`, `HEARTBEAT.md`, `memory/`, `skills/`, `ingest/`
 - Workspace skills:
-  agent-scoped discovery of `skills/<skill-name>/SKILL.md`, enable/disable controls in `/agents`, CLI inspection, and prompt injection for enabled skills
+  agent-scoped discovery of `skills/<skill-name>/SKILL.md`, frontmatter metadata (`name`, `summary`, `version`, `tags`, `tools`, `channels`, `requires`), enable/disable controls in `/agents`, CLI inspection/export, planner hints, and prompt injection for enabled skills
+- Skill tool:
+  `skill_inspect` exposes enabled skills, versions, summaries, tags, tool hints, and channel hints to workers when they need to inspect available workspace workflows
 - MCP registry:
   persisted stdio/HTTP MCP server definitions with setup UI, health probes, CLI management, agent-scoped enablement and binding inspection, operator-report export, and prompt visibility for enabled integrations
+- MCP tools:
+  `mcp_inspect`, `mcp_probe`, and `mcp_invoke` let workers inspect, actively probe, or invoke enabled MCP bindings before relying on them
 - Stable behaviours:
   `HydraX.LLM.Provider`, `HydraX.Gateway.Adapter`, `HydraX.Tool`
 - Provider adapters:
@@ -32,11 +38,13 @@ Hydra-X is a self-hosted Elixir agent runtime with a Phoenix control plane. The 
 - Unified control policy:
   persisted recent-auth freshness, outbound interactive-delivery channels, job-delivery channels, and ingest-root restrictions with global defaults and per-agent overrides
 - Guarded tools:
-  workspace-confined file listing/reads/writes/targeted patch edits, dedicated web search, outbound HTTP fetches with basic SSRF checks, browser-style page fetch or link extraction or form inspection or form-preview or submit or heading/table inspection or snapshot or extract flows, allowlisted shell commands, a persisted tool policy surface, and standardized tool summaries plus safety classifications in execution history
+  workspace-confined file listing/reads/writes/targeted patch edits, dedicated web search, outbound HTTP fetches with basic SSRF checks, session-aware browser-style page fetch or link extraction or form/meta inspection or form-preview or submit or heading/table/image inspection or snapshot or extract flows, allowlisted shell commands, a persisted tool policy surface, and standardized tool summaries plus safety classifications in execution history
 - Scheduler:
   recurring heartbeat/prompt/backup/ingest/maintenance jobs with persisted run history, CLI/UI controls, cron support, active-hour/timeout/retry/circuit controls, and optional Telegram/Discord/Slack/Webchat delivery-back
 - Agent provider routing:
   per-agent provider defaults, process-specific overrides, fallback order, and warmup/readiness state surfaced in `/agents` and `/health`
+- Provider adapter contract:
+  explicit capabilities and healthcheck semantics for mock, OpenAI-compatible, and Anthropic providers
 - Observability:
   telemetry counters for provider, tool, gateway, and scheduler activity surfaced in `/health`, plus a dedicated `/safety` ledger for operator review and exportable report bundles with agent snapshots, incidents, and audit events
 - Operator commands:
@@ -82,6 +90,8 @@ The repository also includes a thin command wrapper:
 ./hydra_x providers
 ./hydra_x agents
 ./hydra_x skills 1 --refresh
+./hydra_x skills 1 --show 3
+./hydra_x skills 1 --export tmp/skills
 ./hydra_x ingest
 ./hydra_x jobs
 ./hydra_x conversations
@@ -97,7 +107,7 @@ The repository also includes a thin command wrapper:
 
 If you want to lock the management UI, set an operator password on `/setup`. After that, browser access requires signing in at `/login`, and repeated failed sign-in attempts from the same IP are temporarily blocked by the login throttle window.
 
-Persisted provider keys and channel tokens are encrypted at rest. Set `HYDRA_X_SECRET_KEY` in production so Hydra-X uses an explicit runtime secret instead of the endpoint fallback key, and check `/health` for any remaining plaintext legacy records.
+Persisted provider keys and channel tokens are encrypted at rest by default. You can also store an environment-backed reference instead of a secret value by saving `env:YOUR_ENV_VAR_NAME` in the UI or CLI; Hydra-X persists only the env reference and resolves the real secret at runtime. Set `HYDRA_X_SECRET_KEY` in production so Hydra-X uses an explicit runtime secret instead of the endpoint fallback key, and check `/health` for any remaining plaintext or unresolved env-backed records.
 
 MCP servers can be managed from `/setup` or the CLI:
 
@@ -108,6 +118,7 @@ mix hydra_x.mcp save --name "Remote MCP" --transport http --url https://mcp.exam
 mix hydra_x.mcp test 1
 mix hydra_x.mcp refresh-bindings hydra-primary
 mix hydra_x.mcp bindings hydra-primary
+mix hydra_x.mcp invoke hydra-primary search_docs --server Remote --json '{"query":"hydra"}'
 mix hydra_x.mcp delete 1
 ```
 
@@ -141,6 +152,8 @@ mix hydra_x.agents provider-routing 2
 mix hydra_x.agents provider-routing 2 --default-provider 4 --fallbacks 5,6
 mix hydra_x.agents warmup 2
 mix hydra_x.agents skills 2 --refresh
+mix hydra_x.agents skills 2 --show 5
+mix hydra_x.agents skills 2 --export tmp/skills
 mix hydra_x.agents tool-policy 2
 mix hydra_x.agents tool-policy 2 --workspace-write true --web-search false --shell false
 mix hydra_x.agents tool-policy 2 --reset
@@ -308,4 +321,4 @@ mix hydra_x.serve
 
 ## Current scope
 
-This is not the full roadmap yet. The repo now has a working multi-channel monolith with ingest, hybrid recall, cron scheduling, operator reporting, public Webchat, targeted workspace patch tooling, richer browser-style automation with structured headings and tables, encrypted secrets, unified cross-cutting control policy, installable workspace skills, an MCP registry layer, resumable execution checkpoints with replay-safe tool caching, and cluster-awareness scaffolding. Real browser-backed rendering, deeper MCP execution semantics, and true multi-node clustering remain future stages.
+This is not the full roadmap yet. The repo now has a working multi-channel monolith with ingest, hybrid recall, cron scheduling, operator reporting, public Webchat, targeted workspace patch tooling, richer browser-style automation with structured headings, scripts, metadata, and tables, encrypted or env-backed secrets, unified cross-cutting control policy, installable workspace skills with richer manifests and exportable catalogs, an MCP registry layer with worker-visible inspect/probe/invoke tools plus CLI invoke flows, channel-native reply/thread handling with chunk-safe outbound previews, resumable execution checkpoints with replay-safe tool caching, and node-aware cluster posture reporting. Real browser-backed rendering and true multi-node clustering remain future stages.

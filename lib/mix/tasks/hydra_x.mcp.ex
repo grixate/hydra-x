@@ -8,6 +8,9 @@ defmodule Mix.Tasks.HydraX.Mcp do
     Mix.Task.run("app.start")
 
     case args do
+      ["invoke", agent_ref, action | rest] ->
+        invoke_binding(agent_ref, action, rest)
+
       ["bindings", agent_ref] ->
         list_bindings(agent_ref)
 
@@ -41,6 +44,38 @@ defmodule Mix.Tasks.HydraX.Mcp do
       _ ->
         list_servers()
     end
+  end
+
+  defp invoke_binding(agent_ref, action, args) do
+    {opts, _argv, _invalid} =
+      OptionParser.parse(args,
+        strict: [server: :string, json: :string, param: :keep]
+      )
+
+    agent = resolve_agent(agent_ref)
+    params = build_invoke_params(opts)
+
+    {:ok, result} =
+      HydraX.Runtime.invoke_agent_mcp(agent.id, action, params,
+        server: opts[:server]
+      )
+
+    Mix.shell().info("agent=#{agent.slug}")
+    Mix.shell().info("action=#{action}")
+    Mix.shell().info("count=#{result.count}")
+
+    Enum.each(result.results, fn entry ->
+      line =
+        [
+          entry.name,
+          entry.transport,
+          entry.status,
+          Map.get(entry, :detail) || format_invoke_result(Map.get(entry, :result))
+        ]
+        |> Enum.join("\t")
+
+      Mix.shell().info(line)
+    end)
   end
 
   defp save_server(args) do
@@ -150,6 +185,69 @@ defmodule Mix.Tasks.HydraX.Mcp do
   defp print_test_result({:error, reason}) do
     Mix.shell().info("status=error")
     Mix.shell().info("detail=#{inspect(reason)}")
+  end
+
+  defp build_invoke_params(opts) do
+    json_params =
+      opts
+      |> Keyword.get(:json)
+      |> decode_json_params()
+
+    param_pairs =
+      opts
+      |> Keyword.get_values(:param)
+      |> Enum.reduce(%{}, fn pair, acc ->
+        case String.split(pair, "=", parts: 2) do
+          [key, value] when key != "" -> Map.put(acc, key, parse_param_value(value))
+          _ -> acc
+        end
+      end)
+
+    Map.merge(json_params, param_pairs)
+  end
+
+  defp decode_json_params(nil), do: %{}
+  defp decode_json_params(""), do: %{}
+
+  defp decode_json_params(value) do
+    case Jason.decode(value) do
+      {:ok, decoded} when is_map(decoded) -> decoded
+      {:ok, _decoded} -> Mix.raise("--json must decode to an object")
+      {:error, error} -> Mix.raise("invalid --json payload: #{Exception.message(error)}")
+    end
+  end
+
+  defp parse_param_value("true"), do: true
+  defp parse_param_value("false"), do: false
+  defp parse_param_value("null"), do: nil
+
+  defp parse_param_value(value) do
+    cond do
+      match?({_, ""}, Integer.parse(value)) ->
+        {parsed, ""} = Integer.parse(value)
+        parsed
+
+      match?({_, ""}, Float.parse(value)) ->
+        {parsed, ""} = Float.parse(value)
+        parsed
+
+      true ->
+        value
+    end
+  end
+
+  defp format_invoke_result(nil), do: "-"
+
+  defp format_invoke_result(%{status: status, url: url}) do
+    "HTTP #{status} #{url}"
+  end
+
+  defp format_invoke_result(result) when is_map(result) do
+    inspect(result, limit: 5, printable_limit: 120)
+  end
+
+  defp format_invoke_result(result) do
+    inspect(result, printable_limit: 120)
   end
 
   defp parse_boolean(nil, default), do: default

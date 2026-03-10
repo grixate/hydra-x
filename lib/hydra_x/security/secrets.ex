@@ -3,11 +3,13 @@ defmodule HydraX.Security.Secrets do
   Transparent encryption helpers for persisted runtime secrets.
 
   Values are stored as `enc:v1:<iv>:<tag>:<ciphertext>` and decrypted on read.
+  Environment-backed references can be stored as `envref:v1:VAR_NAME` and resolved on read.
   Legacy plaintext values are still readable and can be re-encrypted on the next save.
   """
 
   @prefix "enc"
   @version "v1"
+  @env_prefix "envref"
 
   alias HydraX.Config
 
@@ -47,6 +49,9 @@ defmodule HydraX.Security.Secrets do
           _ -> value
         end
 
+      [@env_prefix, @version, env_var] ->
+        System.get_env(env_var) || ""
+
       _ ->
         value
     end
@@ -58,6 +63,31 @@ defmodule HydraX.Security.Secrets do
     do: String.starts_with?(value, @prefix <> ":" <> @version <> ":")
 
   def encrypted?(_value), do: false
+
+  def env_reference?(value) when is_binary(value),
+    do: String.starts_with?(value, @env_prefix <> ":" <> @version <> ":")
+
+  def env_reference?(_value), do: false
+
+  def unresolved_env_reference?(value) when is_binary(value) do
+    with true <- env_reference?(value),
+         env_var when is_binary(env_var) <- env_reference_var(value) do
+      System.get_env(env_var) in [nil, ""]
+    else
+      _ -> false
+    end
+  end
+
+  def unresolved_env_reference?(_value), do: false
+
+  def env_reference_var(value) when is_binary(value) do
+    case String.split(value, ":", parts: 3) do
+      [@env_prefix, @version, env_var] -> env_var
+      _ -> nil
+    end
+  end
+
+  def env_reference_var(_value), do: nil
 
   def decrypt_fields(struct, fields) do
     Enum.reduce(fields, struct, fn field, acc ->
@@ -80,8 +110,14 @@ defmodule HydraX.Security.Secrets do
           |> Map.delete(field)
 
         value when is_binary(value) ->
+          stored =
+            case parse_env_input(value) do
+              {:env_ref, env_var} -> "#{@env_prefix}:#{@version}:#{env_var}"
+              :encrypt -> encrypt(value)
+            end
+
           acc
-          |> Map.put(string_key, encrypt(value))
+          |> Map.put(string_key, stored)
           |> Map.delete(field)
 
         _value ->
@@ -95,6 +131,22 @@ defmodule HydraX.Security.Secrets do
       System.get_env("HYDRA_X_SECRET_KEY") not in [nil, ""] -> :env
       Config.endpoint_secret_key_base() not in [nil, ""] -> :endpoint
       true -> :missing
+    end
+  end
+
+  defp parse_env_input(value) do
+    case String.trim(value) do
+      <<"env:", env_var::binary>> ->
+        env_var = String.trim(env_var)
+
+        if env_var == "" do
+          :encrypt
+        else
+          {:env_ref, env_var}
+        end
+
+      _ ->
+        :encrypt
     end
   end
 

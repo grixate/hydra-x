@@ -91,6 +91,43 @@ defmodule HydraX.Cluster do
     end
   end
 
+  @doc "Returns a node-aware cluster status snapshot without mutating leadership."
+  @spec status() :: map()
+  def status do
+    enabled = enabled?()
+    nodes = nodes()
+    leader_pid = if(enabled, do: :global.whereis_name(@leader_key), else: self())
+
+    %{
+      enabled: enabled,
+      mode: if(enabled, do: "cluster", else: "single_node"),
+      node_id: node_id() |> to_string(),
+      distributed: Node.alive?(),
+      node_count: length(nodes),
+      nodes: Enum.map(nodes, &to_string/1),
+      leader_registered: leader_pid != :undefined,
+      leader_node: leader_node(leader_pid),
+      persistence: "sqlite_single_writer",
+      multi_node_ready: false
+    }
+    |> Map.put(:detail, detail(enabled, leader_pid, nodes))
+  end
+
   # Conflict resolution — keep the existing registered process
   defp resolve_conflict(_name, pid1, _pid2), do: pid1
+
+  defp leader_node(:undefined), do: nil
+  defp leader_node(pid) when is_pid(pid), do: pid |> node() |> to_string()
+
+  defp detail(false, _leader_pid, nodes) do
+    "single-node mode on #{node_id()}; #{length(nodes)} visible node; SQLite is acceptable until federation begins"
+  end
+
+  defp detail(true, :undefined, nodes) do
+    "cluster awareness enabled on #{node_id()} with #{length(nodes)} visible nodes; no leader registered yet; SQLite still blocks production multi-node operation"
+  end
+
+  defp detail(true, leader_pid, nodes) when is_pid(leader_pid) do
+    "cluster awareness enabled on #{node_id()} with #{length(nodes)} visible nodes; leader #{leader_node(leader_pid)}; SQLite still blocks production multi-node operation"
+  end
 end

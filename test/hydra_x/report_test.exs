@@ -54,6 +54,21 @@ defmodule HydraX.ReportTest do
         external_ref: "C999"
       })
 
+    {:ok, _turn} =
+      Runtime.append_turn(conversation, %{
+        role: "user",
+        content: "[Slack attachments: application/pdf]",
+        metadata: %{
+          "attachments" => [
+            %{
+              "kind" => "file",
+              "file_name" => "report.pdf",
+              "download_ref" => "https://slack.test/report.pdf"
+            }
+          ]
+        }
+      })
+
     {:ok, _conversation} =
       Runtime.update_conversation_metadata(conversation, %{
         "last_delivery" => %{
@@ -61,6 +76,13 @@ defmodule HydraX.ReportTest do
           "status" => "delivered",
           "external_ref" => "C999",
           "provider_message_id" => "999.111",
+          "provider_message_ids" => ["999.111", "999.222"],
+          "formatted_payload" => %{
+            "channel" => "C999",
+            "thread_ts" => "123.456",
+            "chunk_count" => 2,
+            "text" => "Report reply"
+          },
           "reply_context" => %{
             "thread_ts" => "123.456",
             "source_message_id" => "123.456"
@@ -73,19 +95,25 @@ defmodule HydraX.ReportTest do
     assert snapshot.default_agent.id == agent.id
     assert is_list(snapshot.health_checks)
     assert is_map(snapshot.readiness)
+    assert snapshot.provider.kind
     assert snapshot.install.public_url
     assert is_list(snapshot.conversations)
     assert is_list(snapshot.agents)
     assert Enum.any?(snapshot.mcp, &(&1.name == "Docs MCP" and &1.status == :ok))
     assert Enum.any?(snapshot.agent_mcp, &(&1.agent_id == agent.id and &1.enabled_bindings == 1))
     assert Enum.any?(snapshot.agents, &(&1.id == agent.id and &1.mcp_count == 1))
+    assert snapshot.cluster.mode == "single_node"
     assert is_map(snapshot.incidents)
     assert is_list(snapshot.audit)
     assert Enum.any?(snapshot.ingest, &(&1.source_file == "report.md"))
     assert snapshot.observability.telemetry_summary.tool.error >= 1
     assert Enum.any?(snapshot.observability.telemetry.recent_events, &(&1.namespace == "tool"))
     assert Enum.any?(snapshot.audit, &(&1.category == "operator"))
-    assert Enum.any?(snapshot.conversations, &(&1.metadata["last_delivery"]["reply_context"]["thread_ts"] == "123.456"))
+
+    assert Enum.any?(
+             snapshot.conversations,
+             &(&1.metadata["last_delivery"]["reply_context"]["thread_ts"] == "123.456")
+           )
   end
 
   test "export_snapshot writes markdown json and bundle exports" do
@@ -103,6 +131,17 @@ defmodule HydraX.ReportTest do
         external_ref: "C555"
       })
 
+    {:ok, _turn} =
+      Runtime.append_turn(conversation, %{
+        role: "user",
+        content: "[Slack attachments: application/pdf]",
+        metadata: %{
+          "attachments" => [
+            %{"kind" => "file", "file_name" => "export.pdf", "download_ref" => "https://slack.test/export.pdf"}
+          ]
+        }
+      })
+
     {:ok, _conversation} =
       Runtime.update_conversation_metadata(conversation, %{
         "last_delivery" => %{
@@ -110,11 +149,42 @@ defmodule HydraX.ReportTest do
           "status" => "delivered",
           "external_ref" => "C555",
           "provider_message_id" => "555.111",
+          "provider_message_ids" => ["555.111", "555.222"],
+          "formatted_payload" => %{
+            "channel" => "C555",
+            "thread_ts" => "777.888",
+            "chunk_count" => 2,
+            "text" => "Export reply"
+          },
           "reply_context" => %{
             "thread_ts" => "777.888",
             "source_message_id" => "777.888"
           }
         }
+      })
+
+    {:ok, _checkpoint} =
+      Runtime.upsert_checkpoint(conversation.id, "channel", %{
+        "status" => "completed",
+        "provider" => "mock",
+        "tool_rounds" => 1,
+        "steps" => [
+          %{
+            "id" => "tool-1-memory_recall",
+            "kind" => "memory",
+            "name" => "memory_recall",
+            "status" => "completed",
+            "summary" => "recalled 2 memories",
+            "output_excerpt" => "2 memories"
+          }
+        ],
+        "execution_events" => [
+          %{
+            "phase" => "tool_result",
+            "at" => DateTime.utc_now(),
+            "details" => %{"summary" => "recalled 2 memories"}
+          }
+        ]
       })
 
     {:ok, export} = Report.export_snapshot(output_root)
@@ -124,8 +194,11 @@ defmodule HydraX.ReportTest do
     assert File.dir?(export.bundle_dir)
     assert File.exists?(Path.join(export.bundle_dir, "manifest.json"))
     assert File.exists?(Path.join(export.bundle_dir, "agents.json"))
+    assert File.exists?(Path.join(export.bundle_dir, "cluster.json"))
     assert File.exists?(Path.join(export.bundle_dir, "mcp.json"))
     assert File.exists?(Path.join(export.bundle_dir, "agent_mcp.json"))
+    assert File.exists?(Path.join(export.bundle_dir, "skills.json"))
+    assert File.exists?(Path.join(export.bundle_dir, "conversations.json"))
     assert File.exists?(Path.join(export.bundle_dir, "incidents.json"))
     assert File.exists?(Path.join(export.bundle_dir, "audit.json"))
     assert File.read!(export.markdown_path) =~ "Hydra-X Operator Report"
@@ -133,10 +206,22 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "MCP Integrations"
     assert File.read!(export.markdown_path) =~ "Agent MCP Bindings"
     assert File.read!(export.markdown_path) =~ "Audit Trail"
+    assert File.read!(export.markdown_path) =~ "attachments=1"
+    assert File.read!(export.markdown_path) =~ "msg_ids=2"
     assert File.read!(export.markdown_path) =~ "Readiness"
+    assert File.read!(export.markdown_path) =~ "Provider Route"
+    assert File.read!(export.markdown_path) =~ "Cluster Posture"
     assert File.read!(export.markdown_path) =~ "ctx=777.888/777.888"
+    assert File.read!(export.markdown_path) =~ "chunks=2"
+    assert File.read!(export.markdown_path) =~ "payload=channel=C555"
+    assert File.read!(export.markdown_path) =~ "thread_ts=777.888"
+    assert File.read!(export.markdown_path) =~ "execution=completed"
+    assert File.read!(export.markdown_path) =~ "memory:memory_recall:completed:recalled 2 memories"
     assert File.read!(export.json_path) =~ "\"generated_at\""
     assert File.read!(export.json_path) =~ "\"last_delivery\""
+    assert File.read!(export.json_path) =~ "\"skills\""
+    assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~ "\"channel_state\""
+    assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~ "\"memory_recall\""
   end
 
   defp restore_env(key, nil), do: System.delete_env(key)

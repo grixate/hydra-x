@@ -1,6 +1,7 @@
 defmodule HydraX.GatewayTest do
   use HydraX.DataCase
 
+  alias HydraX.Gateway.Adapters.{Discord, Telegram}
   alias HydraX.Runtime
 
   test "telegram updates are routed into conversations and answered" do
@@ -33,9 +34,8 @@ defmodule HydraX.GatewayTest do
                %{deliver: deliver}
              )
 
-    assert_receive {:telegram_reply, %{external_ref: "42", content: content, metadata: metadata}}
+    assert_receive {:telegram_reply, %{chat_id: "42", text: content, reply_to_message_id: 501}}
     assert content =~ "Mock response"
-    assert metadata["reply_to_message_id"] == 501
 
     [conversation] = Runtime.list_conversations(agent_id: agent.id, limit: 10)
     assert conversation.channel == "telegram"
@@ -45,6 +45,48 @@ defmodule HydraX.GatewayTest do
     assert refreshed.metadata["last_delivery"]["status"] == "delivered"
     assert refreshed.metadata["last_delivery"]["external_ref"] == "42"
     assert refreshed.metadata["last_delivery"]["reply_context"]["reply_to_message_id"] == 501
+    assert refreshed.metadata["last_delivery"]["formatted_payload"]["chat_id"] == "42"
+    assert refreshed.metadata["last_delivery"]["formatted_payload"]["reply_to_message_id"] == 501
+  end
+
+  test "telegram adapter chunks long outbound replies and reports chunk metadata" do
+    {:ok, state} =
+      Telegram.connect(%{
+        "bot_token" => "test-token",
+        "deliver" => fn payload ->
+          send(self(), {:telegram_chunk, payload})
+          {:ok, %{provider_message_id: "msg-#{String.length(payload.text)}"}}
+        end
+      })
+
+    long_content = String.duplicate("a", 4_500)
+
+    preview =
+      Telegram.format_message(
+        %{content: long_content, external_ref: "42", metadata: %{"reply_to_message_id" => 501}},
+        state
+      )
+
+    assert preview.chat_id == "42"
+    assert preview.reply_to_message_id == 501
+    assert preview.chunk_count == 2
+    assert preview.truncated
+    assert String.length(preview.text) == 4_096
+
+    assert {:ok, metadata} =
+             Telegram.deliver(
+               %{content: long_content, external_ref: "42", metadata: %{"reply_to_message_id" => 501}},
+               state
+             )
+
+    assert metadata.channel == "telegram"
+    assert metadata.chunk_count == 2
+    assert length(metadata.provider_message_ids) == 2
+
+    assert_receive {:telegram_chunk, %{chat_id: "42", reply_to_message_id: 501, text: first}}
+    assert String.length(first) == 4_096
+    assert_receive {:telegram_chunk, %{chat_id: "42", reply_to_message_id: nil, text: second}}
+    assert String.length(second) == 404
   end
 
   test "telegram delivery failures are logged and persisted on the conversation" do
@@ -128,10 +170,9 @@ defmodule HydraX.GatewayTest do
     end)
 
     assert {:ok, _updated} = HydraX.Gateway.retry_conversation_delivery(conversation)
-    assert_receive {:telegram_retry, %{external_ref: "88", content: content, metadata: metadata}}
+    assert_receive {:telegram_retry, %{chat_id: "88", text: content, reply_to_message_id: 601}}
     assert content =~ "Mock response:"
     assert content =~ "Retry the Telegram delivery after failure."
-    assert metadata["reply_to_message_id"] == 601
 
     refreshed = Runtime.get_conversation!(conversation.id)
     assert refreshed.metadata["last_delivery"]["status"] == "delivered"
@@ -211,15 +252,19 @@ defmodule HydraX.GatewayTest do
                %{deliver: deliver}
              )
 
-    assert_receive {:discord_reply, %{external_ref: "chan-42", content: content, metadata: metadata}}
+    assert_receive {:discord_reply,
+                    %{channel_id: "chan-42", content: content, reply_to_message_id: metadata}}
     assert content =~ "Mock response"
-    assert metadata["reply_to_message_id"] == "discord-source-1"
+    assert metadata == "discord-source-1"
 
     [conversation] = Runtime.list_conversations(agent_id: agent.id, limit: 10)
     assert conversation.channel == "discord"
 
     refreshed = Runtime.get_conversation!(conversation.id)
     assert refreshed.metadata["last_delivery"]["status"] == "delivered"
+    assert refreshed.metadata["last_delivery"]["formatted_payload"]["channel_id"] == "chan-42"
+    assert refreshed.metadata["last_delivery"]["formatted_payload"]["reply_to_message_id"] ==
+             "discord-source-1"
 
     assert refreshed.metadata["last_delivery"]["metadata"]["provider_message_id"] ==
              "discord-message-1"
@@ -266,8 +311,68 @@ defmodule HydraX.GatewayTest do
     assert user_turn.role == "user"
     assert user_turn.content == "[Discord attachments: image/png]"
 
-    assert [%{"file_name" => "diagram.png", "content_type" => "image/png"}] =
+    assert [%{
+              "file_name" => "diagram.png",
+              "content_type" => "image/png",
+              "download_ref" => "https://cdn.discord.test/diagram.png",
+              "source_url" => "https://cdn.discord.test/diagram.png"
+            }] =
              user_turn.metadata["attachments"]
+  end
+
+  test "discord formatted payload preview includes chunk metadata for long replies" do
+    preview =
+      Discord.format_message(
+        %{
+          content: String.duplicate("b", 2_500),
+          external_ref: "chan-99",
+          metadata: %{"reply_to_message_id" => "source-99"}
+        },
+        %{}
+      )
+
+    assert preview.channel_id == "chan-99"
+    assert preview.reply_to_message_id == "source-99"
+    assert preview.chunk_count == 2
+    assert preview.truncated
+    assert String.length(preview.content) == 2_000
+  end
+
+  test "discord adapter chunks long outbound replies and reports chunk metadata" do
+    {:ok, state} =
+      Discord.connect(%{
+        "bot_token" => "discord-token",
+        "deliver" => fn payload ->
+          send(self(), {:discord_chunk, payload})
+          {:ok, %{provider_message_id: "discord-#{String.length(payload.content)}"}}
+        end
+      })
+
+    long_content = String.duplicate("b", 2_500)
+
+    assert {:ok, metadata} =
+             Discord.deliver(
+               %{
+                 content: long_content,
+                 external_ref: "chan-99",
+                 metadata: %{"reply_to_message_id" => "source-99"}
+               },
+               state
+             )
+
+    assert metadata.channel == "discord"
+    assert metadata.chunk_count == 2
+    assert length(metadata.provider_message_ids) == 2
+
+    assert_receive {:discord_chunk,
+                    %{channel_id: "chan-99", reply_to_message_id: "source-99", content: first}}
+
+    assert String.length(first) == 2_000
+
+    assert_receive {:discord_chunk,
+                    %{channel_id: "chan-99", reply_to_message_id: "source-99", content: second}}
+
+    assert String.length(second) == 500
   end
 
   test "slack updates are routed into conversations and answered" do
@@ -304,9 +409,9 @@ defmodule HydraX.GatewayTest do
                %{deliver: deliver}
              )
 
-    assert_receive {:slack_reply, %{external_ref: "C123", content: content, metadata: metadata}}
+    assert_receive {:slack_reply, %{channel: "C123", text: content, thread_ts: metadata}}
     assert content =~ "Mock response"
-    assert metadata["thread_ts"] == "123.456"
+    assert metadata == "123.456"
 
     [conversation] = Runtime.list_conversations(agent_id: agent.id, limit: 10)
     assert conversation.channel == "slack"
@@ -314,7 +419,12 @@ defmodule HydraX.GatewayTest do
     refreshed = Runtime.get_conversation!(conversation.id)
     assert refreshed.metadata["last_delivery"]["status"] == "delivered"
     assert refreshed.metadata["last_delivery"]["metadata"]["provider_message_id"] == "slack-ts"
+    assert refreshed.metadata["last_delivery"]["metadata"]["provider_message_ids"] == ["slack-ts"]
+    assert refreshed.metadata["last_delivery"]["metadata"]["chunk_count"] == 1
     assert refreshed.metadata["last_delivery"]["reply_context"]["thread_ts"] == "123.456"
+    assert refreshed.metadata["last_delivery"]["formatted_payload"]["channel"] == "C123"
+    assert refreshed.metadata["last_delivery"]["formatted_payload"]["thread_ts"] == "123.456"
+    assert refreshed.metadata["last_delivery"]["formatted_payload"]["chunk_count"] == 1
   end
 
   test "slack attachment messages preserve attachment metadata" do
@@ -360,8 +470,64 @@ defmodule HydraX.GatewayTest do
     assert user_turn.role == "user"
     assert user_turn.content == "[Slack attachments: application/pdf]"
 
-    assert [%{"file_name" => "runbook.pdf", "content_type" => "application/pdf"}] =
+    assert [%{
+              "file_name" => "runbook.pdf",
+              "content_type" => "application/pdf",
+              "download_ref" => "https://slack.test/runbook.pdf",
+              "source_url" => "https://slack.test/runbook.pdf"
+            }] =
              user_turn.metadata["attachments"]
+  end
+
+  test "slack formatted payload preview includes chunk metadata for long replies" do
+    preview =
+      HydraX.Gateway.Adapters.Slack.format_message(
+        %{
+          content: String.duplicate("c", 4_200),
+          external_ref: "C999",
+          metadata: %{"thread_ts" => "thread-999"}
+        },
+        %{}
+      )
+
+    assert preview.channel == "C999"
+    assert preview.thread_ts == "thread-999"
+    assert preview.chunk_count == 2
+    assert preview.truncated
+    assert String.length(preview.text) == 3_500
+  end
+
+  test "slack adapter chunks long outbound replies and reports chunk metadata" do
+    {:ok, state} =
+      HydraX.Gateway.Adapters.Slack.connect(%{
+        "bot_token" => "slack-token",
+        "deliver" => fn payload ->
+          send(self(), {:slack_chunk, payload})
+          {:ok, %{provider_message_id: "slack-#{String.length(payload.text)}"}}
+        end
+      })
+
+    long_content = String.duplicate("c", 4_200)
+
+    assert {:ok, metadata} =
+             HydraX.Gateway.Adapters.Slack.deliver(
+               %{
+                 content: long_content,
+                 external_ref: "C999",
+                 metadata: %{"thread_ts" => "thread-999"}
+               },
+               state
+             )
+
+    assert metadata.channel == "slack"
+    assert metadata.chunk_count == 2
+    assert length(metadata.provider_message_ids) == 2
+
+    assert_receive {:slack_chunk, %{channel: "C999", thread_ts: "thread-999", text: first}}
+    assert String.length(first) == 3_500
+
+    assert_receive {:slack_chunk, %{channel: "C999", thread_ts: "thread-999", text: second}}
+    assert String.length(second) == 700
   end
 
   test "webchat messages are routed into conversations and answered" do

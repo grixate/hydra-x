@@ -7,6 +7,7 @@ defmodule HydraX.Gateway.Adapters.Slack do
   """
 
   @behaviour HydraX.Gateway.Adapter
+  @slack_message_limit 3_500
 
   @slack_api "https://slack.com/api"
 
@@ -75,6 +76,19 @@ defmodule HydraX.Gateway.Adapters.Slack do
     do_send_response(content, channel_id, token, deliver, Map.get(message, :metadata) || %{})
   end
 
+  def send_response(%{text: content, channel: channel_id} = message, %{
+        bot_token: token,
+        deliver: deliver
+      }) do
+    do_send_response(
+      content,
+      channel_id,
+      token,
+      deliver,
+      %{"thread_ts" => Map.get(message, :thread_ts)}
+    )
+  end
+
   @impl true
   def normalize_inbound(event) do
     case handle_event(event, %{}) do
@@ -118,7 +132,7 @@ defmodule HydraX.Gateway.Adapters.Slack do
     %{
       channel: "slack",
       inbound: [:message, :thread_reply],
-      outbound: [:text],
+      outbound: [:text, :chunked_text],
       threads: true,
       attachments: true,
       rich_formatting: true,
@@ -128,10 +142,14 @@ defmodule HydraX.Gateway.Adapters.Slack do
 
   @impl true
   def format_message(%{content: content, external_ref: channel_id} = message, _state) do
+    chunks = chunk_message(content, @slack_message_limit)
+
     %{
-      text: content,
+      text: List.first(chunks) || "",
       channel: channel_id,
-      thread_ts: get_in(message, [:metadata, "thread_ts"])
+      thread_ts: get_in(message, [:metadata, "thread_ts"]),
+      chunk_count: length(chunks),
+      truncated: length(chunks) > 1
     }
   end
 
@@ -163,35 +181,78 @@ defmodule HydraX.Gateway.Adapters.Slack do
   # -- Private --
 
   defp do_send_response(content, channel_id, _token, deliver, metadata) when is_function(deliver, 1) do
-    case deliver.(%{content: content, external_ref: channel_id, metadata: metadata}) do
-      :ok -> {:ok, %{channel: "slack"}}
-      {:ok, metadata} when is_map(metadata) -> {:ok, Map.put_new(metadata, :channel, "slack")}
-      other -> other
-    end
+    content
+    |> chunk_message(@slack_message_limit)
+    |> Enum.reduce_while(
+      {:ok, %{channel: "slack", chunk_count: 0, provider_message_ids: []}},
+      fn chunk, {:ok, acc} ->
+        payload = %{
+          text: chunk,
+          channel: channel_id,
+          thread_ts: metadata["thread_ts"]
+        }
+
+        case deliver.(payload) do
+          :ok ->
+            {:cont, {:ok, %{acc | chunk_count: acc.chunk_count + 1}}}
+
+          {:ok, metadata} when is_map(metadata) ->
+            provider_message_id = metadata[:provider_message_id] || metadata["provider_message_id"]
+
+            updated =
+              acc
+              |> Map.put(:chunk_count, acc.chunk_count + 1)
+              |> Map.put(:provider_message_id, provider_message_id || acc[:provider_message_id])
+              |> Map.update!(:provider_message_ids, fn ids ->
+                if provider_message_id, do: ids ++ [provider_message_id], else: ids
+              end)
+
+            {:cont, {:ok, updated}}
+
+          other ->
+            {:halt, other}
+        end
+      end
+    )
   end
 
   defp do_send_response(content, channel_id, token, _deliver, metadata) do
-    body =
-      %{channel: channel_id, text: content}
-      |> maybe_add_thread_ts(metadata["thread_ts"])
+    content
+    |> chunk_message(@slack_message_limit)
+    |> Enum.reduce_while(
+      {:ok, %{channel: "slack", chunk_count: 0, provider_message_ids: []}},
+      fn chunk, {:ok, acc} ->
+        body =
+          %{channel: channel_id, text: chunk}
+          |> maybe_add_thread_ts(metadata["thread_ts"])
 
-    case Req.post(
-           url: "#{@slack_api}/chat.postMessage",
-           headers: [{"authorization", "Bearer #{token}"}],
-           json: body
-         ) do
-      {:ok, %{status: 200, body: %{"ok" => true, "ts" => ts}}} ->
-        {:ok, %{channel: "slack", provider_message_id: ts}}
+        case Req.post(
+               url: "#{@slack_api}/chat.postMessage",
+               headers: [{"authorization", "Bearer #{token}"}],
+               json: body
+             ) do
+          {:ok, %{status: 200, body: %{"ok" => true, "ts" => ts}}} ->
+            updated =
+              acc
+              |> Map.put(:chunk_count, acc.chunk_count + 1)
+              |> Map.put(:provider_message_id, ts || acc[:provider_message_id])
+              |> Map.update!(:provider_message_ids, fn ids ->
+                if ts, do: ids ++ [ts], else: ids
+              end)
 
-      {:ok, %{status: 200, body: %{"ok" => false, "error" => error}}} ->
-        {:error, {:slack_error, error}}
+            {:cont, {:ok, updated}}
 
-      {:ok, %{status: status}} ->
-        {:error, {:slack_error, status}}
+          {:ok, %{status: 200, body: %{"ok" => false, "error" => error}}} ->
+            {:halt, {:error, {:slack_error, error}}}
 
-      {:error, reason} ->
-        {:error, reason}
-    end
+          {:ok, %{status: status}} ->
+            {:halt, {:error, {:slack_error, status}}}
+
+          {:error, reason} ->
+            {:halt, {:error, reason}}
+        end
+      end
+    )
   end
 
   defp present?(value), do: is_binary(value) and value != ""
@@ -219,6 +280,8 @@ defmodule HydraX.Gateway.Adapters.Slack do
         "id" => file["id"],
         "file_name" => file["name"],
         "content_type" => file["mimetype"],
+        "download_ref" => file["url_private"],
+        "source_url" => file["url_private"],
         "url" => file["url_private"],
         "size" => file["size"]
       }
@@ -230,4 +293,15 @@ defmodule HydraX.Gateway.Adapters.Slack do
   defp maybe_add_thread_ts(body, nil), do: body
   defp maybe_add_thread_ts(body, ""), do: body
   defp maybe_add_thread_ts(body, thread_ts), do: Map.put(body, :thread_ts, thread_ts)
+
+  defp chunk_message(text, max_length) do
+    if String.length(text) <= max_length do
+      [text]
+    else
+      text
+      |> String.codepoints()
+      |> Enum.chunk_every(max_length)
+      |> Enum.map(&Enum.join/1)
+    end
+  end
 end

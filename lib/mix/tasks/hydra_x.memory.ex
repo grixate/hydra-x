@@ -226,6 +226,7 @@ defmodule Mix.Tasks.HydraX.Memory do
               do: Float.to_string(ranked.vector_score),
               else: "-"
             ),
+            get_in(memory.metadata || %{}, ["embedding_backend"]) || "-",
             Enum.join(ranked.reasons || [], ", "),
             get_in(memory.metadata || %{}, ["source_file"]) || "-",
             memory.content

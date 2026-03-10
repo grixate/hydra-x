@@ -607,6 +607,9 @@ defmodule HydraXWeb.MemoryLive do
                     importance {Float.round(memory.importance, 2)}
                     <span :if={ranked = memory_ranking(@memory_rankings, memory)}>
                       · score {Float.round(ranked.score, 3)}
+                      <span :if={is_float(ranked[:vector_score])}>
+                        · embedding {Float.round(ranked.vector_score, 3)}
+                      </span>
                     </span>
                   </span>
                 </div>
@@ -620,6 +623,12 @@ defmodule HydraXWeb.MemoryLive do
                     class="rounded-full border border-white/10 px-3 py-1 font-mono uppercase tracking-[0.18em] text-[var(--hx-mute)]"
                   >
                     {reason}
+                  </span>
+                  <span
+                    :if={embedding_backend(memory)}
+                    class="rounded-full border border-white/10 px-3 py-1 font-mono uppercase tracking-[0.18em] text-[var(--hx-mute)]"
+                  >
+                    embedding {embedding_backend(memory)}
                   </span>
                 </div>
               </button>
@@ -685,9 +694,21 @@ defmodule HydraXWeb.MemoryLive do
           </.form>
 
           <div :if={@selected} class="mt-8">
+            <div class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+              <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">
+                Embedding profile
+              </div>
+              <dl class="mt-4 grid gap-3 text-sm text-[var(--hx-mute)] md:grid-cols-2">
+                <div :for={{label, value} <- memory_embedding_profile(@selected)}>
+                  <dt class="font-mono text-[11px] uppercase tracking-[0.18em]">{label}</dt>
+                  <dd class="mt-1 break-all text-white">{value}</dd>
+                </div>
+              </dl>
+            </div>
+
             <div
               :if={ingest_backed_memory?(@selected)}
-              class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4"
+              class="mt-6 rounded-2xl border border-white/10 bg-black/10 px-4 py-4"
             >
               <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">
                 Ingest provenance
@@ -1028,6 +1049,36 @@ defmodule HydraXWeb.MemoryLive do
 
     "#{target.type}: #{truncate(target.content, 80)}"
   end
+
+  defp embedding_backend(memory) do
+    get_in(memory.metadata || %{}, ["embedding_backend"])
+  end
+
+  defp memory_embedding_profile(nil), do: []
+
+  defp memory_embedding_profile(memory) do
+    metadata = memory.metadata || %{}
+    vector = metadata["embedding_vector"] || []
+
+    [
+      {"backend", metadata["embedding_backend"] || "none"},
+      {"model", metadata["embedding_model"] || "none"},
+      {"dimensions", to_string(metadata["embedding_dimensions"] || length(vector))},
+      {"generated", format_embedding_generated_at(metadata["embedding_generated_at"])},
+      {"stored values", to_string(length(vector))}
+    ]
+  end
+
+  defp format_embedding_generated_at(nil), do: "never"
+
+  defp format_embedding_generated_at(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, parsed, _offset} -> format_datetime(parsed)
+      _ -> value
+    end
+  end
+
+  defp format_embedding_generated_at(value), do: format_datetime(value)
 
   defp refresh_filters_after_reconcile(filters, "conflicted") do
     case blank_to_nil(filters["status"]) do

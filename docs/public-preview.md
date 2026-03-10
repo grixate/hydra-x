@@ -5,7 +5,7 @@ This repository is now beyond the initial skeleton. Use this checklist before ex
 ## Boot
 
 1. Copy [.env.example](/Users/grigorymikhailov/Documents/hydra-x/.env.example) into your local environment and set `HYDRA_X_PUBLIC_URL` correctly.
-2. Set `HYDRA_X_SECRET_KEY` to a long random secret so persisted provider and channel credentials are encrypted at rest with an explicit runtime key.
+2. Set `HYDRA_X_SECRET_KEY` to a long random secret so persisted provider and channel credentials are encrypted at rest with an explicit runtime key. If you do not want a credential stored in SQLite at all, save it as `env:YOUR_ENV_VAR_NAME` in the UI or CLI and Hydra-X will resolve it from the process environment instead.
 3. Run `mix deps.get`.
 4. Run `mix hydra_x.migrate`.
 5. Start the node with `mix hydra_x.serve`.
@@ -18,19 +18,20 @@ This repository is now beyond the initial skeleton. Use this checklist before ex
 3. Set an operator password before exposing the app beyond localhost.
 4. Confirm the login throttle policy on `/login` and `/health`, then verify sensitive setup actions still require recent re-auth after signing in.
 5. Configure the primary provider or stay on the mock fallback for dry-runs.
-6. Use `/settings/providers` or `mix hydra_x.providers` to edit, activate, test, and remove provider configs before exposing live traffic.
-7. Use `/setup` or `mix hydra_x.mcp` to register any stdio or HTTP MCP servers you expect the node to rely on, then run at least one probe.
-8. Use `/agents` or `mix hydra_x.agents mcp <agent_id> --refresh` to bind the relevant MCP servers into each exposed agent and disable any integration that should stay out of that agent's prompt. Use `mix hydra_x.mcp bindings <agent>` if you want the same binding view from the registry side.
-9. Review the tool policy section and decide whether workspace writes/patches, dedicated web search, HTTP fetches, browser automation, or shell commands should be enabled.
-10. Review the control policy section and confirm the recent-auth window, interactive delivery channels, scheduled-job delivery channels, and allowed ingest roots match the intended preview exposure.
-11. Use `/agents` or `mix hydra_x.agents` to verify the intended default agent, confirm the runtime is actually up for each active agent, repair any workspace scaffold drift, refresh the bulletin, warm the agent provider route, and inspect any agent-specific tool or control policy overrides before going live.
-12. Use `/conversations` or `mix hydra_x.conversations start ...` to confirm the control plane can run a real operator-driven chat before exposing external channels.
-13. Use the conversations filters to confirm archived threads, Telegram threads, and active control-plane threads can be triaged quickly once the list grows.
-14. Export one transcript, review one compaction summary, inspect one execution checkpoint, tune one agent compaction policy from `/agents` or `mix hydra_x.agents compaction ...`, and archive one completed thread from `/conversations` or `mix hydra_x.conversations export|compact|archive ...` to verify operator lifecycle workflows before preview.
-15. Use `/memory` or `mix hydra_x.memory` to verify that critical operator facts, goals, and decisions can be curated, filtered, reconciled, marked as conflicted, resolved, deleted, and synced back into the workspace markdown view.
-16. Use `/memory` or `mix hydra_x.ingest` to manually ingest at least one file from the workspace `ingest/` directory and verify it appears in both the ingest-backed file list and the recent ingest history.
-17. Confirm a file outside the allowed ingest roots is rejected until the control policy is updated, then re-run ingest to verify the guardrail is intentional rather than accidental.
-18. Select one ingest-backed memory and confirm `/memory` shows its provenance details and recent ingest runs for the same source file.
+6. If you want external embeddings instead of the default local vectors, set `HYDRA_X_EMBEDDING_BACKEND=openai_compatible` plus `HYDRA_X_EMBEDDING_URL`, `HYDRA_X_EMBEDDING_API_KEY`, and `HYDRA_X_EMBEDDING_MODEL`.
+7. Use `/settings/providers` or `mix hydra_x.providers` to edit, activate, test, and remove provider configs before exposing live traffic.
+8. Use `/setup` or `mix hydra_x.mcp` to register any stdio or HTTP MCP servers you expect the node to rely on, then run at least one probe.
+9. Use `/agents` or `mix hydra_x.agents mcp <agent_id> --refresh` to bind the relevant MCP servers into each exposed agent and disable any integration that should stay out of that agent's prompt. Use `mix hydra_x.mcp bindings <agent>` if you want the same binding view from the registry side.
+10. Review the tool policy section and decide whether workspace writes/patches, dedicated web search, HTTP fetches, browser automation, or shell commands should be enabled.
+11. Review the control policy section and confirm the recent-auth window, interactive delivery channels, scheduled-job delivery channels, and allowed ingest roots match the intended preview exposure.
+12. Use `/agents` or `mix hydra_x.agents` to verify the intended default agent, confirm the runtime is actually up for each active agent, repair any workspace scaffold drift, refresh the bulletin, warm the agent provider route, and inspect any agent-specific tool or control policy overrides before going live.
+13. Use `/conversations` or `mix hydra_x.conversations start ...` to confirm the control plane can run a real operator-driven chat before exposing external channels.
+14. Use the conversations filters to confirm archived threads, Telegram threads, and active control-plane threads can be triaged quickly once the list grows.
+15. Export one transcript, review one compaction summary, inspect one execution checkpoint, tune one agent compaction policy from `/agents` or `mix hydra_x.agents compaction ...`, and archive one completed thread from `/conversations` or `mix hydra_x.conversations export|compact|archive ...` to verify operator lifecycle workflows before preview.
+16. Use `/memory` or `mix hydra_x.memory` to verify that critical operator facts, goals, and decisions can be curated, filtered, reconciled, marked as conflicted, resolved, deleted, and synced back into the workspace markdown view.
+17. Use `/memory` or `mix hydra_x.ingest` to manually ingest at least one file from the workspace `ingest/` directory and verify it appears in both the ingest-backed file list and the recent ingest history.
+18. Confirm a file outside the allowed ingest roots is rejected until the control policy is updated, then re-run ingest to verify the guardrail is intentional rather than accidental.
+19. Select one ingest-backed memory and confirm `/memory` shows its provenance details and recent ingest runs for the same source file.
 
 ## External Channels
 
@@ -56,7 +57,7 @@ This repository is now beyond the initial skeleton. Use this checklist before ex
 
 ## Safety And Observability
 
-1. Check `/health` for provider warmup, channel readiness, MCP registry health, agent MCP bindings, tool policy, scheduler circuits, recent safety events, and secret-storage posture.
+1. Check `/health` for provider warmup, channel readiness, MCP registry health, agent MCP bindings, tool policy, scheduler circuits, recent safety events, and secret-storage posture, including any unresolved env-backed secret references.
 2. Export one operator report from `/health` or `mix hydra_x.report` so you have a portable markdown/JSON runtime snapshot before opening preview traffic.
 3. Open `/safety` or run `mix hydra_x.safety --level error` to review the latest operator-facing incidents and recent control-plane audit actions directly, then acknowledge or resolve anything already triaged.
 4. Review the runtime counters section to confirm provider requests, tool executions, gateway deliveries, scheduler jobs, OTP alarms, and backup manifests are visible.

@@ -38,5 +38,17 @@ defmodule HydraX.LLM.Provider do
   @callback complete_stream(map(), pid()) ::
               {:ok, reference()} | {:error, term()}
 
-  @optional_callbacks [complete_stream: 2]
+  @callback capabilities() :: %{
+              optional(:tool_calls) => boolean(),
+              optional(:streaming) => boolean(),
+              optional(:system_prompt) => boolean(),
+              optional(:fallbacks) => boolean(),
+              optional(:mock) => boolean()
+            }
+
+  @callback healthcheck(map() | nil, keyword()) ::
+              {:ok, %{status: atom(), detail: String.t(), capabilities: map()}}
+              | {:error, term()}
+
+  @optional_callbacks [complete_stream: 2, capabilities: 0, healthcheck: 2]
 end

@@ -57,7 +57,7 @@ defmodule HydraX.ConversationsTaskTest do
 
     Mix.Tasks.HydraX.Conversations.run(["retry-delivery", to_string(conversation.id)])
 
-    assert_receive {:telegram_retry, %{external_ref: "777", content: "Retry from Mix task"}}
+    assert_receive {:telegram_retry, %{chat_id: "777", text: "Retry from Mix task"}}
 
     refreshed = Runtime.get_conversation!(conversation.id)
     assert refreshed.metadata["last_delivery"]["status"] == "delivered"
@@ -122,7 +122,7 @@ defmodule HydraX.ConversationsTaskTest do
       end)
 
     assert output =~ "Retried slack delivery"
-    assert_receive {:slack_retry, %{external_ref: "C777", content: "Retry from Mix task over Slack"}}
+    assert_receive {:slack_retry, %{channel: "C777", text: "Retry from Mix task over Slack"}}
 
     refreshed = Runtime.get_conversation!(conversation.id)
     assert refreshed.metadata["last_delivery"]["status"] == "delivered"
@@ -184,12 +184,49 @@ defmodule HydraX.ConversationsTaskTest do
         metadata: %{}
       })
 
+    {:ok, _checkpoint} =
+      Runtime.upsert_checkpoint(conversation.id, "channel", %{
+        "status" => "completed",
+        "provider" => "mock",
+        "tool_rounds" => 1,
+        "steps" => [
+          %{
+            "id" => "tool-1-skill_inspect",
+            "kind" => "skill",
+            "name" => "skill_inspect",
+            "status" => "completed",
+            "summary" => "inspected 1 skills",
+            "output_excerpt" => "1 skills"
+          }
+        ],
+        "execution_events" => [
+          %{
+            "phase" => "tool_result",
+            "at" => DateTime.utc_now(),
+            "details" => %{"summary" => "inspected 1 skills"}
+          }
+        ]
+      })
+
     export_output =
       ExUnit.CaptureIO.capture_io(fn ->
         Mix.Tasks.HydraX.Conversations.run(["export", to_string(conversation.id)])
       end)
 
     assert export_output =~ "path="
+
+    transcript_path =
+      export_output
+      |> String.split("\n", trim: true)
+      |> Enum.find(&String.starts_with?(&1, "path="))
+      |> String.replace_prefix("path=", "")
+
+    transcript = File.read!(transcript_path)
+    assert transcript =~ "## Execution checkpoint"
+    assert transcript =~ "### Steps"
+    assert transcript =~ "skill skill_inspect"
+    assert transcript =~ "inspected 1 skills"
+    assert transcript =~ "### Recent execution events"
 
     Mix.Task.reenable("hydra_x.conversations")
 
@@ -200,6 +237,51 @@ defmodule HydraX.ConversationsTaskTest do
 
     assert archive_output =~ "status=archived"
     assert Runtime.get_conversation!(conversation.id).status == "archived"
+  end
+
+  test "conversation task can show execution state" do
+    Mix.Task.reenable("hydra_x.conversations")
+    agent = create_agent()
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{
+        channel: "control_plane",
+        title: "Show Chat"
+      })
+
+    {:ok, _checkpoint} =
+      Runtime.upsert_checkpoint(conversation.id, "channel", %{
+        "status" => "completed",
+        "provider" => "mock",
+        "tool_rounds" => 1,
+        "resumable" => false,
+        "steps" => [
+          %{
+            "id" => "tool-1-mcp_probe",
+            "kind" => "integration",
+            "name" => "mcp_probe",
+            "status" => "completed",
+            "summary" => "probed 1 MCP bindings"
+          }
+        ],
+        "execution_events" => [
+          %{
+            "phase" => "tool_result",
+            "details" => %{"summary" => "probed 1 MCP bindings", "round" => 1}
+          }
+        ]
+      })
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Mix.Tasks.HydraX.Conversations.run(["show", to_string(conversation.id)])
+      end)
+
+    assert output =~ "conversation=#{conversation.id}"
+    assert output =~ "execution_status=completed"
+    assert output =~ "provider=mock"
+    assert output =~ "step\tintegration\tmcp_probe\tcompleted\tprobed 1 MCP bindings"
+    assert output =~ "event\ttool_result\tprobed 1 MCP bindings\t1"
   end
 
   test "conversation task can filter archived conversations by status and search" do

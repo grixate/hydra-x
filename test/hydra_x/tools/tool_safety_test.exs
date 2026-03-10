@@ -214,7 +214,7 @@ defmodule HydraX.Tools.ToolSafetyTest do
     assert clicked.forms == []
   end
 
-  test "browser automation inspects forms, submits by parsed action, and writes snapshots" do
+  test "browser automation inspects forms, media, scripts, structured data, submits by parsed action, and writes snapshots" do
     request_fn = fn opts ->
       case {opts[:method], opts[:url]} do
         {:get, "https://example.com/form"} ->
@@ -222,18 +222,19 @@ defmodule HydraX.Tools.ToolSafetyTest do
            %{
              status: 200,
              body:
-               ~s(<html><head><title>Form Page</title></head><body><h1>Hydra Docs</h1><h2>Search</h2><form method="post" action="/submit"><input type="text" name="query" value="hydra" /><input type="hidden" name="scope" value="docs" /></form><table><tr><th>Name</th><th>Status</th></tr><tr><td>Hydra</td><td>Ready</td></tr></table></body></html>),
-             headers: [{"content-type", "text/html"}]
+               ~s(<html><head><title>Form Page</title><meta name="description" content="Hydra docs landing page" /><meta property="og:title" content="Hydra Docs" /><meta property="og:type" content="website" /><meta name="twitter:card" content="summary" /><link rel="canonical" href="https://example.com/form" /><script src="/static/app.js"></script><script>window.hydra = { mode: "docs" };</script><script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"Hydra Docs"}</script></head><body><h1>Hydra Docs</h1><h2>Search</h2><img src="/static/hydra.png" alt="Hydra logo" width="320" height="180" /><form method="post" action="/submit"><input type="text" name="query" value="hydra" /><input type="hidden" name="scope" value="docs" /></form><table><tr><th>Name</th><th>Status</th></tr><tr><td>Hydra</td><td>Ready</td></tr></table></body></html>),
+             headers: [{"content-type", "text/html"}, {"set-cookie", "hydra_session=abc123; Path=/"}]
            }}
 
         {:post, "https://example.com/submit"} ->
           assert opts[:form] == %{"query" => "hydra x", "scope" => "docs"}
+          assert {"cookie", "hydra_session=abc123"} in (opts[:headers] || [])
 
           {:ok,
            %{
              status: 200,
-             body: ~s(<html><body><p>Submitted hydra x</p></body></html>),
-             headers: [{"content-type", "text/html"}]
+              body: ~s(<html><body><p>Submitted hydra x</p></body></html>),
+             headers: [{"content-type", "text/html"}, {"set-cookie", "hydra_scope=docs; Path=/"}]
            }}
       end
     end
@@ -245,19 +246,31 @@ defmodule HydraX.Tools.ToolSafetyTest do
              )
 
     assert [%{action: "/submit", fields: [%{name: "query"}, %{name: "scope"}]}] = forms.forms
+    assert forms.session.cookies == %{"hydra_session" => "abc123"}
+    assert forms.session.history == ["https://example.com/form"]
 
     assert {:ok, submitted} =
              BrowserAutomation.execute(
                %{
                  action: "submit_form",
-                 url: "https://example.com/form",
-                 form_index: 0,
-                 fields: %{"query" => "hydra x"}
+                  url: "https://example.com/form",
+                  form_index: 0,
+                 fields: %{"query" => "hydra x"},
+                 session: forms.session
                },
                %{request_fn: request_fn}
              )
 
     assert submitted.url == "https://example.com/submit"
+    assert submitted.session.cookies == %{
+             "hydra_scope" => "docs",
+             "hydra_session" => "abc123"
+           }
+
+    assert submitted.session.history == [
+             "https://example.com/form",
+             "https://example.com/submit"
+           ]
 
     assert {:ok, preview} =
              BrowserAutomation.execute(
@@ -265,13 +278,15 @@ defmodule HydraX.Tools.ToolSafetyTest do
                  action: "preview_form_submission",
                  url: "https://example.com/form",
                  form_index: 0,
-                 fields: %{"query" => "hydra x"}
+                 fields: %{"query" => "hydra x"},
+                 session: forms.session
                },
                %{request_fn: request_fn}
              )
 
     assert preview.url == "https://example.com/submit"
     assert preview.fields == %{"query" => "hydra x", "scope" => "docs"}
+    assert preview.session.cookies == %{"hydra_session" => "abc123"}
 
     assert {:ok, headings} =
              BrowserAutomation.execute(
@@ -280,6 +295,45 @@ defmodule HydraX.Tools.ToolSafetyTest do
              )
 
     assert [%{level: 1, text: "Hydra Docs"}, %{level: 2, text: "Search"}] = headings.headings
+
+    assert {:ok, images} =
+             BrowserAutomation.execute(
+               %{action: "inspect_images", url: "https://example.com/form"},
+               %{request_fn: request_fn}
+             )
+
+    assert [%{src: "/static/hydra.png", alt: "Hydra logo", width: 320, height: 180}] =
+             images.images
+
+    assert {:ok, meta} =
+             BrowserAutomation.execute(
+               %{action: "inspect_meta", url: "https://example.com/form"},
+               %{request_fn: request_fn}
+             )
+
+    assert meta.meta.description == "Hydra docs landing page"
+    assert meta.meta.canonical_url == "https://example.com/form"
+    assert meta.meta.open_graph["og:title"] == "Hydra Docs"
+    assert meta.meta.twitter["twitter:card"] == "summary"
+
+    assert {:ok, scripts} =
+             BrowserAutomation.execute(
+               %{action: "inspect_scripts", url: "https://example.com/form"},
+               %{request_fn: request_fn}
+             )
+
+    assert Enum.any?(scripts.scripts, &(&1.src == "/static/app.js" and &1.type == "text/javascript"))
+    assert Enum.any?(scripts.scripts, &(&1.inline and &1.type == "text/javascript"))
+    assert Enum.any?(scripts.scripts, &(&1.type == "application/ld+json"))
+
+    assert {:ok, structured_data} =
+             BrowserAutomation.execute(
+               %{action: "inspect_structured_data", url: "https://example.com/form"},
+               %{request_fn: request_fn}
+             )
+
+    assert [%{summary: "TechArticle", data: %{"headline" => "Hydra Docs"}}] =
+             structured_data.structured_data
 
     assert {:ok, tables} =
              BrowserAutomation.execute(
@@ -298,8 +352,60 @@ defmodule HydraX.Tools.ToolSafetyTest do
              )
 
     assert snapshot.content_type == "image/svg+xml"
+    assert snapshot.heading_count == 2
+    assert snapshot.image_count == 1
     assert File.exists?(snapshot.snapshot_path)
     assert File.read!(snapshot.snapshot_path) =~ "<svg"
+  end
+
+  test "browser automation reuses session cookies and history when following links" do
+    request_fn = fn opts ->
+      case {opts[:method], opts[:url]} do
+        {:get, "https://example.com/start"} ->
+          {:ok,
+           %{
+             status: 200,
+             body:
+               ~s(<html><head><title>Start Page</title></head><body><a href="/account">Account</a></body></html>),
+             headers: [{"content-type", "text/html"}, {"set-cookie", "browser_token=xyz; Path=/"}]
+           }}
+
+        {:get, "https://example.com/account"} ->
+          assert {"cookie", "browser_token=xyz"} in (opts[:headers] || [])
+
+          {:ok,
+           %{
+             status: 200,
+             body: ~s(<html><head><title>Account</title></head><body><p>Authenticated</p></body></html>),
+             headers: [{"content-type", "text/html"}]
+           }}
+      end
+    end
+
+    assert {:ok, start_page} =
+             BrowserAutomation.execute(
+               %{action: "fetch_page", url: "https://example.com/start"},
+               %{request_fn: request_fn}
+             )
+
+    assert start_page.session.cookies == %{"browser_token" => "xyz"}
+    assert start_page.session.history == ["https://example.com/start"]
+
+    assert {:ok, clicked} =
+             BrowserAutomation.execute(
+               %{
+                 action: "click_link",
+                 url: "https://example.com/start",
+                 link_text: "Account",
+                 session: start_page.session
+               },
+               %{request_fn: request_fn}
+             )
+
+    assert clicked.title == "Account"
+    assert clicked.session.cookies == %{"browser_token" => "xyz"}
+
+    assert clicked.session.history == ["https://example.com/start", "https://example.com/account"]
   end
 
   test "browser automation blocks localhost targets before issuing a request" do

@@ -30,6 +30,10 @@ defmodule HydraX.Gateway.Adapters.Webchat do
     {:ok, %{channel: "webchat", external_ref: external_ref, streaming: true}}
   end
 
+  def send_response(%{text: _content, session_id: external_ref}, _state) do
+    {:ok, %{channel: "webchat", external_ref: external_ref, streaming: true}}
+  end
+
   @impl true
   def normalize_inbound(%{"session_id" => session_id, "content" => content} = payload)
       when is_binary(session_id) and is_binary(content) do

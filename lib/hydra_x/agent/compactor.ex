@@ -60,7 +60,8 @@ defmodule HydraX.Agent.Compactor do
   defp review_state(state) do
     turns = Runtime.list_turns(state.conversation_id)
     thresholds = Runtime.compaction_policy(state.agent_id)
-    level = level_for(length(turns), thresholds)
+    token_usage = token_usage(state.agent_id, turns)
+    level = level_for(length(turns), thresholds, token_usage.ratio)
 
     if level do
       # Summarize all turns except the most recent 3 (those stay in full context)
@@ -70,7 +71,10 @@ defmodule HydraX.Agent.Compactor do
       Runtime.upsert_checkpoint(state.conversation_id, "compactor", %{
         "level" => level,
         "summary" => summary,
-        "updated_at" => DateTime.utc_now()
+        "updated_at" => DateTime.utc_now(),
+        "estimated_tokens" => token_usage.estimated_tokens,
+        "conversation_limit_tokens" => token_usage.conversation_limit_tokens,
+        "token_ratio" => token_usage.ratio
       })
     end
 
@@ -124,8 +128,24 @@ defmodule HydraX.Agent.Compactor do
 
   defp fallback_summary(transcript), do: String.slice(transcript, 0, 800)
 
-  defp level_for(count, thresholds) when count >= thresholds.hard, do: "hard"
-  defp level_for(count, thresholds) when count >= thresholds.medium, do: "medium"
-  defp level_for(count, thresholds) when count >= thresholds.soft, do: "soft"
-  defp level_for(_, _), do: nil
+  defp level_for(count, thresholds, ratio) when count >= thresholds.hard or ratio >= 0.95, do: "hard"
+  defp level_for(count, thresholds, ratio) when count >= thresholds.medium or ratio >= 0.9, do: "medium"
+  defp level_for(count, thresholds, ratio) when count >= thresholds.soft or ratio >= 0.8, do: "soft"
+  defp level_for(_, _, _), do: nil
+
+  defp token_usage(agent_id, turns) do
+    estimated_tokens =
+      turns
+      |> Enum.map(&%{role: &1.role, content: &1.content})
+      |> Budget.estimate_prompt_tokens()
+
+    policy = Budget.ensure_policy!(agent_id)
+    limit = max(policy.conversation_limit || 0, 1)
+
+    %{
+      estimated_tokens: estimated_tokens,
+      conversation_limit_tokens: limit,
+      ratio: Float.round(estimated_tokens / limit, 4)
+    }
+  end
 end

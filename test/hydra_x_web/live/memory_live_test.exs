@@ -171,6 +171,7 @@ defmodule HydraXWeb.MemoryLiveTest do
     html = render(view)
     assert html =~ "Ship the Webchat support rollout."
     assert html =~ "score"
+    assert html =~ "embedding"
     assert html =~ "goal match"
     assert html =~ "source provenance"
     assert html =~ "ingest provenance"

@@ -157,7 +157,7 @@ defmodule HydraXWeb.SetupLiveTest do
     })
     |> render_submit()
 
-    assert_receive {:setup_telegram_test, %{content: "UI smoke test", external_ref: "4242"}}
+    assert_receive {:setup_telegram_test, %{text: "UI smoke test", chat_id: "4242"}}
 
     html = render(view)
     assert html =~ "Telegram delivery test succeeded"
@@ -203,7 +203,7 @@ defmodule HydraXWeb.SetupLiveTest do
     |> render_submit()
 
     assert_receive {:setup_discord_test,
-                    %{content: "Discord UI smoke test", external_ref: "discord-room"}}
+                    %{content: "Discord UI smoke test", channel_id: "discord-room"}}
 
     html = render(view)
     assert html =~ "Discord delivery test succeeded"
@@ -249,7 +249,7 @@ defmodule HydraXWeb.SetupLiveTest do
     |> render_submit()
 
     assert_receive {:setup_slack_test,
-                    %{content: "Slack UI smoke test", external_ref: "slack-room"}}
+                    %{text: "Slack UI smoke test", channel: "slack-room"}}
 
     html = render(view)
     assert html =~ "Slack delivery test succeeded"

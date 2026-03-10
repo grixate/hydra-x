@@ -48,6 +48,9 @@ defmodule HydraX.Runtime do
   defdelegate clear_agent_provider_routing!(agent_id), to: HydraX.Runtime.Providers
   defdelegate warm_agent_provider_routing(agent_id), to: HydraX.Runtime.Providers
   defdelegate warm_agent_provider_routing(agent_id, opts), to: HydraX.Runtime.Providers
+  defdelegate provider_capabilities(provider), to: HydraX.Runtime.Providers
+  defdelegate provider_health(provider), to: HydraX.Runtime.Providers
+  defdelegate provider_health(provider, opts), to: HydraX.Runtime.Providers
   defdelegate change_provider_config(), to: HydraX.Runtime.Providers
   defdelegate change_provider_config(provider), to: HydraX.Runtime.Providers
   defdelegate change_provider_config(provider, attrs), to: HydraX.Runtime.Providers
@@ -93,6 +96,8 @@ defmodule HydraX.Runtime do
   defdelegate list_skills_for_agent(agent_id), to: HydraX.Runtime.Skills
   defdelegate enabled_skills(agent_id), to: HydraX.Runtime.Skills
   defdelegate get_skill!(id), to: HydraX.Runtime.Skills
+  defdelegate skill_catalog(agent_id), to: HydraX.Runtime.Skills
+  defdelegate export_skill_catalog(agent_id, output_root), to: HydraX.Runtime.Skills
   defdelegate refresh_agent_skills(agent_id), to: HydraX.Runtime.Skills
   defdelegate enable_skill!(id), to: HydraX.Runtime.Skills
   defdelegate disable_skill!(id), to: HydraX.Runtime.Skills
@@ -122,6 +127,8 @@ defmodule HydraX.Runtime do
   defdelegate disable_agent_mcp_server!(id), to: HydraX.Runtime.MCPServers
   defdelegate test_mcp_server(config), to: HydraX.Runtime.MCPServers
   defdelegate test_mcp_server(config, opts), to: HydraX.Runtime.MCPServers
+  defdelegate invoke_agent_mcp(agent_id, action, params), to: HydraX.Runtime.MCPServers
+  defdelegate invoke_agent_mcp(agent_id, action, params, opts), to: HydraX.Runtime.MCPServers
 
   # ── Conversations ───────────────────────────────────────────────────────
 
@@ -256,6 +263,8 @@ defmodule HydraX.Runtime do
   defdelegate webchat_status(), to: HydraX.Runtime.Observability
   defdelegate channel_statuses(), to: HydraX.Runtime.Observability
   def channel_capabilities, do: HydraX.Gateway.channel_capabilities()
+  defdelegate cluster_status(), to: HydraX.Runtime.Observability
+  defdelegate provider_status(), to: HydraX.Runtime.Observability
   defdelegate budget_status(), to: HydraX.Runtime.Observability
   defdelegate budget_status(agent_or_id), to: HydraX.Runtime.Observability
   defdelegate memory_triage_status(), to: HydraX.Runtime.Observability

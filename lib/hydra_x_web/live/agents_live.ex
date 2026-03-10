@@ -766,8 +766,21 @@ defmodule HydraXWeb.AgentsLive do
                     <p class="mt-2 text-sm text-[var(--hx-mute)]">
                       {skill.description || "No description provided."}
                     </p>
+                    <p :if={skill_tags(skill) != []} class="mt-2 text-xs text-[var(--hx-mute)]">
+                      tags: {Enum.join(skill_tags(skill), ", ")}
+                    </p>
+                    <p :if={skill_tools(skill) != []} class="mt-1 text-xs text-[var(--hx-mute)]">
+                      tools: {Enum.join(skill_tools(skill), ", ")}
+                    </p>
+                    <p
+                      :if={skill_channels(skill) != []}
+                      class="mt-1 text-xs text-[var(--hx-mute)]"
+                    >
+                      channels: {Enum.join(skill_channels(skill), ", ")}
+                    </p>
                     <div class="mt-2 text-xs text-[var(--hx-mute)]">
-                      {if skill.enabled, do: "enabled", else: "disabled"} · {get_in(
+                      {if skill.enabled, do: "enabled", else: "disabled"} · {skill_version(skill) ||
+                        "unversioned"} · {get_in(
                         skill.metadata || %{},
                         ["relative_path"]
                       ) || skill.path}
@@ -927,6 +940,22 @@ defmodule HydraXWeb.AgentsLive do
       "cortex_provider_id" => get_in(profile, ["process_overrides", "cortex"]),
       "compactor_provider_id" => get_in(profile, ["process_overrides", "compactor"])
     }
+  end
+
+  defp skill_tags(skill) do
+    get_in(skill.metadata || %{}, ["tags"]) || []
+  end
+
+  defp skill_tools(skill) do
+    get_in(skill.metadata || %{}, ["tools"]) || []
+  end
+
+  defp skill_channels(skill) do
+    get_in(skill.metadata || %{}, ["channels"]) || []
+  end
+
+  defp skill_version(skill) do
+    get_in(skill.metadata || %{}, ["version"])
   end
 
   defp agent_tool_policy_form(agent) do

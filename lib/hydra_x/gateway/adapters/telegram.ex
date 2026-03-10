@@ -4,6 +4,7 @@ defmodule HydraX.Gateway.Adapters.Telegram do
   """
 
   @behaviour HydraX.Gateway.Adapter
+  @telegram_message_limit 4_096
 
   @impl true
   def connect(%{"bot_token" => token} = config) when is_binary(token) and token != "" do
@@ -45,6 +46,19 @@ defmodule HydraX.Gateway.Adapters.Telegram do
         deliver: deliver
       }) do
     do_send_response(content, external_ref, token, deliver, Map.get(message, :metadata) || %{})
+  end
+
+  def send_response(%{text: content, chat_id: external_ref} = message, %{
+        bot_token: token,
+        deliver: deliver
+      }) do
+    do_send_response(
+      content,
+      external_ref,
+      token,
+      deliver,
+      %{"reply_to_message_id" => Map.get(message, :reply_to_message_id)}
+    )
   end
 
   @impl true
@@ -108,10 +122,14 @@ defmodule HydraX.Gateway.Adapters.Telegram do
 
   @impl true
   def format_message(%{content: content, external_ref: external_ref} = message, _state) do
+    chunks = chunk_message(content, @telegram_message_limit)
+
     %{
-      text: content,
+      text: List.first(chunks) || "",
       chat_id: external_ref,
-      reply_to_message_id: get_in(message, [:metadata, "reply_to_message_id"])
+      reply_to_message_id: get_in(message, [:metadata, "reply_to_message_id"]),
+      chunk_count: length(chunks),
+      truncated: length(chunks) > 1
     }
   end
 
@@ -156,38 +174,91 @@ defmodule HydraX.Gateway.Adapters.Telegram do
   end
 
   defp do_send_response(content, external_ref, _token, deliver, metadata) when is_function(deliver, 1) do
-    case deliver.(%{content: content, external_ref: external_ref, metadata: metadata}) do
-      :ok -> {:ok, %{channel: "telegram"}}
-      {:ok, metadata} when is_map(metadata) -> {:ok, Map.put_new(metadata, :channel, "telegram")}
-      other -> other
-    end
+    content
+    |> chunk_message(@telegram_message_limit)
+    |> Enum.with_index()
+    |> Enum.reduce_while(
+      {:ok, %{channel: "telegram", chunk_count: 0, provider_message_ids: []}},
+      fn {chunk, index}, {:ok, acc} ->
+        payload = %{
+          text: chunk,
+          chat_id: external_ref,
+          reply_to_message_id: if(index == 0, do: metadata["reply_to_message_id"])
+        }
+
+        case deliver.(payload) do
+          :ok ->
+            {:cont, {:ok, %{acc | chunk_count: acc.chunk_count + 1}}}
+
+          {:ok, metadata} when is_map(metadata) ->
+            provider_message_id = metadata[:provider_message_id] || metadata["provider_message_id"]
+
+            updated =
+              acc
+              |> Map.put(:chunk_count, acc.chunk_count + 1)
+              |> Map.put(:provider_message_id, provider_message_id || acc[:provider_message_id])
+              |> Map.update!(:provider_message_ids, fn ids ->
+                if provider_message_id, do: ids ++ [provider_message_id], else: ids
+              end)
+
+            {:cont, {:ok, updated}}
+
+          other ->
+            {:halt, other}
+        end
+      end
+    )
   end
 
   defp do_send_response(content, external_ref, token, _deliver, metadata) do
-    form =
-      [chat_id: external_ref, text: content]
-      |> maybe_add_reply_to(metadata["reply_to_message_id"])
+    content
+    |> chunk_message(@telegram_message_limit)
+    |> Enum.with_index()
+    |> Enum.reduce_while(
+      {:ok, %{channel: "telegram", status: 200, chunk_count: 0, provider_message_ids: []}},
+      fn {chunk, index}, {:ok, acc} ->
+        form =
+          [chat_id: external_ref, text: chunk]
+          |> maybe_add_reply_to(if(index == 0, do: metadata["reply_to_message_id"]))
 
-    case Req.post(
-           url: "https://api.telegram.org/bot#{token}/sendMessage",
-           form: form
-         ) do
-      {:ok, %{status: 200, body: %{"ok" => true, "result" => result}}} ->
-        {:ok,
-         %{
-           channel: "telegram",
-           provider_message_id: Map.get(result, "message_id"),
-           status: 200
-         }}
+        case Req.post(
+               url: "https://api.telegram.org/bot#{token}/sendMessage",
+               form: form
+             ) do
+          {:ok, %{status: 200, body: %{"ok" => true, "result" => result}}} ->
+            provider_message_id = Map.get(result, "message_id")
 
-      {:ok, %{status: 200}} ->
-        {:ok, %{channel: "telegram", status: 200}}
+            updated =
+              acc
+              |> Map.put(:chunk_count, acc.chunk_count + 1)
+              |> Map.put(:provider_message_id, provider_message_id || acc[:provider_message_id])
+              |> Map.update!(:provider_message_ids, fn ids ->
+                if provider_message_id, do: ids ++ [provider_message_id], else: ids
+              end)
 
-      {:ok, response} ->
-        {:error, {:telegram_error, response.status}}
+            {:cont, {:ok, updated}}
 
-      {:error, reason} ->
-        {:error, reason}
+          {:ok, %{status: 200}} ->
+            {:cont, {:ok, %{acc | chunk_count: acc.chunk_count + 1}}}
+
+          {:ok, response} ->
+            {:halt, {:error, {:telegram_error, response.status}}}
+
+          {:error, reason} ->
+            {:halt, {:error, reason}}
+        end
+      end
+    )
+  end
+
+  defp chunk_message(text, max_length) do
+    if String.length(text) <= max_length do
+      [text]
+    else
+      text
+      |> String.codepoints()
+      |> Enum.chunk_every(max_length)
+      |> Enum.map(&Enum.join/1)
     end
   end
 
@@ -233,6 +304,7 @@ defmodule HydraX.Gateway.Adapters.Telegram do
         %{
           "kind" => "photo",
           "file_id" => photo["file_id"],
+          "download_ref" => "telegram:#{photo["file_id"]}",
           "file_unique_id" => photo["file_unique_id"],
           "width" => photo["width"],
           "height" => photo["height"],
@@ -249,8 +321,10 @@ defmodule HydraX.Gateway.Adapters.Telegram do
         %{
           "kind" => "document",
           "file_id" => document["file_id"],
+          "download_ref" => "telegram:#{document["file_id"]}",
           "file_unique_id" => document["file_unique_id"],
           "file_name" => document["file_name"],
+          "content_type" => document["mime_type"],
           "mime_type" => document["mime_type"],
           "file_size" => document["file_size"]
         }
@@ -265,7 +339,9 @@ defmodule HydraX.Gateway.Adapters.Telegram do
         %{
           "kind" => kind,
           "file_id" => audio["file_id"],
+          "download_ref" => "telegram:#{audio["file_id"]}",
           "file_unique_id" => audio["file_unique_id"],
+          "content_type" => audio["mime_type"],
           "mime_type" => audio["mime_type"],
           "duration" => audio["duration"],
           "file_size" => audio["file_size"]
@@ -281,10 +357,12 @@ defmodule HydraX.Gateway.Adapters.Telegram do
         %{
           "kind" => "video",
           "file_id" => video["file_id"],
+          "download_ref" => "telegram:#{video["file_id"]}",
           "file_unique_id" => video["file_unique_id"],
           "width" => video["width"],
           "height" => video["height"],
           "duration" => video["duration"],
+          "content_type" => video["mime_type"],
           "mime_type" => video["mime_type"],
           "file_size" => video["file_size"]
         }

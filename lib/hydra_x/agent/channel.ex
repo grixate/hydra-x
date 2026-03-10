@@ -162,7 +162,13 @@ defmodule HydraX.Agent.Channel do
         mcp_context: Runtime.mcp_prompt_context(agent.id)
       })
 
-    plan = Planner.build(data.conversation, data.coalesce_buffer, prompt.tools || [])
+    plan =
+      Planner.build(
+        data.conversation,
+        data.coalesce_buffer,
+        prompt.tools || [],
+        Runtime.enabled_skills(data.agent_id)
+      )
 
     update_channel_checkpoint(data.conversation.id, %{
       "status" => "planned",
@@ -171,8 +177,8 @@ defmodule HydraX.Agent.Channel do
       "tool_cache" =>
         tool_cache_for_turn(data.conversation.id, latest_turn_id(data.coalesce_buffer)),
       "tool_cache_scope_turn_id" => latest_turn_id(data.coalesce_buffer),
-      "current_step_id" => step_id_at(plan["steps"], 0),
-      "current_step_index" => if(plan["steps"] in [nil, []], do: nil, else: 0),
+      "current_step_id" => step_id_for_status(plan["steps"] || [], "pending"),
+      "current_step_index" => step_index_for_status(plan["steps"] || [], "pending"),
       "resumable" => true,
       "latest_user_turn_id" => latest_turn_id(data.coalesce_buffer),
       "tool_rounds" => 0,
@@ -184,7 +190,8 @@ defmodule HydraX.Agent.Channel do
           %{
             "summary" => "Planned #{length(plan["steps"] || [])} execution steps",
             "step_count" => length(plan["steps"] || []),
-            "mode" => plan["mode"]
+            "mode" => plan["mode"],
+            "skill_hint_count" => length(plan["skill_hints"] || [])
           }
         ),
       "updated_at" => DateTime.utc_now()
@@ -218,7 +225,7 @@ defmodule HydraX.Agent.Channel do
 
         update_channel_checkpoint(data.conversation.id, %{
           "status" => "completed",
-          "steps" => mark_final_provider_step_completed(plan["steps"] || []),
+          "steps" => current_checkpoint_steps(data.conversation.id),
           "current_step_id" => nil,
           "current_step_index" => nil,
           "resumable" => false,
@@ -386,8 +393,13 @@ defmodule HydraX.Agent.Channel do
         # Final response — no more tool calls
         steps =
           current_checkpoint_steps(data.conversation.id)
-          |> mark_provider_running()
-          |> mark_provider_completed()
+          |> mark_provider_running(%{"summary" => "Waiting for final provider response"})
+          |> mark_provider_completed(%{
+            "summary" => "Final response generated",
+            "output_excerpt" => excerpt_text(response.content || ""),
+            "provider" => response.provider,
+            "stop_reason" => response.stop_reason
+          })
 
         append_channel_event(data.conversation.id, "provider_completed", %{
           "round" => round,
@@ -414,8 +426,13 @@ defmodule HydraX.Agent.Channel do
       {:error_response, content, metadata} ->
         steps =
           current_checkpoint_steps(data.conversation.id)
-          |> mark_provider_running()
-          |> mark_provider_failed()
+          |> mark_provider_running(%{"summary" => "Waiting for final provider response"})
+          |> mark_provider_failed(%{
+            "summary" => "Provider response failed",
+            "output_excerpt" => excerpt_text(content),
+            "provider" => metadata[:provider] || metadata["provider"],
+            "reason" => metadata[:provider_error] || metadata["provider_error"]
+          })
 
         update_channel_checkpoint(data.conversation.id, %{
           "status" => "failed",
@@ -529,7 +546,9 @@ defmodule HydraX.Agent.Channel do
 
           case Router.complete_stream(request, self()) do
             {:ok, ref} ->
-              steps = current_checkpoint_steps(data.conversation.id) |> mark_provider_running()
+              steps =
+                current_checkpoint_steps(data.conversation.id)
+                |> mark_provider_running(%{"summary" => "Streaming provider response"})
 
               update_channel_checkpoint(data.conversation.id, %{
                 "status" => "streaming",
@@ -623,7 +642,13 @@ defmodule HydraX.Agent.Channel do
 
     update_channel_checkpoint(data.conversation.id, %{
       "status" => "completed",
-      "steps" => current_checkpoint_steps(data.conversation.id) |> mark_provider_completed(),
+      "steps" =>
+        current_checkpoint_steps(data.conversation.id)
+        |> mark_provider_completed(%{
+          "summary" => "Streamed response completed",
+          "output_excerpt" => excerpt_text(content),
+          "provider" => response.provider
+        }),
       "current_step_id" => nil,
       "current_step_index" => nil,
       "resumable" => false,
@@ -783,16 +808,6 @@ defmodule HydraX.Agent.Channel do
     end)
   end
 
-  defp step_id_at(steps, index) when is_list(steps) do
-    steps |> Enum.at(index) |> then(&(&1 && &1["id"]))
-  end
-
-  defp mark_final_provider_step_completed(steps) when is_list(steps) do
-    steps
-    |> mark_provider_running()
-    |> mark_provider_completed()
-  end
-
   defp current_checkpoint_steps(conversation_id) do
     Runtime.conversation_channel_state(conversation_id).steps || []
   end
@@ -924,8 +939,13 @@ defmodule HydraX.Agent.Channel do
           found? ->
             {step, true}
 
-          step["kind"] == "tool" and step["name"] == tool_name and step["status"] == "pending" ->
-            {Map.put(step, "status", "running"), true}
+          step["kind"] != "provider" and step["name"] == tool_name and step["status"] != "running" ->
+            {
+              step
+              |> transition_step("running")
+              |> Map.put("summary", "Executing #{tool_name}"),
+              true
+            }
 
           true ->
             {step, found?}
@@ -939,11 +959,16 @@ defmodule HydraX.Agent.Channel do
         [
           %{
             "id" => "tool-dynamic-#{tool_name}",
-            "kind" => "tool",
+            "kind" => dynamic_step_kind(tool_name),
             "name" => tool_name,
+            "label" => dynamic_step_label(tool_name),
             "reason" => "dynamically requested by provider",
-            "status" => "running"
+            "status" => "pending",
+            "executor" => "channel",
+            "attempt_count" => 0
           }
+          |> transition_step("running")
+          |> Map.put("summary", "Executing #{tool_name}")
         ]
     end
   end
@@ -951,21 +976,38 @@ defmodule HydraX.Agent.Channel do
   defp complete_tool_steps(steps, tool_results) do
     Enum.reduce(tool_results, steps, fn result, acc ->
       update_matching_step(acc, "tool", result.tool_name, fn step ->
-        Map.put(step, "status", if(result[:is_error] || false, do: "failed", else: "completed"))
+        step
+        |> transition_step(if(result[:is_error] || false, do: "failed", else: "completed"))
+        |> Map.put("summary", result[:summary] || summarize_tool_result_payload(result.result))
+        |> Map.put("output_excerpt", tool_result_excerpt(result.result))
+        |> Map.put("cached", result[:cached] || false)
+        |> Map.put("safety_classification", result[:safety_classification] || "standard")
       end)
     end)
   end
 
-  defp mark_provider_running(steps) do
-    update_matching_step(steps, "provider", nil, &Map.put(&1, "status", "running"))
+  defp mark_provider_running(steps, attrs) do
+    update_matching_step(steps, "provider", nil, fn step ->
+      step
+      |> transition_step("running")
+      |> merge_step_attrs(attrs)
+    end)
   end
 
-  defp mark_provider_completed(steps) do
-    update_matching_step(steps, "provider", nil, &Map.put(&1, "status", "completed"))
+  defp mark_provider_completed(steps, attrs) do
+    update_matching_step(steps, "provider", nil, fn step ->
+      step
+      |> transition_step("completed")
+      |> merge_step_attrs(attrs)
+    end)
   end
 
-  defp mark_provider_failed(steps) do
-    update_matching_step(steps, "provider", nil, &Map.put(&1, "status", "failed"))
+  defp mark_provider_failed(steps, attrs) do
+    update_matching_step(steps, "provider", nil, fn step ->
+      step
+      |> transition_step("failed")
+      |> merge_step_attrs(attrs)
+    end)
   end
 
   defp update_matching_step(steps, "provider", _name, fun) do
@@ -975,7 +1017,7 @@ defmodule HydraX.Agent.Channel do
           found? ->
             {step, true}
 
-          step["kind"] == "provider" and step["status"] in ["pending", "running"] ->
+          step["kind"] == "provider" ->
             {fun.(step), true}
 
           true ->
@@ -992,7 +1034,9 @@ defmodule HydraX.Agent.Channel do
             "id" => "provider-final",
             "kind" => "provider",
             "label" => "Final response",
-            "status" => "running"
+            "status" => "pending",
+            "executor" => "channel",
+            "attempt_count" => 0
           }
           |> fun.()
         ]
@@ -1001,8 +1045,7 @@ defmodule HydraX.Agent.Channel do
 
   defp update_matching_step(steps, "tool", name, fun) do
     Enum.map(steps, fn step ->
-      if step["kind"] == "tool" and step["name"] == name and
-           step["status"] in ["pending", "running"] do
+      if step["kind"] != "provider" and step["name"] == name do
         fun.(step)
       else
         step
@@ -1078,4 +1121,102 @@ defmodule HydraX.Agent.Channel do
     |> inspect(limit: 12, printable_limit: 120)
     |> String.slice(0, 180)
   end
+
+  defp dynamic_step_kind("memory_recall"), do: "memory"
+  defp dynamic_step_kind("memory_save"), do: "memory"
+  defp dynamic_step_kind("mcp_inspect"), do: "integration"
+  defp dynamic_step_kind("mcp_probe"), do: "integration"
+  defp dynamic_step_kind("skill_inspect"), do: "skill"
+  defp dynamic_step_kind("browser_automation"), do: "browser"
+  defp dynamic_step_kind("web_search"), do: "search"
+  defp dynamic_step_kind("http_fetch"), do: "fetch"
+  defp dynamic_step_kind("shell_command"), do: "shell"
+  defp dynamic_step_kind("workspace_read"), do: "workspace"
+  defp dynamic_step_kind("workspace_list"), do: "workspace"
+  defp dynamic_step_kind("workspace_write"), do: "workspace"
+  defp dynamic_step_kind("workspace_patch"), do: "workspace"
+  defp dynamic_step_kind(_tool_name), do: "tool"
+
+  defp dynamic_step_label("memory_recall"), do: "Recall relevant memory"
+  defp dynamic_step_label("memory_save"), do: "Persist new memory"
+  defp dynamic_step_label("mcp_inspect"), do: "Inspect MCP integrations"
+  defp dynamic_step_label("mcp_probe"), do: "Probe MCP integrations"
+  defp dynamic_step_label("skill_inspect"), do: "Inspect enabled skills"
+  defp dynamic_step_label("browser_automation"), do: "Inspect web page state"
+  defp dynamic_step_label("web_search"), do: "Search the public web"
+  defp dynamic_step_label("http_fetch"), do: "Fetch a specific URL"
+  defp dynamic_step_label("shell_command"), do: "Run an allowlisted shell command"
+  defp dynamic_step_label("workspace_read"), do: "Read a workspace file"
+  defp dynamic_step_label("workspace_list"), do: "List workspace files"
+  defp dynamic_step_label("workspace_write"), do: "Write a workspace file"
+  defp dynamic_step_label("workspace_patch"), do: "Patch a workspace file"
+  defp dynamic_step_label(tool_name), do: tool_name
+
+  defp tool_result_excerpt(%{content: content}) when is_binary(content), do: excerpt_text(content)
+  defp tool_result_excerpt(%{"content" => content}) when is_binary(content), do: excerpt_text(content)
+  defp tool_result_excerpt(%{text: text}) when is_binary(text), do: excerpt_text(text)
+  defp tool_result_excerpt(%{"text" => text}) when is_binary(text), do: excerpt_text(text)
+  defp tool_result_excerpt(%{results: results}) when is_list(results), do: "#{length(results)} results"
+  defp tool_result_excerpt(%{"results" => results}) when is_list(results), do: "#{length(results)} results"
+  defp tool_result_excerpt(%{skills: skills}) when is_list(skills), do: "#{length(skills)} skills"
+  defp tool_result_excerpt(%{"skills" => skills}) when is_list(skills), do: "#{length(skills)} skills"
+  defp tool_result_excerpt(%{memories: memories}) when is_list(memories),
+    do: "#{length(memories)} memories"
+
+  defp tool_result_excerpt(%{"memories" => memories}) when is_list(memories),
+    do: "#{length(memories)} memories"
+
+  defp tool_result_excerpt(payload), do: summarize_tool_result_payload(payload)
+
+  defp excerpt_text(text) when is_binary(text) do
+    text
+    |> String.replace(~r/\s+/, " ")
+    |> String.trim()
+    |> String.slice(0, 180)
+  end
+
+  defp excerpt_text(_), do: nil
+
+  defp merge_step_attrs(step, attrs) when is_map(attrs) do
+    Enum.reduce(attrs, step, fn {key, value}, acc ->
+      if is_nil(value) or value == "" do
+        acc
+      else
+        Map.put(acc, to_string(key), value)
+      end
+    end)
+  end
+
+  defp transition_step(step, status) do
+    now = DateTime.utc_now()
+
+    step
+    |> Map.put("status", status)
+    |> Map.put("updated_at", now)
+    |> maybe_mark_step_started(status, now)
+    |> maybe_mark_step_finished(status, now)
+  end
+
+  defp maybe_mark_step_started(step, "running", now) do
+    step
+    |> Map.update("attempt_count", 1, &((&1 || 0) + 1))
+    |> Map.put_new("started_at", now)
+    |> Map.put("last_started_at", now)
+  end
+
+  defp maybe_mark_step_started(step, _status, _now), do: step
+
+  defp maybe_mark_step_finished(step, "completed", now) do
+    step
+    |> Map.put("completed_at", now)
+    |> Map.delete("failed_at")
+  end
+
+  defp maybe_mark_step_finished(step, "failed", now) do
+    step
+    |> Map.put("failed_at", now)
+    |> Map.delete("completed_at")
+  end
+
+  defp maybe_mark_step_finished(step, _status, _now), do: step
 end

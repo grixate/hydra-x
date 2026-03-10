@@ -33,6 +33,8 @@ defmodule HydraX.Report do
           search: filters.search,
           required_only: filters.required_only
         ),
+      provider: Runtime.provider_status(),
+      cluster: Runtime.cluster_status(),
       mcp: Runtime.mcp_statuses(),
       agent_mcp: Runtime.agent_mcp_statuses(),
       telegram: Runtime.telegram_status(),
@@ -55,6 +57,7 @@ defmodule HydraX.Report do
         bulletin: Runtime.agent_bulletin(agent.id)
       },
       agents: agent_snapshots(),
+      skills: Runtime.list_skills(),
       conversations: Runtime.list_conversations(limit: filters.conversation_limit)
     }
   end
@@ -109,6 +112,12 @@ defmodule HydraX.Report do
     ## Readiness
     Summary: #{String.upcase(Atom.to_string(snapshot.readiness.summary))}
     #{render_readiness(snapshot.readiness.items)}
+
+    ## Cluster Posture
+    #{render_cluster(snapshot.cluster)}
+
+    ## Provider Route
+    #{render_provider(snapshot.provider)}
 
     ## Default Agent
     - Status: #{snapshot.default_agent.status}
@@ -237,6 +246,40 @@ defmodule HydraX.Report do
     """
   end
 
+  defp render_cluster(cluster) do
+    """
+    - Mode: #{cluster.mode}
+    - Node ID: #{cluster.node_id}
+    - Distributed node: #{yes_no(cluster.distributed)}
+    - Visible nodes: #{cluster.node_count}
+    - Leader: #{cluster.leader_node || "none"}
+    - Persistence: #{cluster.persistence}
+    - Multi-node ready: #{yes_no(cluster.multi_node_ready)}
+    - Detail: #{cluster.detail}
+    """
+    |> String.trim()
+  end
+
+  defp render_provider(provider) do
+    capabilities =
+      provider.capabilities
+      |> Enum.filter(fn {_key, value} -> value end)
+      |> Enum.map(fn {key, _value} -> key |> to_string() |> String.replace("_", "-") end)
+      |> Enum.join(", ")
+
+    """
+    - Name: #{provider.name}
+    - Kind: #{provider.kind}
+    - Model: #{provider.model || "n/a"}
+    - Route source: #{provider.route_source}
+    - Warmup: #{provider.warmup_status}
+    - Readiness: #{provider.readiness}
+    - Fallbacks: #{provider.fallback_count}
+    - Capabilities: #{if(capabilities == "", do: "none", else: capabilities)}
+    """
+    |> String.trim()
+  end
+
   defp render_mcp_servers([]), do: "- none configured"
 
   defp render_mcp_servers(servers) do
@@ -328,8 +371,39 @@ defmodule HydraX.Report do
   defp render_conversations(conversations) do
     Enum.map_join(conversations, "\n", fn conversation ->
       delivery = render_conversation_delivery(conversation)
-      "- ##{conversation.id} #{conversation.channel}/#{conversation.status}: #{conversation.title || conversation.external_ref || "untitled"}#{delivery}"
+      execution = render_conversation_execution(conversation)
+      attachments = render_conversation_attachments(conversation)
+
+      "- ##{conversation.id} #{conversation.channel}/#{conversation.status}: #{conversation.title || conversation.external_ref || "untitled"}#{attachments}#{delivery}#{execution}"
     end)
+  end
+
+  defp render_conversation_attachments(conversation) do
+    count = conversation_attachment_count(conversation)
+    if count > 0, do: " · attachments=#{count}", else: ""
+  end
+
+  defp render_conversation_execution(conversation) do
+    state = Runtime.conversation_channel_state(conversation.id)
+
+    case state.status do
+      nil ->
+        ""
+
+      status ->
+        steps =
+          state.steps
+          |> Enum.take(3)
+          |> Enum.map(fn step ->
+            kind = step["kind"] || "step"
+            name = step["name"] || step["label"] || step["id"]
+            summary = step["summary"] || step["reason"] || step["label"] || "pending"
+            "#{kind}:#{name}:#{step["status"] || "pending"}:#{summary}"
+          end)
+          |> Enum.join(" | ")
+
+        " · execution=#{status}; steps=#{if(steps == "", do: "none", else: steps)}"
+    end
   end
 
   defp render_conversation_delivery(%{metadata: %{"last_delivery" => delivery}}),
@@ -343,14 +417,29 @@ defmodule HydraX.Report do
   defp render_delivery_summary(delivery) do
     status = Map.get(delivery, "status") || Map.get(delivery, :status) || "unknown"
     external_ref = Map.get(delivery, "external_ref") || Map.get(delivery, :external_ref)
-    provider_message_id = Map.get(delivery, "provider_message_id") || Map.get(delivery, :provider_message_id)
+
+    provider_message_id =
+      Map.get(delivery, "provider_message_id") || Map.get(delivery, :provider_message_id)
+
+    provider_message_ids =
+      Map.get(delivery, "provider_message_ids") || Map.get(delivery, :provider_message_ids) || []
 
     context =
       delivery
       |> Map.get("reply_context", Map.get(delivery, :reply_context, %{}))
       |> render_reply_context()
 
-    [status, external_ref && "ref=#{external_ref}", provider_message_id && "msg=#{provider_message_id}", context]
+    payload = Map.get(delivery, "formatted_payload") || Map.get(delivery, :formatted_payload)
+
+    [
+      status,
+      external_ref && "ref=#{external_ref}",
+      provider_message_id && "msg=#{provider_message_id}",
+      provider_message_ids != [] && "msg_ids=#{length(provider_message_ids)}",
+      context,
+      render_chunk_count(payload),
+      render_formatted_payload(payload)
+    ]
     |> Enum.reject(&is_nil_or_empty/1)
     |> Enum.join(", ")
   end
@@ -369,6 +458,45 @@ defmodule HydraX.Report do
   end
 
   defp render_reply_context(_context), do: nil
+
+  defp render_formatted_payload(payload) when is_map(payload) do
+    payload
+    |> Enum.reject(fn {key, _value} -> to_string(key) in ["text", "content"] end)
+    |> Enum.map(fn {key, value} -> "#{key}=#{value}" end)
+    |> case do
+      [] ->
+        content =
+          payload["text"] || payload[:text] || payload["content"] || payload[:content]
+
+        if is_binary(content) and content != "" do
+          "payload=#{String.slice(content, 0, 48)}"
+        end
+
+      entries ->
+        "payload=" <> Enum.join(entries, "/")
+    end
+  end
+
+  defp render_formatted_payload(_payload), do: nil
+
+  defp render_chunk_count(payload) when is_map(payload) do
+    case payload["chunk_count"] || payload[:chunk_count] do
+      count when is_integer(count) and count > 1 -> "chunks=#{count}"
+      _ -> nil
+    end
+  end
+
+  defp render_chunk_count(_payload), do: nil
+
+  defp conversation_attachment_count(conversation) do
+    conversation.id
+    |> Runtime.list_turns()
+    |> Enum.reduce(0, fn turn, acc ->
+      metadata = turn.metadata || %{}
+      attachments = metadata["attachments"] || metadata[:attachments] || []
+      acc + length(attachments)
+    end)
+  end
 
   defp render_backups([]), do: "- none"
 
@@ -536,6 +664,8 @@ defmodule HydraX.Report do
       install: snapshot.install,
       health_checks: snapshot.health_checks,
       readiness: snapshot.readiness,
+      provider: snapshot.provider,
+      cluster: snapshot.cluster,
       mcp: snapshot.mcp,
       agent_mcp: snapshot.agent_mcp,
       telegram: snapshot.telegram,
@@ -586,6 +716,7 @@ defmodule HydraX.Report do
         }
       },
       agents: Enum.map(snapshot.agents, &json_agent_snapshot/1),
+      skills: Enum.map(snapshot.skills, &json_skill/1),
       conversations: Enum.map(snapshot.conversations, &json_conversation/1)
     }
   end
@@ -633,8 +764,11 @@ defmodule HydraX.Report do
           markdown_path: markdown_path,
           json_path: json_path,
           agent_count: length(snapshot.agents),
+          cluster_mode: snapshot.cluster.mode,
+          cluster_node_count: snapshot.cluster.node_count,
           mcp_server_count: length(snapshot.mcp),
           agent_mcp_count: length(snapshot.agent_mcp),
+          skill_count: length(snapshot.skills),
           open_incident_count: length(snapshot.incidents.open),
           acknowledged_incident_count: length(snapshot.incidents.acknowledged),
           audit_event_count: length(snapshot.audit)
@@ -649,6 +783,11 @@ defmodule HydraX.Report do
     )
 
     File.write!(
+      Path.join(bundle_dir, "cluster.json"),
+      Jason.encode_to_iodata!(snapshot.cluster, pretty: true)
+    )
+
+    File.write!(
       Path.join(bundle_dir, "mcp.json"),
       Jason.encode_to_iodata!(snapshot.mcp, pretty: true)
     )
@@ -656,6 +795,16 @@ defmodule HydraX.Report do
     File.write!(
       Path.join(bundle_dir, "agent_mcp.json"),
       Jason.encode_to_iodata!(snapshot.agent_mcp, pretty: true)
+    )
+
+    File.write!(
+      Path.join(bundle_dir, "skills.json"),
+      Jason.encode_to_iodata!(Enum.map(snapshot.skills, &json_skill/1), pretty: true)
+    )
+
+    File.write!(
+      Path.join(bundle_dir, "conversations.json"),
+      Jason.encode_to_iodata!(Enum.map(snapshot.conversations, &json_conversation/1), pretty: true)
     )
 
     File.write!(
@@ -776,6 +925,8 @@ defmodule HydraX.Report do
   defp json_conversation(conversation) do
     metadata = conversation.metadata || %{}
     delivery = metadata["last_delivery"] || metadata[:last_delivery]
+    channel_state = Runtime.conversation_channel_state(conversation.id)
+    attachment_count = conversation_attachment_count(conversation)
 
     %{
       id: conversation.id,
@@ -785,7 +936,19 @@ defmodule HydraX.Report do
       title: conversation.title,
       external_ref: conversation.external_ref,
       metadata: conversation.metadata,
+      attachment_count: attachment_count,
       last_delivery: delivery,
+      channel_state: %{
+        status: channel_state.status,
+        provider: channel_state.provider,
+        tool_rounds: channel_state.tool_rounds,
+        resumable: channel_state.resumable,
+        current_step_id: channel_state.current_step_id,
+        current_step_index: channel_state.current_step_index,
+        steps: channel_state.steps,
+        execution_events: Enum.take(channel_state.execution_events, -10),
+        tool_results: channel_state.tool_results
+      },
       last_message_at: conversation.last_message_at,
       inserted_at: conversation.inserted_at,
       updated_at: conversation.updated_at
@@ -805,6 +968,28 @@ defmodule HydraX.Report do
       last_seen_at: memory.last_seen_at,
       inserted_at: memory.inserted_at,
       updated_at: memory.updated_at
+    }
+  end
+
+  defp json_skill(skill) do
+    metadata = skill.metadata || %{}
+
+    %{
+      id: skill.id,
+      agent_id: skill.agent_id,
+      slug: skill.slug,
+      name: skill.name,
+      enabled: skill.enabled,
+      description: skill.description,
+      source: skill.source,
+      path: skill.path,
+      version: metadata["version"],
+      summary: metadata["summary"],
+      tags: metadata["tags"] || [],
+      tools: metadata["tools"] || [],
+      channels: metadata["channels"] || [],
+      requires: metadata["requires"] || [],
+      relative_path: metadata["relative_path"] || skill.path
     }
   end
 

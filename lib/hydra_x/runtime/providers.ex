@@ -329,6 +329,23 @@ defmodule HydraX.Runtime.Providers do
     |> apply(:complete, [request])
   end
 
+  def provider_capabilities(nil), do: provider_module(nil).capabilities()
+
+  def provider_capabilities(%ProviderConfig{} = provider) do
+    provider
+    |> provider_module()
+    |> apply(:capabilities, [])
+  end
+
+  def provider_health(provider, opts \\ [])
+  def provider_health(nil, opts), do: provider_module(nil).healthcheck(nil, opts)
+
+  def provider_health(%ProviderConfig{} = provider, opts) do
+    provider
+    |> provider_module()
+    |> apply(:healthcheck, [provider, opts])
+  end
+
   # -- Private helpers --
 
   defp do_warm_providers([], process_type, warmed_at, _opts) do
@@ -529,6 +546,7 @@ defmodule HydraX.Runtime.Providers do
     do: HydraX.LLM.Providers.OpenAICompatible
 
   defp provider_module(%ProviderConfig{kind: "anthropic"}), do: HydraX.LLM.Providers.Anthropic
+  defp provider_module(nil), do: HydraX.LLM.Providers.Mock
 
   defp maybe_put_request_fn(request, opts) do
     case Keyword.get(opts, :request_fn) do

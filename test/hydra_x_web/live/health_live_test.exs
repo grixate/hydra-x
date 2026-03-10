@@ -72,6 +72,14 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "shell cli"
   end
 
+  test "health page shows provider capability summary", %{conn: conn} do
+    {:ok, _view, html} = live(conn, ~p"/health")
+
+    assert html =~ "LLM adapter capabilities"
+    assert html =~ "system-prompt"
+    assert html =~ "mock"
+  end
+
   test "health page shows secret storage posture", %{conn: conn} do
     agent = Runtime.ensure_default_agent!()
 
@@ -178,7 +186,9 @@ defmodule HydraXWeb.HealthLiveTest do
           "external_ref" => "999",
           "status" => "failed",
           "retry_count" => 1,
-          "reason" => "timeout"
+          "reason" => "timeout",
+          "provider_message_ids" => [501, 502],
+          "formatted_payload" => %{"chunk_count" => 2}
         }
       })
 
@@ -278,6 +288,14 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "healthy"
     assert html =~ "Agent MCP"
     assert html =~ agent.slug
+  end
+
+  test "health page shows cluster posture", %{conn: conn} do
+    {:ok, _view, html} = live(conn, ~p"/health")
+
+    assert html =~ "Cluster posture"
+    assert html =~ "single_node"
+    assert html =~ "sqlite_single_writer"
   end
 
   test "health page shows open scheduler circuits", %{conn: conn} do

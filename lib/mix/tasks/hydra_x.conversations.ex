@@ -17,6 +17,9 @@ defmodule Mix.Tasks.HydraX.Conversations do
       ["archive", id] ->
         archive_conversation(id)
 
+      ["show", id] ->
+        show_conversation(id)
+
       ["export", id] ->
         export_conversation(id)
 
@@ -91,6 +94,59 @@ defmodule Mix.Tasks.HydraX.Conversations do
     conversation = HydraX.Runtime.archive_conversation!(String.to_integer(id))
     Mix.shell().info("conversation=#{conversation.id}")
     Mix.shell().info("status=#{conversation.status}")
+  end
+
+  defp show_conversation(id) do
+    conversation = HydraX.Runtime.get_conversation!(String.to_integer(id))
+    channel_state = HydraX.Runtime.conversation_channel_state(conversation.id)
+    delivery = (conversation.metadata || %{})["last_delivery"] || %{}
+
+    Mix.shell().info("conversation=#{conversation.id}")
+    Mix.shell().info("title=#{conversation.title || "Untitled"}")
+    Mix.shell().info("channel=#{conversation.channel}")
+    Mix.shell().info("status=#{conversation.status}")
+    Mix.shell().info("turns=#{length(conversation.turns)}")
+    Mix.shell().info("execution_status=#{channel_state.status || "idle"}")
+    Mix.shell().info("provider=#{channel_state.provider || "n/a"}")
+    Mix.shell().info("tool_rounds=#{channel_state.tool_rounds || 0}")
+    Mix.shell().info("resumable=#{channel_state.resumable}")
+
+    if map_size(delivery) > 0 do
+      Mix.shell().info(
+        "delivery=#{delivery["channel"] || "channel"}:#{delivery["status"] || "unknown"}"
+      )
+    end
+
+    Enum.each(channel_state.steps || [], fn step ->
+      Mix.shell().info(
+        Enum.join(
+          [
+            "step",
+            step["kind"] || "step",
+            step["name"] || step["label"] || step["id"],
+            step["status"] || "pending",
+            step["summary"] || step["reason"] || step["label"] || ""
+          ],
+          "\t"
+        )
+      )
+    end)
+
+    Enum.each(channel_state.execution_events || [], fn event ->
+      details = event["details"] || %{}
+
+      Mix.shell().info(
+        Enum.join(
+          [
+            "event",
+            event["phase"] || "unknown",
+            details["summary"] || details["tool_name"] || details["provider"] || "",
+            to_string(details["round"] || "")
+          ],
+          "\t"
+        )
+      )
+    end)
   end
 
   defp export_conversation(id) do

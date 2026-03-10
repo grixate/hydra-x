@@ -352,7 +352,7 @@ defmodule HydraXWeb.AgentsLiveTest do
 
     File.write!(
       Path.join(skill_dir, "SKILL.md"),
-      "# Deploy Checks\n\nRun deployment verification steps for staged rollouts."
+      "---\nname: Deploy Checks\nsummary: Run deployment verification steps for staged rollouts.\nversion: 1.2.0\ntags: deploy,release,checks\ntools: shell_command,web_search\nchannels: cli,slack\n---\n# Deploy Checks\n\nRun deployment verification steps for staged rollouts."
     )
 
     {:ok, view, _html} = live(conn, ~p"/agents")
@@ -364,9 +364,17 @@ defmodule HydraXWeb.AgentsLiveTest do
     html = render(view)
     assert html =~ "Discovered 1 skills"
     assert html =~ "Deploy Checks"
+    assert html =~ "tags: deploy, release, checks"
+    assert html =~ "tools: shell_command, web_search"
+    assert html =~ "channels: cli, slack"
+    assert html =~ "1.2.0"
     assert html =~ "enabled"
 
     [skill] = Runtime.list_skills(agent_id: agent.id)
+    assert get_in(skill.metadata, ["tags"]) == ["deploy", "release", "checks"]
+    assert get_in(skill.metadata, ["tools"]) == ["shell_command", "web_search"]
+    assert get_in(skill.metadata, ["channels"]) == ["cli", "slack"]
+    assert get_in(skill.metadata, ["version"]) == "1.2.0"
 
     view
     |> element(~s(button[phx-click="toggle_skill"][phx-value-id="#{skill.id}"]))

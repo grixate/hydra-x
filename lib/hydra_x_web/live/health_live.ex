@@ -23,12 +23,14 @@ defmodule HydraXWeb.HealthLive do
      |> assign(:discord_status, Runtime.discord_status())
      |> assign(:slack_status, Runtime.slack_status())
      |> assign(:webchat_status, Runtime.webchat_status())
+     |> assign(:cluster_status, Runtime.cluster_status())
      |> assign(:mcp_statuses, Runtime.mcp_statuses())
      |> assign(:agent_mcp_statuses, Runtime.agent_mcp_statuses())
      |> assign(:channel_capabilities, Runtime.channel_capabilities())
      |> assign(:safety_status, Runtime.safety_status())
      |> assign(:observability_status, Runtime.observability_status())
      |> assign(:operator_status, Runtime.operator_status())
+     |> assign(:provider_status, Runtime.provider_status())
      |> assign(:tool_status, Runtime.tool_status())
      |> assign(:scheduler_status, Runtime.scheduler_status())}
   end
@@ -269,6 +271,68 @@ defmodule HydraXWeb.HealthLive do
                 </div>
               </div>
             </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="glass-panel mt-6 p-6">
+        <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">Provider route</div>
+        <h2 class="mt-3 font-display text-4xl">LLM adapter capabilities</h2>
+        <div class="mt-6 grid gap-3 lg:grid-cols-2">
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Selected route
+            </div>
+            <p class="mt-3 text-sm text-[var(--hx-mute)]">
+              {@provider_status.name} · {@provider_status.kind}
+              <span :if={@provider_status.model}> ·   {@provider_status.model}</span>
+            </p>
+            <p class="mt-2 text-xs text-[var(--hx-mute)]">
+              source {@provider_status.route_source} · readiness {@provider_status.readiness} · warmup {@provider_status.warmup_status}
+            </p>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Capabilities
+            </div>
+            <p class="mt-3 text-sm text-[var(--hx-mute)]">
+              {provider_capability_summary(@provider_status.capabilities)}
+            </p>
+            <p class="mt-2 text-xs text-[var(--hx-mute)]">
+              fallbacks {@provider_status.fallback_count}
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section class="glass-panel mt-6 p-6">
+        <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">Cluster posture</div>
+        <h2 class="mt-3 font-display text-4xl">Node-aware readiness</h2>
+        <div class="mt-6 grid gap-3 lg:grid-cols-2">
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Mode
+            </div>
+            <p class="mt-3 text-sm text-[var(--hx-mute)]">
+              {@cluster_status.mode} · node {@cluster_status.node_id}
+            </p>
+            <p class="mt-2 text-xs text-[var(--hx-mute)]">
+              visible nodes {@cluster_status.node_count} · leader {@cluster_status.leader_node ||
+                "none"}
+            </p>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Persistence posture
+            </div>
+            <p class="mt-3 text-sm text-[var(--hx-mute)]">
+              {@cluster_status.persistence} · {if @cluster_status.multi_node_ready,
+                do: "multi-node ready",
+                else: "single-node only"}
+            </p>
+            <p class="mt-2 text-xs text-[var(--hx-mute)]">
+              {@cluster_status.detail}
+            </p>
           </article>
         </div>
       </section>
@@ -850,6 +914,17 @@ defmodule HydraXWeb.HealthLive do
   defp format_datetime(value), do: Calendar.strftime(value, "%Y-%m-%d %H:%M:%S UTC")
   defp channel_summary([]), do: "none"
   defp channel_summary(channels), do: Enum.join(channels, ", ")
+
+  defp provider_capability_summary(capabilities) do
+    capabilities
+    |> Enum.filter(fn {_key, value} -> value end)
+    |> Enum.map(fn {key, _value} -> key |> to_string() |> String.replace("_", "-") end)
+    |> case do
+      [] -> "none"
+      values -> Enum.join(values, " · ")
+    end
+  end
+
   defp capability_summary(nil), do: "unknown"
 
   defp capability_summary(capabilities) do
@@ -864,11 +939,18 @@ defmodule HydraXWeb.HealthLive do
 
   defp failure_delivery_summary(conversation) do
     delivery = last_delivery(conversation)
+    payload = delivery["formatted_payload"] || %{}
+
+    provider_message_ids =
+      delivery["provider_message_ids"] ||
+        get_in(delivery, ["metadata", "provider_message_ids"]) || []
 
     [
       delivery["status"] || "unknown",
       delivery["reason"],
-      delivery_context_summary(delivery)
+      if(provider_message_ids != [], do: "msg ids #{length(provider_message_ids)}"),
+      delivery_context_summary(delivery),
+      chunk_count_summary(payload)
     ]
     |> Enum.reject(&is_nil_or_empty/1)
     |> Enum.join(" · ")
@@ -893,6 +975,15 @@ defmodule HydraXWeb.HealthLive do
     metadata = conversation.metadata || %{}
     metadata["last_delivery"] || metadata[:last_delivery] || %{}
   end
+
+  defp chunk_count_summary(payload) when is_map(payload) do
+    case payload["chunk_count"] do
+      count when is_integer(count) and count > 1 -> "chunks #{count}"
+      _ -> nil
+    end
+  end
+
+  defp chunk_count_summary(_payload), do: nil
 
   defp is_nil_or_empty(nil), do: true
   defp is_nil_or_empty(""), do: true

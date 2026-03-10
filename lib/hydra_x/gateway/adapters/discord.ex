@@ -9,6 +9,7 @@ defmodule HydraX.Gateway.Adapters.Discord do
   @behaviour HydraX.Gateway.Adapter
 
   @discord_api "https://discord.com/api/v10"
+  @discord_message_limit 2_000
 
   @impl true
   def connect(%{"bot_token" => token} = config) when is_binary(token) and token != "" do
@@ -99,6 +100,19 @@ defmodule HydraX.Gateway.Adapters.Discord do
     do_send_response(content, channel_id, token, deliver, Map.get(message, :metadata) || %{})
   end
 
+  def send_response(%{content: content, channel_id: channel_id} = message, %{
+        bot_token: token,
+        deliver: deliver
+      }) do
+    do_send_response(
+      content,
+      channel_id,
+      token,
+      deliver,
+      %{"reply_to_message_id" => Map.get(message, :reply_to_message_id)}
+    )
+  end
+
   @impl true
   def normalize_inbound(event) do
     case handle_event(event, %{}) do
@@ -153,28 +167,62 @@ defmodule HydraX.Gateway.Adapters.Discord do
 
   @impl true
   def format_message(%{content: content, external_ref: channel_id} = message, _state) do
+    chunks = chunk_message(content, @discord_message_limit)
+
     %{
-      content: content,
+      content: List.first(chunks) || "",
       channel_id: channel_id,
-      reply_to_message_id: get_in(message, [:metadata, "reply_to_message_id"])
+      reply_to_message_id: get_in(message, [:metadata, "reply_to_message_id"]),
+      chunk_count: length(chunks),
+      truncated: length(chunks) > 1
     }
   end
 
   # -- Private --
 
   defp do_send_response(content, channel_id, _token, deliver, metadata) when is_function(deliver, 1) do
-    case deliver.(%{content: content, external_ref: channel_id, metadata: metadata}) do
-      :ok -> {:ok, %{channel: "discord"}}
-      {:ok, metadata} when is_map(metadata) -> {:ok, Map.put_new(metadata, :channel, "discord")}
-      other -> other
-    end
+    content
+    |> chunk_message(@discord_message_limit)
+    |> Enum.reduce_while(
+      {:ok, %{channel: "discord", chunk_count: 0, provider_message_ids: []}},
+      fn chunk, {:ok, acc} ->
+        payload = %{
+          content: chunk,
+          channel_id: channel_id,
+          reply_to_message_id: metadata["reply_to_message_id"]
+        }
+
+        case deliver.(payload) do
+          :ok ->
+            {:cont, {:ok, %{acc | chunk_count: acc.chunk_count + 1}}}
+
+          {:ok, metadata} when is_map(metadata) ->
+            provider_message_id = metadata[:provider_message_id] || metadata["provider_message_id"]
+
+            updated =
+              acc
+              |> Map.put(:chunk_count, acc.chunk_count + 1)
+              |> Map.put(:provider_message_id, provider_message_id || acc[:provider_message_id])
+              |> Map.update!(:provider_message_ids, fn ids ->
+                if provider_message_id, do: ids ++ [provider_message_id], else: ids
+              end)
+
+            {:cont, {:ok, updated}}
+
+          other ->
+            {:halt, other}
+        end
+      end
+    )
   end
 
   defp do_send_response(content, channel_id, token, _deliver, metadata) do
-    # Discord message limit is 2000 chars — split if needed
-    chunks = chunk_message(content, 2000)
+    chunks = chunk_message(content, @discord_message_limit)
 
-    Enum.reduce_while(chunks, {:ok, %{channel: "discord"}}, fn chunk, _acc ->
+    Enum.reduce_while(
+      chunks,
+      {:ok, %{channel: "discord", chunk_count: 0, provider_message_ids: []}},
+      fn chunk, {:ok, acc} ->
       body =
         %{content: chunk}
         |> maybe_add_message_reference(metadata["reply_to_message_id"])
@@ -185,7 +233,15 @@ defmodule HydraX.Gateway.Adapters.Discord do
              json: body
            ) do
         {:ok, %{status: 200, body: %{"id" => message_id}}} ->
-          {:cont, {:ok, %{channel: "discord", provider_message_id: message_id}}}
+          updated =
+            acc
+            |> Map.put(:chunk_count, acc.chunk_count + 1)
+            |> Map.put(:provider_message_id, message_id || acc[:provider_message_id])
+            |> Map.update!(:provider_message_ids, fn ids ->
+              if message_id, do: ids ++ [message_id], else: ids
+            end)
+
+          {:cont, {:ok, updated}}
 
         {:ok, %{status: status}} ->
           {:halt, {:error, {:discord_error, status}}}
@@ -193,7 +249,8 @@ defmodule HydraX.Gateway.Adapters.Discord do
         {:error, reason} ->
           {:halt, {:error, reason}}
       end
-    end)
+      end
+    )
   end
 
   defp extract_command_content(%{"name" => name, "options" => options})
@@ -238,6 +295,8 @@ defmodule HydraX.Gateway.Adapters.Discord do
         "id" => attachment["id"],
         "file_name" => attachment["filename"],
         "content_type" => attachment["content_type"],
+        "download_ref" => attachment["url"],
+        "source_url" => attachment["url"],
         "url" => attachment["url"],
         "proxy_url" => attachment["proxy_url"],
         "size" => attachment["size"]

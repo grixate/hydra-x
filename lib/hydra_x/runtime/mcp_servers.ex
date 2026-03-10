@@ -123,6 +123,31 @@ defmodule HydraX.Runtime.MCPServers do
     probe(config, opts)
   end
 
+  def invoke_agent_mcp(agent_id, action, params, opts \\ []) when is_integer(agent_id) do
+    server_filter =
+      opts
+      |> Keyword.get(:server)
+      |> normalize_filter()
+
+    results =
+      list_agent_mcp_servers(agent_id)
+      |> Enum.filter(&(&1.enabled && &1.mcp_server_config.enabled))
+      |> Enum.filter(fn binding ->
+        is_nil(server_filter) or matches_filter?(binding.mcp_server_config, server_filter)
+      end)
+      |> Enum.map(fn binding ->
+        invoke_binding(binding, action, params, opts)
+      end)
+
+    {:ok,
+     %{
+       agent_id: agent_id,
+       action: action,
+       count: length(results),
+       results: results
+     }}
+  end
+
   def mcp_prompt_context do
     enabled_mcp_servers()
     |> Enum.map(fn config ->
@@ -344,6 +369,83 @@ defmodule HydraX.Runtime.MCPServers do
     end
   end
 
+  defp invoke_binding(binding, action, params, opts) do
+    config = binding.mcp_server_config
+
+    case invoke_server(config, action, params, opts) do
+      {:ok, result} ->
+        %{
+          id: binding.id,
+          server_id: config.id,
+          name: config.name,
+          transport: config.transport,
+          status: "ok",
+          result: result
+        }
+
+      {:error, reason} ->
+        %{
+          id: binding.id,
+          server_id: config.id,
+          name: config.name,
+          transport: config.transport,
+          status: "warn",
+          detail: format_probe_error(reason)
+        }
+    end
+  end
+
+  defp invoke_server(%MCPServerConfig{enabled: false} = config, _action, _params, _opts) do
+    {:error, {:disabled, "#{config.name} is disabled"}}
+  end
+
+  defp invoke_server(%MCPServerConfig{transport: "stdio"}, _action, _params, _opts) do
+    {:error, :stdio_invoke_not_supported}
+  end
+
+  defp invoke_server(%MCPServerConfig{transport: "http"} = config, action, params, opts) do
+    request_fn =
+      Keyword.get(opts, :request_fn) || Application.get_env(:hydra_x, :mcp_http_request_fn) ||
+        (&Req.post/1)
+
+    path =
+      get_in(config.metadata || %{}, ["invoke_path"])
+      |> Helpers.blank_to_nil()
+      |> Kernel.||("/invoke")
+
+    url =
+      config.url
+      |> URI.parse()
+      |> URI.merge(path)
+      |> URI.to_string()
+
+    headers =
+      [
+        {"accept", "application/json"},
+        {"content-type", "application/json"}
+      ]
+      |> maybe_add_auth_header(config.auth_token)
+
+    payload = %{action: action, params: params || %{}}
+
+    case request_fn.(url: url, headers: headers, json: payload) do
+      {:ok, %{status: status, body: body}} when status in 200..299 ->
+        {:ok,
+         %{
+           url: url,
+           action: action,
+           status: status,
+           body: normalize_invoke_body(body)
+         }}
+
+      {:ok, %{status: status}} ->
+        {:error, {:http_status, status}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
   defp build_health_url(config) do
     healthcheck_path =
       config.healthcheck_path
@@ -362,8 +464,25 @@ defmodule HydraX.Runtime.MCPServers do
 
   defp format_probe_error({:disabled, message}), do: message
   defp format_probe_error(:command_not_found), do: "command not found"
+  defp format_probe_error(:stdio_invoke_not_supported), do: "stdio invoke not supported"
   defp format_probe_error({:http_status, status}), do: "unexpected HTTP #{status}"
   defp format_probe_error(reason), do: inspect(reason)
+
+  defp normalize_filter(nil), do: nil
+  defp normalize_filter(""), do: nil
+  defp normalize_filter(value), do: value |> to_string() |> String.downcase()
+
+  defp matches_filter?(config, filter) do
+    [config.name, get_in(config.metadata || %{}, ["slug"])]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.map(&String.downcase(to_string(&1)))
+    |> Enum.any?(&String.contains?(&1, filter))
+  end
+
+  defp normalize_invoke_body(body) when is_binary(body), do: body
+  defp normalize_invoke_body(body) when is_map(body), do: body
+  defp normalize_invoke_body(body) when is_list(body), do: body
+  defp normalize_invoke_body(body), do: inspect(body)
 
   defp decrypt_config(nil), do: nil
 

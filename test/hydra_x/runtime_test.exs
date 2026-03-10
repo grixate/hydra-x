@@ -62,8 +62,73 @@ defmodule HydraX.RuntimeTest do
     assert Enum.all?(channel_state.steps, &(&1["status"] == "completed"))
     assert channel_state.current_step_id == nil
     refute channel_state.resumable
+    assert Enum.any?(channel_state.steps, fn step ->
+             step["kind"] == "provider" and not is_nil(step["summary"]) and
+               step["attempt_count"] == 1 and not is_nil(step["started_at"]) and
+               not is_nil(step["completed_at"])
+           end)
     assert Enum.any?(channel_state.execution_events, &(&1["phase"] == "provider_requested"))
     assert Enum.any?(channel_state.execution_events, &(&1["phase"] == "provider_completed"))
+  end
+
+  test "planner captures enabled skill hints from workspace metadata" do
+    agent = create_agent()
+    skill_dir = Path.join([agent.workspace_root, "skills", "deploy-checks"])
+    File.mkdir_p!(skill_dir)
+
+    File.write!(
+      Path.join(skill_dir, "SKILL.md"),
+      "---\nname: Deploy Checks\nsummary: Run deployment verification steps for staged rollouts.\nversion: 1.2.0\ntags: deploy,release,checks\ntools: shell_command,web_search\nchannels: cli,slack\nrequires: release-window\n---\n# Deploy Checks\n\nRun deployment verification steps for staged rollouts."
+    )
+
+    assert {:ok, _skills} = Runtime.refresh_agent_skills(agent.id)
+    {:ok, pid} = HydraX.Agent.ensure_started(agent)
+    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{channel: "cli", title: "skill-hints"})
+
+    _response =
+      Channel.submit(
+        agent,
+        conversation,
+        "Run the deploy checks before release.",
+        %{source: "test"}
+      )
+
+    channel_state = Runtime.conversation_channel_state(conversation.id)
+    [hint | _] = channel_state.plan["skill_hints"]
+    [skill_step | _] = channel_state.steps
+
+    assert hint["slug"] == "deploy-checks"
+    assert hint["reason"] =~ "deploy"
+    assert skill_step["kind"] == "skill"
+    assert skill_step["status"] == "completed"
+    assert skill_step["summary"] =~ "Matched 1 skill hints"
+  end
+
+  test "planner emits typed integration and memory steps" do
+    conversation = %{channel: "cli"}
+
+    tools = [
+      %{name: "mcp_invoke", description: "Invoke integrations"},
+      %{name: "mcp_probe", description: "Probe integrations"},
+      %{name: "memory_recall", description: "Recall memories"},
+      %{name: "shell_command", description: "Run shell commands"}
+    ]
+
+    plan =
+      HydraX.Agent.Planner.build(
+        conversation,
+        [%{id: 1, content: "Call MCP to probe the integration health and remember what you know"}],
+        tools,
+        []
+      )
+
+    assert Enum.any?(plan["steps"], &(&1["name"] == "mcp_invoke" and &1["kind"] == "integration"))
+    assert Enum.any?(plan["steps"], &(&1["name"] == "mcp_probe" and &1["kind"] == "integration"))
+    assert Enum.any?(plan["steps"], &(&1["name"] == "memory_recall" and &1["kind"] == "memory"))
+    refute Enum.any?(plan["steps"], &(&1["name"] == "shell_command"))
   end
 
   test "worker results include tool summaries and safety classifications" do
@@ -95,6 +160,155 @@ defmodule HydraX.RuntimeTest do
                safety_classification: "memory_read"
              }
            ] = results
+  end
+
+  test "worker can inspect enabled skills with tags" do
+    agent = create_agent()
+    skill_dir = Path.join([agent.workspace_root, "skills", "deploy-checks"])
+    File.mkdir_p!(skill_dir)
+
+    File.write!(
+      Path.join(skill_dir, "SKILL.md"),
+      "---\nname: Deploy Checks\nsummary: Run deployment verification steps for staged rollouts.\nversion: 1.2.0\ntags: deploy,release,checks\ntools: shell_command,web_search\nchannels: cli,slack\nrequires: release-window\n---\n# Deploy Checks\n\nRun deployment verification steps for staged rollouts."
+    )
+
+    assert {:ok, _skills} = Runtime.refresh_agent_skills(agent.id)
+    {:ok, pid} = HydraX.Agent.ensure_started(agent)
+    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{channel: "cli", title: "skill-inspect"})
+
+    [result] =
+      Worker.execute_tool_calls(agent.id, conversation, [
+        %{id: "skill-1", name: "skill_inspect", arguments: %{"tag" => "deploy"}}
+      ])
+
+    refute result.is_error
+    assert result.summary == "inspected 1 skills"
+    [skill] = result.result.skills
+    assert skill.slug == "deploy-checks"
+    assert skill.tags == ["deploy", "release", "checks"]
+    assert skill.version == "1.2.0"
+    assert skill.tools == ["shell_command", "web_search"]
+    assert skill.channels == ["cli", "slack"]
+    assert skill.requires == ["release-window"]
+  end
+
+  test "worker can probe enabled MCP bindings" do
+    agent = create_agent()
+
+    {:ok, _mcp} =
+      Runtime.save_mcp_server(%{
+        name: "Docs MCP",
+        transport: "stdio",
+        command: "cat",
+        enabled: true
+      })
+
+    assert {:ok, _bindings} = Runtime.refresh_agent_mcp_servers(agent.id)
+    {:ok, pid} = HydraX.Agent.ensure_started(agent)
+    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{channel: "cli", title: "mcp-probe"})
+
+    [result] =
+      Worker.execute_tool_calls(agent.id, conversation, [
+        %{id: "mcp-1", name: "mcp_probe", arguments: %{"server" => "Docs"}}
+      ])
+
+    refute result.is_error
+    assert result.summary == "probed 1 MCP bindings"
+    assert [%{name: "Docs MCP", status: "ok"}] = result.result.results
+  end
+
+  test "worker can invoke enabled HTTP MCP bindings" do
+    agent = create_agent()
+    previous = Application.get_env(:hydra_x, :mcp_http_request_fn)
+
+    Application.put_env(:hydra_x, :mcp_http_request_fn, fn opts ->
+      assert opts[:url] == "https://mcp.example.test/invoke"
+      assert {"authorization", "Bearer mcp-secret"} in (opts[:headers] || [])
+      assert opts[:json][:action] == "search_docs"
+      assert opts[:json][:params] == %{"query" => "hydra"}
+      {:ok, %{status: 200, body: %{"results" => [%{"title" => "Hydra docs"}]}}}
+    end)
+
+    on_exit(fn ->
+      if previous do
+        Application.put_env(:hydra_x, :mcp_http_request_fn, previous)
+      else
+        Application.delete_env(:hydra_x, :mcp_http_request_fn)
+      end
+    end)
+
+    {:ok, _mcp} =
+      Runtime.save_mcp_server(%{
+        name: "Docs HTTP MCP",
+        transport: "http",
+        url: "https://mcp.example.test",
+        auth_token: "mcp-secret",
+        metadata: %{"slug" => "docs-http"},
+        enabled: true
+      })
+
+    assert {:ok, _bindings} = Runtime.refresh_agent_mcp_servers(agent.id)
+    {:ok, pid} = HydraX.Agent.ensure_started(agent)
+    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{channel: "cli", title: "mcp-invoke"})
+
+    [result] =
+      Worker.execute_tool_calls(agent.id, conversation, [
+        %{
+          id: "mcp-invoke-1",
+          name: "mcp_invoke",
+          arguments: %{
+            "server" => "docs-http",
+            "action" => "search_docs",
+            "params" => %{"query" => "hydra"}
+          }
+        }
+      ])
+
+    refute result.is_error
+    assert result.summary == "invoked search_docs on 1 MCP bindings"
+    assert [%{name: "Docs HTTP MCP", status: "ok", result: %{status: 200}}] = result.result.results
+  end
+
+  test "worker reports unsupported stdio MCP invoke attempts" do
+    agent = create_agent()
+
+    {:ok, _mcp} =
+      Runtime.save_mcp_server(%{
+        name: "Docs MCP",
+        transport: "stdio",
+        command: "cat",
+        enabled: true
+      })
+
+    assert {:ok, _bindings} = Runtime.refresh_agent_mcp_servers(agent.id)
+    {:ok, pid} = HydraX.Agent.ensure_started(agent)
+    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{channel: "cli", title: "mcp-invoke-stdio"})
+
+    [result] =
+      Worker.execute_tool_calls(agent.id, conversation, [
+        %{
+          id: "mcp-invoke-stdio-1",
+          name: "mcp_invoke",
+          arguments: %{"action" => "search_docs"}
+        }
+      ])
+
+    refute result.is_error
+    assert result.summary == "invoked search_docs on 1 MCP bindings"
+    assert [%{name: "Docs MCP", status: "warn", detail: "stdio invoke not supported"}] =
+             result.result.results
   end
 
   test "channel resumes interrupted pending user turns after restart" do
@@ -362,13 +576,20 @@ defmodule HydraX.RuntimeTest do
 
   test "provider and channel secrets are encrypted at rest but decrypted through runtime" do
     agent = create_agent()
+    previous_provider_env = System.get_env("HYDRA_X_TEST_PROVIDER_API_KEY")
+
+    System.put_env("HYDRA_X_TEST_PROVIDER_API_KEY", "provider-secret")
+
+    on_exit(fn ->
+      restore_env("HYDRA_X_TEST_PROVIDER_API_KEY", previous_provider_env)
+    end)
 
     {:ok, provider} =
       Runtime.save_provider_config(%{
         name: "Encrypted Provider",
         kind: "openai_compatible",
         base_url: "https://encrypted-provider.test",
-        api_key: "provider-secret",
+        api_key: "env:HYDRA_X_TEST_PROVIDER_API_KEY",
         model: "gpt-encrypted",
         enabled: false
       })
@@ -402,7 +623,8 @@ defmodule HydraX.RuntimeTest do
     raw_discord = Repo.get!(DiscordConfig, discord.id)
     raw_slack = Repo.get!(SlackConfig, slack.id)
 
-    assert Secrets.encrypted?(raw_provider.api_key)
+    assert Secrets.env_reference?(raw_provider.api_key)
+    assert Secrets.env_reference_var(raw_provider.api_key) == "HYDRA_X_TEST_PROVIDER_API_KEY"
     assert Secrets.encrypted?(raw_telegram.bot_token)
     assert Secrets.encrypted?(raw_telegram.webhook_secret)
     assert Secrets.encrypted?(raw_discord.bot_token)
@@ -417,7 +639,9 @@ defmodule HydraX.RuntimeTest do
 
     secrets = Runtime.secret_storage_status()
     assert secrets.plaintext_records == 0
-    assert secrets.encrypted_records >= 7
+    assert secrets.encrypted_records >= 6
+    assert secrets.env_backed_records >= 1
+    assert secrets.unresolved_env_records == 0
   end
 
   test "control policy defaults and agent overrides resolve through runtime" do
@@ -548,12 +772,15 @@ defmodule HydraX.RuntimeTest do
 
     File.write!(
       Path.join(skill_dir, "SKILL.md"),
-      "# Deploy Checks\n\nRun deployment verification steps for staged rollouts."
+      "---\nname: Deploy Checks\nsummary: Run deployment verification steps for staged rollouts.\nversion: 1.2.0\ntools: shell_command\nchannels: cli\n---\n# Deploy Checks\n\nRun deployment verification steps for staged rollouts."
     )
 
     assert {:ok, [skill]} = Runtime.refresh_agent_skills(agent.id)
     assert skill.slug == "deploy-checks"
     assert skill.enabled
+    assert get_in(skill.metadata, ["version"]) == "1.2.0"
+    assert get_in(skill.metadata, ["tools"]) == ["shell_command"]
+    assert get_in(skill.metadata, ["channels"]) == ["cli"]
 
     {:ok, mcp} =
       Runtime.save_mcp_server(%{
@@ -578,6 +805,9 @@ defmodule HydraX.RuntimeTest do
     assert system.content =~ "## Enabled Skills"
     assert system.content =~ "Deploy Checks"
     assert system.content =~ "deployment verification steps"
+    assert system.content =~ "version 1.2.0"
+    assert system.content =~ "tools shell_command"
+    assert system.content =~ "channels cli"
     assert system.content =~ "## MCP Integrations"
     assert system.content =~ "Docs MCP"
 
@@ -586,7 +816,32 @@ defmodule HydraX.RuntimeTest do
     assert Runtime.mcp_prompt_context(agent.id) == ""
   end
 
-  test "hybrid recall persists semantic vectors and exposes vector scores" do
+  test "skill catalog can be exported for an agent" do
+    agent = create_agent()
+    skill_dir = Path.join([agent.workspace_root, "skills", "deploy-checks"])
+    File.mkdir_p!(skill_dir)
+
+    File.write!(
+      Path.join(skill_dir, "SKILL.md"),
+      "---\nname: Deploy Checks\nsummary: Run deployment verification steps for staged rollouts.\nversion: 1.2.0\ntags: deploy,release\ntools: shell_command\nchannels: cli\nrequires: release-window\n---\n# Deploy Checks\n\nRun deployment verification steps for staged rollouts."
+    )
+
+    assert {:ok, [_skill]} = Runtime.refresh_agent_skills(agent.id)
+
+    output_root =
+      Path.join(System.tmp_dir!(), "hydra-x-skill-catalog-#{System.unique_integer([:positive])}")
+
+    on_exit(fn -> File.rm_rf(output_root) end)
+
+    assert {:ok, path} = Runtime.export_skill_catalog(agent.id, output_root)
+    assert File.exists?(path)
+
+    assert File.read!(path) =~ "\"slug\": \"deploy-checks\""
+    assert File.read!(path) =~ "\"version\": \"1.2.0\""
+    assert File.read!(path) =~ "\"tools\": ["
+  end
+
+  test "hybrid recall persists explicit embeddings and exposes vector scores" do
     agent = create_agent()
 
     {:ok, memory} =
@@ -601,9 +856,12 @@ defmodule HydraX.RuntimeTest do
     [top | _rest] = Memory.search_ranked(agent.id, "cluster worker placement failover", 5)
 
     assert top.entry.id == memory.id
+    assert is_list(get_in(top.entry.metadata || %{}, ["embedding_vector"]))
+    assert get_in(top.entry.metadata || %{}, ["embedding_backend"]) == "local_hash_v1"
+    assert get_in(top.entry.metadata || %{}, ["embedding_dimensions"]) == 64
     assert is_map(get_in(top.entry.metadata || %{}, ["semantic_vector"]))
     assert top.vector_score > 0.0
-    assert "vector similarity" in top.reasons
+    assert "embedding similarity" in top.reasons
 
     assert {:ok, %{results: [result | _]}} =
              HydraX.Tools.MemoryRecall.execute(
@@ -612,6 +870,60 @@ defmodule HydraX.RuntimeTest do
              )
 
     assert result["vector_score"] || result[:vector_score]
+    assert (result["embedding_backend"] || result[:embedding_backend]) == "local_hash_v1"
+  end
+
+  test "memory embeddings can use an OpenAI-compatible backend when configured" do
+    agent = create_agent()
+    previous_backend = System.get_env("HYDRA_X_EMBEDDING_BACKEND")
+    previous_url = System.get_env("HYDRA_X_EMBEDDING_URL")
+    previous_key = System.get_env("HYDRA_X_EMBEDDING_API_KEY")
+    previous_model = System.get_env("HYDRA_X_EMBEDDING_MODEL")
+    previous_request_fn = Application.get_env(:hydra_x, :embedding_request_fn)
+
+    System.put_env("HYDRA_X_EMBEDDING_BACKEND", "openai_compatible")
+    System.put_env("HYDRA_X_EMBEDDING_URL", "https://embeddings.example.test/v1/embeddings")
+    System.put_env("HYDRA_X_EMBEDDING_API_KEY", "embed-secret")
+    System.put_env("HYDRA_X_EMBEDDING_MODEL", "text-embedding-3-small")
+
+    Application.put_env(:hydra_x, :embedding_request_fn, fn opts ->
+      assert opts[:url] == "https://embeddings.example.test/v1/embeddings"
+      assert {"authorization", "Bearer embed-secret"} in (opts[:headers] || [])
+      assert opts[:json][:model] == "text-embedding-3-small"
+
+      {:ok,
+       %{
+         status: 200,
+         body: %{"data" => [%{"embedding" => [0.11, 0.22, 0.33, 0.44]}]}
+       }}
+    end)
+
+    on_exit(fn ->
+      restore_env("HYDRA_X_EMBEDDING_BACKEND", previous_backend)
+      restore_env("HYDRA_X_EMBEDDING_URL", previous_url)
+      restore_env("HYDRA_X_EMBEDDING_API_KEY", previous_key)
+      restore_env("HYDRA_X_EMBEDDING_MODEL", previous_model)
+
+      if previous_request_fn do
+        Application.put_env(:hydra_x, :embedding_request_fn, previous_request_fn)
+      else
+        Application.delete_env(:hydra_x, :embedding_request_fn)
+      end
+    end)
+
+    {:ok, memory} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Fact",
+        content: "Remote embedding support should route through an OpenAI-compatible endpoint.",
+        importance: 0.7,
+        last_seen_at: DateTime.utc_now()
+      })
+
+    assert get_in(memory.metadata || %{}, ["embedding_backend"]) == "openai_compatible"
+    assert get_in(memory.metadata || %{}, ["embedding_model"]) == "text-embedding-3-small"
+    assert get_in(memory.metadata || %{}, ["embedding_dimensions"]) == 4
+    assert get_in(memory.metadata || %{}, ["embedding_vector"]) == [0.11, 0.22, 0.33, 0.44]
   end
 
   test "mcp servers can be saved and probed over stdio and http" do
@@ -958,6 +1270,13 @@ defmodule HydraX.RuntimeTest do
     assert auth_check.detail =~ "operator password set"
   end
 
+  test "provider capability resolution includes mock fallback" do
+    mock_caps = Runtime.provider_capabilities(nil)
+
+    assert mock_caps.mock
+    refute mock_caps.streaming
+  end
+
   test "system status exposes the repo database path" do
     system = Runtime.system_status()
 
@@ -1011,7 +1330,38 @@ defmodule HydraX.RuntimeTest do
     assert is_binary(snapshot.database_path)
     assert is_binary(snapshot.workspace_root)
     assert is_binary(snapshot.backup_root)
+    assert snapshot.cluster.mode == "single_node"
     assert is_map(snapshot.readiness)
+  end
+
+  test "cluster status reports single-node sqlite posture by default" do
+    status = Runtime.cluster_status()
+
+    refute status.enabled
+    assert status.mode == "single_node"
+    assert status.persistence == "sqlite_single_writer"
+    refute status.multi_node_ready
+    assert status.node_count >= 1
+  end
+
+  test "readiness warns when cluster awareness is enabled on sqlite" do
+    previous = Application.get_env(:hydra_x, :cluster_enabled)
+    Application.put_env(:hydra_x, :cluster_enabled, true)
+
+    on_exit(fn ->
+      if is_nil(previous) do
+        Application.delete_env(:hydra_x, :cluster_enabled)
+      else
+        Application.put_env(:hydra_x, :cluster_enabled, previous)
+      end
+    end)
+
+    item =
+      Runtime.readiness_report().items
+      |> Enum.find(&(&1.id == "cluster"))
+
+    assert item.status == :warn
+    assert item.detail =~ "SQLite"
   end
 
   test "heartbeat jobs are ensured once and create persisted job runs" do
@@ -1096,7 +1446,7 @@ defmodule HydraX.RuntimeTest do
       })
 
     assert {:ok, run} = Runtime.run_scheduled_job(job)
-    assert_receive {:job_delivery, %{external_ref: "9001", content: content}}
+    assert_receive {:job_delivery, %{chat_id: "9001", text: content}}
     assert content =~ "finished with success"
     assert run.metadata["delivery"]["status"] == "delivered"
     assert run.metadata["delivery"]["metadata"]["provider_message_id"] == 77
@@ -1141,7 +1491,7 @@ defmodule HydraX.RuntimeTest do
       })
 
     assert {:ok, run} = Runtime.run_scheduled_job(job)
-    assert_receive {:discord_job_delivery, %{external_ref: "discord-channel", content: content}}
+    assert_receive {:discord_job_delivery, %{channel_id: "discord-channel", content: content}}
     assert content =~ "finished with success"
     assert run.metadata["delivery"]["status"] == "delivered"
     assert run.metadata["delivery"]["metadata"]["provider_message_id"] == "discord-job-1"
@@ -1320,7 +1670,7 @@ defmodule HydraX.RuntimeTest do
       })
 
     assert {:ok, run} = Runtime.run_scheduled_job(job)
-    assert_receive {:slack_job_delivery, %{external_ref: "slack-channel", content: content}}
+    assert_receive {:slack_job_delivery, %{channel: "slack-channel", text: content}}
     assert content =~ "finished with success"
     assert run.metadata["delivery"]["status"] == "delivered"
     assert run.metadata["delivery"]["metadata"]["provider_message_id"] == "slack-job-1"
@@ -1895,7 +2245,10 @@ defmodule HydraX.RuntimeTest do
     assert bulletin.content =~ "## Relevant Context"
     assert bulletin.content =~ "Keep Webchat rollout healthy."
     assert bulletin.content =~ "Use Discord as the fallback operator channel."
-    assert bulletin.content =~ "[Observation/webchat] Webchat retries need continued operator monitoring."
+
+    assert bulletin.content =~
+             "[Observation/webchat] Webchat retries need continued operator monitoring."
+
     assert bulletin.content =~ "typed graph memory"
     assert Runtime.agent_bulletin(agent.id).content =~ "typed graph memory"
   end
@@ -1983,11 +2336,16 @@ defmodule HydraX.RuntimeTest do
     assert compaction.level == "hard"
     assert compaction.summary =~ "Turn"
     assert compaction.thresholds == policy
+    assert compaction.estimated_tokens > 0
+    assert compaction.conversation_limit_tokens == Budget.ensure_policy!(agent.id).conversation_limit
+    assert compaction.token_ratio > 0.0
 
     reset = Runtime.reset_conversation_compaction!(conversation.id)
     assert reset.level == nil
     assert reset.summary == nil
     assert reset.thresholds == policy
+    assert reset.estimated_tokens > 0
+    assert reset.token_ratio > 0.0
   end
 
   test "compaction policy must remain ordered" do

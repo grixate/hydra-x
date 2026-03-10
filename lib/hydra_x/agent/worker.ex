@@ -201,6 +201,18 @@ defmodule HydraX.Agent.Worker do
     Map.put(arguments, :agent_id, context.agent_id)
   end
 
+  defp enrich_params(arguments, "mcp_invoke", context) do
+    Map.put(arguments, :agent_id, context.agent_id)
+  end
+
+  defp enrich_params(arguments, "mcp_probe", context) do
+    Map.put(arguments, :agent_id, context.agent_id)
+  end
+
+  defp enrich_params(arguments, "skill_inspect", context) do
+    Map.put(arguments, :agent_id, context.agent_id)
+  end
+
   defp enrich_params(arguments, _name, _context), do: arguments
 
   defp log_tool_warning(conversation, tool_name, params, reason) do

@@ -253,7 +253,9 @@ defmodule Mix.Tasks.HydraX.Agents do
 
   defp manage_skills(id, rest) do
     {opts, args, _invalid} =
-      OptionParser.parse(rest, strict: [refresh: :boolean, enable: :integer, disable: :integer])
+      OptionParser.parse(rest,
+        strict: [refresh: :boolean, enable: :integer, disable: :integer, show: :integer, export: :string]
+      )
 
     agent_id = String.to_integer(id)
 
@@ -271,6 +273,14 @@ defmodule Mix.Tasks.HydraX.Agents do
         skill = HydraX.Runtime.disable_skill!(opts[:disable])
         Mix.shell().info("skill=#{skill.slug}:disabled")
 
+      opts[:show] ->
+        print_skill_detail(opts[:show])
+
+      opts[:export] ->
+        {:ok, path} = HydraX.Runtime.export_skill_catalog(agent_id, opts[:export])
+        Mix.shell().info("agent=#{HydraX.Runtime.get_agent!(agent_id).slug}")
+        Mix.shell().info("export=#{path}")
+
       args != [] ->
         Mix.raise("unknown skills arguments: #{Enum.join(args, " ")}")
 
@@ -286,6 +296,8 @@ defmodule Mix.Tasks.HydraX.Agents do
             to_string(skill.id),
             skill.slug,
             if(skill.enabled, do: "enabled", else: "disabled"),
+            get_in(skill.metadata || %{}, ["version"]) || "-",
+            Enum.join(get_in(skill.metadata || %{}, ["tags"]) || [], ","),
             get_in(skill.metadata || %{}, ["relative_path"]) || skill.path,
             skill.name
           ],
@@ -293,6 +305,26 @@ defmodule Mix.Tasks.HydraX.Agents do
         )
       )
     end)
+  end
+
+  defp print_skill_detail(id) do
+    skill = HydraX.Runtime.get_skill!(id)
+    metadata = skill.metadata || %{}
+
+    Mix.shell().info("id=#{skill.id}")
+    Mix.shell().info("slug=#{skill.slug}")
+    Mix.shell().info("name=#{skill.name}")
+    Mix.shell().info("enabled=#{skill.enabled}")
+    Mix.shell().info("version=#{metadata["version"] || ""}")
+    Mix.shell().info("tags=#{Enum.join(metadata["tags"] || [], ",")}")
+    Mix.shell().info("tools=#{Enum.join(metadata["tools"] || [], ",")}")
+    Mix.shell().info("channels=#{Enum.join(metadata["channels"] || [], ",")}")
+    Mix.shell().info("requires=#{Enum.join(metadata["requires"] || [], ",")}")
+    Mix.shell().info("path=#{metadata["relative_path"] || skill.path}")
+
+    if skill.description do
+      Mix.shell().info("description=#{skill.description}")
+    end
   end
 
   defp manage_mcp(id, rest) do

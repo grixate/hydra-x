@@ -112,7 +112,7 @@ defmodule HydraX.TelegramRuntimeTest do
              )
 
     assert_receive {:telegram_test_delivery,
-                    %{content: "Hydra-X smoke test", external_ref: "4242"}}
+                    %{text: "Hydra-X smoke test", chat_id: "4242"}}
 
     assert result.metadata[:provider_message_id] == 456
   end

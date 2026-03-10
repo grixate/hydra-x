@@ -6,6 +6,7 @@ defmodule HydraX.Memory do
   import Ecto.Query
 
   alias Ecto.Adapters.SQL
+  alias HydraX.Embeddings
   alias HydraX.Memory.{Edge, Entry, Markdown}
   alias HydraX.Repo
 
@@ -674,7 +675,7 @@ defmodule HydraX.Memory do
     |> maybe_add_reason(type_intent_boost(entry, query) > 0, type_reason(entry))
     |> maybe_add_reason(channel_context_boost(entry, query_context.channels) > 0, "channel context")
     |> maybe_add_reason(provenance_boost(entry, query) > 0, "source provenance")
-    |> maybe_add_reason(vector_similarity(entry, query_context) >= 0.2, "vector similarity")
+    |> maybe_add_reason(vector_similarity(entry, query_context) >= 0.2, "embedding similarity")
     |> maybe_add_reason(recently_reinforced?(entry), "recently reinforced")
     |> maybe_add_reason(
       is_binary(query) and query != "" and exact_phrase_boost(entry, query) > 0,
@@ -733,9 +734,16 @@ defmodule HydraX.Memory do
       |> query_terms()
       |> Enum.take(24)
 
+    {:ok, embedding} = Embeddings.embed([type, content | semantic_terms])
+
     metadata
     |> Map.put("semantic_terms", semantic_terms)
     |> Map.put("semantic_vector", build_semantic_vector(semantic_terms))
+    |> Map.put("embedding_backend", embedding.backend)
+    |> Map.put("embedding_model", embedding.model)
+    |> Map.put("embedding_dimensions", embedding.dimensions)
+    |> Map.put("embedding_vector", embedding.vector)
+    |> Map.put("embedding_generated_at", DateTime.utc_now())
     |> Map.put("recall_type", type)
     |> Map.put("recall_status", status)
   end
@@ -778,6 +786,13 @@ defmodule HydraX.Memory do
     |> case do
       value when is_map(value) and map_size(value) > 0 -> value
       _value -> build_semantic_vector(semantic_terms(entry))
+    end
+  end
+
+  defp embedding_vector(entry) do
+    case get_in(entry.metadata || %{}, ["embedding_vector"]) do
+      vector when is_list(vector) and vector != [] -> vector
+      _ -> []
     end
   end
 
@@ -854,13 +869,25 @@ defmodule HydraX.Memory do
       else: 0.0
   end
 
-  defp vector_similarity(_entry, %{terms: []}), do: 0.0
+  defp vector_similarity(_entry, %{terms: [], embedding: []}), do: 0.0
   defp vector_similarity(_entry, query) when query in [nil, ""], do: 0.0
+
+  defp vector_similarity(entry, %{embedding: embedding, terms: terms})
+       when is_list(embedding) and embedding != [] do
+    case embedding_vector(entry) do
+      [] ->
+        left = semantic_vector(entry)
+        right = build_semantic_vector(terms)
+        do_vector_similarity(left, right)
+
+      left ->
+        Embeddings.cosine_similarity(left, embedding)
+    end
+  end
 
   defp vector_similarity(entry, %{terms: terms}) do
     left = semantic_vector(entry)
     right = build_semantic_vector(terms)
-
     do_vector_similarity(left, right)
   end
 
@@ -912,9 +939,11 @@ defmodule HydraX.Memory do
 
   defp build_query_context(query) do
     terms = query_terms(query)
+    {:ok, embedding} = Embeddings.embed(terms)
 
     %{
       terms: terms,
+      embedding: embedding.vector,
       channels:
         terms
         |> Enum.filter(&(&1 in ~w(telegram discord slack webchat cli scheduler control plane control_plane)))

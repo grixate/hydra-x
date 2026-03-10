@@ -5,6 +5,7 @@ defmodule HydraX.Runtime.Conversations do
 
   import Ecto.Query
 
+  alias HydraX.Budget
   alias HydraX.Repo
 
   alias HydraX.Runtime.{
@@ -87,6 +88,7 @@ defmodule HydraX.Runtime.Conversations do
     state = (checkpoint && checkpoint.state) || %{}
     turns = list_turns(conversation.id)
     thresholds = HydraX.Runtime.Agents.compaction_policy(conversation.agent_id)
+    token_usage = token_usage(conversation.agent_id, turns)
 
     %{
       conversation: conversation,
@@ -95,7 +97,11 @@ defmodule HydraX.Runtime.Conversations do
       summary: state["summary"],
       updated_at: state["updated_at"],
       checkpoint_id: checkpoint && checkpoint.id,
-      thresholds: thresholds
+      thresholds: thresholds,
+      estimated_tokens: state["estimated_tokens"] || token_usage.estimated_tokens,
+      conversation_limit_tokens:
+        state["conversation_limit_tokens"] || token_usage.conversation_limit_tokens,
+      token_ratio: state["token_ratio"] || token_usage.ratio
     }
   end
 
@@ -261,7 +267,25 @@ defmodule HydraX.Runtime.Conversations do
     ])
   end
 
+  defp token_usage(agent_id, turns) do
+    estimated_tokens =
+      turns
+      |> Enum.map(&%{role: &1.role, content: &1.content})
+      |> Budget.estimate_prompt_tokens()
+
+    policy = Budget.ensure_policy!(agent_id)
+    limit = max(policy.conversation_limit || 0, 1)
+
+    %{
+      estimated_tokens: estimated_tokens,
+      conversation_limit_tokens: limit,
+      ratio: Float.round(estimated_tokens / limit, 4)
+    }
+  end
+
   defp render_transcript(conversation) do
+    channel_state = conversation_channel_state(conversation.id)
+
     header = [
       "# #{conversation.title || "Untitled conversation"}",
       "",
@@ -271,6 +295,25 @@ defmodule HydraX.Runtime.Conversations do
       "- updated_at: #{Calendar.strftime(conversation.updated_at, "%Y-%m-%d %H:%M UTC")}",
       ""
     ]
+
+    execution =
+      case channel_state.status do
+        nil ->
+          []
+
+        _ ->
+          [
+            "## Execution checkpoint",
+            "",
+            "- status: #{channel_state.status}",
+            "- provider: #{channel_state.provider || "n/a"}",
+            "- tool_rounds: #{channel_state.tool_rounds || 0}",
+            "- resumable: #{if(channel_state.resumable, do: "yes", else: "no")}",
+            ""
+          ] ++
+            render_transcript_steps(channel_state.steps) ++
+            render_transcript_events(channel_state.execution_events)
+      end
 
     turns =
       Enum.map(conversation.turns, fn turn ->
@@ -282,9 +325,69 @@ defmodule HydraX.Runtime.Conversations do
         ]
       end)
 
-    [header | turns]
+    [header, execution | turns]
     |> List.flatten()
     |> Enum.join("\n")
+  end
+
+  defp render_transcript_steps([]), do: []
+
+  defp render_transcript_steps(steps) do
+    [
+      "### Steps",
+      ""
+    ] ++
+      Enum.flat_map(steps, fn step ->
+        [
+          "- [#{step["status"] || "pending"}] #{step["kind"] || "step"} #{step["name"] || step["label"] || step["id"]}",
+          maybe_transcript_detail("  summary", step["summary"]),
+          maybe_transcript_detail("  reason", step["reason"] || step["label"]),
+          maybe_transcript_detail("  output", step["output_excerpt"]),
+          maybe_transcript_detail("  cached", if(step["cached"], do: "yes", else: nil)),
+          maybe_transcript_detail("  safety", step["safety_classification"]),
+          maybe_transcript_detail("  updated", format_transcript_datetime(step["updated_at"])),
+          ""
+        ]
+      end)
+  end
+
+  defp render_transcript_events([]), do: []
+
+  defp render_transcript_events(events) do
+    recent = Enum.take(events, -8)
+
+    [
+      "### Recent execution events",
+      ""
+    ] ++
+      Enum.flat_map(recent, fn event ->
+        details = event["details"] || %{}
+
+        [
+          "- #{event["phase"]} @ #{format_transcript_datetime(event["at"])}",
+          maybe_transcript_detail("  summary", details["summary"]),
+          maybe_transcript_detail("  tool", details["tool_name"]),
+          maybe_transcript_detail("  provider", details["provider"]),
+          maybe_transcript_detail("  round", details["round"]),
+          ""
+        ]
+      end)
+  end
+
+  defp maybe_transcript_detail(_label, nil), do: nil
+  defp maybe_transcript_detail(_label, ""), do: nil
+  defp maybe_transcript_detail(label, value), do: "#{label}: #{value}"
+
+  defp format_transcript_datetime(nil), do: nil
+
+  defp format_transcript_datetime(%DateTime{} = value),
+    do: Calendar.strftime(value, "%Y-%m-%d %H:%M:%S UTC")
+
+  defp format_transcript_datetime(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} -> Calendar.strftime(datetime, "%Y-%m-%d %H:%M:%S UTC")
+      _ -> value
+    end
   end
 
   defp maybe_filter_agent(query, nil), do: query

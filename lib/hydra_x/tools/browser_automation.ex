@@ -23,14 +23,14 @@ defmodule HydraX.Tools.BrowserAutomation do
     %{
       name: "browser_automation",
       description:
-        "Use a browser-style workflow for public web pages: fetch a page, inspect links, forms, headings, or tables, preview or submit a simple form, follow a link, capture a lightweight snapshot, or extract matching text. SSRF rules still apply.",
+        "Use a browser-style workflow for public web pages: fetch a page, inspect links, forms, headings, tables, images, scripts, or metadata, preview or submit a simple form, follow a link, capture a lightweight snapshot, or extract matching text. A prior session can be passed back in to preserve cookies and navigation history. SSRF rules still apply.",
       input_schema: %{
         type: "object",
         properties: %{
           action: %{
             type: "string",
             description:
-              "One of fetch_page, extract_links, inspect_forms, inspect_headings, extract_tables, preview_form_submission, click_link, submit_form, capture_snapshot, or extract_text"
+              "One of fetch_page, extract_links, inspect_forms, inspect_headings, inspect_images, inspect_meta, inspect_scripts, inspect_structured_data, extract_tables, preview_form_submission, click_link, submit_form, capture_snapshot, or extract_text"
           },
           url: %{type: "string", description: "The starting page URL"},
           link_text: %{
@@ -64,6 +64,11 @@ defmodule HydraX.Tools.BrowserAutomation do
           text_contains: %{
             type: "string",
             description: "For extract_text, return only text snippets containing this substring"
+          },
+          session: %{
+            type: "object",
+            description:
+              "Optional browser session object returned by a previous browser_automation call. Preserves cookies and navigation history across steps."
           }
         },
         required: ["action", "url"]
@@ -75,11 +80,12 @@ defmodule HydraX.Tools.BrowserAutomation do
   def execute(params, context) do
     request_fn = context[:request_fn] || (&Req.request/1)
     allowlist = Map.get(context, :http_allowlist, HydraX.Config.http_allowlist())
+    session = normalize_session(params[:session] || params["session"])
 
     with action when is_binary(action) <- params[:action] || params["action"],
          url when is_binary(url) <- params[:url] || params["url"],
          {:ok, uri} <- UrlGuard.validate_outbound_url(url, allowlist: allowlist) do
-      dispatch(action, uri, params, request_fn, allowlist)
+      dispatch(action, uri, params, request_fn, allowlist, session)
     else
       nil -> {:error, :missing_url}
       {:error, reason} -> {:error, reason}
@@ -96,12 +102,12 @@ defmodule HydraX.Tools.BrowserAutomation do
   def result_summary(%{action: action, url: url}) when is_binary(url), do: "#{action} #{url}"
   def result_summary(payload), do: inspect(payload, limit: 8, printable_limit: 120)
 
-  defp dispatch("fetch_page", uri, _params, request_fn, _allowlist) do
-    fetch_page(uri, request_fn)
+  defp dispatch("fetch_page", uri, _params, request_fn, _allowlist, session) do
+    fetch_page(uri, request_fn, session)
   end
 
-  defp dispatch("extract_links", uri, params, request_fn, _allowlist) do
-    with {:ok, page} <- fetch_page(uri, request_fn) do
+  defp dispatch("extract_links", uri, params, request_fn, _allowlist, session) do
+    with {:ok, page} <- fetch_page(uri, request_fn, session) do
       {:ok,
        %{
          action: "extract_links",
@@ -113,13 +119,14 @@ defmodule HydraX.Tools.BrowserAutomation do
              params[:link_text] || params["link_text"],
              params[:href_contains] || params["href_contains"],
              params[:link_index] || params["link_index"]
-           )
+           ),
+         session: page.session
        }}
     end
   end
 
-  defp dispatch("inspect_forms", uri, params, request_fn, _allowlist) do
-    with {:ok, page} <- fetch_page(uri, request_fn) do
+  defp dispatch("inspect_forms", uri, params, request_fn, _allowlist, session) do
+    with {:ok, page} <- fetch_page(uri, request_fn, session) do
       forms =
         case params[:form_index] || params["form_index"] do
           nil -> page.forms
@@ -131,44 +138,99 @@ defmodule HydraX.Tools.BrowserAutomation do
          action: "inspect_forms",
          url: page.url,
          title: page.title,
-         forms: forms
+         forms: forms,
+         session: page.session
        }}
     end
   end
 
-  defp dispatch("inspect_headings", uri, _params, request_fn, _allowlist) do
-    with {:ok, page} <- fetch_page(uri, request_fn) do
+  defp dispatch("inspect_headings", uri, _params, request_fn, _allowlist, session) do
+    with {:ok, page} <- fetch_page(uri, request_fn, session) do
       {:ok,
        %{
          action: "inspect_headings",
          url: page.url,
          title: page.title,
-         headings: page.headings
+         headings: page.headings,
+         session: page.session
        }}
     end
   end
 
-  defp dispatch("extract_tables", uri, _params, request_fn, _allowlist) do
-    with {:ok, page} <- fetch_page(uri, request_fn) do
+  defp dispatch("inspect_images", uri, _params, request_fn, _allowlist, session) do
+    with {:ok, page} <- fetch_page(uri, request_fn, session) do
+      {:ok,
+       %{
+         action: "inspect_images",
+         url: page.url,
+         title: page.title,
+         images: page.images,
+         session: page.session
+       }}
+    end
+  end
+
+  defp dispatch("inspect_meta", uri, _params, request_fn, _allowlist, session) do
+    with {:ok, page} <- fetch_page(uri, request_fn, session) do
+      {:ok,
+       %{
+         action: "inspect_meta",
+         url: page.url,
+         title: page.title,
+         meta: page.meta,
+         session: page.session
+       }}
+    end
+  end
+
+  defp dispatch("inspect_scripts", uri, _params, request_fn, _allowlist, session) do
+    with {:ok, page} <- fetch_page(uri, request_fn, session) do
+      {:ok,
+       %{
+         action: "inspect_scripts",
+         url: page.url,
+         title: page.title,
+         scripts: page.scripts,
+         session: page.session
+       }}
+    end
+  end
+
+  defp dispatch("inspect_structured_data", uri, _params, request_fn, _allowlist, session) do
+    with {:ok, page} <- fetch_page(uri, request_fn, session) do
+      {:ok,
+       %{
+         action: "inspect_structured_data",
+         url: page.url,
+         title: page.title,
+         structured_data: page.structured_data,
+         session: page.session
+       }}
+    end
+  end
+
+  defp dispatch("extract_tables", uri, _params, request_fn, _allowlist, session) do
+    with {:ok, page} <- fetch_page(uri, request_fn, session) do
       {:ok,
        %{
          action: "extract_tables",
          url: page.url,
          title: page.title,
-         tables: page.tables
+         tables: page.tables,
+         session: page.session
        }}
     end
   end
 
-  defp dispatch("extract_text", uri, params, request_fn, _allowlist) do
-    with {:ok, page} <- fetch_page(uri, request_fn) do
+  defp dispatch("extract_text", uri, params, request_fn, _allowlist, session) do
+    with {:ok, page} <- fetch_page(uri, request_fn, session) do
       snippets = extract_snippets(page.text, params[:text_contains] || params["text_contains"])
       {:ok, Map.put(page, :snippets, snippets)}
     end
   end
 
-  defp dispatch("click_link", uri, params, request_fn, allowlist) do
-    with {:ok, page} <- fetch_page(uri, request_fn),
+  defp dispatch("click_link", uri, params, request_fn, allowlist, session) do
+    with {:ok, page} <- fetch_page(uri, request_fn, session),
          {:ok, href} <-
            find_link(
              page.links,
@@ -179,7 +241,7 @@ defmodule HydraX.Tools.BrowserAutomation do
          target <- URI.merge(uri, href),
          {:ok, safe_target} <-
            UrlGuard.validate_outbound_url(URI.to_string(target), allowlist: allowlist),
-         {:ok, clicked} <- fetch_page(safe_target, request_fn) do
+         {:ok, clicked} <- fetch_page(safe_target, request_fn, page.session) do
       {:ok,
        %{
          action: "click_link",
@@ -190,13 +252,14 @@ defmodule HydraX.Tools.BrowserAutomation do
          excerpt: clicked.excerpt,
          content_type: clicked.content_type,
          links: clicked.links,
-         forms: clicked.forms
+         forms: clicked.forms,
+         session: clicked.session
        }}
     end
   end
 
-  defp dispatch("submit_form", uri, params, request_fn, allowlist) do
-    with {:ok, page} <- fetch_page(uri, request_fn),
+  defp dispatch("submit_form", uri, params, request_fn, allowlist, session) do
+    with {:ok, page} <- fetch_page(uri, request_fn, session),
          {:ok, form} <-
            find_form(
              page.forms,
@@ -211,10 +274,16 @@ defmodule HydraX.Tools.BrowserAutomation do
            [
              method: if(method == "get", do: :get, else: :post),
              url: URI.to_string(safe_target),
+             headers: session_headers(page.session),
              max_redirects: 3
            ]
            |> maybe_put_form(merged_form_fields(form, params[:fields] || params["fields"] || %{})),
          {:ok, response} <- request_fn.(req) do
+      next_session =
+        page.session
+        |> merge_response_cookies(response.headers || [])
+        |> update_session_history(URI.to_string(safe_target))
+
       {:ok,
        %{
          action: "submit_form",
@@ -224,13 +293,14 @@ defmodule HydraX.Tools.BrowserAutomation do
          form_action: form.action,
          status: response.status,
          excerpt: excerpt_body(response.body),
-         content_type: header(response.headers || [], "content-type")
+         content_type: header(response.headers || [], "content-type"),
+         session: next_session
        }}
     end
   end
 
-  defp dispatch("preview_form_submission", uri, params, request_fn, allowlist) do
-    with {:ok, page} <- fetch_page(uri, request_fn),
+  defp dispatch("preview_form_submission", uri, params, request_fn, allowlist, session) do
+    with {:ok, page} <- fetch_page(uri, request_fn, session),
          {:ok, form} <-
            find_form(
              page.forms,
@@ -250,14 +320,15 @@ defmodule HydraX.Tools.BrowserAutomation do
          method: String.upcase(method),
          form_index: form.index,
          form_action: form.action,
-         fields: fields
+         fields: fields,
+         session: page.session
        }}
     end
   end
 
-  defp dispatch(action, uri, _params, request_fn, _allowlist)
+  defp dispatch(action, uri, _params, request_fn, _allowlist, session)
        when action in ["capture_snapshot", "capture_screenshot"] do
-    with {:ok, page} <- fetch_page(uri, request_fn),
+    with {:ok, page} <- fetch_page(uri, request_fn, session),
          {:ok, path} <- write_snapshot(page) do
       {:ok,
        %{
@@ -265,24 +336,33 @@ defmodule HydraX.Tools.BrowserAutomation do
          url: page.url,
          title: page.title,
          snapshot_path: path,
-         content_type: "image/svg+xml"
+         content_type: "image/svg+xml",
+         link_count: length(page.links),
+         heading_count: length(page.headings),
+         image_count: length(page.images),
+         session: page.session
        }}
     end
   end
 
-  defp dispatch(_action, _uri, _params, _request_fn, _allowlist),
+  defp dispatch(_action, _uri, _params, _request_fn, _allowlist, _session),
     do: {:error, :unsupported_action}
 
-  defp fetch_page(uri, request_fn) do
+  defp fetch_page(uri, request_fn, session) do
     with {:ok, response} <-
            request_fn.(
              method: :get,
              url: URI.to_string(uri),
-             headers: [{"user-agent", "Hydra-X BrowserAutomation/1.0"}],
+             headers:
+               [{"user-agent", "Hydra-X BrowserAutomation/1.0"}] ++ session_headers(session),
              max_redirects: 3
            ) do
       body = body_to_string(response.body)
       text = plain_text(body)
+      next_session =
+        session
+        |> merge_response_cookies(response.headers || [])
+        |> update_session_history(URI.to_string(uri))
 
       {:ok,
        %{
@@ -296,7 +376,12 @@ defmodule HydraX.Tools.BrowserAutomation do
          links: parse_links(body),
          forms: parse_forms(body),
          headings: parse_headings(body),
-         tables: parse_tables(body)
+         images: parse_images(body),
+         meta: parse_meta(body),
+         scripts: parse_scripts(body),
+         structured_data: parse_structured_data(body),
+         tables: parse_tables(body),
+         session: next_session
        }}
     end
   end
@@ -378,6 +463,85 @@ defmodule HydraX.Tools.BrowserAutomation do
 
   defp maybe_put_form(req, fields) when map_size(fields) == 0, do: req
   defp maybe_put_form(req, fields), do: Keyword.put(req, :form, Map.new(fields))
+
+  defp normalize_session(nil), do: %{cookies: %{}, history: []}
+
+  defp normalize_session(session) when is_map(session) do
+    cookies =
+      session
+      |> Map.get(:cookies, Map.get(session, "cookies", %{}))
+      |> normalize_cookies()
+
+    history =
+      session
+      |> Map.get(:history, Map.get(session, "history", []))
+      |> normalize_history()
+
+    %{cookies: cookies, history: history}
+  end
+
+  defp normalize_session(_other), do: %{cookies: %{}, history: []}
+
+  defp normalize_cookies(cookies) when is_map(cookies) do
+    cookies
+    |> Enum.map(fn {key, value} -> {to_string(key), to_string(value)} end)
+    |> Map.new()
+  end
+
+  defp normalize_cookies(_cookies), do: %{}
+
+  defp normalize_history(history) when is_list(history) do
+    history
+    |> Enum.map(&to_string/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.take(-12)
+  end
+
+  defp normalize_history(_history), do: []
+
+  defp session_headers(%{cookies: cookies}) when map_size(cookies) > 0 do
+    cookie_value =
+      cookies
+      |> Enum.sort_by(fn {key, _value} -> key end)
+      |> Enum.map_join("; ", fn {key, value} -> "#{key}=#{value}" end)
+
+    [{"cookie", cookie_value}]
+  end
+
+  defp session_headers(_session), do: []
+
+  defp merge_response_cookies(session, headers) do
+    new_cookies =
+      headers
+      |> Enum.flat_map(fn
+        {"set-cookie", value} -> List.wrap(parse_set_cookie(value))
+        {"Set-Cookie", value} -> List.wrap(parse_set_cookie(value))
+        _ -> []
+      end)
+      |> Map.new()
+
+    %{session | cookies: Map.merge(session.cookies, new_cookies)}
+  end
+
+  defp parse_set_cookie(value) when is_binary(value) do
+    case value |> String.split(";", parts: 2) |> List.first() |> String.split("=", parts: 2) do
+      [name, cookie_value] when name != "" -> {String.trim(name), String.trim(cookie_value)}
+      _ -> nil
+    end
+  end
+
+  defp parse_set_cookie(_value), do: nil
+
+  defp update_session_history(session, url) when is_binary(url) do
+    history =
+      case List.last(session.history) do
+        ^url -> session.history
+        _ -> session.history ++ [url]
+      end
+      |> Enum.take(-12)
+
+    %{session | history: history}
+  end
 
   defp extract_snippets(text, nil), do: take_snippets(text)
   defp extract_snippets(text, ""), do: take_snippets(text)
@@ -476,6 +640,115 @@ defmodule HydraX.Tools.BrowserAutomation do
     |> Enum.take(8)
   end
 
+  defp parse_images(body) do
+    Regex.scan(~r/<img([^>]*)>/i, body)
+    |> Enum.with_index()
+    |> Enum.map(fn {[_, attrs], index} ->
+      %{
+        index: index,
+        src: parse_attr(attrs, "src"),
+        alt: parse_attr(attrs, "alt"),
+        width: parse_dimension(parse_attr(attrs, "width")),
+        height: parse_dimension(parse_attr(attrs, "height"))
+      }
+    end)
+    |> Enum.reject(&is_nil(&1.src))
+    |> Enum.take(16)
+  end
+
+  defp parse_meta(body) do
+    tags =
+      Regex.scan(~r/<meta([^>]*)>/i, body)
+      |> Enum.reduce(%{}, fn [_, attrs], acc ->
+        key =
+          parse_attr(attrs, "property") ||
+            parse_attr(attrs, "name") ||
+            parse_attr(attrs, "http-equiv")
+
+        value = parse_attr(attrs, "content")
+
+        if is_binary(key) and key != "" and is_binary(value) and value != "" do
+          Map.put_new(acc, key, value)
+        else
+          acc
+        end
+      end)
+
+    canonical =
+      case Regex.run(~r/<link[^>]*rel="canonical"[^>]*href="([^"]+)"/i, body) do
+        [_, href] -> decode_html(href)
+        _ -> nil
+      end
+
+    %{
+      description: Map.get(tags, "description"),
+      canonical_url: canonical,
+      open_graph:
+        tags
+        |> Enum.filter(fn {key, _value} -> String.starts_with?(String.downcase(key), "og:") end)
+        |> Map.new(),
+      twitter:
+        tags
+        |> Enum.filter(fn {key, _value} -> String.starts_with?(String.downcase(key), "twitter:") end)
+        |> Map.new(),
+      all: tags
+    }
+  end
+
+  defp parse_scripts(body) do
+    Regex.scan(~r/<script([^>]*)>(.*?)<\/script>/is, body)
+    |> Enum.with_index()
+    |> Enum.map(fn {[_, attrs, content], index} ->
+      type = parse_attr(attrs, "type") || "text/javascript"
+      src = parse_attr(attrs, "src")
+      body_excerpt =
+        content
+        |> strip_tags()
+        |> String.slice(0, 180)
+
+      %{
+        index: index,
+        src: src,
+        type: type,
+        inline: is_nil(src),
+        excerpt: body_excerpt
+      }
+    end)
+    |> Enum.reject(fn script ->
+      is_nil(script.src) and script.excerpt in [nil, ""]
+    end)
+    |> Enum.take(24)
+  end
+
+  defp parse_structured_data(body) do
+    Regex.scan(~r/<script([^>]*)type="application\/ld\+json"([^>]*)>(.*?)<\/script>/is, body)
+    |> Enum.with_index()
+    |> Enum.map(fn {match, index} ->
+      content = List.last(match)
+
+      parsed =
+        case Jason.decode(String.trim(content)) do
+          {:ok, value} when is_map(value) -> value
+          {:ok, value} when is_list(value) -> value
+          _ -> nil
+        end
+
+      summary =
+        case parsed do
+          %{"@type" => type} -> to_string(type)
+          [%{"@type" => type} | _] -> to_string(type)
+          _ -> "structured data"
+        end
+
+      %{
+        index: index,
+        summary: summary,
+        data: parsed || String.slice(String.trim(content), 0, 240)
+      }
+    end)
+    |> Enum.take(12)
+  end
+
   defp parse_form_method(attrs) do
     case Regex.run(~r/method="([^"]+)"/i, attrs) do
       [_, method] -> normalized_method(method)
@@ -506,6 +779,15 @@ defmodule HydraX.Tools.BrowserAutomation do
     case Regex.run(~r/#{key}="([^"]+)"/i, attrs) do
       [_, value] -> decode_html(value)
       _ -> nil
+    end
+  end
+
+  defp parse_dimension(nil), do: nil
+
+  defp parse_dimension(value) do
+    case Integer.parse(value) do
+      {dimension, _rest} -> dimension
+      :error -> nil
     end
   end
 
