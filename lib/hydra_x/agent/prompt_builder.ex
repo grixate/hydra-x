@@ -7,6 +7,8 @@ defmodule HydraX.Agent.PromptBuilder do
   def build(agent, history, bulletin, summary, opts \\ %{}) do
     workspace = Workspace.load_context(agent.workspace_root)
     tool_policy = Map.get(opts, :tool_policy, %{})
+    skill_context = Map.get(opts, :skill_context, "")
+    mcp_context = Map.get(opts, :mcp_context, "")
 
     system_parts =
       [
@@ -14,6 +16,8 @@ defmodule HydraX.Agent.PromptBuilder do
         workspace["IDENTITY.md"],
         workspace["USER.md"],
         workspace["TOOLS.md"],
+        if(skill_context not in [nil, ""], do: "## Enabled Skills\n\n#{skill_context}"),
+        if(mcp_context not in [nil, ""], do: "## MCP Integrations\n\n#{mcp_context}"),
         if(bulletin not in [nil, ""], do: "## Bulletin\n\n#{bulletin}"),
         if(summary not in [nil, ""], do: "## Conversation Summary\n\n#{summary}")
       ]

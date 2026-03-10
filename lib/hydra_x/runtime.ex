@@ -71,6 +71,58 @@ defmodule HydraX.Runtime do
   defdelegate test_provider_config(provider), to: HydraX.Runtime.Providers
   defdelegate test_provider_config(provider, opts), to: HydraX.Runtime.Providers
 
+  # ── Control policy ───────────────────────────────────────────────────────
+
+  defdelegate get_control_policy(), to: HydraX.Runtime.ControlPolicies
+  defdelegate ensure_control_policy!(), to: HydraX.Runtime.ControlPolicies
+  defdelegate change_control_policy(), to: HydraX.Runtime.ControlPolicies
+  defdelegate change_control_policy(policy), to: HydraX.Runtime.ControlPolicies
+  defdelegate change_control_policy(policy, attrs), to: HydraX.Runtime.ControlPolicies
+  defdelegate save_control_policy(attrs), to: HydraX.Runtime.ControlPolicies
+  defdelegate save_control_policy(policy, attrs), to: HydraX.Runtime.ControlPolicies
+  defdelegate effective_control_policy(), to: HydraX.Runtime.ControlPolicies
+  defdelegate effective_control_policy(agent_id), to: HydraX.Runtime.ControlPolicies
+  defdelegate get_agent_control_policy(agent_id), to: HydraX.Runtime.ControlPolicies
+  defdelegate save_agent_control_policy(agent_id, attrs), to: HydraX.Runtime.ControlPolicies
+  defdelegate delete_agent_control_policy!(agent_id), to: HydraX.Runtime.ControlPolicies
+
+  # ── Skills ───────────────────────────────────────────────────────────────
+
+  defdelegate list_skills(), to: HydraX.Runtime.Skills
+  defdelegate list_skills(opts), to: HydraX.Runtime.Skills
+  defdelegate list_skills_for_agent(agent_id), to: HydraX.Runtime.Skills
+  defdelegate enabled_skills(agent_id), to: HydraX.Runtime.Skills
+  defdelegate get_skill!(id), to: HydraX.Runtime.Skills
+  defdelegate refresh_agent_skills(agent_id), to: HydraX.Runtime.Skills
+  defdelegate enable_skill!(id), to: HydraX.Runtime.Skills
+  defdelegate disable_skill!(id), to: HydraX.Runtime.Skills
+  defdelegate skill_prompt_context(agent_id), to: HydraX.Runtime.Skills
+
+  # ── MCP ──────────────────────────────────────────────────────────────────
+
+  defdelegate list_mcp_servers(), to: HydraX.Runtime.MCPServers
+  defdelegate enabled_mcp_servers(), to: HydraX.Runtime.MCPServers
+  defdelegate list_agent_mcp_servers(agent_id), to: HydraX.Runtime.MCPServers
+  defdelegate enabled_mcp_servers(agent_id), to: HydraX.Runtime.MCPServers
+  defdelegate get_agent_mcp_server!(id), to: HydraX.Runtime.MCPServers
+  defdelegate get_mcp_server!(id), to: HydraX.Runtime.MCPServers
+  defdelegate change_mcp_server(), to: HydraX.Runtime.MCPServers
+  defdelegate change_mcp_server(config), to: HydraX.Runtime.MCPServers
+  defdelegate change_mcp_server(config, attrs), to: HydraX.Runtime.MCPServers
+  defdelegate save_mcp_server(attrs), to: HydraX.Runtime.MCPServers
+  defdelegate save_mcp_server(config, attrs), to: HydraX.Runtime.MCPServers
+  defdelegate delete_mcp_server!(id), to: HydraX.Runtime.MCPServers
+  defdelegate mcp_statuses(), to: HydraX.Runtime.MCPServers
+  defdelegate agent_mcp_statuses(), to: HydraX.Runtime.MCPServers
+  defdelegate agent_mcp_statuses(agent_id), to: HydraX.Runtime.MCPServers
+  defdelegate mcp_prompt_context(), to: HydraX.Runtime.MCPServers
+  defdelegate mcp_prompt_context(agent_id), to: HydraX.Runtime.MCPServers
+  defdelegate refresh_agent_mcp_servers(agent_id), to: HydraX.Runtime.MCPServers
+  defdelegate enable_agent_mcp_server!(id), to: HydraX.Runtime.MCPServers
+  defdelegate disable_agent_mcp_server!(id), to: HydraX.Runtime.MCPServers
+  defdelegate test_mcp_server(config), to: HydraX.Runtime.MCPServers
+  defdelegate test_mcp_server(config, opts), to: HydraX.Runtime.MCPServers
+
   # ── Conversations ───────────────────────────────────────────────────────
 
   defdelegate list_conversations(), to: HydraX.Runtime.Conversations
@@ -105,6 +157,8 @@ defmodule HydraX.Runtime do
   defdelegate change_scheduled_job(job, attrs), to: HydraX.Runtime.Jobs
   defdelegate save_scheduled_job(attrs), to: HydraX.Runtime.Jobs
   defdelegate save_scheduled_job(job, attrs), to: HydraX.Runtime.Jobs
+  defdelegate parse_schedule_text(text), to: HydraX.Runtime.Jobs
+  defdelegate schedule_text_for(job), to: HydraX.Runtime.Jobs
   defdelegate delete_scheduled_job!(id), to: HydraX.Runtime.Jobs
   defdelegate list_due_scheduled_jobs(now), to: HydraX.Runtime.Jobs
   def recent_job_runs(), do: HydraX.Runtime.Jobs.recent_job_runs()
@@ -210,6 +264,8 @@ defmodule HydraX.Runtime do
   defdelegate safety_status(opts), to: HydraX.Runtime.Observability
   defdelegate operator_status(), to: HydraX.Runtime.Observability
   defdelegate tool_status(), to: HydraX.Runtime.Observability
+  defdelegate control_policy_status(), to: HydraX.Runtime.Observability
+  defdelegate secret_storage_status(), to: HydraX.Runtime.Observability
   defdelegate observability_status(), to: HydraX.Runtime.Observability
   defdelegate system_status(), to: HydraX.Runtime.Observability
   defdelegate readiness_report(), to: HydraX.Runtime.Observability

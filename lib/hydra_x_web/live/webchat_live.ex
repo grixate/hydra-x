@@ -131,6 +131,22 @@ defmodule HydraXWeb.WebchatLive do
                   {if @config.enabled, do: "ready for chat", else: "disabled in setup"}
                 </div>
               </article>
+              <article class="rounded-3xl border border-white/10 bg-white/5 px-5 py-4">
+                <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                  Session state
+                </div>
+                <div class="mt-3 text-sm text-[var(--hx-accent)]">
+                  {session_state(@conversation, @streaming_content)}
+                </div>
+              </article>
+              <article class="rounded-3xl border border-white/10 bg-white/5 px-5 py-4">
+                <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                  Turn count
+                </div>
+                <div class="mt-3 text-sm text-[var(--hx-accent)]">
+                  {conversation_turn_count(@conversation)}
+                </div>
+              </article>
             </div>
             <div
               :if={@config.welcome_prompt not in [nil, ""]}
@@ -226,4 +242,14 @@ defmodule HydraXWeb.WebchatLive do
 
     "webchat:" <> String.slice(Base.encode16(:crypto.hash(:sha256, base), case: :lower), 0, 20)
   end
+
+  defp session_state(_conversation, streaming_content)
+       when is_binary(streaming_content) and streaming_content != "",
+       do: "assistant streaming"
+
+  defp session_state(nil, _streaming_content), do: "awaiting first message"
+  defp session_state(%{status: status}, _streaming_content), do: "conversation #{status}"
+
+  defp conversation_turn_count(nil), do: 0
+  defp conversation_turn_count(conversation), do: length(conversation.turns || [])
 end

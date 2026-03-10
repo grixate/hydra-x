@@ -17,6 +17,8 @@ defmodule Mix.Tasks.HydraX.Report do
           required_only: :boolean,
           search: :string,
           safety_limit: :integer,
+          incident_limit: :integer,
+          audit_limit: :integer,
           job_limit: :integer,
           conversation_limit: :integer
         ],
@@ -31,12 +33,15 @@ defmodule Mix.Tasks.HydraX.Report do
         required_only: opts[:required_only] || false,
         search: opts[:search],
         safety_limit: opts[:safety_limit] || 20,
+        incident_limit: opts[:incident_limit] || 20,
+        audit_limit: opts[:audit_limit] || 30,
         job_limit: opts[:job_limit] || 10,
         conversation_limit: opts[:conversation_limit] || 10
       )
 
     Mix.shell().info("markdown=#{export.markdown_path}")
     Mix.shell().info("json=#{export.json_path}")
+    Mix.shell().info("bundle=#{export.bundle_dir}")
 
     Mix.shell().info(
       "readiness=#{String.upcase(Atom.to_string(export.snapshot.readiness.summary))}"

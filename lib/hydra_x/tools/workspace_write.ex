@@ -10,6 +10,9 @@ defmodule HydraX.Tools.WorkspaceWrite do
   def description, do: "Write a file inside the agent workspace"
 
   @impl true
+  def safety_classification, do: "workspace_write"
+
+  @impl true
   def tool_schema do
     %{
       name: "workspace_write",
@@ -58,6 +61,13 @@ defmodule HydraX.Tools.WorkspaceWrite do
       _ -> {:error, :invalid_content}
     end
   end
+
+  @impl true
+  def result_summary(%{error: error}) when is_binary(error), do: error
+  def result_summary(%{"error" => error}) when is_binary(error), do: error
+  def result_summary(%{path: path, append: true}), do: "appended #{path}"
+  def result_summary(%{path: path}), do: "wrote #{path}"
+  def result_summary(payload), do: inspect(payload, limit: 8, printable_limit: 120)
 
   defp ensure_parent_dir(path) do
     path

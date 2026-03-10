@@ -35,4 +35,24 @@ defmodule HydraX.Runtime.OperatorAuthTest do
     assert event.level == "info"
     assert event.message =~ "Configured operator password"
   end
+
+  test "operator status reflects configurable session policy" do
+    previous_max = Application.get_env(:hydra_x, :operator_session_max_age_seconds)
+    previous_idle = Application.get_env(:hydra_x, :operator_session_idle_timeout_seconds)
+
+    Application.put_env(:hydra_x, :operator_session_max_age_seconds, 10 * 60 * 60)
+    Application.put_env(:hydra_x, :operator_session_idle_timeout_seconds, 45 * 60)
+
+    on_exit(fn ->
+      restore_env(:operator_session_max_age_seconds, previous_max)
+      restore_env(:operator_session_idle_timeout_seconds, previous_idle)
+    end)
+
+    operator = Runtime.operator_status()
+    assert operator.session_max_age_seconds == 10 * 60 * 60
+    assert operator.idle_timeout_seconds == 45 * 60
+  end
+
+  defp restore_env(key, nil), do: Application.delete_env(:hydra_x, key)
+  defp restore_env(key, value), do: Application.put_env(:hydra_x, key, value)
 end

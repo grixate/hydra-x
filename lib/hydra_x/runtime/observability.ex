@@ -3,12 +3,24 @@ defmodule HydraX.Runtime.Observability do
   Health snapshots, readiness reports, system status, and observability aggregation.
   """
 
+  import Ecto.Query
+
   alias HydraX.Config
   alias HydraX.Memory
+  alias HydraX.Security.Secrets
   alias HydraX.Security.LoginThrottle
 
   alias HydraX.Repo
-  alias HydraX.Runtime.{AgentProfile, OperatorSecret}
+
+  alias HydraX.Runtime.{
+    AgentProfile,
+    DiscordConfig,
+    Helpers,
+    OperatorSecret,
+    ProviderConfig,
+    SlackConfig,
+    TelegramConfig
+  }
 
   def health_snapshot(opts \\ []) do
     provider = HydraX.Runtime.Providers.enabled_provider()
@@ -26,6 +38,8 @@ defmodule HydraX.Runtime.Observability do
     safety_counts = HydraX.Safety.recent_counts()
     system = system_status()
     backups = backup_status()
+    secrets = secret_storage_status()
+    control_policy = control_policy_status()
     safety_errors = Map.get(safety_counts, "error", 0)
     safety_warnings = Map.get(safety_counts, "warn", 0)
 
@@ -34,6 +48,8 @@ defmodule HydraX.Runtime.Observability do
     discord_config = HydraX.Runtime.DiscordAdmin.enabled_discord_config()
     slack_config = HydraX.Runtime.SlackAdmin.enabled_slack_config()
     webchat_config = HydraX.Runtime.WebchatAdmin.enabled_webchat_config()
+    mcp_servers = HydraX.Runtime.MCPServers.list_mcp_servers()
+    mcp_statuses = HydraX.Runtime.MCPServers.mcp_statuses()
     operator = operator_status()
 
     checks = [
@@ -89,6 +105,16 @@ defmodule HydraX.Runtime.Observability do
           end
       },
       %{
+        name: "secrets",
+        status:
+          cond do
+            secrets.plaintext_records > 0 -> :warn
+            secrets.total_records > 0 -> :ok
+            true -> :warn
+          end,
+        detail: secret_detail(secrets)
+      },
+      %{
         name: "channels",
         status:
           if(telegram_config || discord_config || slack_config || webchat_config,
@@ -96,6 +122,16 @@ defmodule HydraX.Runtime.Observability do
             else: :warn
           ),
         detail: channel_health_detail(channel_statuses())
+      },
+      %{
+        name: "mcp",
+        status:
+          cond do
+            mcp_servers == [] -> :warn
+            Enum.all?(mcp_statuses, &(&1.status == :ok)) -> :ok
+            true -> :warn
+          end,
+        detail: mcp_health_detail(mcp_statuses)
       },
       %{
         name: "budget",
@@ -131,6 +167,11 @@ defmodule HydraX.Runtime.Observability do
         name: "tools",
         status: :ok,
         detail: tool_detail(tool_status())
+      },
+      %{
+        name: "control_policy",
+        status: :ok,
+        detail: control_policy_detail(control_policy)
       },
       (
         scheduled_jobs = HydraX.Runtime.Jobs.list_scheduled_jobs(limit: 5)
@@ -317,6 +358,10 @@ defmodule HydraX.Runtime.Observability do
     }
   end
 
+  def mcp_statuses do
+    HydraX.Runtime.MCPServers.mcp_statuses()
+  end
+
   def budget_status(agent_or_id \\ nil)
   def budget_status(%AgentProfile{} = agent), do: do_budget_status(agent)
 
@@ -409,14 +454,47 @@ defmodule HydraX.Runtime.Observability do
       workspace_guard: policy.workspace_read_enabled,
       workspace_write_enabled: policy.workspace_write_enabled,
       url_guard: policy.http_fetch_enabled,
+      browser_automation_enabled: policy.browser_automation_enabled,
       web_search_enabled: policy.web_search_enabled,
       shell_command_enabled: policy.shell_command_enabled,
       workspace_write_channels: policy.workspace_write_channels,
       http_fetch_channels: policy.http_fetch_channels,
+      browser_automation_channels: policy.browser_automation_channels,
       web_search_channels: policy.web_search_channels,
       shell_command_channels: policy.shell_command_channels,
       shell_allowlist: policy.shell_allowlist,
       http_allowlist: policy.http_allowlist
+    }
+  end
+
+  def control_policy_status do
+    policy = HydraX.Runtime.effective_control_policy()
+
+    %{
+      require_recent_auth_for_sensitive_actions: policy.require_recent_auth_for_sensitive_actions,
+      recent_auth_window_minutes: policy.recent_auth_window_minutes,
+      interactive_delivery_channels: policy.interactive_delivery_channels,
+      job_delivery_channels: policy.job_delivery_channels,
+      ingest_roots: policy.ingest_roots
+    }
+  end
+
+  def secret_storage_status do
+    secret_values =
+      provider_secret_values() ++
+        telegram_secret_values() ++ discord_secret_values() ++ slack_secret_values()
+
+    %{
+      total_records: Enum.count(secret_values, &(Helpers.blank_to_nil(&1) not in [nil, ""])),
+      encrypted_records:
+        Enum.count(secret_values, fn value ->
+          value not in [nil, ""] and Secrets.encrypted?(value)
+        end),
+      plaintext_records:
+        Enum.count(secret_values, fn value ->
+          value not in [nil, ""] and not Secrets.encrypted?(value)
+        end),
+      key_source: Secrets.key_source()
     }
   end
 
@@ -448,6 +526,7 @@ defmodule HydraX.Runtime.Observability do
 
   def readiness_report(opts \\ []) do
     tool_policy = HydraX.Runtime.Providers.effective_tool_policy()
+    control_policy = control_policy_status()
     backup_root = Config.backup_root()
     telegram = telegram_status()
     discord = discord_status()
@@ -457,6 +536,7 @@ defmodule HydraX.Runtime.Observability do
     public_url = Config.public_base_url()
     local_url? = local_public_url?(public_url)
     memory_status = memory_triage_status()
+    secrets = secret_storage_status()
     default_agent = HydraX.Runtime.Agents.get_default_agent()
 
     default_agent_runtime =
@@ -680,12 +760,26 @@ defmodule HydraX.Runtime.Observability do
         status:
           if(
             tool_policy.shell_command_enabled or tool_policy.http_allowlist != [] or
-              tool_policy.workspace_write_enabled,
+              tool_policy.workspace_write_enabled or tool_policy.browser_automation_enabled,
             do: :ok,
             else: :warn
           ),
         detail:
-          "list #{enabled_text(tool_policy.workspace_list_enabled)}; read #{enabled_text(tool_policy.workspace_read_enabled)}; write #{enabled_text(tool_policy.workspace_write_enabled)} via #{describe_channels(tool_policy.workspace_write_channels)}; search #{enabled_text(tool_policy.web_search_enabled)} via #{describe_channels(tool_policy.web_search_channels)}; shell #{enabled_text(tool_policy.shell_command_enabled)} via #{describe_channels(tool_policy.shell_command_channels)}; http via #{describe_channels(tool_policy.http_fetch_channels)} allowlist #{describe_allowlist(tool_policy.http_allowlist)}"
+          "list #{enabled_text(tool_policy.workspace_list_enabled)}; read #{enabled_text(tool_policy.workspace_read_enabled)}; write #{enabled_text(tool_policy.workspace_write_enabled)} via #{describe_channels(tool_policy.workspace_write_channels)}; browser #{enabled_text(tool_policy.browser_automation_enabled)} via #{describe_channels(tool_policy.browser_automation_channels)}; search #{enabled_text(tool_policy.web_search_enabled)} via #{describe_channels(tool_policy.web_search_channels)}; shell #{enabled_text(tool_policy.shell_command_enabled)} via #{describe_channels(tool_policy.shell_command_channels)}; http via #{describe_channels(tool_policy.http_fetch_channels)} allowlist #{describe_allowlist(tool_policy.http_allowlist)}"
+      },
+      %{
+        id: "control_policy",
+        label: "Control policy reviewed",
+        required: false,
+        status: :ok,
+        detail: control_policy_detail(control_policy)
+      },
+      %{
+        id: "secrets",
+        label: "Runtime secrets are encrypted at rest",
+        required: false,
+        status: if(secrets.plaintext_records > 0, do: :warn, else: :ok),
+        detail: secret_detail(secrets)
       }
     ]
 
@@ -873,6 +967,16 @@ defmodule HydraX.Runtime.Observability do
     |> Enum.join(" · ")
   end
 
+  defp mcp_health_detail([]), do: "no MCP servers configured"
+
+  defp mcp_health_detail(statuses) do
+    statuses
+    |> Enum.map(fn status ->
+      "#{status.name} (#{status.transport}): #{if(status.status == :ok, do: "healthy", else: "warn")}#{if(status.enabled, do: "", else: " disabled")}"
+    end)
+    |> Enum.join(" · ")
+  end
+
   defp agent_suffix(nil), do: ""
   defp agent_suffix(name), do: " -> #{name}"
 
@@ -903,7 +1007,46 @@ defmodule HydraX.Runtime.Observability do
         hosts -> Enum.join(hosts, ", ")
       end
 
-    "workspace list #{enabled_text(tool_status.workspace_list_enabled)}; workspace read #{enabled_text(tool_status.workspace_guard)}; workspace write/patch #{enabled_text(tool_status.workspace_write_enabled)} via #{describe_channels(tool_status.workspace_write_channels)}; web search #{enabled_text(tool_status.web_search_enabled)} via #{describe_channels(tool_status.web_search_channels)}; http fetch #{enabled_text(tool_status.url_guard)} via #{describe_channels(tool_status.http_fetch_channels)}; shell #{enabled_text(tool_status.shell_command_enabled)} via #{describe_channels(tool_status.shell_command_channels)}; shell allowlist: #{shell}; http allowlist: #{http}"
+    "workspace list #{enabled_text(tool_status.workspace_list_enabled)}; workspace read #{enabled_text(tool_status.workspace_guard)}; workspace write/patch #{enabled_text(tool_status.workspace_write_enabled)} via #{describe_channels(tool_status.workspace_write_channels)}; browser automation #{enabled_text(tool_status.browser_automation_enabled)} via #{describe_channels(tool_status.browser_automation_channels)}; web search #{enabled_text(tool_status.web_search_enabled)} via #{describe_channels(tool_status.web_search_channels)}; http fetch #{enabled_text(tool_status.url_guard)} via #{describe_channels(tool_status.http_fetch_channels)}; shell #{enabled_text(tool_status.shell_command_enabled)} via #{describe_channels(tool_status.shell_command_channels)}; shell allowlist: #{shell}; http allowlist: #{http}"
+  end
+
+  defp control_policy_detail(control_policy) do
+    "recent auth #{if(control_policy.require_recent_auth_for_sensitive_actions, do: "required", else: "optional")} within #{control_policy.recent_auth_window_minutes}m; interactive delivery via #{describe_channels(control_policy.interactive_delivery_channels)}; job delivery via #{describe_channels(control_policy.job_delivery_channels)}; ingest roots #{describe_allowlist(control_policy.ingest_roots)}"
+  end
+
+  defp secret_detail(secrets) do
+    "encrypted #{secrets.encrypted_records}/#{secrets.total_records}; plaintext #{secrets.plaintext_records}; key source #{secrets.key_source}"
+  end
+
+  defp provider_secret_values do
+    Repo.all(from(provider in ProviderConfig, select: provider.api_key))
+  end
+
+  defp telegram_secret_values do
+    Repo.all(
+      from(config in TelegramConfig,
+        select: [config.bot_token, config.webhook_secret]
+      )
+    )
+    |> List.flatten()
+  end
+
+  defp discord_secret_values do
+    Repo.all(
+      from(config in DiscordConfig,
+        select: [config.bot_token, config.webhook_secret]
+      )
+    )
+    |> List.flatten()
+  end
+
+  defp slack_secret_values do
+    Repo.all(
+      from(config in SlackConfig,
+        select: [config.bot_token, config.signing_secret]
+      )
+    )
+    |> List.flatten()
   end
 
   defp describe_channels([]), do: "none"

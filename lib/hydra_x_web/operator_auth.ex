@@ -7,6 +7,7 @@ defmodule HydraXWeb.OperatorAuth do
   alias Phoenix.Component
   alias Phoenix.LiveView
   alias HydraX.Runtime
+  alias HydraX.Runtime.Helpers
 
   @session_key :operator_authenticated
   @session_ts_key :operator_authenticated_at
@@ -14,17 +15,30 @@ defmodule HydraXWeb.OperatorAuth do
   @session_recent_auth_key :operator_recent_auth_at
 
   # Session expires after 24 hours regardless of activity
-  @session_max_age_seconds 24 * 60 * 60
+  @default_session_max_age_seconds 24 * 60 * 60
   # Session expires after 2 hours of inactivity
-  @idle_timeout_seconds 2 * 60 * 60
-  # Sensitive actions require a fresh sign-in within 15 minutes
-  @recent_auth_window_seconds 15 * 60
-
+  @default_idle_timeout_seconds 2 * 60 * 60
   def init(action), do: action
 
-  def session_max_age_seconds, do: @session_max_age_seconds
-  def idle_timeout_seconds, do: @idle_timeout_seconds
-  def recent_auth_window_seconds, do: @recent_auth_window_seconds
+  def session_max_age_seconds,
+    do:
+      Application.get_env(
+        :hydra_x,
+        :operator_session_max_age_seconds,
+        @default_session_max_age_seconds
+      )
+
+  def idle_timeout_seconds,
+    do:
+      Application.get_env(
+        :hydra_x,
+        :operator_session_idle_timeout_seconds,
+        @default_idle_timeout_seconds
+      )
+
+  def recent_auth_window_seconds do
+    Runtime.effective_control_policy().recent_auth_window_minutes * 60
+  end
 
   def call(conn, :redirect_if_authenticated) do
     if Runtime.operator_password_configured?() and session_valid?(conn) do
@@ -86,9 +100,9 @@ defmodule HydraXWeb.OperatorAuth do
       recent_auth_at: recent_auth_at,
       valid?: authenticated? and not session_expired?(authenticated_at, last_active_at),
       recent_auth_valid?: authenticated? and recent_auth_valid?(recent_auth_at),
-      session_expires_at: expires_at(authenticated_at, @session_max_age_seconds),
-      idle_expires_at: expires_at(last_active_at, @idle_timeout_seconds),
-      recent_auth_expires_at: expires_at(recent_auth_at, @recent_auth_window_seconds)
+      session_expires_at: expires_at(authenticated_at, session_max_age_seconds()),
+      idle_expires_at: expires_at(last_active_at, idle_timeout_seconds()),
+      recent_auth_expires_at: expires_at(recent_auth_at, recent_auth_window_seconds())
     }
   end
 
@@ -130,14 +144,14 @@ defmodule HydraXWeb.OperatorAuth do
   defp session_expired?(authenticated_at, last_active_at) do
     now = System.system_time(:second)
 
-    now - authenticated_at > @session_max_age_seconds or
-      now - last_active_at > @idle_timeout_seconds
+    now - authenticated_at > session_max_age_seconds() or
+      now - last_active_at > idle_timeout_seconds()
   end
 
   defp recent_auth_valid?(nil), do: false
 
   defp recent_auth_valid?(recent_auth_at) do
-    System.system_time(:second) - recent_auth_at <= @recent_auth_window_seconds
+    System.system_time(:second) - recent_auth_at <= recent_auth_window_seconds()
   end
 
   defp touch_activity(conn) do
@@ -146,6 +160,17 @@ defmodule HydraXWeb.OperatorAuth do
 
   defp clear_expired_session(conn) do
     if get_session(conn, @session_key) == true do
+      state = session_state(conn)
+
+      Helpers.audit_auth_action("Operator session expired",
+        level: "warn",
+        metadata: %{
+          expired_by: expired_by(state),
+          authenticated_at: state.authenticated_at,
+          last_active_at: state.last_active_at
+        }
+      )
+
       log_out(conn)
     else
       conn
@@ -159,4 +184,20 @@ defmodule HydraXWeb.OperatorAuth do
 
   defp expires_at(nil, _seconds), do: nil
   defp expires_at(timestamp, seconds), do: DateTime.from_unix!(timestamp + seconds)
+
+  defp expired_by(state) do
+    now = System.system_time(:second)
+
+    cond do
+      is_integer(state.authenticated_at) and
+          now - state.authenticated_at > session_max_age_seconds() ->
+        "max_age"
+
+      is_integer(state.last_active_at) and now - state.last_active_at > idle_timeout_seconds() ->
+        "idle_timeout"
+
+      true ->
+        "unknown"
+    end
+  end
 end

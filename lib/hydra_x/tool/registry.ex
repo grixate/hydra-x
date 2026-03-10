@@ -2,7 +2,9 @@ defmodule HydraX.Tool.Registry do
   @moduledoc false
 
   alias HydraX.Tools.{
+    BrowserAutomation,
     HttpFetch,
+    MCPInspect,
     MemoryRecall,
     MemorySave,
     Reply,
@@ -17,11 +19,13 @@ defmodule HydraX.Tool.Registry do
   @all_tools [
     {WorkspaceList, :workspace_list_enabled},
     {HttpFetch, :http_fetch_enabled},
+    {BrowserAutomation, :browser_automation_enabled},
     {ShellCommand, :shell_command_enabled},
     {WorkspaceRead, :workspace_read_enabled},
     {WorkspaceWrite, :workspace_write_enabled},
     {WorkspacePatch, :workspace_write_enabled},
     {WebSearch, :web_search_enabled},
+    {MCPInspect, nil},
     {MemoryRecall, nil},
     {MemorySave, nil},
     {Reply, nil}

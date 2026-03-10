@@ -13,6 +13,9 @@ defmodule HydraX.Tools.ShellCommand do
   def description, do: "Run a small allowlisted command inside the agent workspace"
 
   @impl true
+  def safety_classification, do: "shell_command"
+
+  @impl true
   def tool_schema do
     %{
       name: "shell_command",
@@ -54,6 +57,16 @@ defmodule HydraX.Tools.ShellCommand do
       {:error, reason} -> {:error, reason}
     end
   end
+
+  @impl true
+  def result_summary(%{error: error}) when is_binary(error), do: error
+  def result_summary(%{"error" => error}) when is_binary(error), do: error
+
+  def result_summary(%{command: command, exit_status: exit_status}) do
+    "#{command} (exit #{exit_status})"
+  end
+
+  def result_summary(payload), do: inspect(payload, limit: 8, printable_limit: 120)
 
   defp run_command(runner, command, args, workspace_root) do
     task =

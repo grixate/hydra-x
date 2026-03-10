@@ -87,16 +87,35 @@ defmodule HydraX.Agent.Channel do
     turns = Runtime.list_turns(conversation.id)
     {:ok, _pid} = Compactor.ensure_started(agent_id, conversation.id)
 
+    pending_turns = resumable_pending_turns(conversation.id, turns)
+    recovered? = pending_turns != []
+
     data =
       %{
         agent_id: agent_id,
         conversation: conversation,
         turns: turns,
-        coalesce_buffer: [],
+        coalesce_buffer: pending_turns,
         pending_from: []
       }
 
-    {:ok, :ready, data}
+    if recovered? do
+      append_channel_event(conversation.id, "recovered_after_restart", %{
+        "summary" =>
+          "Recovered #{length(pending_turns)} pending user turn(s) after channel restart",
+        "pending_turn_ids" => Enum.map(pending_turns, & &1.id)
+      })
+
+      update_channel_checkpoint(conversation.id, %{
+        "status" => "interrupted",
+        "resumable" => true,
+        "updated_at" => DateTime.utc_now()
+      })
+
+      {:ok, :processing, data, [{:next_event, :internal, :process_buffer}]}
+    else
+      {:ok, :ready, data}
+    end
   end
 
   @impl true
@@ -136,22 +155,38 @@ defmodule HydraX.Agent.Channel do
     summary = Compactor.current_summary(data.conversation.id)
     tool_policy = Runtime.effective_tool_policy(data.agent_id)
 
-    prompt = PromptBuilder.build(agent, history, bulletin, summary, %{tool_policy: tool_policy})
+    prompt =
+      PromptBuilder.build(agent, history, bulletin, summary, %{
+        tool_policy: tool_policy,
+        skill_context: Runtime.skill_prompt_context(agent.id),
+        mcp_context: Runtime.mcp_prompt_context(agent.id)
+      })
+
     plan = Planner.build(data.conversation, data.coalesce_buffer, prompt.tools || [])
 
     update_channel_checkpoint(data.conversation.id, %{
       "status" => "planned",
       "plan" => plan,
+      "steps" => plan["steps"] || [],
+      "tool_cache" =>
+        tool_cache_for_turn(data.conversation.id, latest_turn_id(data.coalesce_buffer)),
+      "tool_cache_scope_turn_id" => latest_turn_id(data.coalesce_buffer),
+      "current_step_id" => step_id_at(plan["steps"], 0),
+      "current_step_index" => if(plan["steps"] in [nil, []], do: nil, else: 0),
+      "resumable" => true,
       "latest_user_turn_id" => latest_turn_id(data.coalesce_buffer),
       "tool_rounds" => 0,
       "tool_results" => [],
-      "execution_events" => [
-        execution_event("planned", %{
-          "summary" => "Planned #{length(plan["steps"] || [])} execution steps",
-          "step_count" => length(plan["steps"] || []),
-          "mode" => plan["mode"]
-        })
-      ],
+      "execution_events" =>
+        append_execution_event(
+          current_execution_events(data.conversation.id),
+          "planned",
+          %{
+            "summary" => "Planned #{length(plan["steps"] || [])} execution steps",
+            "step_count" => length(plan["steps"] || []),
+            "mode" => plan["mode"]
+          }
+        ),
       "updated_at" => DateTime.utc_now()
     })
 
@@ -183,6 +218,10 @@ defmodule HydraX.Agent.Channel do
 
         update_channel_checkpoint(data.conversation.id, %{
           "status" => "completed",
+          "steps" => mark_final_provider_step_completed(plan["steps"] || []),
+          "current_step_id" => nil,
+          "current_step_index" => nil,
+          "resumable" => false,
           "assistant_turn_id" => assistant_turn.id,
           "provider" => response_metadata[:provider] || response_metadata["provider"],
           "tool_rounds" =>
@@ -277,32 +316,55 @@ defmodule HydraX.Agent.Channel do
       {:ok, %{tool_calls: tool_calls, stop_reason: "tool_use"} = response}
       when is_list(tool_calls) and tool_calls != [] ->
         # LLM wants to call tools — execute them and loop
+        updated_steps =
+          tool_calls
+          |> Enum.reduce(current_checkpoint_steps(data.conversation.id), fn tool_call, steps ->
+            mark_step_running(steps, "tool", tool_call.name)
+          end)
+
         append_channel_event(data.conversation.id, "provider_tool_request", %{
           "round" => round + 1,
           "provider" => response.provider,
           "tool_count" => length(tool_calls)
         })
 
-        tool_results =
-          Worker.execute_tool_calls(data.agent_id, data.conversation, tool_calls)
+        {tool_results, cache_hits, cache_misses} =
+          execute_tool_calls_with_cache(data, tool_calls)
 
         update_channel_checkpoint(data.conversation.id, %{
           "status" => "executing_tools",
+          "steps" => complete_tool_steps(updated_steps, tool_results),
+          "current_step_id" =>
+            current_step_id_after_tools(complete_tool_steps(updated_steps, tool_results)),
+          "current_step_index" =>
+            current_step_index_after_tools(complete_tool_steps(updated_steps, tool_results)),
+          "resumable" => true,
           "tool_rounds" => round + 1,
           "active_tool_calls" =>
             Enum.map(tool_calls, fn call ->
               %{"id" => call.id, "name" => call.name}
             end),
+          "tool_cache" => merge_tool_cache(data.conversation.id, tool_results),
           "tool_results" => summarize_tool_results(all_tool_results ++ tool_results),
           "updated_at" => DateTime.utc_now()
         })
+
+        if cache_hits > 0 do
+          append_channel_event(data.conversation.id, "tool_cache_hit", %{
+            "round" => round + 1,
+            "cache_hits" => cache_hits,
+            "cache_misses" => cache_misses
+          })
+        end
 
         Enum.each(tool_results, fn result ->
           append_channel_event(data.conversation.id, "tool_result", %{
             "round" => round + 1,
             "tool_name" => result.tool_name,
             "is_error" => result[:is_error] || false,
-            "summary" => summarize_tool_result_payload(result.result)
+            "cached" => result[:cached] || false,
+            "summary" => result[:summary] || summarize_tool_result_payload(result.result),
+            "safety_classification" => result[:safety_classification] || "standard"
           })
         end)
 
@@ -322,11 +384,22 @@ defmodule HydraX.Agent.Channel do
 
       {:ok, response} ->
         # Final response — no more tool calls
+        steps =
+          current_checkpoint_steps(data.conversation.id)
+          |> mark_provider_running()
+          |> mark_provider_completed()
+
         append_channel_event(data.conversation.id, "provider_completed", %{
           "round" => round,
           "provider" => response.provider,
           "stop_reason" => response.stop_reason,
           "content_length" => String.length(response.content || "")
+        })
+
+        update_channel_checkpoint(data.conversation.id, %{
+          "steps" => steps,
+          "current_step_id" => nil,
+          "current_step_index" => nil
         })
 
         content = response.content || ""
@@ -339,6 +412,20 @@ defmodule HydraX.Agent.Channel do
          }}
 
       {:error_response, content, metadata} ->
+        steps =
+          current_checkpoint_steps(data.conversation.id)
+          |> mark_provider_running()
+          |> mark_provider_failed()
+
+        update_channel_checkpoint(data.conversation.id, %{
+          "status" => "failed",
+          "steps" => steps,
+          "current_step_id" => current_step_id_after_failure(steps),
+          "current_step_index" => current_step_index_after_failure(steps),
+          "resumable" => false,
+          "updated_at" => DateTime.utc_now()
+        })
+
         {content, Map.merge(metadata, %{tool_rounds: round, tool_results: all_tool_results})}
     end
   end
@@ -442,6 +529,17 @@ defmodule HydraX.Agent.Channel do
 
           case Router.complete_stream(request, self()) do
             {:ok, ref} ->
+              steps = current_checkpoint_steps(data.conversation.id) |> mark_provider_running()
+
+              update_channel_checkpoint(data.conversation.id, %{
+                "status" => "streaming",
+                "steps" => steps,
+                "current_step_id" => step_id_for_running(steps),
+                "current_step_index" => step_index_for_running(steps),
+                "resumable" => true,
+                "updated_at" => DateTime.utc_now()
+              })
+
               append_channel_event(data.conversation.id, "stream_started", %{
                 "provider" => provider_name(data.agent_id),
                 "estimated_input_tokens" => estimated_input_tokens,
@@ -525,6 +623,10 @@ defmodule HydraX.Agent.Channel do
 
     update_channel_checkpoint(data.conversation.id, %{
       "status" => "completed",
+      "steps" => current_checkpoint_steps(data.conversation.id) |> mark_provider_completed(),
+      "current_step_id" => nil,
+      "current_step_index" => nil,
+      "resumable" => false,
       "assistant_turn_id" => assistant_turn.id,
       "provider" => response.provider,
       "tool_rounds" => round,
@@ -627,15 +729,24 @@ defmodule HydraX.Agent.Channel do
   defp append_channel_event(conversation_id, phase, details) when is_map(details) do
     existing = Runtime.get_checkpoint(conversation_id, "channel")
     state = (existing && existing.state) || %{}
+    events = append_execution_event(Map.get(state, "execution_events", []), phase, details)
 
-    events =
-      state
-      |> Map.get("execution_events", [])
-      |> List.wrap()
-      |> Kernel.++([execution_event(phase, details)])
-      |> Enum.take(-15)
+    Runtime.upsert_checkpoint(
+      conversation_id,
+      "channel",
+      Map.put(state, "execution_events", events)
+    )
+  end
 
-    Runtime.upsert_checkpoint(conversation_id, "channel", Map.put(state, "execution_events", events))
+  defp current_execution_events(conversation_id) do
+    Runtime.conversation_channel_state(conversation_id).execution_events || []
+  end
+
+  defp append_execution_event(events, phase, details) do
+    events
+    |> List.wrap()
+    |> Kernel.++([execution_event(phase, details)])
+    |> Enum.take(-15)
   end
 
   defp execution_event(phase, details) do
@@ -646,13 +757,285 @@ defmodule HydraX.Agent.Channel do
     }
   end
 
+  defp resumable_pending_turns(conversation_id, turns) do
+    checkpoint = Runtime.get_checkpoint(conversation_id, "channel")
+    state = (checkpoint && checkpoint.state) || %{}
+
+    if state["status"] in ["planned", "executing_tools", "streaming", "interrupted"] and
+         is_nil(state["assistant_turn_id"]) do
+      turns_after_last_assistant(turns)
+    else
+      []
+    end
+  end
+
+  defp turns_after_last_assistant(turns) do
+    last_assistant_sequence =
+      turns
+      |> Enum.filter(&(&1.role == "assistant"))
+      |> List.last()
+      |> then(&(&1 && &1.sequence))
+
+    turns
+    |> Enum.filter(fn turn ->
+      turn.role == "user" and
+        (is_nil(last_assistant_sequence) or turn.sequence > last_assistant_sequence)
+    end)
+  end
+
+  defp step_id_at(steps, index) when is_list(steps) do
+    steps |> Enum.at(index) |> then(&(&1 && &1["id"]))
+  end
+
+  defp mark_final_provider_step_completed(steps) when is_list(steps) do
+    steps
+    |> mark_provider_running()
+    |> mark_provider_completed()
+  end
+
+  defp current_checkpoint_steps(conversation_id) do
+    Runtime.conversation_channel_state(conversation_id).steps || []
+  end
+
+  defp execute_tool_calls_with_cache(data, tool_calls) do
+    cache =
+      data.conversation.id
+      |> current_tool_cache()
+      |> Map.new(fn entry -> {entry["fingerprint"], entry} end)
+
+    {cached_results, uncached_calls} =
+      Enum.reduce(tool_calls, {[], []}, fn tool_call, {cached, uncached} ->
+        fingerprint = tool_call_fingerprint(tool_call)
+
+        case Map.get(cache, fingerprint) do
+          nil ->
+            {cached, [tool_call | uncached]}
+
+          entry ->
+            result =
+              cached_tool_result(tool_call, entry)
+
+            {[result | cached], uncached}
+        end
+      end)
+
+    fresh_results =
+      uncached_calls
+      |> Enum.reverse()
+      |> case do
+        [] ->
+          []
+
+        calls ->
+          fingerprints =
+            Map.new(calls, fn call -> {call.id, tool_call_fingerprint(call)} end)
+
+          Worker.execute_tool_calls(data.agent_id, data.conversation, calls)
+          |> Enum.map(fn result ->
+            Map.put(result, :fingerprint, Map.fetch!(fingerprints, result.tool_use_id))
+          end)
+      end
+
+    {
+      Enum.reverse(cached_results) ++ fresh_results,
+      length(cached_results),
+      length(fresh_results)
+    }
+  end
+
+  defp cached_tool_result(tool_call, entry) do
+    %{
+      tool_use_id: tool_call.id,
+      tool_name: tool_call.name,
+      result: entry["result"],
+      is_error: entry["is_error"] || false,
+      cached: true,
+      fingerprint: entry["fingerprint"],
+      summary: entry["summary"],
+      safety_classification: entry["safety_classification"]
+    }
+  end
+
+  defp merge_tool_cache(conversation_id, results) do
+    existing =
+      current_tool_cache(conversation_id)
+      |> Map.new(fn entry -> {entry["fingerprint"], entry} end)
+
+    results
+    |> Enum.reduce(existing, fn result, acc ->
+      Map.put(
+        acc,
+        tool_result_cache_entry(result)["fingerprint"],
+        tool_result_cache_entry(result)
+      )
+    end)
+    |> Map.values()
+  end
+
+  defp tool_result_cache_entry(result) do
+    %{
+      "fingerprint" => result[:fingerprint],
+      "tool_name" => result.tool_name,
+      "result" => result.result,
+      "is_error" => result[:is_error] || false,
+      "summary" => result[:summary],
+      "safety_classification" => result[:safety_classification] || "standard",
+      "cached_at" => DateTime.utc_now()
+    }
+  end
+
+  defp current_tool_cache(conversation_id) do
+    state = (Runtime.get_checkpoint(conversation_id, "channel") || %{state: %{}}).state || %{}
+    Map.get(state, "tool_cache", [])
+  end
+
+  defp tool_cache_for_turn(conversation_id, latest_user_turn_id) do
+    state = (Runtime.get_checkpoint(conversation_id, "channel") || %{state: %{}}).state || %{}
+
+    if Map.get(state, "tool_cache_scope_turn_id") == latest_user_turn_id do
+      Map.get(state, "tool_cache", [])
+    else
+      []
+    end
+  end
+
+  defp tool_call_fingerprint(%{name: name, arguments: arguments}) do
+    [name, normalized_fingerprint_term(arguments)]
+    |> :erlang.term_to_binary()
+    |> Base.encode16(case: :lower)
+  end
+
+  defp normalized_fingerprint_term(term) when is_map(term) do
+    term
+    |> Enum.map(fn {key, value} -> {to_string(key), normalized_fingerprint_term(value)} end)
+    |> Enum.sort()
+  end
+
+  defp normalized_fingerprint_term(term) when is_list(term) do
+    Enum.map(term, &normalized_fingerprint_term/1)
+  end
+
+  defp normalized_fingerprint_term(term), do: term
+
+  defp mark_step_running(steps, "tool", tool_name) do
+    {updated, found?} =
+      Enum.map_reduce(steps, false, fn step, found? ->
+        cond do
+          found? ->
+            {step, true}
+
+          step["kind"] == "tool" and step["name"] == tool_name and step["status"] == "pending" ->
+            {Map.put(step, "status", "running"), true}
+
+          true ->
+            {step, found?}
+        end
+      end)
+
+    if found? do
+      updated
+    else
+      updated ++
+        [
+          %{
+            "id" => "tool-dynamic-#{tool_name}",
+            "kind" => "tool",
+            "name" => tool_name,
+            "reason" => "dynamically requested by provider",
+            "status" => "running"
+          }
+        ]
+    end
+  end
+
+  defp complete_tool_steps(steps, tool_results) do
+    Enum.reduce(tool_results, steps, fn result, acc ->
+      update_matching_step(acc, "tool", result.tool_name, fn step ->
+        Map.put(step, "status", if(result[:is_error] || false, do: "failed", else: "completed"))
+      end)
+    end)
+  end
+
+  defp mark_provider_running(steps) do
+    update_matching_step(steps, "provider", nil, &Map.put(&1, "status", "running"))
+  end
+
+  defp mark_provider_completed(steps) do
+    update_matching_step(steps, "provider", nil, &Map.put(&1, "status", "completed"))
+  end
+
+  defp mark_provider_failed(steps) do
+    update_matching_step(steps, "provider", nil, &Map.put(&1, "status", "failed"))
+  end
+
+  defp update_matching_step(steps, "provider", _name, fun) do
+    {updated, found?} =
+      Enum.map_reduce(steps, false, fn step, found? ->
+        cond do
+          found? ->
+            {step, true}
+
+          step["kind"] == "provider" and step["status"] in ["pending", "running"] ->
+            {fun.(step), true}
+
+          true ->
+            {step, found?}
+        end
+      end)
+
+    if found? do
+      updated
+    else
+      updated ++
+        [
+          %{
+            "id" => "provider-final",
+            "kind" => "provider",
+            "label" => "Final response",
+            "status" => "running"
+          }
+          |> fun.()
+        ]
+    end
+  end
+
+  defp update_matching_step(steps, "tool", name, fun) do
+    Enum.map(steps, fn step ->
+      if step["kind"] == "tool" and step["name"] == name and
+           step["status"] in ["pending", "running"] do
+        fun.(step)
+      else
+        step
+      end
+    end)
+  end
+
+  defp current_step_id_after_tools(steps), do: step_id_for_status(steps, "pending")
+  defp current_step_index_after_tools(steps), do: step_index_for_status(steps, "pending")
+  defp current_step_id_after_failure(steps), do: step_id_for_status(steps, "failed")
+  defp current_step_index_after_failure(steps), do: step_index_for_status(steps, "failed")
+  defp step_id_for_running(steps), do: step_id_for_status(steps, "running")
+  defp step_index_for_running(steps), do: step_index_for_status(steps, "running")
+
+  defp step_id_for_status(steps, status) do
+    steps
+    |> Enum.find(&(&1["status"] == status))
+    |> then(&(&1 && &1["id"]))
+  end
+
+  defp step_index_for_status(steps, status) do
+    Enum.find_index(steps, &(&1["status"] == status))
+  end
+
   defp summarize_tool_results(results) do
     Enum.map(results, fn result ->
       %{
         "tool_use_id" => result.tool_use_id,
         "tool_name" => result.tool_name,
         "is_error" => result[:is_error] || false,
-        "summary" => summarize_tool_result_payload(result.result)
+        "cached" => result[:cached] || false,
+        "summary" => result[:summary] || summarize_tool_result_payload(result.result),
+        "safety_classification" => result[:safety_classification] || "standard"
       }
     end)
   end
@@ -665,6 +1048,18 @@ defmodule HydraX.Agent.Channel do
 
   defp summarize_tool_result_payload(%{"path" => path}) when is_binary(path),
     do: "path=#{path}"
+
+  defp summarize_tool_result_payload(%{snapshot_path: path}) when is_binary(path),
+    do: "snapshot=#{path}"
+
+  defp summarize_tool_result_payload(%{"snapshot_path" => path}) when is_binary(path),
+    do: "snapshot=#{path}"
+
+  defp summarize_tool_result_payload(%{title: title}) when is_binary(title),
+    do: "title=#{title}"
+
+  defp summarize_tool_result_payload(%{"title" => title}) when is_binary(title),
+    do: "title=#{title}"
 
   defp summarize_tool_result_payload(%{query: query}) when is_binary(query),
     do: "query=#{query}"

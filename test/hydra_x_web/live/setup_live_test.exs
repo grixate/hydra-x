@@ -62,6 +62,30 @@ defmodule HydraXWeb.SetupLiveTest do
     assert html =~ ".tar.gz"
   end
 
+  test "setup page can save the global control policy", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/setup")
+
+    view
+    |> form("form[phx-submit=\"save_control_policy\"]", %{
+      "control_policy" => %{
+        "require_recent_auth_for_sensitive_actions" => "true",
+        "recent_auth_window_minutes" => "7",
+        "interactive_delivery_channels_csv" => "telegram,webchat",
+        "job_delivery_channels_csv" => "discord,slack",
+        "ingest_roots_csv" => "ingest,docs"
+      }
+    })
+    |> render_submit()
+
+    html = render(view)
+    assert html =~ "Control policy updated"
+
+    policy = Runtime.effective_control_policy()
+    assert policy.recent_auth_window_minutes == 7
+    assert policy.job_delivery_channels == ["discord", "slack"]
+    assert policy.ingest_roots == ["ingest", "docs"]
+  end
+
   test "setup page requires recent auth for sensitive actions when password is configured", %{
     conn: conn
   } do
@@ -255,6 +279,57 @@ defmodule HydraXWeb.SetupLiveTest do
     assert html =~ "Hydra-X Browser"
 
     assert %{enabled: true, title: "Hydra-X Browser"} = Runtime.enabled_webchat_config()
+  end
+
+  test "setup page can save and test an MCP server", %{conn: conn} do
+    previous = Application.get_env(:hydra_x, :mcp_http_request_fn)
+    test_pid = self()
+
+    Application.put_env(:hydra_x, :mcp_http_request_fn, fn opts ->
+      send(test_pid, {:setup_mcp_test, opts})
+      {:ok, %{status: 200}}
+    end)
+
+    on_exit(fn ->
+      if previous do
+        Application.put_env(:hydra_x, :mcp_http_request_fn, previous)
+      else
+        Application.delete_env(:hydra_x, :mcp_http_request_fn)
+      end
+    end)
+
+    {:ok, view, _html} = live(conn, ~p"/setup")
+
+    view
+    |> form("form[phx-submit=\"save_mcp_server\"]", %{
+      "mcp_server_config" => %{
+        "name" => "Docs MCP",
+        "transport" => "http",
+        "url" => "https://mcp.example.test",
+        "healthcheck_path" => "/health",
+        "auth_token" => "mcp-secret",
+        "retry_limit" => "1",
+        "enabled" => "true"
+      }
+    })
+    |> render_submit()
+
+    html = render(view)
+    assert html =~ "MCP server updated"
+    assert html =~ "Docs MCP"
+
+    [server] = Runtime.list_mcp_servers()
+
+    view
+    |> element(~s(button[phx-click="test_mcp_server"][phx-value-id="#{server.id}"]))
+    |> render_click()
+
+    assert_receive {:setup_mcp_test, opts}
+    assert opts[:url] == "https://mcp.example.test/health"
+
+    html = render(view)
+    assert html =~ "MCP server test succeeded"
+    assert html =~ "HTTP 200"
   end
 
   defp restore_env(key, nil), do: System.delete_env(key)

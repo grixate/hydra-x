@@ -26,14 +26,16 @@ defmodule HydraX.GatewayTest do
                %{
                  "message" => %{
                    "chat" => %{"id" => 42},
+                   "message_id" => 501,
                    "text" => "Remember that Telegram ingress is now routed."
                  }
                },
                %{deliver: deliver}
              )
 
-    assert_receive {:telegram_reply, %{external_ref: "42", content: content}}
+    assert_receive {:telegram_reply, %{external_ref: "42", content: content, metadata: metadata}}
     assert content =~ "Mock response"
+    assert metadata["reply_to_message_id"] == 501
 
     [conversation] = Runtime.list_conversations(agent_id: agent.id, limit: 10)
     assert conversation.channel == "telegram"
@@ -42,6 +44,7 @@ defmodule HydraX.GatewayTest do
     refreshed = Runtime.get_conversation!(conversation.id)
     assert refreshed.metadata["last_delivery"]["status"] == "delivered"
     assert refreshed.metadata["last_delivery"]["external_ref"] == "42"
+    assert refreshed.metadata["last_delivery"]["reply_context"]["reply_to_message_id"] == 501
   end
 
   test "telegram delivery failures are logged and persisted on the conversation" do
@@ -100,6 +103,7 @@ defmodule HydraX.GatewayTest do
                %{
                  "message" => %{
                    "chat" => %{"id" => 88},
+                   "message_id" => 601,
                    "text" => "Retry the Telegram delivery after failure."
                  }
                },
@@ -124,9 +128,10 @@ defmodule HydraX.GatewayTest do
     end)
 
     assert {:ok, _updated} = HydraX.Gateway.retry_conversation_delivery(conversation)
-    assert_receive {:telegram_retry, %{external_ref: "88", content: content}}
+    assert_receive {:telegram_retry, %{external_ref: "88", content: content, metadata: metadata}}
     assert content =~ "Mock response:"
     assert content =~ "Retry the Telegram delivery after failure."
+    assert metadata["reply_to_message_id"] == 601
 
     refreshed = Runtime.get_conversation!(conversation.id)
     assert refreshed.metadata["last_delivery"]["status"] == "delivered"
@@ -197,6 +202,7 @@ defmodule HydraX.GatewayTest do
              HydraX.Gateway.dispatch_discord_update(
                %{
                  "d" => %{
+                   "id" => "discord-source-1",
                    "content" => "Discord ingress should reach the agent runtime.",
                    "channel_id" => "chan-42",
                    "author" => %{"id" => "user-1", "username" => "discord-user"}
@@ -205,8 +211,9 @@ defmodule HydraX.GatewayTest do
                %{deliver: deliver}
              )
 
-    assert_receive {:discord_reply, %{external_ref: "chan-42", content: content}}
+    assert_receive {:discord_reply, %{external_ref: "chan-42", content: content, metadata: metadata}}
     assert content =~ "Mock response"
+    assert metadata["reply_to_message_id"] == "discord-source-1"
 
     [conversation] = Runtime.list_conversations(agent_id: agent.id, limit: 10)
     assert conversation.channel == "discord"
@@ -216,6 +223,51 @@ defmodule HydraX.GatewayTest do
 
     assert refreshed.metadata["last_delivery"]["metadata"]["provider_message_id"] ==
              "discord-message-1"
+  end
+
+  test "discord attachment messages preserve attachment metadata" do
+    agent = create_agent()
+    {:ok, pid} = HydraX.Agent.ensure_started(agent)
+    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
+
+    {:ok, _discord} =
+      Runtime.save_discord_config(%{
+        bot_token: "discord-test-token",
+        application_id: "discord-app",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
+    assert :ok =
+             HydraX.Gateway.dispatch_discord_update(
+               %{
+                 "d" => %{
+                   "id" => "discord-source-attachment",
+                   "channel_id" => "chan-77",
+                   "author" => %{"id" => "user-1", "username" => "discord-user"},
+                   "attachments" => [
+                     %{
+                       "id" => "att-1",
+                       "filename" => "diagram.png",
+                       "content_type" => "image/png",
+                       "url" => "https://cdn.discord.test/diagram.png",
+                       "proxy_url" => "https://proxy.discord.test/diagram.png",
+                       "size" => 2048
+                     }
+                   ]
+                 }
+               },
+               %{deliver: fn _payload -> :ok end}
+             )
+
+    [conversation] = Runtime.list_conversations(agent_id: agent.id, limit: 10)
+    [user_turn | _] = Runtime.list_turns(conversation.id)
+
+    assert user_turn.role == "user"
+    assert user_turn.content == "[Discord attachments: image/png]"
+
+    assert [%{"file_name" => "diagram.png", "content_type" => "image/png"}] =
+             user_turn.metadata["attachments"]
   end
 
   test "slack updates are routed into conversations and answered" do
@@ -252,8 +304,9 @@ defmodule HydraX.GatewayTest do
                %{deliver: deliver}
              )
 
-    assert_receive {:slack_reply, %{external_ref: "C123", content: content}}
+    assert_receive {:slack_reply, %{external_ref: "C123", content: content, metadata: metadata}}
     assert content =~ "Mock response"
+    assert metadata["thread_ts"] == "123.456"
 
     [conversation] = Runtime.list_conversations(agent_id: agent.id, limit: 10)
     assert conversation.channel == "slack"
@@ -261,6 +314,54 @@ defmodule HydraX.GatewayTest do
     refreshed = Runtime.get_conversation!(conversation.id)
     assert refreshed.metadata["last_delivery"]["status"] == "delivered"
     assert refreshed.metadata["last_delivery"]["metadata"]["provider_message_id"] == "slack-ts"
+    assert refreshed.metadata["last_delivery"]["reply_context"]["thread_ts"] == "123.456"
+  end
+
+  test "slack attachment messages preserve attachment metadata" do
+    agent = create_agent()
+    {:ok, pid} = HydraX.Agent.ensure_started(agent)
+    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
+
+    {:ok, _slack} =
+      Runtime.save_slack_config(%{
+        bot_token: "slack-test-token",
+        signing_secret: "slack-signing-secret",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
+    assert :ok =
+             HydraX.Gateway.dispatch_slack_update(
+               %{
+                 "type" => "event_callback",
+                 "team_id" => "team-1",
+                 "event" => %{
+                   "type" => "message",
+                   "channel" => "C777",
+                   "user" => "U123",
+                   "ts" => "999.111",
+                   "files" => [
+                     %{
+                       "id" => "F123",
+                       "name" => "runbook.pdf",
+                       "mimetype" => "application/pdf",
+                       "url_private" => "https://slack.test/runbook.pdf",
+                       "size" => 4096
+                     }
+                   ]
+                 }
+               },
+               %{deliver: fn _payload -> :ok end}
+             )
+
+    [conversation] = Runtime.list_conversations(agent_id: agent.id, limit: 10)
+    [user_turn | _] = Runtime.list_turns(conversation.id)
+
+    assert user_turn.role == "user"
+    assert user_turn.content == "[Slack attachments: application/pdf]"
+
+    assert [%{"file_name" => "runbook.pdf", "content_type" => "application/pdf"}] =
+             user_turn.metadata["attachments"]
   end
 
   test "webchat messages are routed into conversations and answered" do

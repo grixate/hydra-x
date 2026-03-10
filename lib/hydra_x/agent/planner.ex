@@ -49,26 +49,35 @@ defmodule HydraX.Agent.Planner do
   defp plan_steps([]) do
     [
       %{
+        "id" => "provider-final",
         "kind" => "provider",
-        "label" => "Generate a direct model response"
+        "label" => "Generate a direct model response",
+        "status" => "pending"
       }
     ]
   end
 
   defp plan_steps(suggested_tools) do
-    Enum.map(suggested_tools, fn tool ->
+    Enum.with_index(suggested_tools, 1)
+    |> Enum.map(fn {tool, index} ->
       %{
+        "id" => "tool-#{index}-#{tool["name"]}",
         "kind" => "tool",
         "name" => tool["name"],
-        "reason" => tool["reason"]
+        "reason" => tool["reason"],
+        "status" => "pending"
       }
-    end) ++
+    end)
+    |> Kernel.++(
       [
         %{
+          "id" => "provider-final",
           "kind" => "provider",
-          "label" => "Synthesize the final response from tool results"
+          "label" => "Synthesize the final response from tool results",
+          "status" => "pending"
         }
       ]
+    )
   end
 
   defp tool_reason("workspace_list", message) do
@@ -99,6 +108,11 @@ defmodule HydraX.Agent.Planner do
   defp tool_reason("web_search", message) do
     if contains_any?(message, ["search", "look up", "find online"]),
       do: "search the public web"
+  end
+
+  defp tool_reason("mcp_inspect", message) do
+    if contains_any?(message, ["mcp", "integration", "tool server", "server health"]),
+      do: "inspect configured MCP integrations"
   end
 
   defp tool_reason("shell_command", message) do

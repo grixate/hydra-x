@@ -9,6 +9,7 @@ defmodule HydraX.Runtime.TelegramAdmin do
   alias HydraX.Repo
 
   alias HydraX.Gateway.Adapters.Telegram
+  alias HydraX.Security.Secrets
   alias HydraX.Runtime.{Helpers, TelegramConfig}
 
   def enabled_telegram_config do
@@ -17,6 +18,7 @@ defmodule HydraX.Runtime.TelegramAdmin do
     |> preload([:default_agent])
     |> limit(1)
     |> Repo.one()
+    |> decrypt_config()
   end
 
   def list_telegram_configs do
@@ -24,10 +26,11 @@ defmodule HydraX.Runtime.TelegramAdmin do
     |> preload([:default_agent])
     |> order_by([config], desc: config.enabled, desc: config.updated_at)
     |> Repo.all()
+    |> Enum.map(&decrypt_config/1)
   end
 
   def change_telegram_config(config \\ %TelegramConfig{}, attrs \\ %{}) do
-    TelegramConfig.changeset(config, attrs)
+    TelegramConfig.changeset(decrypt_config(config), attrs)
   end
 
   def save_telegram_config(attrs) when is_map(attrs) do
@@ -39,11 +42,18 @@ defmodule HydraX.Runtime.TelegramAdmin do
 
   def save_telegram_config(%TelegramConfig{} = config, attrs) do
     Repo.transaction(fn ->
-      changeset = TelegramConfig.changeset(config, attrs)
+      decrypted = decrypt_config(config)
+
+      encrypted_attrs =
+        attrs
+        |> Helpers.normalize_string_keys()
+        |> Secrets.encrypt_secret_attrs(decrypted, [:bot_token, :webhook_secret])
+
+      changeset = TelegramConfig.changeset(config, encrypted_attrs)
 
       record =
         case Repo.insert_or_update(changeset) do
-          {:ok, record} -> record
+          {:ok, record} -> decrypt_config(record)
           {:error, changeset} -> Repo.rollback(changeset)
         end
 
@@ -147,6 +157,7 @@ defmodule HydraX.Runtime.TelegramAdmin do
   end
 
   def test_telegram_delivery(%TelegramConfig{} = config, target, message, opts \\ []) do
+    config = decrypt_config(config)
     target = Helpers.blank_to_nil(to_string(target || ""))
     message = Helpers.blank_to_nil(message)
     deliver = Keyword.get(opts, :deliver, Application.get_env(:hydra_x, :telegram_deliver))
@@ -180,5 +191,11 @@ defmodule HydraX.Runtime.TelegramAdmin do
           {:ok, %{target: target, message: message, metadata: metadata}}
         end
     end
+  end
+
+  defp decrypt_config(nil), do: nil
+
+  defp decrypt_config(%TelegramConfig{} = config) do
+    Secrets.decrypt_fields(config, [:bot_token, :webhook_secret])
   end
 end

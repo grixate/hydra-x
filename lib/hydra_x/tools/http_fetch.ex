@@ -12,6 +12,9 @@ defmodule HydraX.Tools.HttpFetch do
   def description, do: "Fetch a public HTTP(S) resource after SSRF checks"
 
   @impl true
+  def safety_classification, do: "network_read"
+
+  @impl true
   def tool_schema do
     %{
       name: "http_fetch",
@@ -50,6 +53,12 @@ defmodule HydraX.Tools.HttpFetch do
       {:error, reason} -> {:error, reason}
     end
   end
+
+  @impl true
+  def result_summary(%{error: error}) when is_binary(error), do: error
+  def result_summary(%{"error" => error}) when is_binary(error), do: error
+  def result_summary(%{status: status, url: url}), do: "fetched #{url} (HTTP #{status})"
+  def result_summary(payload), do: inspect(payload, limit: 8, printable_limit: 120)
 
   defp excerpt_body(body) when is_binary(body), do: String.slice(body, 0, @max_excerpt)
 

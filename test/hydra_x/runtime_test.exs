@@ -5,8 +5,12 @@ defmodule HydraX.RuntimeTest do
   alias HydraX.Agent.Worker
   alias HydraX.Budget
   alias HydraX.Memory
+  alias HydraX.Repo
   alias HydraX.Runtime
+  alias HydraX.Runtime.{DiscordConfig, ProviderConfig, SlackConfig, TelegramConfig}
+  alias HydraX.Security.Secrets
   alias HydraX.Safety
+  alias HydraXWeb.OperatorAuth
 
   setup do
     backup_root =
@@ -55,8 +59,280 @@ defmodule HydraX.RuntimeTest do
     assert channel_state.status == "completed"
     assert channel_state.plan["mode"] == "tool_capable"
     assert channel_state.provider == "mock"
+    assert Enum.all?(channel_state.steps, &(&1["status"] == "completed"))
+    assert channel_state.current_step_id == nil
+    refute channel_state.resumable
     assert Enum.any?(channel_state.execution_events, &(&1["phase"] == "provider_requested"))
     assert Enum.any?(channel_state.execution_events, &(&1["phase"] == "provider_completed"))
+  end
+
+  test "worker results include tool summaries and safety classifications" do
+    agent = create_agent()
+    File.write!(Path.join(agent.workspace_root, "SOUL.md"), "Hydra soul")
+    {:ok, pid} = HydraX.Agent.ensure_started(agent)
+    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{channel: "cli", title: "worker-tool-summary"})
+
+    results =
+      Worker.execute_tool_calls(agent.id, conversation, [
+        %{id: "read-1", name: "workspace_read", arguments: %{"path" => "SOUL.md"}},
+        %{id: "recall-1", name: "memory_recall", arguments: %{"query" => "hydra"}}
+      ])
+
+    assert [
+             %{
+               tool_name: "workspace_read",
+               is_error: false,
+               summary: "read SOUL.md",
+               safety_classification: "workspace_read"
+             },
+             %{
+               tool_name: "memory_recall",
+               is_error: false,
+               summary: "recalled 0 memories",
+               safety_classification: "memory_read"
+             }
+           ] = results
+  end
+
+  test "channel resumes interrupted pending user turns after restart" do
+    agent = create_agent()
+    {:ok, pid} = HydraX.Agent.ensure_started(agent)
+    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{channel: "webchat", title: "recoverable-chat"})
+
+    {:ok, user_turn} =
+      Runtime.append_turn(conversation, %{
+        role: "user",
+        kind: "message",
+        content: "Please recover this pending turn after restart.",
+        metadata: %{"source" => "test"}
+      })
+
+    {:ok, _checkpoint} =
+      Runtime.upsert_checkpoint(conversation.id, "channel", %{
+        "status" => "executing_tools",
+        "latest_user_turn_id" => user_turn.id,
+        "plan" => %{
+          "mode" => "tool_capable",
+          "steps" => [
+            %{
+              "id" => "provider-final",
+              "kind" => "provider",
+              "label" => "Recover",
+              "status" => "running"
+            }
+          ]
+        },
+        "steps" => [
+          %{
+            "id" => "provider-final",
+            "kind" => "provider",
+            "label" => "Recover",
+            "status" => "running"
+          }
+        ],
+        "current_step_id" => "provider-final",
+        "current_step_index" => 0,
+        "resumable" => true,
+        "execution_events" => []
+      })
+
+    {:ok, _channel_pid} = HydraX.Agent.Channel.ensure_started(agent.id, conversation)
+    Process.sleep(100)
+
+    refreshed = Runtime.get_conversation!(conversation.id)
+    assert List.last(refreshed.turns).role == "assistant"
+
+    channel_state = Runtime.conversation_channel_state(conversation.id)
+    assert channel_state.status == "completed"
+    assert Enum.any?(channel_state.execution_events, &(&1["phase"] == "recovered_after_restart"))
+    assert Enum.all?(channel_state.steps, &(&1["status"] == "completed"))
+  end
+
+  test "channel recovery reuses cached tool results instead of repeating side effects" do
+    previous = Application.get_env(:hydra_x, :provider_request_fn)
+
+    counter = :atomics.new(1, [])
+
+    Application.put_env(:hydra_x, :provider_request_fn, fn _opts ->
+      call_number = :atomics.add_get(counter, 1, 1)
+
+      body =
+        case call_number do
+          1 ->
+            %{
+              "choices" => [
+                %{
+                  "message" => %{
+                    "content" => nil,
+                    "tool_calls" => [
+                      %{
+                        "id" => "call-memory-1",
+                        "function" => %{
+                          "name" => "memory_save",
+                          "arguments" =>
+                            Jason.encode!(%{
+                              "type" => "Fact",
+                              "content" => "Remember cached tool result."
+                            })
+                        }
+                      }
+                    ]
+                  },
+                  "finish_reason" => "tool_calls"
+                }
+              ]
+            }
+
+          _ ->
+            %{
+              "choices" => [
+                %{
+                  "message" => %{
+                    "content" => "Recovered without re-running the tool.",
+                    "tool_calls" => nil
+                  },
+                  "finish_reason" => "stop"
+                }
+              ]
+            }
+        end
+
+      {:ok, %{status: 200, body: body}}
+    end)
+
+    on_exit(fn ->
+      if previous do
+        Application.put_env(:hydra_x, :provider_request_fn, previous)
+      else
+        Application.delete_env(:hydra_x, :provider_request_fn)
+      end
+    end)
+
+    agent = create_agent()
+
+    {:ok, provider} =
+      Runtime.save_provider_config(%{
+        name: "Replay Safe Provider",
+        kind: "openai_compatible",
+        base_url: "https://replay-safe.test",
+        api_key: "secret",
+        model: "gpt-replay-safe",
+        enabled: false
+      })
+
+    {:ok, _agent} =
+      Runtime.save_agent_provider_routing(agent.id, %{
+        "default_provider_id" => provider.id
+      })
+
+    {:ok, _pid} = HydraX.Agent.ensure_started(agent)
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{channel: "cli", title: "replay-safe-chat"})
+
+    {:ok, existing_memory} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        conversation_id: conversation.id,
+        type: "Fact",
+        content: "Remember cached tool result.",
+        importance: 0.7,
+        last_seen_at: DateTime.utc_now()
+      })
+
+    {:ok, user_turn} =
+      Runtime.append_turn(conversation, %{
+        role: "user",
+        kind: "message",
+        content: "Remember cached tool result.",
+        metadata: %{"source" => "test"}
+      })
+
+    fingerprint =
+      ["memory_save", [{"content", "Remember cached tool result."}, {"type", "Fact"}]]
+      |> :erlang.term_to_binary()
+      |> Base.encode16(case: :lower)
+
+    {:ok, _checkpoint} =
+      Runtime.upsert_checkpoint(conversation.id, "channel", %{
+        "status" => "interrupted",
+        "latest_user_turn_id" => user_turn.id,
+        "assistant_turn_id" => nil,
+        "plan" => %{
+          "mode" => "tool_capable",
+          "steps" => [
+            %{
+              "id" => "tool-1-memory_save",
+              "kind" => "tool",
+              "name" => "memory_save",
+              "status" => "completed"
+            },
+            %{
+              "id" => "provider-final",
+              "kind" => "provider",
+              "label" => "Recover",
+              "status" => "running"
+            }
+          ]
+        },
+        "steps" => [
+          %{
+            "id" => "tool-1-memory_save",
+            "kind" => "tool",
+            "name" => "memory_save",
+            "status" => "completed"
+          },
+          %{
+            "id" => "provider-final",
+            "kind" => "provider",
+            "label" => "Recover",
+            "status" => "running"
+          }
+        ],
+        "current_step_id" => "provider-final",
+        "current_step_index" => 1,
+        "resumable" => true,
+        "tool_cache_scope_turn_id" => user_turn.id,
+        "tool_cache" => [
+          %{
+            "fingerprint" => fingerprint,
+            "tool_name" => "memory_save",
+            "result" => %{
+              "id" => existing_memory.id,
+              "type" => existing_memory.type,
+              "content" => existing_memory.content
+            },
+            "is_error" => false
+          }
+        ],
+        "execution_events" => []
+      })
+
+    {:ok, _channel_pid} = HydraX.Agent.Channel.ensure_started(agent.id, conversation)
+    Process.sleep(150)
+
+    memories =
+      Memory.list_memories(agent_id: agent.id)
+      |> Enum.filter(&(&1.content == "Remember cached tool result."))
+
+    assert length(memories) == 1
+
+    refreshed = Runtime.get_conversation!(conversation.id)
+    assert List.last(refreshed.turns).content =~ "Recovered without re-running the tool."
+
+    channel_state = Runtime.conversation_channel_state(conversation.id)
+    assert Enum.any?(channel_state.execution_events, &(&1["phase"] == "tool_cache_hit"))
+
+    assert Enum.any?(
+             channel_state.tool_results,
+             &(&1["tool_name"] == "memory_save" and &1["cached"])
+           )
   end
 
   test "memory tools work directly" do
@@ -84,6 +360,90 @@ defmodule HydraX.RuntimeTest do
     assert Enum.any?(hd(recall.results).reasons, &(&1 in ["lexical match", "semantic overlap"]))
   end
 
+  test "provider and channel secrets are encrypted at rest but decrypted through runtime" do
+    agent = create_agent()
+
+    {:ok, provider} =
+      Runtime.save_provider_config(%{
+        name: "Encrypted Provider",
+        kind: "openai_compatible",
+        base_url: "https://encrypted-provider.test",
+        api_key: "provider-secret",
+        model: "gpt-encrypted",
+        enabled: false
+      })
+
+    {:ok, telegram} =
+      Runtime.save_telegram_config(%{
+        bot_token: "telegram-secret",
+        webhook_secret: "telegram-hook",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
+    {:ok, discord} =
+      Runtime.save_discord_config(%{
+        bot_token: "discord-secret",
+        webhook_secret: "discord-hook",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
+    {:ok, slack} =
+      Runtime.save_slack_config(%{
+        bot_token: "slack-secret",
+        signing_secret: "slack-hook",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
+    raw_provider = Repo.get!(ProviderConfig, provider.id)
+    raw_telegram = Repo.get!(TelegramConfig, telegram.id)
+    raw_discord = Repo.get!(DiscordConfig, discord.id)
+    raw_slack = Repo.get!(SlackConfig, slack.id)
+
+    assert Secrets.encrypted?(raw_provider.api_key)
+    assert Secrets.encrypted?(raw_telegram.bot_token)
+    assert Secrets.encrypted?(raw_telegram.webhook_secret)
+    assert Secrets.encrypted?(raw_discord.bot_token)
+    assert Secrets.encrypted?(raw_discord.webhook_secret)
+    assert Secrets.encrypted?(raw_slack.bot_token)
+    assert Secrets.encrypted?(raw_slack.signing_secret)
+
+    assert Runtime.get_provider_config!(provider.id).api_key == "provider-secret"
+    assert Runtime.enabled_telegram_config().bot_token == "telegram-secret"
+    assert Runtime.enabled_discord_config().bot_token == "discord-secret"
+    assert Runtime.enabled_slack_config().bot_token == "slack-secret"
+
+    secrets = Runtime.secret_storage_status()
+    assert secrets.plaintext_records == 0
+    assert secrets.encrypted_records >= 7
+  end
+
+  test "control policy defaults and agent overrides resolve through runtime" do
+    agent = create_agent()
+    policy = Runtime.effective_control_policy()
+
+    assert policy.require_recent_auth_for_sensitive_actions
+    assert "telegram" in policy.interactive_delivery_channels
+    assert policy.ingest_roots == ["ingest"]
+    assert OperatorAuth.recent_auth_window_seconds() == policy.recent_auth_window_minutes * 60
+
+    {:ok, _override} =
+      Runtime.save_agent_control_policy(agent.id, %{
+        recent_auth_window_minutes: 3,
+        interactive_delivery_channels_csv: "cli,webchat",
+        job_delivery_channels_csv: "discord",
+        ingest_roots_csv: "ingest,docs"
+      })
+
+    effective = Runtime.effective_control_policy(agent.id)
+    assert effective.recent_auth_window_minutes == 3
+    assert effective.interactive_delivery_channels == ["cli", "webchat"]
+    assert effective.job_delivery_channels == ["discord"]
+    assert effective.ingest_roots == ["ingest", "docs"]
+  end
+
   test "hybrid memory search favors exact lexical matches over weaker semantic overlap" do
     agent = create_agent()
 
@@ -109,7 +469,220 @@ defmodule HydraX.RuntimeTest do
 
     assert top.entry.id == exact.id
     assert top.lexical_rank == 1
-    assert semantic.id in Enum.map(Memory.search(agent.id, "Discord delivery retries", 5), & &1.id)
+
+    assert semantic.id in Enum.map(
+             Memory.search(agent.id, "Discord delivery retries", 5),
+             & &1.id
+           )
+  end
+
+  test "hybrid memory search uses provenance and type intent signals" do
+    agent = create_agent()
+
+    {:ok, ranked_goal} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Goal",
+        content: "Publish an operator playbook for Webchat and Discord support.",
+        importance: 0.7,
+        metadata: %{
+          "source" => "ingest",
+          "source_file" => "ops-goals.md",
+          "source_section" => "webchat rollout"
+        },
+        last_seen_at: DateTime.utc_now()
+      })
+
+    {:ok, _lower_match} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Observation",
+        content: "Support channels should stay healthy during rollout.",
+        importance: 0.7,
+        last_seen_at: DateTime.utc_now()
+      })
+
+    [top | _rest] = Memory.search_ranked(agent.id, "ops webchat goal", 5)
+
+    assert top.entry.id == ranked_goal.id
+    assert "goal match" in top.reasons
+    assert "source provenance" in top.reasons
+    assert "ingest provenance" in top.reasons
+    assert "ops" in get_in(top.entry.metadata || %{}, ["semantic_terms"])
+  end
+
+  test "hybrid memory search uses channel context signals" do
+    agent = create_agent()
+
+    {:ok, ranked_webchat} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Observation",
+        content: "Retry queue needs manual triage during the current rollout.",
+        importance: 0.7,
+        metadata: %{"source_channel" => "webchat"},
+        last_seen_at: DateTime.utc_now()
+      })
+
+    {:ok, _discord} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Observation",
+        content: "Retry queue needs manual triage during the current rollout.",
+        importance: 0.7,
+        metadata: %{"source_channel" => "discord"},
+        last_seen_at: DateTime.utc_now()
+      })
+
+    [top | _rest] = Memory.search_ranked(agent.id, "webchat retry queue", 5)
+
+    assert top.entry.id == ranked_webchat.id
+    assert "channel context" in top.reasons
+  end
+
+  test "workspace skills can be discovered and exposed to prompts" do
+    agent = create_agent()
+    other_agent = create_agent()
+    skill_dir = Path.join([agent.workspace_root, "skills", "deploy-checks"])
+    File.mkdir_p!(skill_dir)
+
+    File.write!(
+      Path.join(skill_dir, "SKILL.md"),
+      "# Deploy Checks\n\nRun deployment verification steps for staged rollouts."
+    )
+
+    assert {:ok, [skill]} = Runtime.refresh_agent_skills(agent.id)
+    assert skill.slug == "deploy-checks"
+    assert skill.enabled
+
+    {:ok, mcp} =
+      Runtime.save_mcp_server(%{
+        name: "Docs MCP",
+        transport: "stdio",
+        command: "cat",
+        enabled: true
+      })
+
+    assert {:ok, [binding]} = Runtime.refresh_agent_mcp_servers(agent.id)
+    assert binding.mcp_server_config_id == mcp.id
+    assert binding.enabled
+
+    prompt =
+      HydraX.Agent.PromptBuilder.build(agent, [], nil, nil, %{
+        tool_policy: %{},
+        skill_context: Runtime.skill_prompt_context(agent.id),
+        mcp_context: Runtime.mcp_prompt_context(agent.id)
+      })
+
+    system = List.first(prompt.messages)
+    assert system.content =~ "## Enabled Skills"
+    assert system.content =~ "Deploy Checks"
+    assert system.content =~ "deployment verification steps"
+    assert system.content =~ "## MCP Integrations"
+    assert system.content =~ "Docs MCP"
+
+    assert Runtime.mcp_prompt_context(other_agent.id) == ""
+    Runtime.disable_agent_mcp_server!(binding.id)
+    assert Runtime.mcp_prompt_context(agent.id) == ""
+  end
+
+  test "hybrid recall persists semantic vectors and exposes vector scores" do
+    agent = create_agent()
+
+    {:ok, memory} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Fact",
+        content: "Distributed worker placement should stay stable during cluster failover.",
+        importance: 0.8,
+        last_seen_at: DateTime.utc_now()
+      })
+
+    [top | _rest] = Memory.search_ranked(agent.id, "cluster worker placement failover", 5)
+
+    assert top.entry.id == memory.id
+    assert is_map(get_in(top.entry.metadata || %{}, ["semantic_vector"]))
+    assert top.vector_score > 0.0
+    assert "vector similarity" in top.reasons
+
+    assert {:ok, %{results: [result | _]}} =
+             HydraX.Tools.MemoryRecall.execute(
+               %{"agent_id" => agent.id, "query" => "cluster worker placement failover"},
+               %{}
+             )
+
+    assert result["vector_score"] || result[:vector_score]
+  end
+
+  test "mcp servers can be saved and probed over stdio and http" do
+    {:ok, stdio} =
+      Runtime.save_mcp_server(%{
+        name: "Local Docs MCP",
+        transport: "stdio",
+        command: "cat",
+        enabled: true
+      })
+
+    assert stdio.transport == "stdio"
+    assert Enum.any?(Runtime.mcp_statuses(), &(&1.name == "Local Docs MCP" and &1.status == :ok))
+
+    {:ok, http} =
+      Runtime.save_mcp_server(%{
+        name: "Remote MCP",
+        transport: "http",
+        url: "https://mcp.example.test",
+        healthcheck_path: "/status",
+        auth_token: "secret-token",
+        enabled: true,
+        retry_limit: 1
+      })
+
+    test_pid = self()
+
+    assert {:ok, result} =
+             Runtime.test_mcp_server(http,
+               request_fn: fn opts ->
+                 send(test_pid, {:mcp_http_probe, opts})
+                 {:ok, %{status: 200}}
+               end
+             )
+
+    assert result.detail =~ "HTTP 200"
+
+    assert_receive {:mcp_http_probe, opts}
+    assert opts[:url] == "https://mcp.example.test/status"
+    assert {"authorization", "Bearer secret-token"} in opts[:headers]
+  end
+
+  test "workers can inspect agent MCP bindings through the MCP tool" do
+    agent = create_agent()
+    {:ok, pid} = HydraX.Agent.ensure_started(agent)
+    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
+
+    {:ok, mcp} =
+      Runtime.save_mcp_server(%{
+        name: "Healthy MCP",
+        transport: "stdio",
+        command: "cat",
+        enabled: true
+      })
+
+    assert {:ok, [binding]} = Runtime.refresh_agent_mcp_servers(agent.id)
+    assert binding.mcp_server_config_id == mcp.id
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{channel: "cli", title: "mcp-tooling"})
+
+    [result] =
+      Worker.execute_tool_calls(agent.id, conversation, [
+        %{id: "mcp-1", name: "mcp_inspect", arguments: %{"only_enabled" => true}}
+      ])
+
+    assert result.tool_name == "mcp_inspect"
+    assert result.summary == "inspected 1 MCP bindings"
+    assert result.safety_classification == "integration_read"
+    assert length(result.result.bindings) == 1
+    assert hd(result.result.bindings).name == "Healthy MCP"
   end
 
   test "budget hard limit rejects llm traffic and logs a safety event" do
@@ -753,6 +1326,48 @@ defmodule HydraX.RuntimeTest do
     assert run.metadata["delivery"]["metadata"]["provider_message_id"] == "slack-job-1"
   end
 
+  test "scheduled job delivery can be blocked by control policy" do
+    previous = Application.get_env(:hydra_x, :telegram_deliver)
+
+    Application.put_env(:hydra_x, :telegram_deliver, fn _payload ->
+      flunk("telegram deliver should not run when policy blocks the channel")
+    end)
+
+    on_exit(fn ->
+      if previous do
+        Application.put_env(:hydra_x, :telegram_deliver, previous)
+      else
+        Application.delete_env(:hydra_x, :telegram_deliver)
+      end
+    end)
+
+    agent = create_agent()
+
+    {:ok, _policy} =
+      Runtime.save_agent_control_policy(agent.id, %{
+        job_delivery_channels_csv: "discord"
+      })
+
+    {:ok, job} =
+      Runtime.save_scheduled_job(%{
+        agent_id: agent.id,
+        name: "Blocked Telegram Delivery",
+        kind: "backup",
+        interval_minutes: 60,
+        enabled: true,
+        delivery_enabled: true,
+        delivery_channel: "telegram",
+        delivery_target: "9001"
+      })
+
+    assert {:ok, run} = Runtime.run_scheduled_job(job)
+    assert run.metadata["delivery"]["status"] == "blocked"
+    assert run.metadata["delivery"]["reason"] =~ "delivery_channel_blocked_by_policy"
+
+    [event | _] = Safety.list_events(category: "scheduler", limit: 5)
+    assert event.message =~ "blocked by policy"
+  end
+
   test "weekly scheduled jobs compute the next run after execution" do
     agent = create_agent()
 
@@ -809,6 +1424,69 @@ defmodule HydraX.RuntimeTest do
     assert DateTime.compare(updated.next_run_at, DateTime.utc_now()) == :gt
   end
 
+  test "scheduled jobs can be created from natural schedule text" do
+    agent = create_agent()
+
+    {:ok, weekly} =
+      Runtime.save_scheduled_job(%{
+        agent_id: agent.id,
+        name: "Natural Weekly Review",
+        kind: "prompt",
+        schedule_text: "weekly mon, fri 08:15",
+        prompt: "Review weekly plan",
+        enabled: true
+      })
+
+    assert weekly.schedule_mode == "weekly"
+    assert weekly.weekday_csv == "mon,fri"
+    assert weekly.run_hour == 8
+    assert weekly.run_minute == 15
+    assert Runtime.schedule_text_for(weekly) == "weekly mon,fri 08:15"
+
+    {:ok, interval} =
+      Runtime.save_scheduled_job(%{
+        agent_id: agent.id,
+        name: "Natural Interval Review",
+        kind: "prompt",
+        schedule_text: "every 2 hours",
+        prompt: "Interval review",
+        enabled: true
+      })
+
+    assert interval.schedule_mode == "interval"
+    assert interval.interval_minutes == 120
+    assert Runtime.schedule_text_for(interval) == "every 2 hours"
+  end
+
+  test "scheduled jobs reject invalid natural schedule text and invalid weekdays" do
+    agent = create_agent()
+
+    assert {:error, changeset} =
+             Runtime.save_scheduled_job(%{
+               agent_id: agent.id,
+               name: "Broken Natural Schedule",
+               kind: "prompt",
+               schedule_text: "sometimes maybe",
+               enabled: true
+             })
+
+    assert "is not a supported schedule format" in errors_on(changeset).schedule_text
+
+    assert {:error, weekly_changeset} =
+             Runtime.save_scheduled_job(%{
+               agent_id: agent.id,
+               name: "Broken Weekly Schedule",
+               kind: "prompt",
+               schedule_mode: "weekly",
+               weekday_csv: "maybe",
+               run_hour: 8,
+               run_minute: 15,
+               enabled: true
+             })
+
+    assert "must use weekdays like mon,tue,wed" in errors_on(weekly_changeset).weekday_csv
+  end
+
   test "ingest scheduled jobs import supported files from the workspace ingest directory" do
     agent = create_agent()
     ingest_dir = Path.join(agent.workspace_root, "ingest")
@@ -834,6 +1512,29 @@ defmodule HydraX.RuntimeTest do
              HydraX.Memory.list_memories(agent_id: agent.id, status: "active", limit: 20),
              &String.contains?(&1.content, "Scheduled ingest works.")
            )
+  end
+
+  test "manual ingest respects control-policy ingest roots" do
+    agent = create_agent()
+    docs_dir = Path.join(agent.workspace_root, "docs")
+    ingest_dir = Path.join(agent.workspace_root, "ingest")
+    outside_file = Path.join(docs_dir, "ops.md")
+    allowed_file = Path.join(ingest_dir, "ops.md")
+
+    File.mkdir_p!(docs_dir)
+    File.mkdir_p!(ingest_dir)
+    File.write!(outside_file, "# Outside\n\nNot allowed.")
+    File.write!(allowed_file, "# Allowed\n\nInside ingest root.")
+
+    assert {:error, :ingest_path_not_allowed} = Runtime.ingest_file(agent.id, outside_file)
+    assert {:ok, result} = Runtime.ingest_file(agent.id, allowed_file)
+    assert result.created > 0
+
+    {:ok, _override} =
+      Runtime.save_agent_control_policy(agent.id, %{ingest_roots_csv: "ingest,docs"})
+
+    assert {:ok, override_result} = Runtime.ingest_file(agent.id, outside_file, force: true)
+    assert override_result.created > 0 or override_result.restored > 0
   end
 
   test "maintenance scheduled jobs refresh reports and clean up runtime state" do
@@ -901,6 +1602,7 @@ defmodule HydraX.RuntimeTest do
       Runtime.save_tool_policy(%{
         shell_command_enabled: true,
         workspace_write_enabled: true,
+        browser_automation_enabled: true,
         web_search_enabled: true
       })
 
@@ -910,6 +1612,7 @@ defmodule HydraX.RuntimeTest do
     assert "shell_command" in tool_names
     assert "workspace_write" in tool_names
     assert "workspace_patch" in tool_names
+    assert "browser_automation" in tool_names
     assert "web_search" in tool_names
   end
 
@@ -922,6 +1625,8 @@ defmodule HydraX.RuntimeTest do
       Runtime.save_agent_tool_policy(agent.id, %{
         "shell_command_enabled" => true,
         "shell_command_channels_csv" => "cli,control_plane",
+        "browser_automation_enabled" => true,
+        "browser_automation_channels_csv" => "cli",
         "workspace_write_enabled" => true,
         "workspace_write_channels_csv" => "cli"
       })
@@ -939,6 +1644,18 @@ defmodule HydraX.RuntimeTest do
 
     assert telegram_result.is_error
     assert telegram_result.result.error =~ "disabled by policy"
+
+    [browser_blocked] =
+      Worker.execute_tool_calls(agent.id, telegram_conversation, [
+        %{
+          id: "browser-1",
+          name: "browser_automation",
+          arguments: %{action: "fetch_page", url: "https://example.com"}
+        }
+      ])
+
+    assert browser_blocked.is_error
+    assert browser_blocked.result.error =~ "disabled by policy"
 
     [cli_result] =
       Worker.execute_tool_calls(agent.id, cli_conversation, [
@@ -1140,6 +1857,20 @@ defmodule HydraX.RuntimeTest do
   test "agent bulletins can be rebuilt from typed memory" do
     agent = create_agent()
 
+    {:ok, _goal} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Goal",
+        content: "Keep Webchat rollout healthy."
+      })
+
+    {:ok, _decision} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Decision",
+        content: "Use Discord as the fallback operator channel."
+      })
+
     {:ok, _memory} =
       Memory.create_memory(%{
         agent_id: agent.id,
@@ -1147,9 +1878,24 @@ defmodule HydraX.RuntimeTest do
         content: "Hydra-X keeps a typed graph memory."
       })
 
+    {:ok, _channel_memory} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Observation",
+        content: "Webchat retries need continued operator monitoring.",
+        metadata: %{"source_channel" => "webchat"}
+      })
+
     bulletin = Runtime.refresh_agent_bulletin!(agent.id)
 
     assert bulletin.memory_count >= 1
+    assert bulletin.content =~ "## Active Goals And Todos"
+    assert bulletin.content =~ "## Current Decisions And Preferences"
+    assert bulletin.content =~ "## Channel-Specific Context"
+    assert bulletin.content =~ "## Relevant Context"
+    assert bulletin.content =~ "Keep Webchat rollout healthy."
+    assert bulletin.content =~ "Use Discord as the fallback operator channel."
+    assert bulletin.content =~ "[Observation/webchat] Webchat retries need continued operator monitoring."
     assert bulletin.content =~ "typed graph memory"
     assert Runtime.agent_bulletin(agent.id).content =~ "typed graph memory"
   end

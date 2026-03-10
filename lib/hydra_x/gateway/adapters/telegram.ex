@@ -27,7 +27,11 @@ defmodule HydraX.Gateway.Adapters.Telegram do
       channel: "telegram",
       external_ref: to_string(chat_id),
       content: content,
-      metadata: %{raw: event, attachments: attachments}
+      metadata: %{
+        raw: event,
+        attachments: attachments,
+        reply_to_message_id: message["message_id"]
+      }
     }
 
     {:messages, [message], state}
@@ -36,11 +40,11 @@ defmodule HydraX.Gateway.Adapters.Telegram do
   def handle_event(_event, state), do: {:messages, [], state}
 
   @impl true
-  def send_response(%{content: content, external_ref: external_ref}, %{
+  def send_response(%{content: content, external_ref: external_ref} = message, %{
         bot_token: token,
         deliver: deliver
       }) do
-    do_send_response(content, external_ref, token, deliver)
+    do_send_response(content, external_ref, token, deliver, Map.get(message, :metadata) || %{})
   end
 
   @impl true
@@ -103,8 +107,12 @@ defmodule HydraX.Gateway.Adapters.Telegram do
   end
 
   @impl true
-  def format_message(%{content: content, external_ref: external_ref}, _state) do
-    %{text: content, chat_id: external_ref}
+  def format_message(%{content: content, external_ref: external_ref} = message, _state) do
+    %{
+      text: content,
+      chat_id: external_ref,
+      reply_to_message_id: get_in(message, [:metadata, "reply_to_message_id"])
+    }
   end
 
   def register_webhook(bot_token, url, secret, opts \\ []) do
@@ -147,18 +155,22 @@ defmodule HydraX.Gateway.Adapters.Telegram do
     end
   end
 
-  defp do_send_response(content, external_ref, _token, deliver) when is_function(deliver, 1) do
-    case deliver.(%{content: content, external_ref: external_ref}) do
+  defp do_send_response(content, external_ref, _token, deliver, metadata) when is_function(deliver, 1) do
+    case deliver.(%{content: content, external_ref: external_ref, metadata: metadata}) do
       :ok -> {:ok, %{channel: "telegram"}}
       {:ok, metadata} when is_map(metadata) -> {:ok, Map.put_new(metadata, :channel, "telegram")}
       other -> other
     end
   end
 
-  defp do_send_response(content, external_ref, token, _deliver) do
+  defp do_send_response(content, external_ref, token, _deliver, metadata) do
+    form =
+      [chat_id: external_ref, text: content]
+      |> maybe_add_reply_to(metadata["reply_to_message_id"])
+
     case Req.post(
            url: "https://api.telegram.org/bot#{token}/sendMessage",
-           form: [chat_id: external_ref, text: content]
+           form: form
          ) do
       {:ok, %{status: 200, body: %{"ok" => true, "result" => result}}} ->
         {:ok,
@@ -182,6 +194,9 @@ defmodule HydraX.Gateway.Adapters.Telegram do
   defp maybe_put_secret(body, nil), do: body
   defp maybe_put_secret(body, ""), do: body
   defp maybe_put_secret(body, secret), do: Map.put(body, :secret_token, secret)
+  defp maybe_add_reply_to(form, nil), do: form
+  defp maybe_add_reply_to(form, ""), do: form
+  defp maybe_add_reply_to(form, reply_to), do: Keyword.put(form, :reply_to_message_id, reply_to)
 
   defp message_content(message, attachments) do
     message["text"] ||

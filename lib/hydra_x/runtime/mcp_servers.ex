@@ -1,0 +1,428 @@
+defmodule HydraX.Runtime.MCPServers do
+  @moduledoc """
+  Persisted MCP server registry and health probing.
+  """
+
+  import Ecto.Query
+
+  alias HydraX.Repo
+  alias HydraX.Runtime.{AgentMCPServer, AgentProfile, Helpers, MCPServerConfig}
+  alias HydraX.Security.Secrets
+
+  def list_mcp_servers do
+    MCPServerConfig
+    |> order_by([config], desc: config.enabled, asc: config.name)
+    |> Repo.all()
+    |> Enum.map(&decrypt_config/1)
+  end
+
+  def get_mcp_server!(id), do: Repo.get!(MCPServerConfig, id) |> decrypt_config()
+
+  def enabled_mcp_servers do
+    list_mcp_servers()
+    |> Enum.filter(& &1.enabled)
+  end
+
+  def list_agent_mcp_servers(agent_id) when is_integer(agent_id) do
+    AgentMCPServer
+    |> where([binding], binding.agent_id == ^agent_id)
+    |> join(:inner, [binding], config in assoc(binding, :mcp_server_config))
+    |> preload([_binding, config], mcp_server_config: config)
+    |> order_by([binding, config], desc: binding.enabled, asc: config.name)
+    |> Repo.all()
+    |> Enum.map(&decrypt_binding/1)
+  end
+
+  def enabled_mcp_servers(agent_id) when is_integer(agent_id) do
+    list_agent_mcp_servers(agent_id)
+    |> Enum.filter(&(&1.enabled && &1.mcp_server_config.enabled))
+  end
+
+  def get_agent_mcp_server!(id) do
+    AgentMCPServer
+    |> Repo.get!(id)
+    |> Repo.preload(:mcp_server_config)
+    |> decrypt_binding()
+  end
+
+  def change_mcp_server(config \\ %MCPServerConfig{}, attrs \\ %{}) do
+    MCPServerConfig.changeset(decrypt_config(config), attrs)
+  end
+
+  def save_mcp_server(attrs) when is_map(attrs), do: save_mcp_server(%MCPServerConfig{}, attrs)
+
+  def save_mcp_server(%MCPServerConfig{} = config, attrs) do
+    Repo.transaction(fn ->
+      decrypted = decrypt_config(config)
+
+      encrypted_attrs =
+        attrs
+        |> Helpers.normalize_string_keys()
+        |> Secrets.encrypt_secret_attrs(decrypted, [:auth_token])
+
+      record =
+        config
+        |> MCPServerConfig.changeset(encrypted_attrs)
+        |> Repo.insert_or_update()
+        |> case do
+          {:ok, record} -> decrypt_config(record)
+          {:error, changeset} -> Repo.rollback(changeset)
+        end
+
+      Helpers.audit_operator_action(
+        "Saved MCP server #{record.name}",
+        metadata: %{"mcp_server_id" => record.id, "transport" => record.transport}
+      )
+
+      record
+    end)
+    |> Helpers.unwrap_transaction()
+  end
+
+  def delete_mcp_server!(id) do
+    config = get_mcp_server!(id)
+    Repo.delete!(config)
+
+    Helpers.audit_operator_action(
+      "Deleted MCP server #{config.name}",
+      metadata: %{"mcp_server_id" => config.id, "transport" => config.transport}
+    )
+
+    config
+  end
+
+  def mcp_statuses do
+    list_mcp_servers()
+    |> Enum.map(&server_status/1)
+  end
+
+  def agent_mcp_statuses do
+    status_map =
+      list_mcp_servers()
+      |> Enum.map(fn config -> {config.id, server_status(config)} end)
+      |> Map.new()
+
+    AgentProfile
+    |> order_by([agent], asc: agent.name, asc: agent.slug)
+    |> Repo.all()
+    |> Enum.map(&agent_mcp_status(&1, status_map))
+  end
+
+  def agent_mcp_statuses(agent_id) when is_integer(agent_id) do
+    status_map =
+      list_mcp_servers()
+      |> Enum.map(fn config -> {config.id, server_status(config)} end)
+      |> Map.new()
+
+    AgentProfile
+    |> Repo.get!(agent_id)
+    |> agent_mcp_status(status_map)
+  end
+
+  def test_mcp_server(%MCPServerConfig{} = config, opts \\ []) do
+    probe(config, opts)
+  end
+
+  def mcp_prompt_context do
+    enabled_mcp_servers()
+    |> Enum.map(fn config ->
+      status =
+        case server_status(config) do
+          %{status: :ok} -> "healthy"
+          %{status: :warn} -> "degraded"
+        end
+
+      descriptor =
+        case config.transport do
+          "stdio" ->
+            command = config.command || "unknown"
+            "stdio command `#{command}`"
+
+          "http" ->
+            "HTTP endpoint `#{build_health_url(config)}`"
+
+          other ->
+            other
+        end
+
+      "- #{config.name}: #{descriptor} (#{status})"
+    end)
+    |> Enum.join("\n")
+  end
+
+  def mcp_prompt_context(agent_id) when is_integer(agent_id) do
+    enabled_mcp_servers(agent_id)
+    |> Enum.map(fn binding -> mcp_prompt_line(binding.mcp_server_config) end)
+    |> Enum.join("\n")
+  end
+
+  def refresh_agent_mcp_servers(agent_id) when is_integer(agent_id) do
+    agent = Repo.get!(AgentProfile, agent_id)
+    configs = list_mcp_servers()
+
+    Repo.transaction(fn ->
+      existing =
+        AgentMCPServer
+        |> where([binding], binding.agent_id == ^agent.id)
+        |> Repo.all()
+        |> Map.new(&{&1.mcp_server_config_id, &1})
+
+      kept_ids =
+        Enum.map(configs, fn config ->
+          record = Map.get(existing, config.id, %AgentMCPServer{})
+
+          enabled =
+            existing
+            |> Map.get(config.id, %AgentMCPServer{enabled: true})
+            |> Map.get(:enabled)
+
+          attrs = %{
+            agent_id: agent.id,
+            mcp_server_config_id: config.id,
+            enabled: enabled,
+            metadata: %{"name" => config.name, "transport" => config.transport}
+          }
+
+          {:ok, saved} =
+            record
+            |> AgentMCPServer.changeset(attrs)
+            |> Repo.insert_or_update()
+
+          saved.mcp_server_config_id
+        end)
+
+      AgentMCPServer
+      |> where(
+        [binding],
+        binding.agent_id == ^agent.id and binding.mcp_server_config_id not in ^kept_ids
+      )
+      |> Repo.delete_all()
+
+      list_agent_mcp_servers(agent.id)
+    end)
+    |> Helpers.unwrap_transaction()
+    |> case do
+      {:ok, bindings} ->
+        Helpers.audit_operator_action(
+          "Refreshed MCP bindings for #{agent.slug}",
+          agent: agent,
+          metadata: %{"mcp_binding_count" => length(bindings)}
+        )
+
+        {:ok, bindings}
+
+      other ->
+        other
+    end
+  end
+
+  def enable_agent_mcp_server!(id), do: set_agent_mcp_enabled!(id, true)
+  def disable_agent_mcp_server!(id), do: set_agent_mcp_enabled!(id, false)
+
+  defp server_status(config) do
+    case probe(config, []) do
+      {:ok, result} ->
+        %{
+          id: config.id,
+          name: config.name,
+          transport: config.transport,
+          enabled: config.enabled,
+          status: :ok,
+          detail: result.detail
+        }
+
+      {:error, reason} ->
+        %{
+          id: config.id,
+          name: config.name,
+          transport: config.transport,
+          enabled: config.enabled,
+          status: :warn,
+          detail: format_probe_error(reason)
+        }
+    end
+  end
+
+  defp agent_mcp_status(%AgentProfile{} = agent, status_map) do
+    bindings =
+      list_agent_mcp_servers(agent.id)
+      |> Enum.map(fn binding ->
+        server = binding.mcp_server_config
+        status = Map.get(status_map, server.id) || server_status(server)
+
+        %{
+          id: binding.id,
+          enabled: binding.enabled,
+          server_id: server.id,
+          server_name: server.name,
+          transport: server.transport,
+          server_enabled: server.enabled,
+          status: status.status,
+          detail: status.detail
+        }
+      end)
+
+    %{
+      agent_id: agent.id,
+      agent_name: agent.name,
+      agent_slug: agent.slug,
+      total_bindings: length(bindings),
+      enabled_bindings: Enum.count(bindings, & &1.enabled),
+      healthy_bindings: Enum.count(bindings, &(&1.enabled && &1.status == :ok)),
+      bindings: bindings
+    }
+  end
+
+  defp probe(%MCPServerConfig{enabled: false} = config, _opts) do
+    {:error, {:disabled, "#{config.name} is disabled"}}
+  end
+
+  defp probe(%MCPServerConfig{transport: "stdio"} = config, _opts) do
+    executable =
+      cond do
+        is_binary(config.command) and String.contains?(config.command, "/") and
+            File.exists?(config.command) ->
+          config.command
+
+        is_binary(config.command) ->
+          System.find_executable(config.command)
+
+        true ->
+          nil
+      end
+
+    case executable do
+      nil ->
+        {:error, :command_not_found}
+
+      path ->
+        {:ok,
+         %{
+           transport: "stdio",
+           detail: "command #{path} available",
+           metadata: %{command: config.command, cwd: config.cwd}
+         }}
+    end
+  end
+
+  defp probe(%MCPServerConfig{transport: "http"} = config, opts) do
+    request_fn =
+      Keyword.get(opts, :request_fn) || Application.get_env(:hydra_x, :mcp_http_request_fn) ||
+        (&Req.get/1)
+
+    retries = Keyword.get(opts, :retry_limit, config.retry_limit || 0)
+    do_http_probe(config, request_fn, retries)
+  end
+
+  defp do_http_probe(config, request_fn, retries_left) do
+    url = build_health_url(config)
+
+    headers =
+      [{"accept", "application/json"}]
+      |> maybe_add_auth_header(config.auth_token)
+
+    case request_fn.(url: url, headers: headers) do
+      {:ok, %{status: status}} when status in 200..399 ->
+        {:ok,
+         %{
+           transport: "http",
+           detail: "HTTP #{status} from #{url}",
+           metadata: %{url: url, status: status}
+         }}
+
+      {:ok, %{status: _status}} when retries_left > 0 ->
+        do_http_probe(config, request_fn, retries_left - 1)
+
+      {:ok, %{status: status}} ->
+        {:error, {:http_status, status}}
+
+      {:error, _reason} when retries_left > 0 ->
+        do_http_probe(config, request_fn, retries_left - 1)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp build_health_url(config) do
+    healthcheck_path =
+      config.healthcheck_path
+      |> Helpers.blank_to_nil()
+      |> Kernel.||("/health")
+
+    base = URI.parse(config.url)
+    URI.merge(base, healthcheck_path) |> URI.to_string()
+  end
+
+  defp maybe_add_auth_header(headers, nil), do: headers
+  defp maybe_add_auth_header(headers, ""), do: headers
+
+  defp maybe_add_auth_header(headers, token),
+    do: [{"authorization", "Bearer " <> token} | headers]
+
+  defp format_probe_error({:disabled, message}), do: message
+  defp format_probe_error(:command_not_found), do: "command not found"
+  defp format_probe_error({:http_status, status}), do: "unexpected HTTP #{status}"
+  defp format_probe_error(reason), do: inspect(reason)
+
+  defp decrypt_config(nil), do: nil
+
+  defp decrypt_config(%MCPServerConfig{} = config),
+    do: Secrets.decrypt_fields(config, [:auth_token])
+
+  defp decrypt_binding(%AgentMCPServer{} = binding) do
+    binding
+    |> Repo.preload(:mcp_server_config)
+    |> Map.update!(:mcp_server_config, &decrypt_config/1)
+  end
+
+  defp mcp_prompt_line(config) do
+    status =
+      case server_status(config) do
+        %{status: :ok} -> "healthy"
+        %{status: :warn} -> "degraded"
+      end
+
+    descriptor =
+      case config.transport do
+        "stdio" ->
+          command = config.command || "unknown"
+          "stdio command `#{command}`"
+
+        "http" ->
+          "HTTP endpoint `#{build_health_url(config)}`"
+
+        other ->
+          other
+      end
+
+    "- #{config.name}: #{descriptor} (#{status})"
+  end
+
+  defp set_agent_mcp_enabled!(id, enabled) do
+    binding = get_agent_mcp_server!(id)
+
+    {:ok, updated} =
+      binding
+      |> AgentMCPServer.changeset(%{enabled: enabled})
+      |> Repo.update()
+      |> case do
+        {:ok, saved} -> {:ok, decrypt_binding(saved)}
+        other -> other
+      end
+
+    agent = Repo.get!(AgentProfile, updated.agent_id)
+
+    Helpers.audit_operator_action(
+      "#{if(enabled, do: "Enabled", else: "Disabled")} MCP #{updated.mcp_server_config.name} for #{agent.slug}",
+      agent: agent,
+      metadata: %{
+        "agent_mcp_id" => updated.id,
+        "mcp_server_id" => updated.mcp_server_config_id,
+        "mcp_name" => updated.mcp_server_config.name
+      }
+    )
+
+    updated
+  end
+end

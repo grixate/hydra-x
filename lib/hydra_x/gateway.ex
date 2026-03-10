@@ -64,11 +64,24 @@ defmodule HydraX.Gateway do
     with delivery when is_map(delivery) <- last_delivery(conversation),
          {:ok, adapter_mod, _config, config_map} <- retry_adapter(delivery, opts),
          {:ok, state} <- adapter_mod.connect(config_map),
-         %{content: content} <- latest_assistant_turn(conversation) do
+         %{content: content} <- latest_assistant_turn(conversation),
+         true <-
+           interactive_delivery_allowed?(
+             conversation.agent_id,
+             delivery_message(delivery).channel
+           ) do
       external_ref = Map.get(delivery, "external_ref") || Map.get(delivery, :external_ref)
 
       result =
-        adapter_deliver(adapter_mod, %{content: content, external_ref: external_ref}, state)
+        adapter_deliver(
+          adapter_mod,
+          %{
+            content: content,
+            external_ref: external_ref,
+            metadata: Map.get(delivery, "reply_context") || Map.get(delivery, :reply_context) || %{}
+          },
+          state
+        )
 
       record_delivery_result(
         conversation.agent_id,
@@ -80,6 +93,7 @@ defmodule HydraX.Gateway do
     else
       nil -> {:error, :missing_delivery}
       :no_assistant_turn -> {:error, :no_assistant_turn}
+      false -> {:error, :delivery_channel_blocked_by_policy}
       {:error, reason} -> {:error, reason}
       _ -> {:error, :channel_not_configured}
     end
@@ -105,15 +119,26 @@ defmodule HydraX.Gateway do
       )
 
     delivery_result =
-      adapter_deliver(
-        adapter_mod,
-        %{content: response, external_ref: message.external_ref},
-        state
-      )
+      if interactive_delivery_allowed?(agent.id, message.channel) do
+        adapter_deliver(
+          adapter_mod,
+          %{
+            content: response,
+            external_ref: message.external_ref,
+            metadata: delivery_context(message)
+          },
+          state
+        )
+      else
+        {:error, :delivery_channel_blocked_by_policy}
+      end
 
     record_delivery_result(agent.id, conversation, message, delivery_result)
 
     case delivery_result do
+      {:error, :delivery_channel_blocked_by_policy} ->
+        :ok
+
       {:error, _reason} ->
         schedule_retry(agent.id, conversation.id, message, adapter_mod, config, 0)
 
@@ -141,15 +166,26 @@ defmodule HydraX.Gateway do
     with {:ok, state} <- adapter_mod.connect(retry_adapter_config(adapter_mod, config)),
          %{content: content} <- latest_assistant_turn(conversation) do
       result =
-        adapter_deliver(
-          adapter_mod,
-          %{content: content, external_ref: message.external_ref},
-          state
-        )
+        if interactive_delivery_allowed?(agent_id, message.channel) do
+          adapter_deliver(
+            adapter_mod,
+            %{
+              content: content,
+              external_ref: message.external_ref,
+              metadata: delivery_context(message)
+            },
+            state
+          )
+        else
+          {:error, :delivery_channel_blocked_by_policy}
+        end
 
       record_delivery_result(agent_id, conversation, message, result, retry: true)
 
       case result do
+        {:error, :delivery_channel_blocked_by_policy} ->
+          :ok
+
         {:error, _reason} ->
           next_attempt = attempt + 1
 
@@ -312,7 +348,8 @@ defmodule HydraX.Gateway do
   defp delivery_message(delivery) do
     %{
       channel: Map.get(delivery, "channel") || Map.get(delivery, :channel) || "telegram",
-      external_ref: Map.get(delivery, "external_ref") || Map.get(delivery, :external_ref)
+      external_ref: Map.get(delivery, "external_ref") || Map.get(delivery, :external_ref),
+      metadata: Map.get(delivery, "reply_context") || Map.get(delivery, :reply_context) || %{}
     }
   end
 
@@ -345,9 +382,18 @@ defmodule HydraX.Gateway do
     %{
       "channel" => message.channel,
       "external_ref" => message.external_ref,
-      "retry_count" => retry_count
+      "retry_count" => retry_count,
+      "reply_context" => stringify_keys(delivery_context(message))
     }
   end
+
+  defp delivery_context(%{metadata: metadata}) when is_map(metadata) do
+    metadata
+    |> stringify_keys()
+    |> Map.take(["reply_to_message_id", "thread_ts", "source_message_id"])
+  end
+
+  defp delivery_context(_message), do: %{}
 
   defp dispatch_channel_update(nil, _adapter_mod, _adapter_config, _event, error),
     do: {:error, error}
@@ -381,6 +427,10 @@ defmodule HydraX.Gateway do
       true ->
         adapter_mod.send_response(payload, state)
     end
+  end
+
+  defp interactive_delivery_allowed?(agent_id, channel) do
+    channel in HydraX.Runtime.effective_control_policy(agent_id).interactive_delivery_channels
   end
 
   defp retry_adapter(delivery, opts) do

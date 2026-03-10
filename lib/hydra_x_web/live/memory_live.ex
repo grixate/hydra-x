@@ -14,7 +14,7 @@ defmodule HydraXWeb.MemoryLive do
       default_filters()
       |> Map.put("query", Map.get(params, "q", ""))
 
-    {memories, has_next} = load_memories_paginated(filters, 1)
+    {memories, memory_rankings, has_next} = load_memories_paginated(filters, 1)
     selected = List.first(memories)
 
     {:ok,
@@ -34,6 +34,7 @@ defmodule HydraXWeb.MemoryLive do
      |> assign(:ingested_files, load_ingested_files(filters))
      |> assign(:ingest_runs, load_ingest_runs(filters))
      |> assign(:memories, memories)
+     |> assign(:memory_rankings, memory_rankings)
      |> assign(:selected, selected)
      |> assign(:selected_ingest_runs, selected_ingest_runs(selected))
      |> assign(:edges, load_edges(selected))
@@ -47,7 +48,7 @@ defmodule HydraXWeb.MemoryLive do
   @impl true
   def handle_event("search", %{"q" => query}, socket) do
     filters = Map.put(socket.assigns.filters, "query", query)
-    memories = load_memories(filters)
+    {memories, memory_rankings} = load_memories(filters)
 
     selected =
       socket.assigns.selected && maybe_refresh_selection(memories, socket.assigns.selected.id)
@@ -59,6 +60,7 @@ defmodule HydraXWeb.MemoryLive do
      |> assign(:filters, filters)
      |> assign(:filter_form, to_form(filters, as: :filters))
      |> assign(:memories, memories)
+     |> assign(:memory_rankings, memory_rankings)
      |> assign(:ingest_agent, current_ingest_agent(filters))
      |> assign(:ingested_files, load_ingested_files(filters))
      |> assign(:ingest_runs, load_ingest_runs(filters))
@@ -75,7 +77,7 @@ defmodule HydraXWeb.MemoryLive do
       socket.assigns.filters
       |> Map.merge(params)
 
-    memories = load_memories(filters)
+    {memories, memory_rankings} = load_memories(filters)
 
     selected =
       socket.assigns.selected && maybe_refresh_selection(memories, socket.assigns.selected.id)
@@ -87,6 +89,7 @@ defmodule HydraXWeb.MemoryLive do
      |> assign(:filters, filters)
      |> assign(:filter_form, to_form(filters, as: :filters))
      |> assign(:memories, memories)
+     |> assign(:memory_rankings, memory_rankings)
      |> assign(:ingest_agent, current_ingest_agent(filters))
      |> assign(:ingested_files, load_ingested_files(filters))
      |> assign(:ingest_runs, load_ingest_runs(filters))
@@ -198,7 +201,7 @@ defmodule HydraXWeb.MemoryLive do
     deleted = Memory.delete_memory!(id)
     if agent = Runtime.get_agent!(deleted.agent_id), do: Memory.sync_markdown(agent)
 
-    memories = load_memories(socket.assigns.filters)
+    {memories, memory_rankings} = load_memories(socket.assigns.filters)
 
     selected =
       socket.assigns.selected && maybe_refresh_selection(memories, socket.assigns.selected.id)
@@ -209,6 +212,7 @@ defmodule HydraXWeb.MemoryLive do
      socket
      |> put_flash(:info, "Memory deleted")
      |> assign(:memories, memories)
+     |> assign(:memory_rankings, memory_rankings)
      |> assign(:selected, selected)
      |> assign(:selected_ingest_runs, selected_ingest_runs(selected))
      |> assign(:edges, load_edges(selected))
@@ -228,13 +232,14 @@ defmodule HydraXWeb.MemoryLive do
     case result do
       {:ok, memory} ->
         if agent = Runtime.get_agent!(memory.agent_id), do: Memory.sync_markdown(agent)
-        memories = load_memories(socket.assigns.filters)
+        {memories, memory_rankings} = load_memories(socket.assigns.filters)
         selected = Memory.get_memory!(memory.id)
 
         {:noreply,
          socket
          |> put_flash(:info, "Memory saved")
          |> assign(:memories, memories)
+         |> assign(:memory_rankings, memory_rankings)
          |> assign(:selected, selected)
          |> assign(:selected_ingest_runs, selected_ingest_runs(selected))
          |> assign(:edges, load_edges(selected))
@@ -326,7 +331,7 @@ defmodule HydraXWeb.MemoryLive do
         filters =
           refresh_filters_after_reconcile(socket.assigns.filters, selected_memory.status)
 
-        memories = load_memories(filters)
+        {memories, memory_rankings} = load_memories(filters)
         selected = Memory.get_memory!(selected_memory.id)
 
         {:noreply,
@@ -335,6 +340,7 @@ defmodule HydraXWeb.MemoryLive do
          |> assign(:filters, filters)
          |> assign(:filter_form, to_form(filters, as: :filters))
          |> assign(:memories, memories)
+         |> assign(:memory_rankings, memory_rankings)
          |> assign(:selected, selected)
          |> assign(:selected_ingest_runs, selected_ingest_runs(selected))
          |> assign(:edges, load_edges(selected))
@@ -354,7 +360,7 @@ defmodule HydraXWeb.MemoryLive do
 
   def handle_event("paginate", %{"page" => page}, socket) do
     page = safe_page_number(page)
-    {memories, has_next} = load_memories_paginated(socket.assigns.filters, page)
+    {memories, memory_rankings, has_next} = load_memories_paginated(socket.assigns.filters, page)
 
     selected =
       if socket.assigns.selected do
@@ -368,6 +374,7 @@ defmodule HydraXWeb.MemoryLive do
      |> assign(:page, page)
      |> assign(:has_next, has_next)
      |> assign(:memories, memories)
+     |> assign(:memory_rankings, memory_rankings)
      |> assign(:selected, selected)
      |> assign(:selected_ingest_runs, selected_ingest_runs(selected))
      |> assign(:edges, load_edges(selected))
@@ -378,7 +385,7 @@ defmodule HydraXWeb.MemoryLive do
 
   @impl true
   def handle_info({:memory_updated, _agent_id}, socket) do
-    memories = load_memories(socket.assigns.filters)
+    {memories, memory_rankings} = load_memories(socket.assigns.filters)
 
     selected =
       if socket.assigns.selected do
@@ -388,6 +395,7 @@ defmodule HydraXWeb.MemoryLive do
     {:noreply,
      socket
      |> assign(:memories, memories)
+     |> assign(:memory_rankings, memory_rankings)
      |> assign(:ingested_files, load_ingested_files(socket.assigns.filters))
      |> assign(:ingest_runs, load_ingest_runs(socket.assigns.filters))
      |> assign(:selected, selected)
@@ -597,9 +605,23 @@ defmodule HydraXWeb.MemoryLive do
                   </div>
                   <span class="text-xs text-[var(--hx-mute)]">
                     importance {Float.round(memory.importance, 2)}
+                    <span :if={ranked = memory_ranking(@memory_rankings, memory)}>
+                      · score {Float.round(ranked.score, 3)}
+                    </span>
                   </span>
                 </div>
                 <p class="mt-3 text-sm leading-6">{memory.content}</p>
+                <div
+                  :if={ranked = memory_ranking(@memory_rankings, memory)}
+                  class="mt-3 flex flex-wrap gap-2 text-xs"
+                >
+                  <span
+                    :for={reason <- ranked.reasons || []}
+                    class="rounded-full border border-white/10 px-3 py-1 font-mono uppercase tracking-[0.18em] text-[var(--hx-mute)]"
+                  >
+                    {reason}
+                  </span>
+                </div>
               </button>
               <div class="mt-4">
                 <button
@@ -689,7 +711,9 @@ defmodule HydraXWeb.MemoryLive do
                       <div class="text-xs uppercase tracking-[0.18em] text-[var(--hx-accent)]">
                         {run.status}
                       </div>
-                      <div class="text-xs text-[var(--hx-mute)]">{format_datetime(run.inserted_at)}</div>
+                      <div class="text-xs text-[var(--hx-mute)]">
+                        {format_datetime(run.inserted_at)}
+                      </div>
                     </div>
                     <div class="mt-2 text-xs text-[var(--hx-mute)]">
                       created {run.created_count} - restored {ingest_run_restored_count(run)} - skipped {run.skipped_count} - archived {run.archived_count}
@@ -816,7 +840,24 @@ defmodule HydraXWeb.MemoryLive do
       min_importance: parse_float(filters["min_importance"], nil)
     ]
 
-    Memory.search(parse_integer(filters["agent_id"]), filters["query"], @memory_page_size, opts)
+    case blank_to_nil(filters["query"]) do
+      nil ->
+        memories =
+          Memory.search(parse_integer(filters["agent_id"]), filters["query"], @memory_page_size, opts)
+
+        {memories, %{}}
+
+      query ->
+        ranked =
+          Memory.search_ranked(
+            parse_integer(filters["agent_id"]),
+            query,
+            @memory_page_size,
+            opts
+          )
+
+        {Enum.map(ranked, & &1.entry), map_rankings(ranked)}
+    end
   end
 
   defp load_memories_paginated(filters, page) do
@@ -831,15 +872,33 @@ defmodule HydraXWeb.MemoryLive do
       min_importance: parse_float(filters["min_importance"], nil)
     ]
 
-    results =
-      Memory.search(
-        parse_integer(filters["agent_id"]),
-        filters["query"],
-        @memory_page_size + 1,
-        opts
-      )
+    case blank_to_nil(filters["query"]) do
+      nil ->
+        results =
+          Memory.search(
+            parse_integer(filters["agent_id"]),
+            filters["query"],
+            @memory_page_size + 1,
+            opts
+          )
 
-    {Enum.take(results, @memory_page_size), length(results) > @memory_page_size}
+        {Enum.take(results, @memory_page_size), %{}, length(results) > @memory_page_size}
+
+      query ->
+        ranked =
+          Memory.search_ranked(
+            parse_integer(filters["agent_id"]),
+            query,
+            offset + @memory_page_size + 1,
+            opts
+          )
+
+        page_ranked = ranked |> Enum.drop(offset) |> Enum.take(@memory_page_size + 1)
+        has_next = length(page_ranked) > @memory_page_size
+        page_ranked = Enum.take(page_ranked, @memory_page_size)
+
+        {Enum.map(page_ranked, & &1.entry), map_rankings(page_ranked), has_next}
+    end
   end
 
   defp load_ingested_files(filters) do
@@ -1085,4 +1144,10 @@ defmodule HydraXWeb.MemoryLive do
       memories: Memory.list_memories(limit: 1_000) |> length()
     }
   end
+
+  defp map_rankings(ranked) do
+    Map.new(ranked, fn item -> {item.entry.id, item} end)
+  end
+
+  defp memory_ranking(rankings, memory), do: Map.get(rankings || %{}, memory.id)
 end

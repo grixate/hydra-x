@@ -7,6 +7,7 @@ defmodule HydraX.Runtime.DiscordAdmin do
 
   alias HydraX.Repo
   alias HydraX.Gateway.Adapters.Discord
+  alias HydraX.Security.Secrets
   alias HydraX.Runtime.{DiscordConfig, Helpers}
 
   def enabled_discord_config do
@@ -15,6 +16,7 @@ defmodule HydraX.Runtime.DiscordAdmin do
     |> preload([:default_agent])
     |> limit(1)
     |> Repo.one()
+    |> decrypt_config()
   end
 
   def list_discord_configs do
@@ -22,10 +24,11 @@ defmodule HydraX.Runtime.DiscordAdmin do
     |> preload([:default_agent])
     |> order_by([config], desc: config.enabled, desc: config.updated_at)
     |> Repo.all()
+    |> Enum.map(&decrypt_config/1)
   end
 
   def change_discord_config(config \\ %DiscordConfig{}, attrs \\ %{}) do
-    DiscordConfig.changeset(config, attrs)
+    DiscordConfig.changeset(decrypt_config(config), attrs)
   end
 
   def save_discord_config(attrs) when is_map(attrs) do
@@ -37,11 +40,18 @@ defmodule HydraX.Runtime.DiscordAdmin do
 
   def save_discord_config(%DiscordConfig{} = config, attrs) do
     Repo.transaction(fn ->
-      changeset = DiscordConfig.changeset(config, attrs)
+      decrypted = decrypt_config(config)
+
+      encrypted_attrs =
+        attrs
+        |> Helpers.normalize_string_keys()
+        |> Secrets.encrypt_secret_attrs(decrypted, [:bot_token, :webhook_secret])
+
+      changeset = DiscordConfig.changeset(config, encrypted_attrs)
 
       record =
         case Repo.insert_or_update(changeset) do
-          {:ok, record} -> record
+          {:ok, record} -> decrypt_config(record)
           {:error, changeset} -> Repo.rollback(changeset)
         end
 
@@ -56,6 +66,8 @@ defmodule HydraX.Runtime.DiscordAdmin do
   end
 
   def test_discord_delivery(%DiscordConfig{} = config, target, message, opts \\ []) do
+    config = decrypt_config(config)
+
     with true <- is_binary(target) and target != "",
          {:ok, state} <-
            Discord.connect(%{
@@ -72,5 +84,11 @@ defmodule HydraX.Runtime.DiscordAdmin do
       false -> {:error, :missing_target}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp decrypt_config(nil), do: nil
+
+  defp decrypt_config(%DiscordConfig{} = config) do
+    Secrets.decrypt_fields(config, [:bot_token, :webhook_secret])
   end
 end

@@ -64,6 +64,71 @@ defmodule HydraX.ConversationsTaskTest do
     assert refreshed.metadata["last_delivery"]["retry_count"] == 1
   end
 
+  test "conversation task retries a failed Slack delivery" do
+    Mix.Task.reenable("hydra_x.conversations")
+
+    previous = Application.get_env(:hydra_x, :slack_deliver)
+
+    Application.put_env(:hydra_x, :slack_deliver, fn payload ->
+      send(self(), {:slack_retry, payload})
+      {:ok, %{provider_message_id: "slack-321"}}
+    end)
+
+    on_exit(fn ->
+      if previous do
+        Application.put_env(:hydra_x, :slack_deliver, previous)
+      else
+        Application.delete_env(:hydra_x, :slack_deliver)
+      end
+    end)
+
+    agent = create_agent()
+
+    {:ok, _slack} =
+      Runtime.save_slack_config(%{
+        bot_token: "slack-test-token",
+        signing_secret: "slack-signing-secret",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{
+        channel: "slack",
+        external_ref: "C777",
+        title: "Slack 777"
+      })
+
+    {:ok, _turn} =
+      Runtime.append_turn(conversation, %{
+        role: "assistant",
+        content: "Retry from Mix task over Slack",
+        metadata: %{}
+      })
+
+    {:ok, _conversation} =
+      Runtime.update_conversation_metadata(conversation, %{
+        "last_delivery" => %{
+          "channel" => "slack",
+          "status" => "failed",
+          "external_ref" => "C777",
+          "reason" => "timeout"
+        }
+      })
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Mix.Tasks.HydraX.Conversations.run(["retry-delivery", to_string(conversation.id)])
+      end)
+
+    assert output =~ "Retried slack delivery"
+    assert_receive {:slack_retry, %{external_ref: "C777", content: "Retry from Mix task over Slack"}}
+
+    refreshed = Runtime.get_conversation!(conversation.id)
+    assert refreshed.metadata["last_delivery"]["status"] == "delivered"
+    assert refreshed.metadata["last_delivery"]["retry_count"] == 1
+  end
+
   test "conversation task can start and send control-plane messages" do
     Mix.Task.reenable("hydra_x.conversations")
     agent = create_agent()

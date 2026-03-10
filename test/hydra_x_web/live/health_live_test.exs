@@ -72,6 +72,34 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "shell cli"
   end
 
+  test "health page shows secret storage posture", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, _provider} =
+      Runtime.save_provider_config(%{
+        name: "Health Secret Provider",
+        kind: "openai_compatible",
+        base_url: "https://secret-health.test",
+        api_key: "secret",
+        model: "gpt-secret-health",
+        enabled: false
+      })
+
+    {:ok, _telegram} =
+      Runtime.save_telegram_config(%{
+        bot_token: "test-token",
+        webhook_secret: "hook-secret",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
+    {:ok, _view, html} = live(conn, ~p"/health")
+
+    assert html =~ "secrets"
+    assert html =~ "encrypted"
+    assert html =~ "key source"
+  end
+
   test "health page can export an operator report", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/health")
 
@@ -180,6 +208,24 @@ defmodule HydraXWeb.HealthLiveTest do
         default_agent_id: agent.id
       })
 
+    {:ok, failed_slack} =
+      Runtime.start_conversation(agent, %{
+        channel: "slack",
+        title: "Slack Failure",
+        external_ref: "C777"
+      })
+
+    {:ok, _conversation} =
+      Runtime.update_conversation_metadata(failed_slack, %{
+        "last_delivery" => %{
+          "channel" => "slack",
+          "external_ref" => "C777",
+          "status" => "failed",
+          "reason" => "thread timeout",
+          "reply_context" => %{"thread_ts" => "123.456"}
+        }
+      })
+
     {:ok, _view, html} = live(conn, ~p"/health")
 
     assert html =~ "Additional channel readiness"
@@ -187,6 +233,8 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "slack"
     assert html =~ "discord-app"
     assert html =~ "capabilities:"
+    assert html =~ "thread timeout"
+    assert html =~ "thread 123.456"
   end
 
   test "health page shows Webchat readiness", %{conn: conn} do
@@ -205,6 +253,31 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "Additional channel readiness"
     assert html =~ "webchat"
     assert html =~ "/webchat"
+  end
+
+  test "health page shows MCP server registry health", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, server} =
+      Runtime.save_mcp_server(%{
+        name: "Docs MCP",
+        transport: "stdio",
+        command: "cat",
+        enabled: true
+      })
+
+    assert {:ok, _bindings} = Runtime.refresh_agent_mcp_servers(agent.id)
+    [binding] = Runtime.list_agent_mcp_servers(agent.id)
+    assert binding.mcp_server_config_id == server.id
+
+    {:ok, _view, html} = live(conn, ~p"/health")
+
+    assert html =~ "MCP servers"
+    assert html =~ "Docs MCP"
+    assert html =~ "stdio"
+    assert html =~ "healthy"
+    assert html =~ "Agent MCP"
+    assert html =~ agent.slug
   end
 
   test "health page shows open scheduler circuits", %{conn: conn} do

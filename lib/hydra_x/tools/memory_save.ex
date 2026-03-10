@@ -8,6 +8,9 @@ defmodule HydraX.Tools.MemorySave do
   def description, do: "Persist a typed memory entry"
 
   @impl true
+  def safety_classification, do: "memory_write"
+
+  @impl true
   def tool_schema do
     %{
       name: "memory_save",
@@ -61,4 +64,10 @@ defmodule HydraX.Tools.MemorySave do
         {:error, changeset}
     end
   end
+
+  @impl true
+  def result_summary(%{id: id, type: type}), do: "saved #{type} memory ##{id}"
+  def result_summary(%{error: error}) when is_binary(error), do: error
+  def result_summary(%{"error" => error}) when is_binary(error), do: error
+  def result_summary(payload), do: inspect(payload, limit: 8, printable_limit: 120)
 end

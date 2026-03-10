@@ -4,6 +4,7 @@ defmodule HydraX.Tools.ToolSafetyTest do
   alias HydraX.Runtime
 
   alias HydraX.Tools.{
+    BrowserAutomation,
     HttpFetch,
     ShellCommand,
     WebSearch,
@@ -168,6 +169,152 @@ defmodule HydraX.Tools.ToolSafetyTest do
 
     assert [%{title: "Example A", url: "https://example.com/a"}, %{title: "Example B"}] =
              result.results
+  end
+
+  test "browser automation fetches and follows public page links" do
+    request_fn = fn opts ->
+      case {opts[:method], opts[:url]} do
+        {:get, "https://example.com/start"} ->
+          {:ok,
+           %{
+             status: 200,
+             body:
+               ~s(<html><head><title>Start Page</title></head><body><a href="/next">Read more</a><p>Hydra browser entry</p></body></html>),
+             headers: [{"content-type", "text/html"}]
+           }}
+
+        {:get, "https://example.com/next"} ->
+          {:ok,
+           %{
+             status: 200,
+             body:
+               ~s(<html><head><title>Next Page</title></head><body><p>Expanded browser content</p></body></html>),
+             headers: [{"content-type", "text/html"}]
+           }}
+      end
+    end
+
+    assert {:ok, fetched} =
+             BrowserAutomation.execute(
+               %{action: "fetch_page", url: "https://example.com/start"},
+               %{request_fn: request_fn}
+             )
+
+    assert fetched.title == "Start Page"
+    assert Enum.any?(fetched.links, &(&1.text == "Read more"))
+
+    assert {:ok, clicked} =
+             BrowserAutomation.execute(
+               %{action: "click_link", url: "https://example.com/start", link_text: "Read more"},
+               %{request_fn: request_fn}
+             )
+
+    assert clicked.title == "Next Page"
+    assert clicked.followed_href == "/next"
+    assert clicked.forms == []
+  end
+
+  test "browser automation inspects forms, submits by parsed action, and writes snapshots" do
+    request_fn = fn opts ->
+      case {opts[:method], opts[:url]} do
+        {:get, "https://example.com/form"} ->
+          {:ok,
+           %{
+             status: 200,
+             body:
+               ~s(<html><head><title>Form Page</title></head><body><h1>Hydra Docs</h1><h2>Search</h2><form method="post" action="/submit"><input type="text" name="query" value="hydra" /><input type="hidden" name="scope" value="docs" /></form><table><tr><th>Name</th><th>Status</th></tr><tr><td>Hydra</td><td>Ready</td></tr></table></body></html>),
+             headers: [{"content-type", "text/html"}]
+           }}
+
+        {:post, "https://example.com/submit"} ->
+          assert opts[:form] == %{"query" => "hydra x", "scope" => "docs"}
+
+          {:ok,
+           %{
+             status: 200,
+             body: ~s(<html><body><p>Submitted hydra x</p></body></html>),
+             headers: [{"content-type", "text/html"}]
+           }}
+      end
+    end
+
+    assert {:ok, forms} =
+             BrowserAutomation.execute(
+               %{action: "inspect_forms", url: "https://example.com/form"},
+               %{request_fn: request_fn}
+             )
+
+    assert [%{action: "/submit", fields: [%{name: "query"}, %{name: "scope"}]}] = forms.forms
+
+    assert {:ok, submitted} =
+             BrowserAutomation.execute(
+               %{
+                 action: "submit_form",
+                 url: "https://example.com/form",
+                 form_index: 0,
+                 fields: %{"query" => "hydra x"}
+               },
+               %{request_fn: request_fn}
+             )
+
+    assert submitted.url == "https://example.com/submit"
+
+    assert {:ok, preview} =
+             BrowserAutomation.execute(
+               %{
+                 action: "preview_form_submission",
+                 url: "https://example.com/form",
+                 form_index: 0,
+                 fields: %{"query" => "hydra x"}
+               },
+               %{request_fn: request_fn}
+             )
+
+    assert preview.url == "https://example.com/submit"
+    assert preview.fields == %{"query" => "hydra x", "scope" => "docs"}
+
+    assert {:ok, headings} =
+             BrowserAutomation.execute(
+               %{action: "inspect_headings", url: "https://example.com/form"},
+               %{request_fn: request_fn}
+             )
+
+    assert [%{level: 1, text: "Hydra Docs"}, %{level: 2, text: "Search"}] = headings.headings
+
+    assert {:ok, tables} =
+             BrowserAutomation.execute(
+               %{action: "extract_tables", url: "https://example.com/form"},
+               %{request_fn: request_fn}
+             )
+
+    assert [%{headers: ["Name", "Status"], rows: [["Hydra", "Ready"]]}] = tables.tables
+    assert submitted.form_index == 0
+    assert submitted.method == "POST"
+
+    assert {:ok, snapshot} =
+             BrowserAutomation.execute(
+               %{action: "capture_snapshot", url: "https://example.com/form"},
+               %{request_fn: request_fn}
+             )
+
+    assert snapshot.content_type == "image/svg+xml"
+    assert File.exists?(snapshot.snapshot_path)
+    assert File.read!(snapshot.snapshot_path) =~ "<svg"
+  end
+
+  test "browser automation blocks localhost targets before issuing a request" do
+    request_fn = fn _opts ->
+      send(self(), :browser_request_attempted)
+      {:ok, %{status: 200, body: "should not happen", headers: []}}
+    end
+
+    assert {:error, :blocked_host} =
+             BrowserAutomation.execute(
+               %{action: "fetch_page", url: "http://localhost:4000/secret"},
+               %{request_fn: request_fn}
+             )
+
+    refute_received :browser_request_attempted
   end
 
   test "shell commands run inside the workspace when allowlisted" do

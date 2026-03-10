@@ -12,6 +12,9 @@ defmodule HydraX.Tools.WebSearch do
   def description, do: "Search the public web through a dedicated search endpoint"
 
   @impl true
+  def safety_classification, do: "network_read"
+
+  @impl true
   def tool_schema do
     %{
       name: "web_search",
@@ -66,6 +69,16 @@ defmodule HydraX.Tools.WebSearch do
       {:error, reason} -> {:error, reason}
     end
   end
+
+  @impl true
+  def result_summary(%{error: error}) when is_binary(error), do: error
+  def result_summary(%{"error" => error}) when is_binary(error), do: error
+
+  def result_summary(%{query: query, results: results}) do
+    "searched #{query} (#{length(results)} results)"
+  end
+
+  def result_summary(payload), do: inspect(payload, limit: 8, printable_limit: 120)
 
   defp parse_limit(nil), do: @default_limit
   defp parse_limit(limit) when is_integer(limit) and limit > 0, do: min(limit, 10)

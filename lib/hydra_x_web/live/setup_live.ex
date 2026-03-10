@@ -6,7 +6,9 @@ defmodule HydraXWeb.SetupLive do
 
   alias HydraX.Runtime.{
     AgentProfile,
+    ControlPolicy,
     DiscordConfig,
+    MCPServerConfig,
     ProviderConfig,
     SlackConfig,
     TelegramConfig,
@@ -43,7 +45,10 @@ defmodule HydraXWeb.SetupLive do
       Runtime.enabled_webchat_config() || List.first(Runtime.list_webchat_configs()) ||
         %WebchatConfig{default_agent_id: agent.id}
 
+    mcp_server = List.first(Runtime.list_mcp_servers()) || %MCPServerConfig{}
+
     tool_policy = Runtime.get_tool_policy() || %ToolPolicy{}
+    control_policy = Runtime.get_control_policy() || %ControlPolicy{}
 
     {:ok,
      socket
@@ -56,6 +61,7 @@ defmodule HydraXWeb.SetupLive do
      |> assign(:telegram_test_result, nil)
      |> assign(:discord_test_result, nil)
      |> assign(:slack_test_result, nil)
+     |> assign(:mcp_test_result, nil)
      |> assign(:install_export, nil)
      |> assign(:backup_export, nil)
      |> assign(:readiness_report, Runtime.readiness_report())
@@ -66,7 +72,10 @@ defmodule HydraXWeb.SetupLive do
      |> assign(:discord, discord)
      |> assign(:slack, slack)
      |> assign(:webchat, webchat)
+     |> assign(:mcp_server, mcp_server)
+     |> assign(:mcp_servers, Runtime.list_mcp_servers())
      |> assign(:tool_policy, tool_policy)
+     |> assign(:control_policy, control_policy)
      |> assign_form(:operator_form, Runtime.change_operator_secret())
      |> assign_form(:agent_form, Runtime.change_agent(agent))
      |> assign_form(:provider_form, Runtime.change_provider_config(provider))
@@ -74,10 +83,12 @@ defmodule HydraXWeb.SetupLive do
      |> assign_form(:discord_form, Runtime.change_discord_config(discord))
      |> assign_form(:slack_form, Runtime.change_slack_config(slack))
      |> assign_form(:webchat_form, Runtime.change_webchat_config(webchat))
+     |> assign_form(:mcp_form, Runtime.change_mcp_server(mcp_server))
      |> assign(:telegram_test_form, to_form(default_telegram_test(), as: :telegram_test))
      |> assign(:discord_test_form, to_form(default_channel_test("discord"), as: :discord_test))
      |> assign(:slack_test_form, to_form(default_channel_test("slack"), as: :slack_test))
-     |> assign_form(:tool_policy_form, Runtime.change_tool_policy(tool_policy))}
+     |> assign_form(:tool_policy_form, Runtime.change_tool_policy(tool_policy))
+     |> assign_form(:control_policy_form, Runtime.change_control_policy(control_policy))}
   end
 
   @impl true
@@ -224,6 +235,78 @@ defmodule HydraXWeb.SetupLive do
     end
   end
 
+  def handle_event("save_mcp_server", %{"mcp_server_config" => params}, socket) do
+    with {:ok, socket} <- require_recent_auth(socket, "save MCP server"),
+         {:ok, mcp_server} <- Runtime.save_mcp_server(socket.assigns.mcp_server, params) do
+      {:noreply,
+       socket
+       |> put_flash(:info, "MCP server updated")
+       |> assign(:mcp_server, mcp_server)
+       |> assign(:mcp_servers, Runtime.list_mcp_servers())
+       |> assign(:readiness_report, Runtime.readiness_report())
+       |> assign(:stats, stats())
+       |> assign_form(:mcp_form, Runtime.change_mcp_server(mcp_server))}
+    else
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:noreply, assign_form(socket, :mcp_form, changeset)}
+
+      {:reauth, socket} ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("edit_mcp_server", %{"id" => id}, socket) do
+    mcp_server = Runtime.get_mcp_server!(String.to_integer(id))
+
+    {:noreply,
+     socket
+     |> assign(:mcp_server, mcp_server)
+     |> assign_form(:mcp_form, Runtime.change_mcp_server(mcp_server))}
+  end
+
+  def handle_event("reset_mcp_form", _params, socket) do
+    mcp_server = %MCPServerConfig{}
+
+    {:noreply,
+     socket
+     |> assign(:mcp_server, mcp_server)
+     |> assign_form(:mcp_form, Runtime.change_mcp_server(mcp_server))}
+  end
+
+  def handle_event("delete_mcp_server", %{"id" => id}, socket) do
+    with {:ok, socket} <- require_recent_auth(socket, "delete MCP server") do
+      Runtime.delete_mcp_server!(String.to_integer(id))
+
+      {:noreply,
+       socket
+       |> put_flash(:info, "MCP server deleted")
+       |> assign(:mcp_server, %MCPServerConfig{})
+       |> assign(:mcp_servers, Runtime.list_mcp_servers())
+       |> assign_form(:mcp_form, Runtime.change_mcp_server(%MCPServerConfig{}))}
+    else
+      {:reauth, socket} ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("test_mcp_server", %{"id" => id}, socket) do
+    config = Runtime.get_mcp_server!(String.to_integer(id))
+
+    case Runtime.test_mcp_server(config) do
+      {:ok, result} ->
+        {:noreply,
+         socket
+         |> assign(:mcp_test_result, %{status: :ok, content: inspect(result)})
+         |> put_flash(:info, "MCP server test succeeded")}
+
+      {:error, reason} ->
+        {:noreply,
+         socket
+         |> assign(:mcp_test_result, %{status: :error, content: inspect(reason)})
+         |> put_flash(:error, "MCP server test failed")}
+    end
+  end
+
   def handle_event("save_tool_policy", %{"tool_policy" => params}, socket) do
     with {:ok, socket} <- require_recent_auth(socket, "save tool policy"),
          {:ok, tool_policy} <- Runtime.save_tool_policy(socket.assigns.tool_policy, params) do
@@ -236,6 +319,26 @@ defmodule HydraXWeb.SetupLive do
     else
       {:error, %Ecto.Changeset{} = changeset} ->
         {:noreply, assign_form(socket, :tool_policy_form, changeset)}
+
+      {:reauth, socket} ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("save_control_policy", %{"control_policy" => params}, socket) do
+    with {:ok, socket} <- require_recent_auth(socket, "save control policy"),
+         {:ok, control_policy} <-
+           Runtime.save_control_policy(socket.assigns.control_policy, params) do
+      {:noreply,
+       socket
+       |> put_flash(:info, "Control policy updated")
+       |> assign(:control_policy, control_policy)
+       |> assign(:operator_status, Runtime.operator_status())
+       |> assign(:readiness_report, Runtime.readiness_report())
+       |> assign_form(:control_policy_form, Runtime.change_control_policy(control_policy))}
+    else
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:noreply, assign_form(socket, :control_policy_form, changeset)}
 
       {:reauth, socket} ->
         {:noreply, socket}
@@ -649,6 +752,11 @@ defmodule HydraXWeb.SetupLive do
               label="Enable outbound HTTP fetches"
             />
             <.input
+              field={@tool_policy_form[:browser_automation_enabled]}
+              type="checkbox"
+              label="Enable browser automation"
+            />
+            <.input
               field={@tool_policy_form[:web_search_enabled]}
               type="checkbox"
               label="Enable dedicated web search"
@@ -675,6 +783,10 @@ defmodule HydraXWeb.SetupLive do
               label="HTTP fetch channels (comma separated)"
             />
             <.input
+              field={@tool_policy_form[:browser_automation_channels_csv]}
+              label="Browser automation channels (comma separated)"
+            />
+            <.input
               field={@tool_policy_form[:web_search_channels_csv]}
               label="Web search channels (comma separated)"
             />
@@ -684,6 +796,50 @@ defmodule HydraXWeb.SetupLive do
             />
             <div class="xl:col-span-2 pt-2">
               <.button>Save tool policy</.button>
+            </div>
+          </.form>
+        </article>
+      </section>
+
+      <section class="mt-6">
+        <article class="glass-panel p-6">
+          <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">
+            Control policy
+          </div>
+          <h2 class="mt-3 font-display text-4xl">Cross-cutting runtime controls</h2>
+          <p class="mt-3 max-w-3xl text-sm text-[var(--hx-mute)]">
+            These settings govern recent-auth freshness, which channels can receive outbound runtime replies, which channels scheduled jobs can target, and where ingest is allowed to read from inside an agent workspace.
+          </p>
+          <.form
+            for={@control_policy_form}
+            id="control-policy-form"
+            phx-submit="save_control_policy"
+            class="mt-6 grid gap-4 xl:grid-cols-2"
+          >
+            <.input
+              field={@control_policy_form[:require_recent_auth_for_sensitive_actions]}
+              type="checkbox"
+              label="Require recent auth for sensitive actions"
+            />
+            <.input
+              field={@control_policy_form[:recent_auth_window_minutes]}
+              type="number"
+              label="Recent-auth window (minutes)"
+            />
+            <.input
+              field={@control_policy_form[:interactive_delivery_channels_csv]}
+              label="Interactive delivery channels (comma separated)"
+            />
+            <.input
+              field={@control_policy_form[:job_delivery_channels_csv]}
+              label="Scheduled job delivery channels (comma separated)"
+            />
+            <.input
+              field={@control_policy_form[:ingest_roots_csv]}
+              label="Allowed ingest roots (comma separated, relative to workspace)"
+            />
+            <div class="xl:col-span-2 pt-2">
+              <.button>Save control policy</.button>
             </div>
           </.form>
         </article>
@@ -930,6 +1086,111 @@ defmodule HydraXWeb.SetupLive do
               <.button>Save Webchat settings</.button>
             </div>
           </.form>
+        </article>
+      </section>
+
+      <section class="mt-6">
+        <article class="glass-panel p-6">
+          <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">
+            MCP registry
+          </div>
+          <h2 class="mt-3 font-display text-4xl">External context servers</h2>
+          <p class="mt-3 max-w-3xl text-sm text-[var(--hx-mute)]">
+            Register stdio or HTTP MCP servers so Hydra-X can track their availability and prepare
+            for later tool integration. This registry is operator-visible and health-checked from
+            the existing control plane.
+          </p>
+          <div class="mt-6 space-y-3">
+            <div
+              :for={server <- @mcp_servers}
+              class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4"
+            >
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div class="text-sm font-semibold text-white">{server.name}</div>
+                  <div class="mt-1 font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                    {server.transport}
+                    {if server.enabled, do: " · enabled", else: " · disabled"}
+                  </div>
+                  <div class="mt-2 text-xs text-[var(--hx-mute)]">
+                    {if server.transport == "stdio",
+                      do: server.command || "no command",
+                      else: server.url || "no url"}
+                  </div>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    phx-click="edit_mcp_server"
+                    phx-value-id={server.id}
+                    class="btn btn-outline border-white/10 bg-white/5 text-white hover:bg-white/10"
+                  >
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    phx-click="test_mcp_server"
+                    phx-value-id={server.id}
+                    class="btn btn-outline border-white/10 bg-white/5 text-white hover:bg-white/10"
+                  >
+                    Test
+                  </button>
+                  <button
+                    type="button"
+                    phx-click="delete_mcp_server"
+                    phx-value-id={server.id}
+                    class="btn btn-outline border-white/10 bg-white/5 text-white hover:bg-white/10"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            </div>
+            <p :if={@mcp_servers == []} class="text-sm text-[var(--hx-mute)]">
+              No MCP servers configured yet.
+            </p>
+          </div>
+          <.form
+            for={@mcp_form}
+            id="mcp-server-form"
+            phx-submit="save_mcp_server"
+            class="mt-6 grid gap-4 xl:grid-cols-2"
+          >
+            <.input field={@mcp_form[:name]} label="Name" />
+            <.input
+              field={@mcp_form[:transport]}
+              type="select"
+              label="Transport"
+              options={[{"stdio", "stdio"}, {"http", "http"}]}
+            />
+            <.input field={@mcp_form[:command]} label="Command (stdio)" />
+            <.input field={@mcp_form[:args_csv]} label="Args (comma separated)" />
+            <.input field={@mcp_form[:cwd]} label="Working directory (optional)" />
+            <.input field={@mcp_form[:url]} label="Base URL (http)" />
+            <.input field={@mcp_form[:healthcheck_path]} label="Healthcheck path" />
+            <.input field={@mcp_form[:auth_token]} type="password" label="Auth token (optional)" />
+            <.input field={@mcp_form[:retry_limit]} type="number" label="Retry limit" />
+            <.input field={@mcp_form[:enabled]} type="checkbox" label="Enable MCP server" />
+            <div class="xl:col-span-2 pt-2">
+              <.button>Save MCP server</.button>
+              <button
+                type="button"
+                phx-click="reset_mcp_form"
+                class="btn btn-outline ml-3 border-white/10 bg-white/5 text-white hover:bg-white/10"
+              >
+                New MCP server
+              </button>
+            </div>
+          </.form>
+          <div
+            :if={@mcp_test_result}
+            class="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-4 text-sm text-[var(--hx-mute)]"
+          >
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              MCP test result
+            </div>
+            <p class="mt-3 whitespace-pre-wrap">{@mcp_test_result.content}</p>
+          </div>
         </article>
       </section>
     </AppShell.shell>

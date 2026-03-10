@@ -53,7 +53,7 @@ defmodule HydraXWeb.SessionController do
         {:error, :not_configured} ->
           conn
           |> put_flash(:info, "No operator password is configured yet. Set one on /setup.")
-            |> redirect(to: "/setup")
+          |> redirect(to: "/setup")
 
         {:error, :unauthorized} ->
           LoginThrottle.record_attempt(ip)
@@ -97,7 +97,10 @@ defmodule HydraXWeb.SessionController do
       password_configured?: Runtime.operator_password_configured?(),
       reauth?: Keyword.get(opts, :reauth?, false),
       changeset: Keyword.fetch!(opts, :changeset),
-      throttle: throttle
+      throttle: throttle,
+      session_max_age_seconds: OperatorAuth.session_max_age_seconds(),
+      idle_timeout_seconds: OperatorAuth.idle_timeout_seconds(),
+      recent_auth_window_seconds: OperatorAuth.recent_auth_window_seconds()
     )
   end
 

@@ -126,7 +126,7 @@ defmodule HydraXWeb.JobsLive do
     {:noreply,
      socket
      |> assign(:editing_job, job)
-     |> assign(:form, to_form(Runtime.change_scheduled_job(job)))}
+     |> assign(:form, to_form(Runtime.change_scheduled_job(job, edit_job_attrs(job))))}
   end
 
   def handle_event("reset_form", _params, socket) do
@@ -255,6 +255,9 @@ defmodule HydraXWeb.JobsLive do
                   <div class="mt-1 text-xs text-[var(--hx-mute)]">
                     {execution_policy_summary(job)}
                   </div>
+                  <div class="mt-1 text-xs text-[var(--hx-mute)]">
+                    retention {job.run_retention_days || 30} days
+                  </div>
                   <div
                     :if={job.delivery_enabled}
                     class="mt-2 text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]"
@@ -369,6 +372,11 @@ defmodule HydraXWeb.JobsLive do
                 {"Cron", "cron"}
               ]}
             />
+            <.input
+              field={@form[:schedule_text]}
+              label="Natural schedule"
+              placeholder="every 2 hours | daily 09:30 | weekly mon,fri 08:15 | cron 0 9 * * 1-5"
+            />
             <.input field={@form[:interval_minutes]} type="number" label="Interval minutes" />
             <.input field={@form[:weekday_csv]} label="Weekdays (mon,tue,wed...)" />
             <.input field={@form[:run_hour]} type="number" label="Run hour (UTC)" min="0" max="23" />
@@ -424,6 +432,12 @@ defmodule HydraXWeb.JobsLive do
               field={@form[:cooldown_minutes]}
               type="number"
               label="Circuit cooldown (minutes)"
+              min="0"
+            />
+            <.input
+              field={@form[:run_retention_days]}
+              type="number"
+              label="Run retention (days)"
               min="0"
             />
             <.input field={@form[:enabled]} type="checkbox" label="Enabled" />
@@ -561,6 +575,7 @@ defmodule HydraXWeb.JobsLive do
       kind: "heartbeat",
       schedule_mode: "interval",
       interval_minutes: 60,
+      schedule_text: "",
       weekday_csv: "mon",
       run_hour: 9,
       run_minute: 0,
@@ -569,6 +584,7 @@ defmodule HydraXWeb.JobsLive do
       retry_backoff_seconds: 0,
       pause_after_failures: 0,
       cooldown_minutes: 0,
+      run_retention_days: 30,
       enabled: true,
       delivery_enabled: false,
       delivery_channel: "telegram"
@@ -623,20 +639,7 @@ defmodule HydraXWeb.JobsLive do
 
   defp format_datetime(nil), do: "never"
   defp format_datetime(datetime), do: Calendar.strftime(datetime, "%Y-%m-%d %H:%M UTC")
-
-  defp schedule_summary(%{schedule_mode: "daily"} = job) do
-    "daily @ #{pad(job.run_hour)}:#{pad(job.run_minute)} UTC"
-  end
-
-  defp schedule_summary(%{schedule_mode: "weekly"} = job) do
-    "#{job.weekday_csv || "mon"} @ #{pad(job.run_hour)}:#{pad(job.run_minute)} UTC"
-  end
-
-  defp schedule_summary(%{schedule_mode: "cron"} = job) do
-    "cron #{job.cron_expression || "* * * * *"}"
-  end
-
-  defp schedule_summary(job), do: "every #{job.interval_minutes} min"
+  defp schedule_summary(job), do: Runtime.schedule_text_for(job)
 
   defp run_class("success"), do: "border-emerald-400/20 bg-emerald-400/10 text-emerald-300"
   defp run_class("error"), do: "border-rose-400/20 bg-rose-400/10 text-rose-300"
@@ -670,7 +673,8 @@ defmodule HydraXWeb.JobsLive do
         ),
         if((job.pause_after_failures || 0) > 0,
           do: "circuit #{job.pause_after_failures} failures / #{job.cooldown_minutes || 0}m"
-        )
+        ),
+        "retain #{job.run_retention_days || 30}d"
       ]
       |> Enum.reject(&is_nil/1)
 
@@ -701,6 +705,10 @@ defmodule HydraXWeb.JobsLive do
   defp pad(nil), do: "00"
   defp pad(value) when value < 10, do: "0#{value}"
   defp pad(value), do: to_string(value)
+
+  defp edit_job_attrs(job) do
+    %{"schedule_text" => Runtime.schedule_text_for(job)}
+  end
 
   defp safe_page_number(value) when is_binary(value) do
     case Integer.parse(value) do

@@ -222,7 +222,12 @@ defmodule Mix.Tasks.HydraX.Memory do
             memory.status,
             Float.to_string(memory.importance),
             if(is_float(ranked.score), do: Float.to_string(ranked.score), else: "-"),
+            if(is_float(ranked[:vector_score]),
+              do: Float.to_string(ranked.vector_score),
+              else: "-"
+            ),
             Enum.join(ranked.reasons || [], ", "),
+            get_in(memory.metadata || %{}, ["source_file"]) || "-",
             memory.content
           ],
           "\t"

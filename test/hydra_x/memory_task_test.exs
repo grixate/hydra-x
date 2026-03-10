@@ -86,6 +86,7 @@ defmodule HydraX.MemoryTaskTest do
         type: "Fact",
         content: "Hydra-X retains filtered facts.",
         importance: 0.9,
+        metadata: %{"source_file" => "ops.md"},
         last_seen_at: DateTime.utc_now()
       })
 
@@ -106,7 +107,7 @@ defmodule HydraX.MemoryTaskTest do
           "--type",
           "Fact",
           "--search",
-          "filtered",
+          "filtered ops",
           "--min_importance",
           "0.8"
         ])
@@ -115,6 +116,8 @@ defmodule HydraX.MemoryTaskTest do
     assert output =~ "\tFact\tactive\t0.9\t"
     assert output =~ "Hydra-X retains filtered facts."
     assert output =~ "lexical match"
+    assert output =~ "source provenance"
+    assert output =~ "\tops.md\t"
     refute output =~ "Ignore this goal."
   end
 

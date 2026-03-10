@@ -62,6 +62,7 @@ defmodule HydraX.Memory do
       %{
         entry: entry,
         score: round_score(1.0 - index * 0.01 + importance_boost(entry)),
+        vector_score: nil,
         lexical_rank: nil,
         semantic_rank: nil,
         reasons: ["recent memory list", importance_reason(entry)]
@@ -73,8 +74,9 @@ defmodule HydraX.Memory do
 
   def search_ranked(agent_id, query, limit, opts) do
     search_opts = search_opts(opts)
+    query_context = build_query_context(query)
     lexical_results = lexical_search(agent_id, query, max(limit * 3, 12), search_opts)
-    semantic_results = semantic_search(agent_id, query, max(limit * 4, 20), search_opts)
+    semantic_results = semantic_search(agent_id, query, max(limit * 4, 20), search_opts, query_context)
 
     lexical_ranks =
       lexical_results
@@ -100,17 +102,23 @@ defmodule HydraX.Memory do
           nil -> nil
         end
 
+      vector_score = vector_similarity(entry, query_context)
+
       %{
         entry: entry,
         score:
-          hybrid_score(entry, lexical_rank, semantic_rank, query)
+          hybrid_score(entry, lexical_rank, semantic_rank, query_context, query)
           |> round_score(),
+        vector_score: round_score(vector_score),
         lexical_rank: lexical_rank,
         semantic_rank: semantic_rank,
-        reasons: hybrid_reasons(entry, lexical_rank, semantic_rank, query)
+        reasons: hybrid_reasons(entry, lexical_rank, semantic_rank, query_context, query)
       }
     end)
-    |> Enum.sort_by(&{-&1.score, lexical_rank_order(&1.lexical_rank), lexical_rank_order(&1.semantic_rank), -&1.entry.importance})
+    |> Enum.sort_by(
+      &{-&1.score, lexical_rank_order(&1.lexical_rank), lexical_rank_order(&1.semantic_rank),
+       -&1.entry.importance}
+    )
     |> Enum.take(limit)
   end
 
@@ -119,7 +127,7 @@ defmodule HydraX.Memory do
   def create_memory(attrs) do
     result =
       %Entry{}
-      |> Entry.changeset(attrs)
+      |> Entry.changeset(enrich_memory_attrs(attrs))
       |> Repo.insert()
 
     with {:ok, entry} <- result do
@@ -136,7 +144,7 @@ defmodule HydraX.Memory do
   def update_memory(%Entry{} = entry, attrs) do
     result =
       entry
-      |> Entry.changeset(attrs)
+      |> Entry.changeset(enrich_memory_attrs(attrs, entry))
       |> Repo.update()
 
     with {:ok, updated} <- result do
@@ -186,6 +194,12 @@ defmodule HydraX.Memory do
               target_metadata
               |> Map.put("merged_from_ids", merged_from_ids)
               |> Map.put("last_reconciled_at", DateTime.utc_now())
+              |> enriched_memory_metadata(%{
+                content: target_content,
+                type: target.type,
+                status: target.status,
+                importance: target.importance
+              })
           })
           |> Repo.update()
 
@@ -300,7 +314,15 @@ defmodule HydraX.Memory do
           |> Entry.changeset(%{
             status: "active",
             content: winner_content,
-            metadata: resolve_conflict_metadata(winner.metadata, loser.id, resolved_at, note)
+            metadata:
+              winner.metadata
+              |> resolve_conflict_metadata(loser.id, resolved_at, note)
+              |> enriched_memory_metadata(%{
+                content: winner_content,
+                type: winner.type,
+                status: "active",
+                importance: winner.importance
+              })
           })
           |> Repo.update()
 
@@ -557,9 +579,7 @@ defmodule HydraX.Memory do
     end
   end
 
-  defp semantic_search(agent_id, query, limit, search_opts) do
-    terms = query_terms(query)
-
+  defp semantic_search(agent_id, query, limit, search_opts, query_context) do
     Entry
     |> maybe_filter_agent(agent_id)
     |> maybe_filter_type(search_opts.type)
@@ -569,7 +589,7 @@ defmodule HydraX.Memory do
     |> limit(^max(limit * 4, 80))
     |> Repo.all()
     |> Enum.map(fn entry ->
-      {entry, semantic_similarity(entry, terms)}
+      {entry, semantic_similarity(entry, query_context, query)}
     end)
     |> Enum.filter(fn {_entry, score} -> score > 0 end)
     |> Enum.sort_by(fn {entry, score} -> {-score, -entry.importance} end)
@@ -585,20 +605,11 @@ defmodule HydraX.Memory do
     |> Enum.uniq()
   end
 
-  defp semantic_similarity(_entry, []), do: 0.0
+  defp semantic_similarity(_entry, %{terms: []}, _query), do: 0.0
 
-  defp semantic_similarity(entry, query_terms) do
-    haystack_terms =
-      [
-        entry.type,
-        entry.content,
-        get_in(entry.metadata || %{}, ["source_file"]),
-        get_in(entry.metadata || %{}, ["source_section"]),
-        get_in(entry.metadata || %{}, ["conflict_reason"])
-      ]
-      |> Enum.reject(&is_nil/1)
-      |> Enum.join(" ")
-      |> query_terms()
+  defp semantic_similarity(entry, query_context, query) do
+    query_terms = query_context.terms
+    haystack_terms = semantic_terms(entry)
 
     overlap =
       MapSet.intersection(MapSet.new(query_terms), MapSet.new(haystack_terms))
@@ -607,15 +618,23 @@ defmodule HydraX.Memory do
     if overlap == 0 do
       0.0
     else
-      overlap / max(length(query_terms), 1)
+      overlap / max(length(query_terms), 1) +
+        provenance_semantic_boost(entry, query_terms) +
+        type_semantic_boost(entry, query_terms) +
+        channel_semantic_boost(entry, query_context.channels) +
+        phrase_fragment_boost(entry, query)
     end
   end
 
-  defp hybrid_score(entry, lexical_rank, semantic_rank, query) do
+  defp hybrid_score(entry, lexical_rank, semantic_rank, query_context, query) do
     reciprocal_rank(lexical_rank) +
       reciprocal_rank(semantic_rank) +
       importance_boost(entry) +
       recency_boost(entry) +
+      vector_similarity(entry, query_context) * 0.18 +
+      provenance_boost(entry, query) +
+      type_intent_boost(entry, query) +
+      channel_context_boost(entry, query_context.channels) +
       exact_phrase_boost(entry, query)
   end
 
@@ -645,12 +664,18 @@ defmodule HydraX.Memory do
       else: 0.0
   end
 
-  defp hybrid_reasons(entry, lexical_rank, semantic_rank, query) do
+  defp hybrid_reasons(entry, lexical_rank, semantic_rank, query_context, query) do
     []
     |> maybe_add_reason(not is_nil(lexical_rank), "lexical match")
     |> maybe_add_reason(not is_nil(semantic_rank), "semantic overlap")
     |> maybe_add_reason(entry.importance >= 0.8, importance_reason(entry))
     |> maybe_add_reason(entry.status == "conflicted", "unresolved conflict")
+    |> maybe_add_reason(ingest_backed?(entry), "ingest provenance")
+    |> maybe_add_reason(type_intent_boost(entry, query) > 0, type_reason(entry))
+    |> maybe_add_reason(channel_context_boost(entry, query_context.channels) > 0, "channel context")
+    |> maybe_add_reason(provenance_boost(entry, query) > 0, "source provenance")
+    |> maybe_add_reason(vector_similarity(entry, query_context) >= 0.2, "vector similarity")
+    |> maybe_add_reason(recently_reinforced?(entry), "recently reinforced")
     |> maybe_add_reason(
       is_binary(query) and query != "" and exact_phrase_boost(entry, query) > 0,
       "exact phrase"
@@ -665,6 +690,12 @@ defmodule HydraX.Memory do
     end
   end
 
+  defp type_reason(%{type: "Goal"}), do: "goal match"
+  defp type_reason(%{type: "Todo"}), do: "todo match"
+  defp type_reason(%{type: "Decision"}), do: "decision match"
+  defp type_reason(%{type: "Preference"}), do: "preference match"
+  defp type_reason(_entry), do: "typed memory match"
+
   defp maybe_add_reason(reasons, true, reason), do: reasons ++ [reason]
   defp maybe_add_reason(reasons, false, _reason), do: reasons
 
@@ -672,6 +703,257 @@ defmodule HydraX.Memory do
   defp lexical_rank_order(rank), do: rank
 
   defp round_score(score), do: Float.round(score, 4)
+
+  defp enrich_memory_attrs(attrs, entry \\ nil) do
+    attrs = normalize_attr_map(attrs)
+
+    metadata =
+      enriched_memory_metadata(Map.get(attrs, "metadata") || entry_metadata(entry), attrs, entry)
+
+    Map.put(attrs, "metadata", metadata)
+  end
+
+  defp enriched_memory_metadata(metadata, attrs, entry \\ nil) do
+    metadata = metadata || %{}
+    content = Map.get(attrs, "content") || entry_value(entry, :content) || ""
+    type = Map.get(attrs, "type") || entry_value(entry, :type)
+    status = Map.get(attrs, "status") || entry_value(entry, :status) || "active"
+
+    semantic_terms =
+      [
+        type,
+        content,
+        metadata["source_file"],
+        metadata["source_section"],
+        metadata["source_channel"],
+        metadata["conflict_reason"]
+      ]
+      |> Enum.reject(&is_nil_or_empty/1)
+      |> Enum.join(" ")
+      |> query_terms()
+      |> Enum.take(24)
+
+    metadata
+    |> Map.put("semantic_terms", semantic_terms)
+    |> Map.put("semantic_vector", build_semantic_vector(semantic_terms))
+    |> Map.put("recall_type", type)
+    |> Map.put("recall_status", status)
+  end
+
+  defp normalize_attr_map(attrs) when is_map(attrs) do
+    Enum.reduce(attrs, %{}, fn
+      {key, value}, acc when is_atom(key) -> Map.put(acc, Atom.to_string(key), value)
+      {key, value}, acc -> Map.put(acc, key, value)
+    end)
+  end
+
+  defp semantic_terms(entry) do
+    persisted =
+      entry.metadata
+      |> Kernel.||(%{})
+      |> Map.get("semantic_terms", [])
+      |> List.wrap()
+
+    if persisted == [] do
+      [
+        entry.type,
+        entry.content,
+        get_in(entry.metadata || %{}, ["source_file"]),
+        get_in(entry.metadata || %{}, ["source_section"]),
+        get_in(entry.metadata || %{}, ["source_channel"]),
+        get_in(entry.metadata || %{}, ["conflict_reason"])
+      ]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join(" ")
+      |> query_terms()
+    else
+      persisted
+    end
+  end
+
+  defp semantic_vector(entry) do
+    entry.metadata
+    |> Kernel.||(%{})
+    |> Map.get("semantic_vector")
+    |> case do
+      value when is_map(value) and map_size(value) > 0 -> value
+      _value -> build_semantic_vector(semantic_terms(entry))
+    end
+  end
+
+  defp provenance_boost(_entry, query) when query in [nil, ""], do: 0.0
+
+  defp provenance_boost(entry, query) do
+    terms = query_terms(query)
+
+    source_terms =
+      [
+        get_in(entry.metadata || %{}, ["source_file"]),
+        get_in(entry.metadata || %{}, ["source_section"])
+      ]
+      |> Enum.reject(&is_nil_or_empty/1)
+      |> Enum.join(" ")
+      |> query_terms()
+
+    if source_terms != [] and
+         MapSet.intersection(MapSet.new(terms), MapSet.new(source_terms)) |> MapSet.size() > 0 do
+      0.05
+    else
+      0.0
+    end
+  end
+
+  defp provenance_semantic_boost(entry, terms) do
+    source_terms =
+      [
+        get_in(entry.metadata || %{}, ["source_file"]),
+        get_in(entry.metadata || %{}, ["source_section"])
+      ]
+      |> Enum.reject(&is_nil_or_empty/1)
+      |> Enum.join(" ")
+      |> query_terms()
+
+    overlap = MapSet.intersection(MapSet.new(terms), MapSet.new(source_terms)) |> MapSet.size()
+    if overlap > 0, do: 0.08, else: 0.0
+  end
+
+  defp type_intent_boost(_entry, query) when query in [nil, ""], do: 0.0
+
+  defp type_intent_boost(entry, query) do
+    type_semantic_boost(entry, query_terms(query))
+  end
+
+  defp type_semantic_boost(entry, query_terms) do
+    wanted =
+      case entry.type do
+        "Goal" -> ["goal", "plan", "target"]
+        "Todo" -> ["todo", "task", "next"]
+        "Decision" -> ["decision", "decided", "policy"]
+        "Preference" -> ["prefer", "preference", "likes"]
+        "Identity" -> ["identity", "about", "who"]
+        _ -> []
+      end
+
+    if wanted != [] and Enum.any?(wanted, &(&1 in query_terms)), do: 0.05, else: 0.0
+  end
+
+  defp phrase_fragment_boost(_entry, query) when query in [nil, ""], do: 0.0
+
+  defp phrase_fragment_boost(entry, query) do
+    content = String.downcase(entry.content || "")
+
+    fragments =
+      query
+      |> String.downcase()
+      |> String.split(~r/\s+/, trim: true)
+      |> Enum.chunk_every(2, 1, :discard)
+      |> Enum.map(&Enum.join(&1, " "))
+
+    if Enum.any?(fragments, &(String.length(&1) > 4 and String.contains?(content, &1))),
+      do: 0.03,
+      else: 0.0
+  end
+
+  defp vector_similarity(_entry, %{terms: []}), do: 0.0
+  defp vector_similarity(_entry, query) when query in [nil, ""], do: 0.0
+
+  defp vector_similarity(entry, %{terms: terms}) do
+    left = semantic_vector(entry)
+    right = build_semantic_vector(terms)
+
+    do_vector_similarity(left, right)
+  end
+
+  defp vector_similarity(entry, query) do
+    left = semantic_vector(entry)
+    right = query |> query_terms() |> build_semantic_vector()
+
+    do_vector_similarity(left, right)
+  end
+
+  defp do_vector_similarity(left, right) do
+    if map_size(left) == 0 or map_size(right) == 0 do
+      0.0
+    else
+      shared_terms =
+        left
+        |> Map.keys()
+        |> Enum.filter(&Map.has_key?(right, &1))
+
+      Enum.reduce(shared_terms, 0.0, fn term, acc ->
+        acc + Map.get(left, term, 0.0) * Map.get(right, term, 0.0)
+      end)
+    end
+  end
+
+  defp build_semantic_vector(terms) do
+    terms
+    |> List.wrap()
+    |> Enum.reject(&is_nil_or_empty/1)
+    |> Enum.frequencies()
+    |> normalize_vector()
+  end
+
+  defp normalize_vector(frequencies) do
+    magnitude =
+      frequencies
+      |> Map.values()
+      |> Enum.reduce(0.0, fn value, acc -> acc + value * value end)
+      |> :math.sqrt()
+
+    if magnitude == 0.0 do
+      %{}
+    else
+      Map.new(frequencies, fn {term, value} -> {term, Float.round(value / magnitude, 6)} end)
+    end
+  end
+
+  defp ingest_backed?(entry), do: get_in(entry.metadata || %{}, ["source"]) == "ingest"
+
+  defp build_query_context(query) do
+    terms = query_terms(query)
+
+    %{
+      terms: terms,
+      channels:
+        terms
+        |> Enum.filter(&(&1 in ~w(telegram discord slack webchat cli scheduler control plane control_plane)))
+        |> Enum.map(fn
+          "control" -> "control_plane"
+          "plane" -> "control_plane"
+          other -> other
+        end)
+        |> Enum.uniq()
+    }
+  end
+
+  defp channel_context_boost(_entry, []), do: 0.0
+
+  defp channel_context_boost(entry, channels) do
+    if memory_channel(entry) in channels, do: 0.06, else: 0.0
+  end
+
+  defp channel_semantic_boost(_entry, []), do: 0.0
+
+  defp channel_semantic_boost(entry, channels) do
+    if memory_channel(entry) in channels, do: 0.08, else: 0.0
+  end
+
+  defp memory_channel(entry) do
+    get_in(entry.metadata || %{}, ["source_channel"]) ||
+      if(Ecto.assoc_loaded?(entry.conversation), do: entry.conversation.channel, else: nil)
+  end
+
+  defp recently_reinforced?(entry) do
+    timestamp = entry.last_seen_at || entry.updated_at
+    timestamp && DateTime.diff(DateTime.utc_now(), timestamp, :day) <= 3
+  end
+
+  defp entry_metadata(nil), do: %{}
+  defp entry_metadata(entry), do: entry.metadata || %{}
+
+  defp entry_value(nil, _field), do: nil
+  defp entry_value(entry, field), do: Map.get(entry, field)
 
   defp unwrap_transaction({:ok, result}), do: {:ok, result}
   defp unwrap_transaction({:error, error}), do: {:error, error}

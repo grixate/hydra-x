@@ -69,6 +69,19 @@ defmodule HydraX.Config do
       endpoint_base_url()
   end
 
+  @spec secret_key() :: String.t()
+  def secret_key do
+    System.get_env("HYDRA_X_SECRET_KEY") ||
+      endpoint_secret_key_base() ||
+      "hydra-x-dev-secret"
+  end
+
+  @spec endpoint_secret_key_base() :: String.t() | nil
+  def endpoint_secret_key_base do
+    Application.get_env(:hydra_x, HydraXWeb.Endpoint, [])
+    |> Keyword.get(:secret_key_base)
+  end
+
   @spec telegram_webhook_url() :: String.t()
   def telegram_webhook_url do
     String.trim_trailing(public_base_url(), "/") <> "/api/telegram/webhook"

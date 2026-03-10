@@ -179,12 +179,14 @@ defmodule HydraXWeb.AgentsLiveTest do
         "workspace_read_enabled" => "true",
         "workspace_write_enabled" => "true",
         "http_fetch_enabled" => "true",
+        "browser_automation_enabled" => "true",
         "web_search_enabled" => "false",
         "shell_command_enabled" => "false",
         "shell_allowlist_csv" => "pwd,ls",
         "http_allowlist_csv" => "example.com",
         "workspace_write_channels_csv" => "cli,control_plane",
         "http_fetch_channels_csv" => "cli,scheduler",
+        "browser_automation_channels_csv" => "cli",
         "web_search_channels_csv" => "cli",
         "shell_command_channels_csv" => "cli"
       }
@@ -197,10 +199,12 @@ defmodule HydraXWeb.AgentsLiveTest do
 
     policy = Runtime.effective_tool_policy(agent.id)
     assert policy.workspace_write_enabled
+    assert policy.browser_automation_enabled
     refute policy.web_search_enabled
     refute policy.shell_command_enabled
     assert policy.http_allowlist == ["example.com"]
     assert policy.workspace_write_channels == ["cli", "control_plane"]
+    assert policy.browser_automation_channels == ["cli"]
     assert policy.shell_command_channels == ["cli"]
 
     view
@@ -211,6 +215,51 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "Agent tool policy override removed"
     assert html =~ "inherits global"
     refute Runtime.get_agent_tool_policy(agent.id)
+  end
+
+  test "agents page can save and reset an agent-specific control policy override", %{conn: conn} do
+    {:ok, agent} =
+      Runtime.save_agent(%{
+        name: "Control Policy Agent",
+        slug: "control-policy-agent",
+        workspace_root: Path.join(System.tmp_dir!(), "hydra-x-control-policy-agent"),
+        description: "control policy",
+        is_default: false
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/agents")
+
+    view
+    |> form(~s(form[phx-submit="save_agent_control_policy"]), %{
+      "agent_control_policy" => %{
+        "agent_id" => to_string(agent.id),
+        "require_recent_auth_for_sensitive_actions" => "true",
+        "recent_auth_window_minutes" => "4",
+        "interactive_delivery_channels_csv" => "webchat",
+        "job_delivery_channels_csv" => "discord,slack",
+        "ingest_roots_csv" => "ingest,docs"
+      }
+    })
+    |> render_submit()
+
+    html = render(view)
+    assert html =~ "Agent control policy updated"
+    assert html =~ "override active"
+
+    policy = Runtime.effective_control_policy(agent.id)
+    assert policy.recent_auth_window_minutes == 4
+    assert policy.interactive_delivery_channels == ["webchat"]
+    assert policy.job_delivery_channels == ["discord", "slack"]
+    assert policy.ingest_roots == ["ingest", "docs"]
+
+    view
+    |> element(~s(button[phx-click="reset_agent_control_policy"][phx-value-id="#{agent.id}"]))
+    |> render_click()
+
+    html = render(view)
+    assert html =~ "Agent control policy override removed"
+    assert html =~ "inherits global"
+    refute Runtime.get_agent_control_policy(agent.id)
   end
 
   test "agents page can save and warm provider routing", %{conn: conn} do
@@ -286,5 +335,87 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "Provider warmup ready via Agent Route Provider"
     assert html =~ "warmup ready"
     assert Runtime.agent_runtime_status(agent.id).warmup_status == "ready"
+  end
+
+  test "agents page can discover and toggle workspace skills", %{conn: conn} do
+    {:ok, agent} =
+      Runtime.save_agent(%{
+        name: "Skills Agent",
+        slug: "skills-agent",
+        workspace_root: Path.join(System.tmp_dir!(), "hydra-x-skills-agent"),
+        description: "skills",
+        is_default: false
+      })
+
+    skill_dir = Path.join([agent.workspace_root, "skills", "deploy-checks"])
+    File.mkdir_p!(skill_dir)
+
+    File.write!(
+      Path.join(skill_dir, "SKILL.md"),
+      "# Deploy Checks\n\nRun deployment verification steps for staged rollouts."
+    )
+
+    {:ok, view, _html} = live(conn, ~p"/agents")
+
+    view
+    |> element(~s(button[phx-click="refresh_skills"][phx-value-id="#{agent.id}"]))
+    |> render_click()
+
+    html = render(view)
+    assert html =~ "Discovered 1 skills"
+    assert html =~ "Deploy Checks"
+    assert html =~ "enabled"
+
+    [skill] = Runtime.list_skills(agent_id: agent.id)
+
+    view
+    |> element(~s(button[phx-click="toggle_skill"][phx-value-id="#{skill.id}"]))
+    |> render_click()
+
+    html = render(view)
+    assert html =~ "Skill disabled"
+    assert html =~ "disabled"
+    refute Runtime.get_skill!(skill.id).enabled
+  end
+
+  test "agents page can discover and toggle agent MCP integrations", %{conn: conn} do
+    {:ok, agent} =
+      Runtime.save_agent(%{
+        name: "MCP Agent",
+        slug: "mcp-agent",
+        workspace_root: Path.join(System.tmp_dir!(), "hydra-x-mcp-agent"),
+        description: "mcp",
+        is_default: false
+      })
+
+    assert {:ok, _server} =
+             Runtime.save_mcp_server(%{
+               name: "Docs MCP",
+               transport: "stdio",
+               command: "cat",
+               enabled: true
+             })
+
+    {:ok, view, _html} = live(conn, ~p"/agents")
+
+    view
+    |> element(~s(button[phx-click="refresh_mcp"][phx-value-id="#{agent.id}"]))
+    |> render_click()
+
+    html = render(view)
+    assert html =~ "Discovered 1 MCP integrations"
+    assert html =~ "Docs MCP"
+    assert html =~ "enabled"
+
+    [binding] = Runtime.list_agent_mcp_servers(agent.id)
+
+    view
+    |> element(~s(button[phx-click="toggle_agent_mcp"][phx-value-id="#{binding.id}"]))
+    |> render_click()
+
+    html = render(view)
+    assert html =~ "MCP integration disabled"
+    assert html =~ "disabled"
+    refute Runtime.get_agent_mcp_server!(binding.id).enabled
   end
 end

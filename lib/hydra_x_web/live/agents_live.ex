@@ -167,6 +167,7 @@ defmodule HydraXWeb.AgentsLive do
         "workspace_read_enabled",
         "workspace_write_enabled",
         "http_fetch_enabled",
+        "browser_automation_enabled",
         "web_search_enabled",
         "shell_command_enabled"
       ])
@@ -190,6 +191,38 @@ defmodule HydraXWeb.AgentsLive do
     {:noreply,
      socket
      |> put_flash(:info, "Agent tool policy override removed")
+     |> assign(:agents, agents_with_runtime())
+     |> assign(:stats, stats())}
+  end
+
+  def handle_event("save_agent_control_policy", %{"agent_control_policy" => params}, socket) do
+    agent_id = params["agent_id"] |> String.to_integer()
+
+    attrs =
+      params
+      |> Map.drop(["agent_id"])
+      |> normalize_checkbox_fields(["require_recent_auth_for_sensitive_actions"])
+
+    case Runtime.save_agent_control_policy(agent_id, attrs) do
+      {:ok, _policy} ->
+        {:noreply,
+         socket
+         |> put_flash(:info, "Agent control policy updated")
+         |> assign(:agents, agents_with_runtime())
+         |> assign(:stats, stats())}
+
+      {:error, changeset} ->
+        {:noreply,
+         put_flash(socket, :error, "Control policy failed: #{inspect(changeset.errors)}")}
+    end
+  end
+
+  def handle_event("reset_agent_control_policy", %{"id" => id}, socket) do
+    Runtime.delete_agent_control_policy!(String.to_integer(id))
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Agent control policy override removed")
      |> assign(:agents, agents_with_runtime())
      |> assign(:stats, stats())}
   end
@@ -229,6 +262,61 @@ defmodule HydraXWeb.AgentsLive do
      |> put_flash(
        :info,
        "Provider warmup #{status["status"]}#{if(status["selected_provider_name"], do: " via #{status["selected_provider_name"]}", else: "")}"
+     )
+     |> assign(:agents, agents_with_runtime())
+     |> assign(:stats, stats())}
+  end
+
+  def handle_event("refresh_skills", %{"id" => id}, socket) do
+    {:ok, skills} = Runtime.refresh_agent_skills(String.to_integer(id))
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Discovered #{length(skills)} skills")
+     |> assign(:agents, agents_with_runtime())
+     |> assign(:stats, stats())}
+  end
+
+  def handle_event("toggle_skill", %{"id" => id}, socket) do
+    skill = Runtime.get_skill!(String.to_integer(id))
+
+    if skill.enabled do
+      Runtime.disable_skill!(skill.id)
+    else
+      Runtime.enable_skill!(skill.id)
+    end
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Skill #{if(skill.enabled, do: "disabled", else: "enabled")}")
+     |> assign(:agents, agents_with_runtime())
+     |> assign(:stats, stats())}
+  end
+
+  def handle_event("refresh_mcp", %{"id" => id}, socket) do
+    {:ok, bindings} = Runtime.refresh_agent_mcp_servers(String.to_integer(id))
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Discovered #{length(bindings)} MCP integrations")
+     |> assign(:agents, agents_with_runtime())
+     |> assign(:stats, stats())}
+  end
+
+  def handle_event("toggle_agent_mcp", %{"id" => id}, socket) do
+    binding = Runtime.get_agent_mcp_server!(String.to_integer(id))
+
+    if binding.enabled do
+      Runtime.disable_agent_mcp_server!(binding.id)
+    else
+      Runtime.enable_agent_mcp_server!(binding.id)
+    end
+
+    {:noreply,
+     socket
+     |> put_flash(
+       :info,
+       "MCP integration #{if(binding.enabled, do: "disabled", else: "enabled")}"
      )
      |> assign(:agents, agents_with_runtime())
      |> assign(:stats, stats())}
@@ -469,15 +557,18 @@ defmodule HydraXWeb.AgentsLive do
                 <div class="mt-2 text-sm text-[var(--hx-mute)]">
                   list {enabled_label(agent.effective_tool_policy.workspace_list_enabled)} · read {enabled_label(
                     agent.effective_tool_policy.workspace_read_enabled
-                  )} · write {enabled_label(agent.effective_tool_policy.workspace_write_enabled)} · search {enabled_label(
-                    agent.effective_tool_policy.web_search_enabled
-                  )} · http {enabled_label(agent.effective_tool_policy.http_fetch_enabled)} · shell {enabled_label(
-                    agent.effective_tool_policy.shell_command_enabled
-                  )}
+                  )} · write {enabled_label(agent.effective_tool_policy.workspace_write_enabled)} · browser {enabled_label(
+                    agent.effective_tool_policy.browser_automation_enabled
+                  )} · search {enabled_label(agent.effective_tool_policy.web_search_enabled)} · http {enabled_label(
+                    agent.effective_tool_policy.http_fetch_enabled
+                  )} · shell {enabled_label(agent.effective_tool_policy.shell_command_enabled)}
                 </div>
                 <div class="mt-2 text-xs text-[var(--hx-mute)]">
                   write via {channel_summary(agent.effective_tool_policy.workspace_write_channels)} ·
                   http via {channel_summary(agent.effective_tool_policy.http_fetch_channels)} ·
+                  browser via {channel_summary(
+                    agent.effective_tool_policy.browser_automation_channels
+                  )} ·
                   search via {channel_summary(agent.effective_tool_policy.web_search_channels)} ·
                   shell via {channel_summary(agent.effective_tool_policy.shell_command_channels)}
                 </div>
@@ -514,6 +605,11 @@ defmodule HydraXWeb.AgentsLive do
                     label="HTTP fetch"
                   />
                   <.input
+                    field={tool_policy_form[:browser_automation_enabled]}
+                    type="checkbox"
+                    label="Browser automation"
+                  />
+                  <.input
                     field={tool_policy_form[:shell_command_enabled]}
                     type="checkbox"
                     label="Shell commands"
@@ -533,6 +629,10 @@ defmodule HydraXWeb.AgentsLive do
                   <.input
                     field={tool_policy_form[:http_fetch_channels_csv]}
                     label="HTTP fetch channels"
+                  />
+                  <.input
+                    field={tool_policy_form[:browser_automation_channels_csv]}
+                    label="Browser channels"
                   />
                   <.input
                     field={tool_policy_form[:web_search_channels_csv]}
@@ -555,6 +655,185 @@ defmodule HydraXWeb.AgentsLive do
                     </button>
                   </div>
                 </.form>
+                <div class="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-3">
+                  <div class="flex items-center justify-between gap-3">
+                    <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                      Control policy override
+                    </div>
+                    <span class="text-xs text-[var(--hx-mute)]">
+                      {if agent.control_policy_override,
+                        do: "override active",
+                        else: "inherits global"}
+                    </span>
+                  </div>
+                  <div class="mt-2 text-sm text-[var(--hx-mute)]">
+                    recent auth {if agent.effective_control_policy.require_recent_auth_for_sensitive_actions,
+                      do: "required",
+                      else: "optional"} within {agent.effective_control_policy.recent_auth_window_minutes}m
+                  </div>
+                  <div class="mt-2 text-xs text-[var(--hx-mute)]">
+                    interactive delivery via {channel_summary(
+                      agent.effective_control_policy.interactive_delivery_channels
+                    )} ·
+                    job delivery via {channel_summary(
+                      agent.effective_control_policy.job_delivery_channels
+                    )} ·
+                    ingest roots {channel_summary(agent.effective_control_policy.ingest_roots)}
+                  </div>
+                  <% control_policy_form =
+                    to_form(agent_control_policy_form(agent), as: :agent_control_policy) %>
+                  <.form
+                    for={control_policy_form}
+                    phx-submit="save_agent_control_policy"
+                    class="mt-4 grid gap-3 md:grid-cols-2"
+                  >
+                    <input type="hidden" name="agent_control_policy[agent_id]" value={agent.id} />
+                    <.input
+                      field={control_policy_form[:require_recent_auth_for_sensitive_actions]}
+                      type="checkbox"
+                      label="Require recent auth"
+                    />
+                    <.input
+                      field={control_policy_form[:recent_auth_window_minutes]}
+                      type="number"
+                      label="Recent-auth window (minutes)"
+                    />
+                    <.input
+                      field={control_policy_form[:interactive_delivery_channels_csv]}
+                      label="Interactive delivery channels"
+                    />
+                    <.input
+                      field={control_policy_form[:job_delivery_channels_csv]}
+                      label="Job delivery channels"
+                    />
+                    <.input
+                      field={control_policy_form[:ingest_roots_csv]}
+                      label="Allowed ingest roots"
+                    />
+                    <div class="md:col-span-2 pt-1">
+                      <.button>Save control override</.button>
+                      <button
+                        :if={agent.control_policy_override}
+                        type="button"
+                        phx-click="reset_agent_control_policy"
+                        phx-value-id={agent.id}
+                        class="ml-3 inline-flex items-center rounded-2xl border border-white/10 bg-white/5 px-4 py-2 font-mono text-xs uppercase tracking-[0.18em] text-white transition hover:bg-white/10"
+                      >
+                        Reset override
+                      </button>
+                    </div>
+                  </.form>
+                </div>
+              </div>
+              <div class="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-3">
+                <div class="flex items-center justify-between gap-3">
+                  <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                    Skills
+                  </div>
+                  <button
+                    type="button"
+                    phx-click="refresh_skills"
+                    phx-value-id={agent.id}
+                    class="btn btn-sm btn-outline border-white/10 bg-white/5 text-white hover:bg-white/10"
+                  >
+                    Refresh skills
+                  </button>
+                </div>
+                <div class="mt-2 text-sm text-[var(--hx-mute)]">
+                  {length(agent.skills)} discovered · {Enum.count(agent.skills, & &1.enabled)} enabled
+                </div>
+                <div class="mt-3 space-y-3">
+                  <div
+                    :for={skill <- agent.skills}
+                    class="rounded-2xl border border-white/10 bg-black/10 px-4 py-3"
+                  >
+                    <div class="flex items-start justify-between gap-3">
+                      <div>
+                        <div class="text-sm font-semibold text-white">{skill.name}</div>
+                        <div class="mt-1 font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                          {skill.slug}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        phx-click="toggle_skill"
+                        phx-value-id={skill.id}
+                        class="btn btn-sm btn-outline border-white/10 bg-white/5 text-white hover:bg-white/10"
+                      >
+                        {if skill.enabled, do: "Disable", else: "Enable"}
+                      </button>
+                    </div>
+                    <p class="mt-2 text-sm text-[var(--hx-mute)]">
+                      {skill.description || "No description provided."}
+                    </p>
+                    <div class="mt-2 text-xs text-[var(--hx-mute)]">
+                      {if skill.enabled, do: "enabled", else: "disabled"} · {get_in(
+                        skill.metadata || %{},
+                        ["relative_path"]
+                      ) || skill.path}
+                    </div>
+                  </div>
+                  <p :if={agent.skills == []} class="text-sm text-[var(--hx-mute)]">
+                    No workspace skills discovered yet.
+                  </p>
+                </div>
+              </div>
+              <div class="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-3">
+                <div class="flex items-center justify-between gap-3">
+                  <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                    MCP integrations
+                  </div>
+                  <button
+                    type="button"
+                    phx-click="refresh_mcp"
+                    phx-value-id={agent.id}
+                    class="btn btn-sm btn-outline border-white/10 bg-white/5 text-white hover:bg-white/10"
+                  >
+                    Refresh MCP
+                  </button>
+                </div>
+                <div class="mt-2 text-sm text-[var(--hx-mute)]">
+                  {length(agent.mcp_servers)} discovered · {Enum.count(
+                    agent.mcp_servers,
+                    & &1.enabled
+                  )} enabled
+                </div>
+                <div class="mt-3 space-y-3">
+                  <div
+                    :for={binding <- agent.mcp_servers}
+                    class="rounded-2xl border border-white/10 bg-black/10 px-4 py-3"
+                  >
+                    <div class="flex items-start justify-between gap-3">
+                      <div>
+                        <div class="text-sm font-semibold text-white">
+                          {binding.mcp_server_config.name}
+                        </div>
+                        <div class="mt-1 font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                          {binding.mcp_server_config.transport}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        phx-click="toggle_agent_mcp"
+                        phx-value-id={binding.id}
+                        class="btn btn-sm btn-outline border-white/10 bg-white/5 text-white hover:bg-white/10"
+                      >
+                        {if binding.enabled, do: "Disable", else: "Enable"}
+                      </button>
+                    </div>
+                    <div class="mt-2 text-sm text-[var(--hx-mute)]">
+                      {mcp_descriptor(binding.mcp_server_config)}
+                    </div>
+                    <div class="mt-2 text-xs text-[var(--hx-mute)]">
+                      {if binding.enabled, do: "enabled", else: "disabled"} · {mcp_health_label(
+                        agent.mcp_statuses[binding.mcp_server_config_id]
+                      )}
+                    </div>
+                  </div>
+                  <p :if={agent.mcp_servers == []} class="text-sm text-[var(--hx-mute)]">
+                    No MCP integrations bound to this agent yet.
+                  </p>
+                </div>
               </div>
             </div>
           </div>
@@ -610,6 +889,8 @@ defmodule HydraXWeb.AgentsLive do
   end
 
   defp agents_with_runtime do
+    mcp_statuses = Runtime.mcp_statuses() |> Map.new(&{&1.id, &1})
+
     Runtime.list_agents()
     |> Enum.map(fn agent ->
       agent
@@ -619,6 +900,11 @@ defmodule HydraXWeb.AgentsLive do
       |> Map.put(:compaction_policy, Runtime.compaction_policy(agent.id))
       |> Map.put(:tool_policy_override, Runtime.get_agent_tool_policy(agent.id))
       |> Map.put(:effective_tool_policy, Runtime.effective_tool_policy(agent.id))
+      |> Map.put(:control_policy_override, Runtime.get_agent_control_policy(agent.id))
+      |> Map.put(:effective_control_policy, Runtime.effective_control_policy(agent.id))
+      |> Map.put(:skills, Runtime.list_skills(agent_id: agent.id))
+      |> Map.put(:mcp_servers, Runtime.list_agent_mcp_servers(agent.id))
+      |> Map.put(:mcp_statuses, mcp_statuses)
     end)
   end
 
@@ -651,14 +937,30 @@ defmodule HydraXWeb.AgentsLive do
       "workspace_read_enabled" => Map.get(policy, :workspace_read_enabled, true),
       "workspace_write_enabled" => Map.get(policy, :workspace_write_enabled, false),
       "http_fetch_enabled" => Map.get(policy, :http_fetch_enabled, true),
+      "browser_automation_enabled" => Map.get(policy, :browser_automation_enabled, false),
       "web_search_enabled" => Map.get(policy, :web_search_enabled, true),
       "shell_command_enabled" => Map.get(policy, :shell_command_enabled, true),
       "shell_allowlist_csv" => Map.get(policy, :shell_allowlist_csv, ""),
       "http_allowlist_csv" => Map.get(policy, :http_allowlist_csv, ""),
       "workspace_write_channels_csv" => Map.get(policy, :workspace_write_channels_csv, ""),
       "http_fetch_channels_csv" => Map.get(policy, :http_fetch_channels_csv, ""),
+      "browser_automation_channels_csv" => Map.get(policy, :browser_automation_channels_csv, ""),
       "web_search_channels_csv" => Map.get(policy, :web_search_channels_csv, ""),
       "shell_command_channels_csv" => Map.get(policy, :shell_command_channels_csv, "")
+    }
+  end
+
+  defp agent_control_policy_form(agent) do
+    policy = agent.control_policy_override || Runtime.get_control_policy() || %{}
+
+    %{
+      "require_recent_auth_for_sensitive_actions" =>
+        Map.get(policy, :require_recent_auth_for_sensitive_actions, true),
+      "recent_auth_window_minutes" => Map.get(policy, :recent_auth_window_minutes, 15),
+      "interactive_delivery_channels_csv" =>
+        Map.get(policy, :interactive_delivery_channels_csv, ""),
+      "job_delivery_channels_csv" => Map.get(policy, :job_delivery_channels_csv, ""),
+      "ingest_roots_csv" => Map.get(policy, :ingest_roots_csv, "")
     }
   end
 
@@ -686,4 +988,15 @@ defmodule HydraXWeb.AgentsLive do
 
   defp channel_summary([]), do: "none"
   defp channel_summary(channels), do: Enum.join(channels, ", ")
+
+  defp mcp_descriptor(%{transport: "stdio", command: command}),
+    do: "stdio command #{command || "unknown"}"
+
+  defp mcp_descriptor(%{transport: "http"} = config),
+    do: "HTTP #{config.url}#{config.healthcheck_path || "/health"}"
+
+  defp mcp_descriptor(config), do: config.transport
+
+  defp mcp_health_label(nil), do: "status unknown"
+  defp mcp_health_label(status), do: "#{status.status} · #{status.detail}"
 end

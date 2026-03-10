@@ -12,6 +12,9 @@ defmodule HydraX.Tools.WorkspaceRead do
   def description, do: "Read a file from the agent workspace without leaving the workspace root"
 
   @impl true
+  def safety_classification, do: "workspace_read"
+
+  @impl true
   def tool_schema do
     %{
       name: "workspace_read",
@@ -53,4 +56,10 @@ defmodule HydraX.Tools.WorkspaceRead do
       {:error, reason} -> {:error, reason}
     end
   end
+
+  @impl true
+  def result_summary(%{error: error}) when is_binary(error), do: error
+  def result_summary(%{"error" => error}) when is_binary(error), do: error
+  def result_summary(%{path: path}), do: "read #{path}"
+  def result_summary(payload), do: inspect(payload, limit: 8, printable_limit: 120)
 end

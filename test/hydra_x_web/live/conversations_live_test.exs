@@ -6,6 +6,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
   setup do
     test_pid = self()
     previous = Application.get_env(:hydra_x, :telegram_deliver)
+    previous_slack = Application.get_env(:hydra_x, :slack_deliver)
 
     Application.put_env(:hydra_x, :telegram_deliver, fn payload ->
       send(test_pid, {:telegram_retry, payload})
@@ -17,6 +18,12 @@ defmodule HydraXWeb.ConversationsLiveTest do
         Application.put_env(:hydra_x, :telegram_deliver, previous)
       else
         Application.delete_env(:hydra_x, :telegram_deliver)
+      end
+
+      if previous_slack do
+        Application.put_env(:hydra_x, :slack_deliver, previous_slack)
+      else
+        Application.delete_env(:hydra_x, :slack_deliver)
       end
     end)
 
@@ -71,6 +78,60 @@ defmodule HydraXWeb.ConversationsLiveTest do
     assert html =~ "delivery delivered"
   end
 
+  test "conversations page can retry a failed Slack delivery", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+    test_pid = self()
+
+    Application.put_env(:hydra_x, :slack_deliver, fn payload ->
+      send(test_pid, {:slack_retry, payload})
+      {:ok, %{provider_message_id: "slack-retry-1"}}
+    end)
+
+    {:ok, _slack} =
+      Runtime.save_slack_config(%{
+        bot_token: "slack-test-token",
+        signing_secret: "slack-signing-secret",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{
+        channel: "slack",
+        external_ref: "C901",
+        title: "Slack 901"
+      })
+
+    {:ok, _turn} =
+      Runtime.append_turn(conversation, %{
+        role: "assistant",
+        content: "Retryable Slack reply",
+        metadata: %{}
+      })
+
+    {:ok, _conversation} =
+      Runtime.update_conversation_metadata(conversation, %{
+        "last_delivery" => %{
+          "channel" => "slack",
+          "status" => "failed",
+          "external_ref" => "C901",
+          "reason" => "thread timeout"
+        }
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/conversations")
+
+    view
+    |> element(~s(button[phx-click="retry_delivery"][phx-value-id="#{conversation.id}"]))
+    |> render_click()
+
+    assert_receive {:slack_retry, %{external_ref: "C901", content: "Retryable Slack reply"}}
+
+    html = render(view)
+    assert html =~ "Slack delivery retried"
+    assert html =~ "delivery delivered"
+  end
+
   test "conversations page shows Telegram attachment metadata", %{conn: conn} do
     agent = Runtime.ensure_default_agent!()
 
@@ -98,6 +159,37 @@ defmodule HydraXWeb.ConversationsLiveTest do
     assert html =~ "document: spec.pdf"
   end
 
+  test "conversations page shows delivery reply and thread context", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{
+        channel: "slack",
+        external_ref: "C321",
+        title: "Slack 321"
+      })
+
+    {:ok, _conversation} =
+      Runtime.update_conversation_metadata(conversation, %{
+        "last_delivery" => %{
+          "channel" => "slack",
+          "status" => "delivered",
+          "external_ref" => "C321",
+          "provider_message_id" => "321.654",
+          "reply_context" => %{
+            "thread_ts" => "123.456",
+            "source_message_id" => "123.456"
+          }
+        }
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/conversations?conversation_id=#{conversation.id}")
+
+    html = render(view)
+    assert html =~ "thread 123.456"
+    assert html =~ "source 123.456"
+  end
+
   test "conversations page can start and reply to a control-plane conversation", %{conn: conn} do
     agent = Runtime.ensure_default_agent!()
 
@@ -122,6 +214,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
     assert html =~ "Execution events"
     assert html =~ "Tool-capable turn"
     assert html =~ "provider_requested"
+    assert html =~ "completed"
 
     [conversation | _] = Runtime.list_conversations(limit: 5)
 
@@ -138,6 +231,41 @@ defmodule HydraXWeb.ConversationsLiveTest do
     assert html =~ "Reply sent"
     assert html =~ "Mock response"
     assert html =~ "status completed"
+  end
+
+  test "conversations page shows recovered resumable execution state", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{
+        channel: "webchat",
+        title: "Recovered UI"
+      })
+
+    {:ok, _checkpoint} =
+      Runtime.upsert_checkpoint(conversation.id, "channel", %{
+        "status" => "interrupted",
+        "resumable" => true,
+        "current_step_id" => "provider-final",
+        "current_step_index" => 0,
+        "steps" => [
+          %{"id" => "provider-final", "kind" => "provider", "label" => "Recover", "status" => "running"}
+        ],
+        "execution_events" => [
+          %{
+            "phase" => "recovered_after_restart",
+            "at" => DateTime.utc_now(),
+            "details" => %{"summary" => "Recovered 1 pending user turn(s) after channel restart"}
+          }
+        ]
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/conversations?conversation_id=#{conversation.id}")
+
+    html = render(view)
+    assert html =~ "resumable"
+    assert html =~ "current"
+    assert html =~ "Recovered 1 pending user turn(s) after channel restart"
   end
 
   test "conversations page can rename and archive a conversation", %{conn: conn} do

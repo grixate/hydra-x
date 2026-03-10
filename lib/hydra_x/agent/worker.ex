@@ -82,7 +82,9 @@ defmodule HydraX.Agent.Worker do
           tool_use_id: id,
           tool_name: name,
           result: %{error: "Unknown tool: #{name}"},
-          is_error: true
+          is_error: true,
+          summary: "Unknown tool: #{name}",
+          safety_classification: "unknown"
         }
 
       tool_module ->
@@ -92,16 +94,28 @@ defmodule HydraX.Agent.Worker do
           case tool_module.execute(params, context) do
             {:ok, result} ->
               Telemetry.tool_execution(name, :ok)
-              %{tool_use_id: id, tool_name: name, result: result, is_error: false}
-
-            {:error, reason} ->
-              log_tool_warning(conversation, name, arguments, reason)
 
               %{
                 tool_use_id: id,
                 tool_name: name,
-                result: %{error: inspect(reason)},
-                is_error: true
+                result: result,
+                is_error: false,
+                summary: tool_summary(tool_module, result),
+                safety_classification: tool_safety_classification(tool_module)
+              }
+
+            {:error, reason} ->
+              log_tool_warning(conversation, name, arguments, reason)
+
+              error_result = %{error: inspect(reason)}
+
+              %{
+                tool_use_id: id,
+                tool_name: name,
+                result: error_result,
+                is_error: true,
+                summary: tool_summary(tool_module, error_result),
+                safety_classification: tool_safety_classification(tool_module)
               }
           end
         else
@@ -111,7 +125,9 @@ defmodule HydraX.Agent.Worker do
             tool_use_id: id,
             tool_name: name,
             result: %{error: "Tool #{name} is disabled by policy"},
-            is_error: true
+            is_error: true,
+            summary: "Tool #{name} is disabled by policy",
+            safety_classification: tool_safety_classification(tool_module)
           }
         end
     end
@@ -144,6 +160,10 @@ defmodule HydraX.Agent.Worker do
         Map.get(policy, :http_fetch_enabled, true) and
           channel_allowed?(channel, Map.get(policy, :http_fetch_channels, []))
 
+      "browser_automation" ->
+        Map.get(policy, :browser_automation_enabled, false) and
+          channel_allowed?(channel, Map.get(policy, :browser_automation_channels, []))
+
       "web_search" ->
         Map.get(policy, :web_search_enabled, true) and
           channel_allowed?(channel, Map.get(policy, :web_search_channels, []))
@@ -158,12 +178,26 @@ defmodule HydraX.Agent.Worker do
   end
 
   defp enrich_params(arguments, "memory_save", context) do
+    metadata =
+      arguments
+      |> Map.get(:metadata, Map.get(arguments, "metadata", %{}))
+      |> case do
+        value when is_map(value) -> value
+        _ -> %{}
+      end
+      |> Map.put_new("source_channel", context.current_channel)
+
     arguments
     |> Map.put(:agent_id, context.agent_id)
     |> Map.put(:conversation_id, context.conversation_id)
+    |> Map.put(:metadata, metadata)
   end
 
   defp enrich_params(arguments, "memory_recall", context) do
+    Map.put(arguments, :agent_id, context.agent_id)
+  end
+
+  defp enrich_params(arguments, "mcp_inspect", context) do
     Map.put(arguments, :agent_id, context.agent_id)
   end
 
@@ -190,4 +224,24 @@ defmodule HydraX.Agent.Worker do
     do: channel in channels
 
   defp channel_allowed?(_, _), do: false
+
+  defp tool_summary(module, payload) do
+    if function_exported?(module, :result_summary, 1) do
+      module.result_summary(payload)
+    else
+      default_tool_summary(payload)
+    end
+  end
+
+  defp tool_safety_classification(module) do
+    if function_exported?(module, :safety_classification, 0) do
+      module.safety_classification()
+    else
+      "standard"
+    end
+  end
+
+  defp default_tool_summary(%{error: error}) when is_binary(error), do: error
+  defp default_tool_summary(%{"error" => error}) when is_binary(error), do: error
+  defp default_tool_summary(payload), do: inspect(payload, limit: 8, printable_limit: 120)
 end

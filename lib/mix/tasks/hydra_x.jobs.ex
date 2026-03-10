@@ -25,6 +25,7 @@ defmodule Mix.Tasks.HydraX.Jobs do
           name: :string,
           agent: :string,
           prompt: :string,
+          schedule: :string,
           schedule_mode: :string,
           interval_minutes: :integer,
           weekday_csv: :string,
@@ -38,6 +39,7 @@ defmodule Mix.Tasks.HydraX.Jobs do
           retry_backoff_seconds: :integer,
           pause_after_failures: :integer,
           cooldown_minutes: :integer,
+          run_retention_days: :integer,
           delivery_enabled: :string,
           delivery_channel: :string,
           delivery_target: :string
@@ -176,6 +178,7 @@ defmodule Mix.Tasks.HydraX.Jobs do
     |> maybe_put("name", opts[:name])
     |> maybe_put("kind", opts[:kind])
     |> maybe_put("prompt", opts[:prompt])
+    |> maybe_put("schedule_text", opts[:schedule])
     |> maybe_put("schedule_mode", opts[:schedule_mode])
     |> maybe_put("interval_minutes", opts[:interval_minutes])
     |> maybe_put("weekday_csv", opts[:weekday_csv])
@@ -189,6 +192,7 @@ defmodule Mix.Tasks.HydraX.Jobs do
     |> maybe_put("retry_backoff_seconds", opts[:retry_backoff_seconds])
     |> maybe_put("pause_after_failures", opts[:pause_after_failures])
     |> maybe_put("cooldown_minutes", opts[:cooldown_minutes])
+    |> maybe_put("run_retention_days", opts[:run_retention_days])
     |> maybe_put("enabled", parse_enabled(opts[:enabled]))
     |> maybe_put("delivery_enabled", parse_enabled(opts[:delivery_enabled]))
     |> maybe_put("delivery_channel", opts[:delivery_channel])
@@ -208,19 +212,7 @@ defmodule Mix.Tasks.HydraX.Jobs do
   defp format_datetime(nil), do: "never"
   defp format_datetime(datetime), do: Calendar.strftime(datetime, "%Y-%m-%d %H:%M:%S UTC")
 
-  defp schedule_summary(%{schedule_mode: "daily"} = job) do
-    "daily@#{pad(job.run_hour)}:#{pad(job.run_minute)}"
-  end
-
-  defp schedule_summary(%{schedule_mode: "weekly"} = job) do
-    "#{job.weekday_csv || "mon"}@#{pad(job.run_hour)}:#{pad(job.run_minute)}"
-  end
-
-  defp schedule_summary(%{schedule_mode: "cron"} = job) do
-    "cron=#{job.cron_expression || "* * * * *"}"
-  end
-
-  defp schedule_summary(job), do: "every-#{job.interval_minutes}m"
+  defp schedule_summary(job), do: HydraX.Runtime.schedule_text_for(job)
 
   defp policy_summary(job) do
     [
@@ -231,7 +223,8 @@ defmodule Mix.Tasks.HydraX.Jobs do
       ),
       if((job.pause_after_failures || 0) > 0,
         do: "circuit=#{job.pause_after_failures}/#{job.cooldown_minutes || 0}m"
-      )
+      ),
+      "retain=#{job.run_retention_days || 30}d"
     ]
     |> Enum.reject(&is_nil/1)
     |> Enum.join(",")

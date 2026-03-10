@@ -128,6 +128,54 @@ defmodule HydraXWeb.MemoryLiveTest do
     refute html =~ "Filterable goal memory"
   end
 
+  test "memory page shows ranked reasons and scores for search results", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, _goal} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Goal",
+        content: "Ship the Webchat support rollout.",
+        importance: 0.8,
+        metadata: %{
+          "source" => "ingest",
+          "source_file" => "ops-goals.md",
+          "source_section" => "webchat rollout"
+        },
+        last_seen_at: DateTime.utc_now()
+      })
+
+    {:ok, _fact} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Fact",
+        content: "Discord support rollout needs retry coverage.",
+        importance: 0.5,
+        last_seen_at: DateTime.utc_now()
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/memory")
+
+    view
+    |> form("form[phx-submit=\"filter_memories\"]", %{
+      "filters" => %{
+        "query" => "ops webchat goal",
+        "agent_id" => to_string(agent.id),
+        "type" => "",
+        "status" => "active",
+        "min_importance" => ""
+      }
+    })
+    |> render_submit()
+
+    html = render(view)
+    assert html =~ "Ship the Webchat support rollout."
+    assert html =~ "score"
+    assert html =~ "goal match"
+    assert html =~ "source provenance"
+    assert html =~ "ingest provenance"
+  end
+
   test "memory page can delete a memory and its link", %{conn: conn} do
     agent = Runtime.ensure_default_agent!()
 
@@ -406,7 +454,11 @@ defmodule HydraXWeb.MemoryLiveTest do
     agent = Runtime.ensure_default_agent!()
     ingest_dir = Path.join(agent.workspace_root, "ingest")
     File.mkdir_p!(ingest_dir)
-    File.write!(Path.join(ingest_dir, "ops.md"), "# Ops\n\nHydra-X can restore archived ingest chunks.")
+
+    File.write!(
+      Path.join(ingest_dir, "ops.md"),
+      "# Ops\n\nHydra-X can restore archived ingest chunks."
+    )
 
     {:ok, view, _html} = live(conn, ~p"/memory")
 

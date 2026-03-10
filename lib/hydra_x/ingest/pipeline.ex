@@ -8,6 +8,7 @@ defmodule HydraX.Ingest.Pipeline do
   alias HydraX.Ingest.Run
   alias HydraX.Ingest.Parser
   alias HydraX.Memory
+  alias HydraX.Runtime
 
   import Ecto.Query
 
@@ -27,108 +28,123 @@ defmodule HydraX.Ingest.Pipeline do
     filename = Path.basename(file_path)
     force? = Keyword.get(opts, :force, false)
 
-    case Parser.parse(file_path) do
-      {:ok, chunks} ->
-        document_hash = document_hash(chunks)
-        existing = existing_hashes(agent_id, filename)
+    with :ok <- validate_ingest_path(agent_id, file_path),
+         {:ok, chunks} <- Parser.parse(file_path) do
+      document_hash = document_hash(chunks)
+      existing = existing_hashes(agent_id, filename)
 
-        if not force? and latest_document_hash(agent_id, filename) == document_hash and
-             MapSet.size(existing) > 0 do
-          record_run!(agent_id, %{
-            source_file: filename,
-            source_path: Path.expand(file_path),
-            status: "skipped",
-            chunk_count: length(chunks),
-            skipped_count: length(chunks),
-            metadata: %{
-              "source" => "manual_or_watcher_ingest",
-              "reason" => "unchanged_document",
-              "document_hash" => document_hash,
-              "content_hashes" => Enum.map(chunks, & &1.metadata["content_hash"]),
-              "forced" => false
-            }
-          })
+      if not force? and latest_document_hash(agent_id, filename) == document_hash and
+           MapSet.size(existing) > 0 do
+        record_run!(agent_id, %{
+          source_file: filename,
+          source_path: Path.expand(file_path),
+          status: "skipped",
+          chunk_count: length(chunks),
+          skipped_count: length(chunks),
+          metadata: %{
+            "source" => "manual_or_watcher_ingest",
+            "reason" => "unchanged_document",
+            "document_hash" => document_hash,
+            "content_hashes" => Enum.map(chunks, & &1.metadata["content_hash"]),
+            "forced" => false
+          }
+        })
 
-          {:ok,
-           %{created: 0, restored: 0, skipped: length(chunks), archived: 0, unchanged: true}}
-        else
-          new_hashes = MapSet.new(chunks, fn c -> c.metadata["content_hash"] end)
+        {:ok, %{created: 0, restored: 0, skipped: length(chunks), archived: 0, unchanged: true}}
+      else
+        new_hashes = MapSet.new(chunks, fn c -> c.metadata["content_hash"] end)
 
-          archived = archive_stale_entries(agent_id, filename, existing, new_hashes)
+        archived = archive_stale_entries(agent_id, filename, existing, new_hashes)
 
-          {created, restored, skipped} =
-            Enum.reduce(chunks, {0, 0, 0}, fn chunk,
-                                              {created_count, restored_count, skipped_count} ->
-              hash = chunk.metadata["content_hash"]
+        {created, restored, skipped} =
+          Enum.reduce(chunks, {0, 0, 0}, fn chunk,
+                                            {created_count, restored_count, skipped_count} ->
+            hash = chunk.metadata["content_hash"]
 
-              if MapSet.member?(existing, hash) do
-                {created_count, restored_count, skipped_count + 1}
-              else
-                case archived_entry(agent_id, filename, hash) do
-                  nil ->
-                    attrs = memory_attrs(agent_id, file_path, document_hash, chunk)
+            if MapSet.member?(existing, hash) do
+              {created_count, restored_count, skipped_count + 1}
+            else
+              case archived_entry(agent_id, filename, hash) do
+                nil ->
+                  attrs = memory_attrs(agent_id, file_path, document_hash, chunk)
 
-                    case Memory.create_memory(attrs) do
-                      {:ok, _entry} ->
-                        {created_count + 1, restored_count, skipped_count}
+                  case Memory.create_memory(attrs) do
+                    {:ok, _entry} ->
+                      {created_count + 1, restored_count, skipped_count}
 
-                      {:error, reason} ->
-                        Logger.warning("Failed to ingest chunk from #{filename}: #{inspect(reason)}")
-                        {created_count, restored_count, skipped_count}
-                    end
+                    {:error, reason} ->
+                      Logger.warning(
+                        "Failed to ingest chunk from #{filename}: #{inspect(reason)}"
+                      )
 
-                  entry ->
-                    case Memory.update_memory(entry, %{
-                           status: "active",
-                           content: chunk.content,
-                           metadata:
-                             memory_metadata(file_path, document_hash, chunk)
-                             |> Map.put("restored_at", DateTime.utc_now() |> DateTime.to_iso8601())
-                         }) do
-                      {:ok, _entry} ->
-                        {created_count, restored_count + 1, skipped_count}
+                      {created_count, restored_count, skipped_count}
+                  end
 
-                      {:error, reason} ->
-                        Logger.warning(
-                          "Failed to restore archived ingest chunk from #{filename}: #{inspect(reason)}"
-                        )
+                entry ->
+                  case Memory.update_memory(entry, %{
+                         status: "active",
+                         content: chunk.content,
+                         metadata:
+                           memory_metadata(file_path, document_hash, chunk)
+                           |> Map.put("restored_at", DateTime.utc_now() |> DateTime.to_iso8601())
+                       }) do
+                    {:ok, _entry} ->
+                      {created_count, restored_count + 1, skipped_count}
 
-                        {created_count, restored_count, skipped_count}
-                    end
-                end
+                    {:error, reason} ->
+                      Logger.warning(
+                        "Failed to restore archived ingest chunk from #{filename}: #{inspect(reason)}"
+                      )
+
+                      {created_count, restored_count, skipped_count}
+                  end
               end
-            end)
+            end
+          end)
 
-          Logger.info(
-            "Ingest complete: #{filename} → #{created} created, #{restored} restored, #{skipped} skipped, #{archived} archived"
-          )
+        Logger.info(
+          "Ingest complete: #{filename} → #{created} created, #{restored} restored, #{skipped} skipped, #{archived} archived"
+        )
 
-          record_run!(agent_id, %{
-            source_file: filename,
-            source_path: Path.expand(file_path),
-            status: "imported",
-            chunk_count: length(chunks),
-            created_count: created,
-            skipped_count: skipped,
-            archived_count: archived,
-            metadata: %{
-              "source" => "manual_or_watcher_ingest",
-              "document_hash" => document_hash,
-              "content_hashes" => Enum.map(chunks, & &1.metadata["content_hash"]),
-              "forced" => force?,
-              "restored_count" => restored
-            }
-          })
+        record_run!(agent_id, %{
+          source_file: filename,
+          source_path: Path.expand(file_path),
+          status: "imported",
+          chunk_count: length(chunks),
+          created_count: created,
+          skipped_count: skipped,
+          archived_count: archived,
+          metadata: %{
+            "source" => "manual_or_watcher_ingest",
+            "document_hash" => document_hash,
+            "content_hashes" => Enum.map(chunks, & &1.metadata["content_hash"]),
+            "forced" => force?,
+            "restored_count" => restored
+          }
+        })
 
-          {:ok,
-           %{
-             created: created,
-             restored: restored,
-             skipped: skipped,
-             archived: archived,
-             unchanged: false
-           }}
-        end
+        {:ok,
+         %{
+           created: created,
+           restored: restored,
+           skipped: skipped,
+           archived: archived,
+           unchanged: false
+         }}
+      end
+    else
+      {:error, :ingest_path_not_allowed} ->
+        record_run!(agent_id, %{
+          source_file: filename,
+          source_path: Path.expand(file_path),
+          status: "failed",
+          metadata: %{
+            "reason" => "ingest_path_not_allowed",
+            "allowed_roots" => Runtime.effective_control_policy(agent_id).ingest_roots
+          }
+        })
+
+        {:error, :ingest_path_not_allowed}
 
       {:error, reason} ->
         Logger.warning("Failed to parse #{file_path}: #{inspect(reason)}")
@@ -253,6 +269,20 @@ defmodule HydraX.Ingest.Pipeline do
       "document_hash" => document_hash,
       "source_path" => Path.expand(file_path)
     })
+  end
+
+  defp validate_ingest_path(agent_id, file_path) do
+    agent = Runtime.get_agent!(agent_id)
+    candidate = Path.expand(file_path)
+
+    allowed? =
+      Runtime.effective_control_policy(agent_id).ingest_roots
+      |> Enum.any?(fn root ->
+        allowed_root = Path.expand(root, agent.workspace_root)
+        candidate == allowed_root or String.starts_with?(candidate, allowed_root <> "/")
+      end)
+
+    if allowed?, do: :ok, else: {:error, :ingest_path_not_allowed}
   end
 
   defp archive_stale_entries(agent_id, filename, existing_hashes, new_hashes) do

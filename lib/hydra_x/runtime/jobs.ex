@@ -53,8 +53,15 @@ defmodule HydraX.Runtime.Jobs do
     do: save_scheduled_job(%ScheduledJob{}, attrs)
 
   def save_scheduled_job(%ScheduledJob{} = job, attrs) do
-    normalized_attrs = Helpers.normalize_string_keys(attrs)
+    with {:ok, normalized_attrs} <-
+           attrs
+           |> Helpers.normalize_string_keys()
+           |> apply_schedule_text(job) do
+      persist_scheduled_job(job, normalized_attrs)
+    end
+  end
 
+  defp persist_scheduled_job(%ScheduledJob{} = job, normalized_attrs) do
     interval_minutes =
       persisted_integer(normalized_attrs, "interval_minutes", job.interval_minutes || 60)
 
@@ -91,12 +98,16 @@ defmodule HydraX.Runtime.Jobs do
     cooldown_minutes =
       persisted_integer(normalized_attrs, "cooldown_minutes", job.cooldown_minutes || 0)
 
+    run_retention_days =
+      persisted_integer(normalized_attrs, "run_retention_days", job.run_retention_days || 30)
+
     interval_minutes = interval_minutes || job.interval_minutes || 60
     timeout_seconds = timeout_seconds || job.timeout_seconds || 120
     retry_limit = retry_limit || job.retry_limit || 0
     retry_backoff_seconds = retry_backoff_seconds || job.retry_backoff_seconds || 0
     pause_after_failures = pause_after_failures || job.pause_after_failures || 0
     cooldown_minutes = cooldown_minutes || job.cooldown_minutes || 0
+    run_retention_days = run_retention_days || job.run_retention_days || 30
 
     next_run_at =
       case Helpers.blank_to_nil(Map.get(normalized_attrs, "next_run_at")) do
@@ -130,6 +141,7 @@ defmodule HydraX.Runtime.Jobs do
       |> Map.put("retry_backoff_seconds", retry_backoff_seconds)
       |> Map.put("pause_after_failures", pause_after_failures)
       |> Map.put("cooldown_minutes", cooldown_minutes)
+      |> Map.put("run_retention_days", run_retention_days)
       |> Map.put("next_run_at", next_run_at)
 
     job
@@ -370,6 +382,113 @@ defmodule HydraX.Runtime.Jobs do
      }}
   end
 
+  def parse_schedule_text(text) when is_binary(text) do
+    normalized =
+      text
+      |> String.trim()
+      |> String.downcase()
+      |> String.replace(~r/\s+/, " ")
+
+    cond do
+      normalized == "" ->
+        {:error, :blank}
+
+      Regex.match?(~r/^cron\s+/, normalized) ->
+        expression = String.replace_prefix(normalized, "cron ", "")
+        parse_cron_schedule(expression)
+
+      Regex.match?(~r/^every\s+\d+\s+minute(s)?$/, normalized) ->
+        [minutes] =
+          Regex.run(~r/^every\s+(\d+)\s+minute(?:s)?$/, normalized, capture: :all_but_first)
+
+        {:ok, %{"schedule_mode" => "interval", "interval_minutes" => String.to_integer(minutes)}}
+
+      Regex.match?(~r/^every\s+\d+\s+hour(s)?$/, normalized) ->
+        [hours] = Regex.run(~r/^every\s+(\d+)\s+hour(?:s)?$/, normalized, capture: :all_but_first)
+
+        {:ok,
+         %{"schedule_mode" => "interval", "interval_minutes" => String.to_integer(hours) * 60}}
+
+      Regex.match?(~r/^every hour$/, normalized) ->
+        {:ok, %{"schedule_mode" => "interval", "interval_minutes" => 60}}
+
+      Regex.match?(~r/^daily\s+\d{1,2}:\d{2}$/, normalized) ->
+        [hour, minute] =
+          Regex.run(~r/^daily\s+(\d{1,2}):(\d{2})$/, normalized, capture: :all_but_first)
+
+        {:ok,
+         %{
+           "schedule_mode" => "daily",
+           "run_hour" => String.to_integer(hour),
+           "run_minute" => String.to_integer(minute)
+         }}
+
+      Regex.match?(~r/^weekdays\s+\d{1,2}:\d{2}$/, normalized) ->
+        [hour, minute] =
+          Regex.run(~r/^weekdays\s+(\d{1,2}):(\d{2})$/, normalized, capture: :all_but_first)
+
+        {:ok,
+         %{
+           "schedule_mode" => "weekly",
+           "weekday_csv" => "mon,tue,wed,thu,fri",
+           "run_hour" => String.to_integer(hour),
+           "run_minute" => String.to_integer(minute)
+         }}
+
+      Regex.match?(~r/^weekly\s+[\w,\s]+\s+\d{1,2}:\d{2}$/, normalized) ->
+        [days, hour, minute] =
+          Regex.run(
+            ~r/^weekly\s+([\w,\s]+)\s+(\d{1,2}):(\d{2})$/,
+            normalized,
+            capture: :all_but_first
+          )
+
+        {:ok,
+         %{
+           "schedule_mode" => "weekly",
+           "weekday_csv" => normalize_schedule_weekdays(days),
+           "run_hour" => String.to_integer(hour),
+           "run_minute" => String.to_integer(minute)
+         }}
+
+      true ->
+        {:error, :unsupported}
+    end
+  end
+
+  def parse_schedule_text(_), do: {:error, :unsupported}
+
+  def schedule_text_for(%ScheduledJob{schedule_mode: "daily"} = job) do
+    "daily #{pad(job.run_hour)}:#{pad(job.run_minute)}"
+  end
+
+  def schedule_text_for(%ScheduledJob{schedule_mode: "weekly"} = job) do
+    days =
+      case job.weekday_csv do
+        "mon,tue,wed,thu,fri" -> "weekdays"
+        csv -> "weekly #{csv || "mon"}"
+      end
+
+    "#{days} #{pad(job.run_hour)}:#{pad(job.run_minute)}"
+  end
+
+  def schedule_text_for(%ScheduledJob{schedule_mode: "cron"} = job) do
+    "cron #{job.cron_expression || "* * * * *"}"
+  end
+
+  def schedule_text_for(%ScheduledJob{} = job) do
+    minutes = job.interval_minutes || 60
+
+    cond do
+      rem(minutes, 60) == 0 and minutes >= 60 ->
+        hours = div(minutes, 60)
+        "every #{hours} hour#{if(hours == 1, do: "", else: "s")}"
+
+      true ->
+        "every #{minutes} minute#{if(minutes == 1, do: "", else: "s")}"
+    end
+  end
+
   # -- Job execution --
 
   defp refresh_job_for_execution(%ScheduledJob{} = job, now) do
@@ -405,6 +524,7 @@ defmodule HydraX.Runtime.Jobs do
           })
           |> Repo.update()
 
+        {:ok, run} = prune_job_run_history({:ok, run}, job)
         {:ok, run}
 
       {:success, output, metadata} ->
@@ -424,6 +544,7 @@ defmodule HydraX.Runtime.Jobs do
           |> Repo.update()
 
         maybe_deliver_job_run(job, run)
+        |> prune_job_run_history(job)
 
       {:timeout, reason, metadata} ->
         finished_at = DateTime.utc_now()
@@ -443,6 +564,7 @@ defmodule HydraX.Runtime.Jobs do
           |> Repo.update()
 
         maybe_deliver_job_run(job, run)
+        |> prune_job_run_history(job)
 
       {:error, reason, metadata} ->
         finished_at = DateTime.utc_now()
@@ -462,6 +584,7 @@ defmodule HydraX.Runtime.Jobs do
           |> Repo.update()
 
         maybe_deliver_job_run(job, run)
+        |> prune_job_run_history(job)
     end
   end
 
@@ -595,6 +718,42 @@ defmodule HydraX.Runtime.Jobs do
     |> Repo.update()
   end
 
+  defp prune_job_run_history({:ok, %JobRun{} = run}, %ScheduledJob{} = job) do
+    retention_days = job.run_retention_days || 30
+
+    if retention_days <= 0 do
+      {:ok, run}
+    else
+      cutoff = DateTime.add(DateTime.utc_now(), -retention_days * 86_400, :second)
+
+      {deleted, _} =
+        JobRun
+        |> where(
+          [job_run],
+          job_run.scheduled_job_id == ^job.id and job_run.inserted_at < ^cutoff and
+            job_run.id != ^run.id
+        )
+        |> Repo.delete_all()
+
+      if deleted > 0 do
+        HydraX.Safety.log_event(%{
+          agent_id: job.agent_id,
+          category: "scheduler",
+          level: "info",
+          message: "Pruned scheduled job run history",
+          metadata: %{
+            job_id: job.id,
+            job_name: job.name,
+            deleted_runs: deleted,
+            retention_days: retention_days
+          }
+        })
+      end
+
+      {:ok, run}
+    end
+  end
+
   defp apply_job_failure_state(%ScheduledJob{} = job, reason, failed_at) do
     consecutive_failures = (job.consecutive_failures || 0) + 1
 
@@ -690,8 +849,8 @@ defmodule HydraX.Runtime.Jobs do
       else
         {summary, imported_files} =
           Enum.reduce(files, {%{created: 0, restored: 0, skipped: 0, archived: 0}, []}, fn file,
-                                                                                              {acc,
-                                                                                               names} ->
+                                                                                           {acc,
+                                                                                            names} ->
             case HydraX.Ingest.Pipeline.ingest_file(agent.id, file) do
               {:ok, result} ->
                 merged = %{
@@ -731,9 +890,10 @@ defmodule HydraX.Runtime.Jobs do
 
   defp execute_scheduled_job(%ScheduledJob{kind: "maintenance"} = job) do
     with {:ok, agent} <- fetch_job_agent(job),
-         deleted_runs <- delete_old_job_runs(30),
+         deleted_runs <- delete_old_job_runs(max(job.run_retention_days || 30, 1)),
          bulletin <- HydraX.Runtime.Agents.refresh_agent_bulletin!(agent.id),
-         {:ok, report} <- HydraX.Report.export_snapshot(Path.join(Config.install_root(), "reports")) do
+         {:ok, report} <-
+           HydraX.Report.export_snapshot(Path.join(Config.install_root(), "reports")) do
       {:ok,
        "Maintenance completed for #{agent.slug}: deleted #{deleted_runs} old runs and refreshed bulletin.",
        %{
@@ -787,16 +947,42 @@ defmodule HydraX.Runtime.Jobs do
   defp maybe_deliver_job_run(%ScheduledJob{delivery_enabled: nil}, run), do: {:ok, run}
 
   defp maybe_deliver_job_run(%ScheduledJob{} = job, %JobRun{} = run) do
-    case deliver_job_run(job, run) do
-      {:ok, delivery} ->
-        update_job_run_delivery(run, delivery)
+    case delivery_allowed_by_policy?(job) do
+      :ok ->
+        case deliver_job_run(job, run) do
+          {:ok, delivery} ->
+            update_job_run_delivery(run, delivery)
+
+          {:error, reason} ->
+            HydraX.Safety.log_event(%{
+              agent_id: job.agent_id,
+              category: "scheduler",
+              level: "error",
+              message: "Scheduled job delivery failed",
+              metadata: %{
+                job_id: job.id,
+                job_name: job.name,
+                reason: inspect(reason),
+                channel: job.delivery_channel,
+                target: job.delivery_target
+              }
+            })
+
+            update_job_run_delivery(run, %{
+              "status" => "failed",
+              "channel" => job.delivery_channel,
+              "target" => job.delivery_target,
+              "attempted_at" => DateTime.utc_now(),
+              "reason" => inspect(reason)
+            })
+        end
 
       {:error, reason} ->
         HydraX.Safety.log_event(%{
           agent_id: job.agent_id,
           category: "scheduler",
-          level: "error",
-          message: "Scheduled job delivery failed",
+          level: "warn",
+          message: "Scheduled job delivery blocked by policy",
           metadata: %{
             job_id: job.id,
             job_name: job.name,
@@ -807,13 +993,18 @@ defmodule HydraX.Runtime.Jobs do
         })
 
         update_job_run_delivery(run, %{
-          "status" => "failed",
+          "status" => "blocked",
           "channel" => job.delivery_channel,
           "target" => job.delivery_target,
           "attempted_at" => DateTime.utc_now(),
           "reason" => inspect(reason)
         })
     end
+  end
+
+  defp delivery_allowed_by_policy?(%ScheduledJob{agent_id: agent_id, delivery_channel: channel}) do
+    allowed = HydraX.Runtime.effective_control_policy(agent_id).job_delivery_channels
+    if channel in allowed, do: :ok, else: {:error, {:delivery_channel_blocked_by_policy, channel}}
   end
 
   defp deliver_job_run(
@@ -1052,6 +1243,60 @@ defmodule HydraX.Runtime.Jobs do
 
         DateTime.add(from, 3600, :second)
     end
+  end
+
+  defp apply_schedule_text(attrs, %ScheduledJob{} = _job) do
+    case Helpers.blank_to_nil(Map.get(attrs, "schedule_text")) do
+      nil ->
+        {:ok, attrs}
+
+      text ->
+        case parse_schedule_text(text) do
+          {:ok, parsed} ->
+            {:ok,
+             attrs
+             |> Map.merge(parsed)
+             |> Map.delete("schedule_text")}
+
+          {:error, reason} ->
+            {:error,
+             ScheduledJob.changeset(%ScheduledJob{}, attrs)
+             |> Ecto.Changeset.add_error(
+               :schedule_text,
+               schedule_text_error_message(reason)
+             )}
+        end
+    end
+  end
+
+  defp schedule_text_error_message(:blank), do: "cannot be blank"
+  defp schedule_text_error_message(:invalid_cron), do: "contains an invalid cron expression"
+  defp schedule_text_error_message(:unsupported), do: "is not a supported schedule format"
+  defp schedule_text_error_message(_), do: "is invalid"
+
+  defp parse_cron_schedule(expression) do
+    case Crontab.CronExpression.Parser.parse(expression) do
+      {:ok, _} -> {:ok, %{"schedule_mode" => "cron", "cron_expression" => expression}}
+      {:error, _} -> {:error, :invalid_cron}
+    end
+  end
+
+  defp normalize_schedule_weekdays(days) do
+    days
+    |> String.replace(" ", "")
+    |> String.split(",", trim: true)
+    |> Enum.map(&String.downcase/1)
+    |> Enum.map(fn
+      "monday" -> "mon"
+      "tuesday" -> "tue"
+      "wednesday" -> "wed"
+      "thursday" -> "thu"
+      "friday" -> "fri"
+      "saturday" -> "sat"
+      "sunday" -> "sun"
+      day -> day
+    end)
+    |> Enum.join(",")
   end
 
   defp next_daily_run_at(run_hour, run_minute, from) do

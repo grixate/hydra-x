@@ -7,6 +7,7 @@ defmodule HydraX.Runtime.Providers do
 
   alias HydraX.Config
   alias HydraX.Repo
+  alias HydraX.Security.Secrets
 
   alias HydraX.Runtime.{AgentProfile, Helpers, ProviderConfig, ToolPolicy}
 
@@ -14,12 +15,14 @@ defmodule HydraX.Runtime.Providers do
     ProviderConfig
     |> order_by([provider], desc: provider.enabled, asc: provider.name)
     |> Repo.all()
+    |> Enum.map(&decrypt_provider/1)
   end
 
-  def get_provider_config!(id), do: Repo.get!(ProviderConfig, id)
+  def get_provider_config!(id), do: Repo.get!(ProviderConfig, id) |> decrypt_provider()
 
   def enabled_provider do
     Repo.one(from(provider in ProviderConfig, where: provider.enabled == true, limit: 1))
+    |> decrypt_provider()
   end
 
   def enabled_provider(agent_id, process_type \\ "channel") do
@@ -129,7 +132,7 @@ defmodule HydraX.Runtime.Providers do
   end
 
   def change_provider_config(provider \\ %ProviderConfig{}, attrs \\ %{}) do
-    ProviderConfig.changeset(provider, attrs)
+    ProviderConfig.changeset(decrypt_provider(provider), attrs)
   end
 
   def save_provider_config(attrs) when is_map(attrs) do
@@ -138,11 +141,18 @@ defmodule HydraX.Runtime.Providers do
 
   def save_provider_config(%ProviderConfig{} = provider, attrs) do
     Repo.transaction(fn ->
-      changeset = ProviderConfig.changeset(provider, attrs)
+      decrypted = decrypt_provider(provider)
+
+      encrypted_attrs =
+        attrs
+        |> Helpers.normalize_string_keys()
+        |> Secrets.encrypt_secret_attrs(decrypted, [:api_key])
+
+      changeset = ProviderConfig.changeset(provider, encrypted_attrs)
 
       record =
         case Repo.insert_or_update(changeset) do
-          {:ok, record} -> record
+          {:ok, record} -> decrypt_provider(record)
           {:error, changeset} -> Repo.rollback(changeset)
         end
 
@@ -191,10 +201,12 @@ defmodule HydraX.Runtime.Providers do
             workspace_read_enabled: true,
             workspace_write_enabled: false,
             http_fetch_enabled: true,
+            browser_automation_enabled: false,
             web_search_enabled: true,
             shell_command_enabled: true,
             workspace_write_channels_csv: Enum.join(default_workspace_write_channels(), ","),
             http_fetch_channels_csv: Enum.join(default_network_tool_channels(), ","),
+            browser_automation_channels_csv: Enum.join(default_network_tool_channels(), ","),
             web_search_channels_csv: Enum.join(default_network_tool_channels(), ","),
             shell_command_channels_csv: Enum.join(default_shell_channels(), ",")
           })
@@ -279,12 +291,15 @@ defmodule HydraX.Runtime.Providers do
       workspace_read_enabled: Map.get(policy, :workspace_read_enabled, true),
       workspace_write_enabled: Map.get(policy, :workspace_write_enabled, false),
       http_fetch_enabled: Map.get(policy, :http_fetch_enabled, true),
+      browser_automation_enabled: Map.get(policy, :browser_automation_enabled, false),
       web_search_enabled: Map.get(policy, :web_search_enabled, true),
       shell_command_enabled: Map.get(policy, :shell_command_enabled, true),
       workspace_write_channels:
         csv_values(policy.workspace_write_channels_csv, default_workspace_write_channels()),
       http_fetch_channels:
         csv_values(policy.http_fetch_channels_csv, default_network_tool_channels()),
+      browser_automation_channels:
+        csv_values(policy.browser_automation_channels_csv, default_network_tool_channels()),
       web_search_channels:
         csv_values(policy.web_search_channels_csv, default_network_tool_channels()),
       shell_command_channels:
@@ -315,6 +330,17 @@ defmodule HydraX.Runtime.Providers do
   end
 
   # -- Private helpers --
+
+  defp do_warm_providers([], process_type, warmed_at, _opts) do
+    %{
+      "status" => "degraded",
+      "process_type" => process_type,
+      "warmed_at" => warmed_at,
+      "selected_provider_id" => nil,
+      "checked_provider_ids" => [],
+      "last_error" => "no provider could be warmed"
+    }
+  end
 
   defp do_warm_providers([provider | rest], process_type, warmed_at, opts) do
     case test_provider_config(provider, opts) do
@@ -350,16 +376,10 @@ defmodule HydraX.Runtime.Providers do
     end
   end
 
-  defp do_warm_providers([], process_type, warmed_at, _opts) do
-    %{
-      "status" => "degraded",
-      "process_type" => process_type,
-      "warmed_at" => warmed_at,
-      "selected_provider_id" => nil,
-      "checked_provider_ids" => [],
-      "last_error" => "no provider could be warmed"
-    }
-  end
+  defp decrypt_provider(nil), do: nil
+
+  defp decrypt_provider(%ProviderConfig{} = provider),
+    do: Secrets.decrypt_fields(provider, [:api_key])
 
   defp provider_routing_status(nil), do: default_provider_routing_status()
 

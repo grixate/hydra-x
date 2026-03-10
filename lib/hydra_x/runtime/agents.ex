@@ -66,25 +66,27 @@ defmodule HydraX.Runtime.Agents do
   end
 
   def save_agent(%AgentProfile{} = agent, attrs) do
-    Repo.transaction(fn ->
-      attrs = normalize_agent_attrs(attrs)
-      changeset = AgentProfile.changeset(agent, attrs)
+    retry_busy_transaction(fn ->
+      Repo.transaction(fn ->
+        attrs = normalize_agent_attrs(attrs)
+        changeset = AgentProfile.changeset(agent, attrs)
 
-      record =
-        case Repo.insert_or_update(changeset) do
-          {:ok, record} -> record
-          {:error, changeset} -> Repo.rollback(changeset)
+        record =
+          case Repo.insert_or_update(changeset) do
+            {:ok, record} -> record
+            {:error, changeset} -> Repo.rollback(changeset)
+          end
+
+        if record.is_default do
+          from(other in AgentProfile, where: other.id != ^record.id and other.is_default == true)
+          |> Repo.update_all(set: [is_default: false])
         end
 
-      if record.is_default do
-        from(other in AgentProfile, where: other.id != ^record.id and other.is_default == true)
-        |> Repo.update_all(set: [is_default: false])
-      end
-
-      Workspace.Scaffold.copy_template!(record.workspace_root)
-      record
+        Workspace.Scaffold.copy_template!(record.workspace_root)
+        record
+      end)
+      |> Helpers.unwrap_transaction()
     end)
-    |> Helpers.unwrap_transaction()
   end
 
   def update_agent_runtime_state(%AgentProfile{} = agent, attrs) when is_map(attrs) do
@@ -282,41 +284,108 @@ defmodule HydraX.Runtime.Agents do
     conflict_count =
       Memory.list_memories(agent_id: agent_id, limit: 50, status: "conflicted") |> length()
 
-    # Ensure type diversity: pick the top memory from each type first
-    by_type = Enum.group_by(active, & &1.type)
+    prioritized =
+      prioritize_bulletin_memories(active)
 
-    diverse =
-      by_type
-      |> Enum.map(fn {_type, entries} -> List.first(entries) end)
-      |> Enum.reject(&is_nil/1)
-      |> Enum.sort_by(&recency_score/1, :desc)
-      |> Enum.take(8)
+    sections =
+      []
+      |> maybe_add_section(
+        conflict_count > 0,
+        "Warnings",
+        ["- #{conflict_count} conflicted memories need operator review"]
+      )
+      |> maybe_add_section(
+        prioritized.goals != [],
+        "Active Goals And Todos",
+        Enum.map(prioritized.goals, &bulletin_line/1)
+      )
+      |> maybe_add_section(
+        prioritized.decisions != [],
+        "Current Decisions And Preferences",
+        Enum.map(prioritized.decisions, &bulletin_line/1)
+      )
+      |> maybe_add_section(
+        prioritized.channels != [],
+        "Channel-Specific Context",
+        Enum.map(prioritized.channels, &bulletin_line/1)
+      )
+      |> maybe_add_section(
+        prioritized.context != [],
+        "Relevant Context",
+        Enum.map(prioritized.context, &bulletin_line/1)
+      )
 
-    # Fill remaining slots with highest-importance recent memories not yet included
-    diverse_ids = MapSet.new(diverse, & &1.id)
-    remaining_slots = max(10 - length(diverse), 0)
+    case sections do
+      [] -> "No active memory yet."
+      _ -> Enum.join(sections, "\n\n")
+    end
+  end
 
-    filler =
-      active
-      |> Enum.reject(&MapSet.member?(diverse_ids, &1.id))
-      |> Enum.sort_by(&recency_score/1, :desc)
-      |> Enum.take(remaining_slots)
+  defp prioritize_bulletin_memories(active) do
+    ranked = Enum.sort_by(active, &bulletin_priority/1, :desc)
 
-    selected = diverse ++ filler
+    goals =
+      ranked
+      |> Enum.filter(&(&1.type in ["Goal", "Todo"]))
+      |> Enum.take(4)
 
-    lines =
-      Enum.map(selected, fn memory ->
-        "- [#{memory.type}] #{memory.content}"
-      end)
+    goal_ids = MapSet.new(goals, & &1.id)
 
-    conflict_warning =
-      if conflict_count > 0 do
-        ["- [WARNING] #{conflict_count} conflicted memories need operator review"]
-      else
-        []
+    decisions =
+      ranked
+      |> Enum.reject(&MapSet.member?(goal_ids, &1.id))
+      |> Enum.filter(&(&1.type in ["Decision", "Preference", "Identity"]))
+      |> Enum.take(3)
+
+    taken_ids = MapSet.union(goal_ids, MapSet.new(decisions, & &1.id))
+
+    channels =
+      ranked
+      |> Enum.reject(&MapSet.member?(taken_ids, &1.id))
+      |> Enum.filter(&(bulletin_channel(&1) && &1.type in ["Event", "Observation", "Fact"]))
+      |> Enum.uniq_by(&bulletin_channel/1)
+      |> Enum.take(3)
+
+    taken_ids = MapSet.union(taken_ids, MapSet.new(channels, & &1.id))
+
+    context =
+      ranked
+      |> Enum.reject(&MapSet.member?(taken_ids, &1.id))
+      |> Enum.take(4)
+
+    %{goals: goals, decisions: decisions, channels: channels, context: context}
+  end
+
+  defp bulletin_priority(memory) do
+    type_weight =
+      case memory.type do
+        "Goal" -> 2.4
+        "Todo" -> 2.2
+        "Decision" -> 2.0
+        "Preference" -> 1.8
+        "Identity" -> 1.5
+        "Event" -> 1.35
+        "Observation" -> 1.25
+        _ -> 1.0
       end
 
-    Enum.join(lines ++ conflict_warning, "\n")
+    type_weight + recency_score(memory) + channel_bulletin_boost(memory)
+  end
+
+  defp bulletin_line(memory) do
+    prefix =
+      case bulletin_channel(memory) do
+        nil -> "[#{memory.type}]"
+        channel -> "[#{memory.type}/#{channel}]"
+      end
+
+    "- #{prefix} #{memory.content}"
+  end
+
+  defp maybe_add_section(sections, false, _title, _lines), do: sections
+
+  defp maybe_add_section(sections, true, title, lines) do
+    sections ++ ["## #{title}\n" <> Enum.join(lines, "\n")]
   end
 
   defp recency_score(memory) do
@@ -328,6 +397,15 @@ defmodule HydraX.Runtime.Agents do
     decay = 1.0 / (1.0 + seconds_ago / 86_400)
 
     importance * 0.6 + decay * 0.4
+  end
+
+  defp channel_bulletin_boost(memory) do
+    if bulletin_channel(memory), do: 0.12, else: 0.0
+  end
+
+  defp bulletin_channel(memory) do
+    get_in(memory.metadata || %{}, ["source_channel"]) ||
+      (memory.conversation && memory.conversation.channel)
   end
 
   defp normalize_agent_attrs(attrs) do
@@ -378,4 +456,20 @@ defmodule HydraX.Runtime.Agents do
   defp readiness_status(true, "ready"), do: "ready"
   defp readiness_status(true, "mock"), do: "mock"
   defp readiness_status(true, _), do: "degraded"
+
+  defp retry_busy_transaction(fun, attempts \\ 3)
+
+  defp retry_busy_transaction(fun, attempts) when attempts > 1 do
+    fun.()
+  rescue
+    error in Exqlite.Error ->
+      if String.contains?(Exception.message(error), "Database busy") do
+        Process.sleep(40)
+        retry_busy_transaction(fun, attempts - 1)
+      else
+        reraise error, __STACKTRACE__
+      end
+  end
+
+  defp retry_busy_transaction(fun, _attempts), do: fun.()
 end

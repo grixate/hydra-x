@@ -113,4 +113,26 @@ defmodule HydraXWeb.SessionControllerTest do
     [event | _] = Safety.list_events(category: "auth", limit: 5)
     assert event.message =~ "Operator logged out"
   end
+
+  test "expired session redirects to login and is audited", %{conn: conn} do
+    assert {:ok, _secret} =
+             Runtime.save_operator_secret_password(%{
+               "password" => "hydra-password-123",
+               "password_confirmation" => "hydra-password-123"
+             })
+
+    now = System.system_time(:second)
+
+    conn =
+      conn
+      |> init_test_session(%{})
+      |> OperatorAuth.log_in(authenticated_at: now - 90_000, last_active_at: now - 90_000)
+      |> get(~p"/setup")
+
+    assert redirected_to(conn) == "/login"
+
+    [event | _] = Safety.list_events(category: "auth", limit: 5)
+    assert event.level == "warn"
+    assert event.message =~ "Operator session expired"
+  end
 end

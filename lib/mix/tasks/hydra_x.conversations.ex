@@ -1,7 +1,7 @@
 defmodule Mix.Tasks.HydraX.Conversations do
   use Mix.Task
 
-  @shortdoc "Lists conversations, sends messages, or retries failed Telegram deliveries"
+  @shortdoc "Lists conversations, sends messages, or retries failed channel deliveries"
 
   @impl true
   def run(args) do

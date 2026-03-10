@@ -162,7 +162,41 @@ defmodule HydraXWeb.JobsLiveTest do
 
     html = render(view)
     assert html =~ "Weekly Planning Review"
-    assert html =~ "mon,fri @ 08:15 UTC"
+    assert html =~ "weekly mon,fri 08:15"
+  end
+
+  test "jobs page can create a job from natural schedule text", %{conn: conn} do
+    Runtime.ensure_default_agent!()
+
+    {:ok, view, _html} = live(conn, ~p"/jobs")
+
+    view
+    |> form("#job-form", %{
+      scheduled_job: %{
+        name: "Natural Schedule Job",
+        kind: "prompt",
+        schedule_text: "daily 09:30",
+        interval_minutes: "",
+        prompt: "Natural schedule",
+        enabled: true,
+        delivery_enabled: false,
+        delivery_channel: "telegram",
+        delivery_target: ""
+      }
+    })
+    |> render_submit()
+
+    [job | _] =
+      Runtime.list_scheduled_jobs(limit: 10)
+      |> Enum.filter(&(&1.name == "Natural Schedule Job"))
+
+    assert job.schedule_mode == "daily"
+    assert job.run_hour == 9
+    assert job.run_minute == 30
+
+    html = render(view)
+    assert html =~ "Natural Schedule Job"
+    assert html =~ "daily 09:30"
   end
 
   test "jobs page can create and run an ingest scheduled job", %{conn: conn} do
@@ -222,6 +256,7 @@ defmodule HydraXWeb.JobsLiveTest do
         retry_backoff_seconds: 5,
         pause_after_failures: 3,
         cooldown_minutes: 30,
+        run_retention_days: 14,
         active_hour_start: 8,
         active_hour_end: 18,
         circuit_state: "open",
@@ -236,6 +271,7 @@ defmodule HydraXWeb.JobsLiveTest do
     assert html =~ "circuit open"
     assert html =~ "timeout 45s"
     assert html =~ "active 08:00-18:00 UTC"
+    assert html =~ "retention 14 days"
 
     view
     |> element(~s(button[phx-click="reset_circuit"][phx-value-id="#{job.id}"]))
@@ -246,6 +282,38 @@ defmodule HydraXWeb.JobsLiveTest do
 
     html = render(view)
     assert html =~ "Scheduler circuit reset"
+  end
+
+  test "jobs page saves run retention policy on create", %{conn: conn} do
+    Runtime.ensure_default_agent!()
+
+    {:ok, view, _html} = live(conn, ~p"/jobs")
+
+    view
+    |> form("#job-form", %{
+      scheduled_job: %{
+        name: "Retention Job",
+        kind: "prompt",
+        interval_minutes: 30,
+        prompt: "Retention test.",
+        enabled: true,
+        run_retention_days: 7,
+        delivery_enabled: false,
+        delivery_channel: "telegram",
+        delivery_target: ""
+      }
+    })
+    |> render_submit()
+
+    [job | _] =
+      Runtime.list_scheduled_jobs(limit: 10)
+      |> Enum.filter(&(&1.name == "Retention Job"))
+
+    assert job.run_retention_days == 7
+
+    html = render(view)
+    assert html =~ "Retention Job"
+    assert html =~ "retention 7 days"
   end
 
   test "jobs page can filter and export the run ledger", %{conn: conn} do

@@ -26,6 +26,7 @@ defmodule HydraX.Runtime.ScheduledJob do
     field :retry_backoff_seconds, :integer, default: 0
     field :pause_after_failures, :integer, default: 0
     field :cooldown_minutes, :integer, default: 0
+    field :run_retention_days, :integer, default: 30
     field :consecutive_failures, :integer, default: 0
     field :circuit_state, :string, default: "closed"
     field :circuit_opened_at, :utc_datetime_usec
@@ -35,6 +36,7 @@ defmodule HydraX.Runtime.ScheduledJob do
     field :next_run_at, :utc_datetime_usec
     field :last_run_at, :utc_datetime_usec
     field :cron_expression, :string
+    field :schedule_text, :string, virtual: true
     field :config, :map, default: %{}
 
     belongs_to :agent, HydraX.Runtime.AgentProfile
@@ -56,6 +58,7 @@ defmodule HydraX.Runtime.ScheduledJob do
       :run_hour,
       :run_minute,
       :cron_expression,
+      :schedule_text,
       :enabled,
       :delivery_enabled,
       :delivery_channel,
@@ -67,6 +70,7 @@ defmodule HydraX.Runtime.ScheduledJob do
       :retry_backoff_seconds,
       :pause_after_failures,
       :cooldown_minutes,
+      :run_retention_days,
       :consecutive_failures,
       :circuit_state,
       :circuit_opened_at,
@@ -98,6 +102,7 @@ defmodule HydraX.Runtime.ScheduledJob do
       "weekly" ->
         changeset
         |> validate_required([:weekday_csv, :run_hour, :run_minute])
+        |> validate_weekday_csv()
         |> validate_number(:run_hour, greater_than_or_equal_to: 0, less_than_or_equal_to: 23)
         |> validate_number(:run_minute, greater_than_or_equal_to: 0, less_than_or_equal_to: 59)
 
@@ -122,6 +127,28 @@ defmodule HydraX.Runtime.ScheduledJob do
         case Crontab.CronExpression.Parser.parse(expression) do
           {:ok, _} -> changeset
           {:error, _} -> add_error(changeset, :cron_expression, "is not a valid cron expression")
+        end
+    end
+  end
+
+  defp validate_weekday_csv(changeset) do
+    allowed = MapSet.new(~w(mon tue wed thu fri sat sun))
+
+    case get_field(changeset, :weekday_csv) do
+      nil ->
+        changeset
+
+      csv ->
+        tokens =
+          csv
+          |> String.split(",", trim: true)
+          |> Enum.map(&String.trim/1)
+          |> Enum.reject(&(&1 == ""))
+
+        if tokens != [] and Enum.all?(tokens, &MapSet.member?(allowed, &1)) do
+          changeset
+        else
+          add_error(changeset, :weekday_csv, "must use weekdays like mon,tue,wed")
         end
     end
   end
@@ -153,6 +180,10 @@ defmodule HydraX.Runtime.ScheduledJob do
     |> validate_number(:cooldown_minutes,
       greater_than_or_equal_to: 0,
       less_than_or_equal_to: 43_200
+    )
+    |> validate_number(:run_retention_days,
+      greater_than_or_equal_to: 0,
+      less_than_or_equal_to: 3650
     )
     |> validate_number(:consecutive_failures, greater_than_or_equal_to: 0)
     |> validate_active_hours()

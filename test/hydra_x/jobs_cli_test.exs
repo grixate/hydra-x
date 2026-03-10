@@ -63,6 +63,70 @@ defmodule HydraX.JobsCliTest do
     assert export_output =~ "count=1"
   end
 
+  test "jobs task saves retention policy on create" do
+    agent = create_agent()
+
+    Mix.Task.reenable("hydra_x.jobs")
+
+    output =
+      capture_io(fn ->
+        Mix.Tasks.HydraX.Jobs.run([
+          "create",
+          "--agent",
+          agent.slug,
+          "--name",
+          "CLI Retention Job",
+          "--kind",
+          "prompt",
+          "--interval-minutes",
+          "15",
+          "--run-retention-days",
+          "5"
+        ])
+      end)
+
+    assert output =~ "job="
+
+    [job | _] =
+      Runtime.list_scheduled_jobs(limit: 20)
+      |> Enum.filter(&(&1.name == "CLI Retention Job"))
+
+    assert job.run_retention_days == 5
+  end
+
+  test "jobs task supports natural schedule text on create" do
+    agent = create_agent()
+
+    Mix.Task.reenable("hydra_x.jobs")
+
+    output =
+      capture_io(fn ->
+        Mix.Tasks.HydraX.Jobs.run([
+          "create",
+          "--agent",
+          agent.slug,
+          "--name",
+          "CLI Natural Schedule Job",
+          "--kind",
+          "prompt",
+          "--schedule",
+          "weekly tue,thu 07:45"
+        ])
+      end)
+
+    assert output =~ "job="
+    assert output =~ "weekly tue,thu 07:45"
+
+    [job | _] =
+      Runtime.list_scheduled_jobs(limit: 20)
+      |> Enum.filter(&(&1.name == "CLI Natural Schedule Job"))
+
+    assert job.schedule_mode == "weekly"
+    assert job.weekday_csv == "tue,thu"
+    assert job.run_hour == 7
+    assert job.run_minute == 45
+  end
+
   defp create_agent do
     unique = System.unique_integer([:positive])
 

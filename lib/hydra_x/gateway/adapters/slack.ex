@@ -31,40 +31,48 @@ defmodule HydraX.Gateway.Adapters.Slack do
   def handle_event(
         %{
           "type" => "event_callback",
-          "event" => %{"type" => "message", "channel" => channel_id, "text" => text} = event
+          "event" => %{"type" => "message", "channel" => channel_id} = event
         } = payload,
         state
-      )
-      when is_binary(text) and text != "" do
+      ) do
     # Skip bot messages to avoid loops
     if event["bot_id"] || event["subtype"] do
       {:messages, [], state}
     else
+      attachments = extract_attachments(event)
+      content = message_content(event, attachments)
+
+      if is_binary(content) and content != "" do
       message = %{
         channel: "slack",
         external_ref: channel_id,
-        content: text,
+        content: content,
         metadata: %{
           raw: payload,
           user: event["user"],
           team: payload["team_id"],
           ts: event["ts"],
-          thread_ts: event["thread_ts"]
+          thread_ts: event["thread_ts"] || event["ts"],
+          source_message_id: event["ts"],
+          attachments: attachments
         }
       }
 
-      {:messages, [message], state}
+        {:messages, [message], state}
+      else
+        {:messages, [], state}
+      end
     end
   end
 
   def handle_event(_event, state), do: {:messages, [], state}
 
   @impl true
-  def send_response(%{content: content, external_ref: channel_id}, %{
+  def send_response(%{content: content, external_ref: channel_id} = message, %{
         bot_token: token,
         deliver: deliver
       }) do
-    do_send_response(content, channel_id, token, deliver)
+    do_send_response(content, channel_id, token, deliver, Map.get(message, :metadata) || %{})
   end
 
   @impl true
@@ -91,7 +99,7 @@ defmodule HydraX.Gateway.Adapters.Slack do
       configured: true,
       supports_threads: true,
       supports_rich_formatting: true,
-      supports_attachments: false,
+      supports_attachments: true,
       supports_streaming: false,
       signing_secret: present?(state[:signing_secret])
     }
@@ -112,15 +120,19 @@ defmodule HydraX.Gateway.Adapters.Slack do
       inbound: [:message, :thread_reply],
       outbound: [:text],
       threads: true,
-      attachments: false,
+      attachments: true,
       rich_formatting: true,
       streaming: false
     }
   end
 
   @impl true
-  def format_message(%{content: content, external_ref: channel_id}, _state) do
-    %{text: content, channel: channel_id}
+  def format_message(%{content: content, external_ref: channel_id} = message, _state) do
+    %{
+      text: content,
+      channel: channel_id,
+      thread_ts: get_in(message, [:metadata, "thread_ts"])
+    }
   end
 
   @doc """
@@ -150,19 +162,23 @@ defmodule HydraX.Gateway.Adapters.Slack do
 
   # -- Private --
 
-  defp do_send_response(content, channel_id, _token, deliver) when is_function(deliver, 1) do
-    case deliver.(%{content: content, external_ref: channel_id}) do
+  defp do_send_response(content, channel_id, _token, deliver, metadata) when is_function(deliver, 1) do
+    case deliver.(%{content: content, external_ref: channel_id, metadata: metadata}) do
       :ok -> {:ok, %{channel: "slack"}}
       {:ok, metadata} when is_map(metadata) -> {:ok, Map.put_new(metadata, :channel, "slack")}
       other -> other
     end
   end
 
-  defp do_send_response(content, channel_id, token, _deliver) do
+  defp do_send_response(content, channel_id, token, _deliver, metadata) do
+    body =
+      %{channel: channel_id, text: content}
+      |> maybe_add_thread_ts(metadata["thread_ts"])
+
     case Req.post(
            url: "#{@slack_api}/chat.postMessage",
            headers: [{"authorization", "Bearer #{token}"}],
-           json: %{channel: channel_id, text: content}
+           json: body
          ) do
       {:ok, %{status: 200, body: %{"ok" => true, "ts" => ts}}} ->
         {:ok, %{channel: "slack", provider_message_id: ts}}
@@ -179,4 +195,39 @@ defmodule HydraX.Gateway.Adapters.Slack do
   end
 
   defp present?(value), do: is_binary(value) and value != ""
+
+  defp message_content(event, attachments) do
+    event["text"] || attachment_summary(attachments)
+  end
+
+  defp attachment_summary([]), do: nil
+
+  defp attachment_summary(attachments) do
+    kinds =
+      attachments
+      |> Enum.map(&(&1["content_type"] || &1["kind"] || "attachment"))
+      |> Enum.uniq()
+      |> Enum.join(", ")
+
+    "[Slack attachments: #{kinds}]"
+  end
+
+  defp extract_attachments(%{"files" => files}) when is_list(files) do
+    Enum.map(files, fn file ->
+      %{
+        "kind" => "file",
+        "id" => file["id"],
+        "file_name" => file["name"],
+        "content_type" => file["mimetype"],
+        "url" => file["url_private"],
+        "size" => file["size"]
+      }
+    end)
+  end
+
+  defp extract_attachments(_event), do: []
+
+  defp maybe_add_thread_ts(body, nil), do: body
+  defp maybe_add_thread_ts(body, ""), do: body
+  defp maybe_add_thread_ts(body, thread_ts), do: Map.put(body, :thread_ts, thread_ts)
 end

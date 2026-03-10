@@ -23,6 +23,8 @@ defmodule HydraXWeb.HealthLive do
      |> assign(:discord_status, Runtime.discord_status())
      |> assign(:slack_status, Runtime.slack_status())
      |> assign(:webchat_status, Runtime.webchat_status())
+     |> assign(:mcp_statuses, Runtime.mcp_statuses())
+     |> assign(:agent_mcp_statuses, Runtime.agent_mcp_statuses())
      |> assign(:channel_capabilities, Runtime.channel_capabilities())
      |> assign(:safety_status, Runtime.safety_status())
      |> assign(:observability_status, Runtime.observability_status())
@@ -75,6 +77,7 @@ defmodule HydraXWeb.HealthLive do
           <div :if={@report_export} class="text-xs text-[var(--hx-mute)]">
             <div>Markdown: {@report_export.markdown_path}</div>
             <div>JSON: {@report_export.json_path}</div>
+            <div>Bundle: {@report_export.bundle_dir}</div>
           </div>
         </div>
         <.form for={@filter_form} phx-submit="filter_health" class="mt-6 grid gap-3 lg:grid-cols-4">
@@ -271,6 +274,87 @@ defmodule HydraXWeb.HealthLive do
       </section>
 
       <section class="glass-panel mt-6 p-6">
+        <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">MCP servers</div>
+        <h2 class="mt-3 font-display text-4xl">Registry health</h2>
+        <div class="mt-6 grid gap-3 lg:grid-cols-2">
+          <article
+            :for={status <- @mcp_statuses}
+            class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4"
+          >
+            <div class="flex items-center justify-between gap-4">
+              <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                {status.name}
+              </div>
+              <span class={[
+                "rounded-full border px-3 py-1 font-mono text-xs uppercase tracking-[0.18em]",
+                if(status.status == :ok,
+                  do: "border-emerald-400/20 bg-emerald-400/10 text-emerald-300",
+                  else: "border-amber-400/20 bg-amber-400/10 text-amber-300"
+                )
+              ]}>
+                {status.status}
+              </span>
+            </div>
+            <p class="mt-3 text-sm text-[var(--hx-mute)]">{status.transport} · {status.detail}</p>
+          </article>
+          <article
+            :if={@mcp_statuses == []}
+            class="rounded-2xl border border-dashed border-white/10 px-4 py-8 text-center text-[var(--hx-mute)] lg:col-span-2"
+          >
+            No MCP servers configured.
+          </article>
+        </div>
+      </section>
+
+      <section class="glass-panel mt-6 p-6">
+        <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">Agent MCP</div>
+        <h2 class="mt-3 font-display text-4xl">Bound integrations by agent</h2>
+        <div class="mt-6 grid gap-3 lg:grid-cols-2">
+          <article
+            :for={status <- @agent_mcp_statuses}
+            class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4"
+          >
+            <div class="flex items-center justify-between gap-4">
+              <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                {status.agent_slug}
+              </div>
+              <span class="rounded-full border border-white/10 px-3 py-1 font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                {status.enabled_bindings}/{status.total_bindings} enabled
+              </span>
+            </div>
+            <p class="mt-3 text-sm text-[var(--hx-mute)]">
+              {status.agent_name} · healthy bindings {status.healthy_bindings}
+            </p>
+            <div class="mt-3 space-y-2">
+              <p :if={status.bindings == []} class="text-xs text-[var(--hx-mute)]">
+                No MCP bindings for this agent.
+              </p>
+              <div
+                :for={binding <- status.bindings}
+                class="rounded-xl border border-white/10 bg-black/10 px-3 py-3"
+              >
+                <div class="flex items-center justify-between gap-3">
+                  <div class="text-sm text-[var(--hx-accent)]">{binding.server_name}</div>
+                  <div class={[
+                    "rounded-full border px-3 py-1 font-mono text-xs uppercase tracking-[0.18em]",
+                    if(binding.status == :ok,
+                      do: "border-emerald-400/20 bg-emerald-400/10 text-emerald-300",
+                      else: "border-amber-400/20 bg-amber-400/10 text-amber-300"
+                    )
+                  ]}>
+                    {binding.status}
+                  </div>
+                </div>
+                <div class="mt-2 text-xs text-[var(--hx-mute)]">
+                  {binding.transport} · {if(binding.enabled, do: "enabled", else: "disabled")} · {binding.detail}
+                </div>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="glass-panel mt-6 p-6">
         <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">
           Discord + Slack + Webchat
         </div>
@@ -302,8 +386,7 @@ defmodule HydraXWeb.HealthLive do
               binding: {status.binding}
             </p>
             <p class="mt-2 text-xs text-[var(--hx-mute)]">
-              capabilities:
-              {capability_summary(@channel_capabilities[status.channel])}
+              capabilities: {capability_summary(@channel_capabilities[status.channel])}
             </p>
             <div class="mt-3 space-y-2">
               <p
@@ -321,6 +404,9 @@ defmodule HydraXWeb.HealthLive do
                   <div class="text-xs text-[var(--hx-mute)]">
                     {format_datetime(failure.updated_at)}
                   </div>
+                </div>
+                <div class="mt-2 text-xs text-[var(--hx-mute)]">
+                  {failure_delivery_summary(failure)}
                 </div>
               </div>
             </div>
@@ -775,6 +861,42 @@ defmodule HydraXWeb.HealthLive do
     ]
     |> Enum.join(" · ")
   end
+
+  defp failure_delivery_summary(conversation) do
+    delivery = last_delivery(conversation)
+
+    [
+      delivery["status"] || "unknown",
+      delivery["reason"],
+      delivery_context_summary(delivery)
+    ]
+    |> Enum.reject(&is_nil_or_empty/1)
+    |> Enum.join(" · ")
+  end
+
+  defp delivery_context_summary(delivery) do
+    reply_context = delivery["reply_context"] || %{}
+
+    [
+      reply_context["reply_to_message_id"] && "reply #{reply_context["reply_to_message_id"]}",
+      reply_context["thread_ts"] && "thread #{reply_context["thread_ts"]}",
+      reply_context["source_message_id"] && "source #{reply_context["source_message_id"]}"
+    ]
+    |> Enum.reject(&is_nil_or_empty/1)
+    |> case do
+      [] -> nil
+      labels -> Enum.join(labels, " · ")
+    end
+  end
+
+  defp last_delivery(conversation) do
+    metadata = conversation.metadata || %{}
+    metadata["last_delivery"] || metadata[:last_delivery] || %{}
+  end
+
+  defp is_nil_or_empty(nil), do: true
+  defp is_nil_or_empty(""), do: true
+  defp is_nil_or_empty(_value), do: false
 
   defp stats do
     %{

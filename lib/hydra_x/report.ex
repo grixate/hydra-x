@@ -15,6 +15,8 @@ defmodule HydraX.Report do
       search: Keyword.get(opts, :search),
       required_only: Keyword.get(opts, :required_only, false),
       safety_limit: Keyword.get(opts, :safety_limit, 20),
+      incident_limit: Keyword.get(opts, :incident_limit, 20),
+      audit_limit: Keyword.get(opts, :audit_limit, 30),
       job_limit: Keyword.get(opts, :job_limit, 10),
       conversation_limit: Keyword.get(opts, :conversation_limit, 10)
     }
@@ -31,6 +33,8 @@ defmodule HydraX.Report do
           search: filters.search,
           required_only: filters.required_only
         ),
+      mcp: Runtime.mcp_statuses(),
+      agent_mcp: Runtime.agent_mcp_statuses(),
       telegram: Runtime.telegram_status(),
       operator: Runtime.operator_status(),
       tools: Runtime.tool_status(),
@@ -38,6 +42,8 @@ defmodule HydraX.Report do
       ingest: Runtime.list_ingest_runs(agent.id, 10),
       observability: Runtime.observability_status(),
       safety: Runtime.safety_status(limit: filters.safety_limit),
+      incidents: incident_snapshot(filters.incident_limit),
+      audit: audit_snapshot(filters.audit_limit),
       memory: Runtime.memory_triage_status(agent),
       budget: Runtime.budget_status(agent),
       default_agent: %{
@@ -48,6 +54,7 @@ defmodule HydraX.Report do
         runtime: Runtime.agent_runtime_status(agent),
         bulletin: Runtime.agent_bulletin(agent.id)
       },
+      agents: agent_snapshots(),
       conversations: Runtime.list_conversations(limit: filters.conversation_limit)
     }
   end
@@ -64,15 +71,18 @@ defmodule HydraX.Report do
     base_name = "hydra-x-report-#{timestamp_slug()}"
     markdown_path = Path.join(output_root, "#{base_name}.md")
     json_path = Path.join(output_root, "#{base_name}.json")
+    bundle_dir = Path.join(output_root, "#{base_name}-bundle")
 
     File.write!(markdown_path, render_markdown(snapshot))
     File.write!(json_path, Jason.encode_to_iodata!(json_snapshot(snapshot), pretty: true))
+    write_bundle(bundle_dir, snapshot, markdown_path, json_path)
 
     {:ok,
      %{
        snapshot: snapshot,
        markdown_path: markdown_path,
-       json_path: json_path
+       json_path: json_path,
+       bundle_dir: bundle_dir
      }}
   end
 
@@ -108,6 +118,15 @@ defmodule HydraX.Report do
     - Bulletin memory count: #{snapshot.default_agent.bulletin.memory_count}
 
     #{render_bulletin(snapshot.default_agent.bulletin.content)}
+
+    ## MCP Integrations
+    #{render_mcp_servers(snapshot.mcp)}
+
+    ## Agent MCP Bindings
+    #{render_agent_mcp(snapshot.agent_mcp)}
+
+    ## Agent Runtime Snapshots
+    #{render_agents(snapshot.agents)}
 
     ## Budget
     #{render_budget(snapshot.budget)}
@@ -168,6 +187,12 @@ defmodule HydraX.Report do
     - Info: #{snapshot.safety.counts.info}
     - Status counts: open=#{snapshot.safety.statuses.open}, acknowledged=#{snapshot.safety.statuses.acknowledged}, resolved=#{snapshot.safety.statuses.resolved}
 
+    ## Incidents
+    #{render_incidents(snapshot.incidents)}
+
+    ## Audit Trail
+    #{render_audit_events(snapshot.audit)}
+
     ### Recent Safety Events
     #{render_safety_events(snapshot.safety.recent_events)}
     """
@@ -212,6 +237,33 @@ defmodule HydraX.Report do
     """
   end
 
+  defp render_mcp_servers([]), do: "- none configured"
+
+  defp render_mcp_servers(servers) do
+    Enum.map_join(servers, "\n", fn server ->
+      "- [#{String.upcase(Atom.to_string(server.status))}] #{server.name} (#{server.transport}): #{server.detail}"
+    end)
+  end
+
+  defp render_agent_mcp([]), do: "- none"
+
+  defp render_agent_mcp(agent_statuses) do
+    Enum.map_join(agent_statuses, "\n", fn status ->
+      bindings =
+        case status.bindings do
+          [] ->
+            "none"
+
+          bindings ->
+            Enum.map_join(bindings, ", ", fn binding ->
+              "#{binding.server_name}[#{if(binding.enabled, do: "on", else: "off")}/#{binding.status}]"
+            end)
+        end
+
+      "- #{status.agent_name} (#{status.agent_slug}) bindings=#{status.enabled_bindings}/#{status.total_bindings} healthy=#{status.healthy_bindings} :: #{bindings}"
+    end)
+  end
+
   defp render_budget(%{policy: nil}), do: "- No budget policy configured"
 
   defp render_budget(%{policy: policy, usage: usage, recent_usage: recent_usage}) do
@@ -236,6 +288,14 @@ defmodule HydraX.Report do
     #{render_conflicted_memories(recent_conflicts)}
     """
     |> String.trim()
+  end
+
+  defp render_agents([]), do: "- none"
+
+  defp render_agents(agents) do
+    Enum.map_join(agents, "\n", fn agent ->
+      "- #{agent.name} (#{agent.slug}) status=#{agent.status} runtime=#{runtime_label(agent.runtime.running)} readiness=#{agent.runtime.readiness} bulletin_memories=#{agent.bulletin.memory_count} skills=#{agent.skill_count} mcp=#{agent.mcp_count}"
+    end)
   end
 
   defp render_jobs([]), do: "- none"
@@ -267,9 +327,48 @@ defmodule HydraX.Report do
 
   defp render_conversations(conversations) do
     Enum.map_join(conversations, "\n", fn conversation ->
-      "- ##{conversation.id} #{conversation.channel}/#{conversation.status}: #{conversation.title || conversation.external_ref || "untitled"}"
+      delivery = render_conversation_delivery(conversation)
+      "- ##{conversation.id} #{conversation.channel}/#{conversation.status}: #{conversation.title || conversation.external_ref || "untitled"}#{delivery}"
     end)
   end
+
+  defp render_conversation_delivery(%{metadata: %{"last_delivery" => delivery}}),
+    do: " · delivery=#{render_delivery_summary(delivery)}"
+
+  defp render_conversation_delivery(%{metadata: %{last_delivery: delivery}}),
+    do: " · delivery=#{render_delivery_summary(delivery)}"
+
+  defp render_conversation_delivery(_conversation), do: ""
+
+  defp render_delivery_summary(delivery) do
+    status = Map.get(delivery, "status") || Map.get(delivery, :status) || "unknown"
+    external_ref = Map.get(delivery, "external_ref") || Map.get(delivery, :external_ref)
+    provider_message_id = Map.get(delivery, "provider_message_id") || Map.get(delivery, :provider_message_id)
+
+    context =
+      delivery
+      |> Map.get("reply_context", Map.get(delivery, :reply_context, %{}))
+      |> render_reply_context()
+
+    [status, external_ref && "ref=#{external_ref}", provider_message_id && "msg=#{provider_message_id}", context]
+    |> Enum.reject(&is_nil_or_empty/1)
+    |> Enum.join(", ")
+  end
+
+  defp render_reply_context(context) when is_map(context) do
+    [
+      context["reply_to_message_id"] || context[:reply_to_message_id],
+      context["thread_ts"] || context[:thread_ts],
+      context["source_message_id"] || context[:source_message_id]
+    ]
+    |> Enum.reject(&is_nil_or_empty/1)
+    |> case do
+      [] -> nil
+      values -> "ctx=" <> Enum.join(values, "/")
+    end
+  end
+
+  defp render_reply_context(_context), do: nil
 
   defp render_backups([]), do: "- none"
 
@@ -330,6 +429,32 @@ defmodule HydraX.Report do
 
   defp render_alarms([]), do: "none"
   defp render_alarms(alarms), do: Enum.join(alarms, ", ")
+
+  defp render_incidents(%{open: open, acknowledged: acknowledged}) do
+    """
+    - Open incidents: #{length(open)}
+    #{render_incident_items(open)}
+    - Acknowledged incidents: #{length(acknowledged)}
+    #{render_incident_items(acknowledged)}
+    """
+    |> String.trim()
+  end
+
+  defp render_incident_items([]), do: "  - none"
+
+  defp render_incident_items(events) do
+    Enum.map_join(events, "\n", fn event ->
+      "  - [#{String.upcase(event.level)}] #{event.category}: #{event.message}"
+    end)
+  end
+
+  defp render_audit_events([]), do: "- none"
+
+  defp render_audit_events(events) do
+    Enum.map_join(events, "\n", fn event ->
+      "- [#{event.category}] #{event.message} at #{format_datetime(event.inserted_at)}"
+    end)
+  end
 
   defp render_http_allowlist([]), do: "public hosts"
   defp render_http_allowlist(hosts), do: Enum.join(hosts, ", ")
@@ -396,6 +521,10 @@ defmodule HydraX.Report do
   defp pad2(value) when is_integer(value) and value < 10, do: "0#{value}"
   defp pad2(value), do: to_string(value)
 
+  defp is_nil_or_empty(nil), do: true
+  defp is_nil_or_empty(""), do: true
+  defp is_nil_or_empty(_value), do: false
+
   defp default_output_root do
     Path.join(Config.install_root(), "reports")
   end
@@ -407,6 +536,8 @@ defmodule HydraX.Report do
       install: snapshot.install,
       health_checks: snapshot.health_checks,
       readiness: snapshot.readiness,
+      mcp: snapshot.mcp,
+      agent_mcp: snapshot.agent_mcp,
       telegram: snapshot.telegram,
       operator: snapshot.operator,
       tools: snapshot.tools,
@@ -430,6 +561,11 @@ defmodule HydraX.Report do
         categories: snapshot.safety.categories,
         recent_events: Enum.map(snapshot.safety.recent_events, &json_safety_event/1)
       },
+      incidents: %{
+        open: Enum.map(snapshot.incidents.open, &json_safety_event/1),
+        acknowledged: Enum.map(snapshot.incidents.acknowledged, &json_safety_event/1)
+      },
+      audit: Enum.map(snapshot.audit, &json_safety_event/1),
       memory: %{
         agent_id: snapshot.memory.agent_id,
         agent_name: snapshot.memory.agent_name,
@@ -449,8 +585,94 @@ defmodule HydraX.Report do
           memory_count: snapshot.default_agent.bulletin.memory_count
         }
       },
+      agents: Enum.map(snapshot.agents, &json_agent_snapshot/1),
       conversations: Enum.map(snapshot.conversations, &json_conversation/1)
     }
+  end
+
+  defp incident_snapshot(limit) do
+    %{
+      open: HydraX.Safety.list_events(status: "open", limit: limit),
+      acknowledged: HydraX.Safety.list_events(status: "acknowledged", limit: limit)
+    }
+  end
+
+  defp audit_snapshot(limit) do
+    HydraX.Safety.list_events(limit: limit)
+    |> Enum.filter(&(&1.category in ["operator", "auth"]))
+  end
+
+  defp agent_snapshots do
+    Runtime.list_agents()
+    |> Enum.map(fn agent ->
+      %{
+        id: agent.id,
+        name: agent.name,
+        slug: agent.slug,
+        status: agent.status,
+        runtime: Runtime.agent_runtime_status(agent),
+        bulletin: Runtime.agent_bulletin(agent.id),
+        compaction_policy: Runtime.compaction_policy(agent.id),
+        provider_route: Runtime.effective_provider_route(agent.id, "channel"),
+        tool_policy: Runtime.effective_tool_policy(agent.id),
+        control_policy: Runtime.effective_control_policy(agent.id),
+        skill_count: Runtime.enabled_skills(agent.id) |> length(),
+        mcp_count: Runtime.enabled_mcp_servers(agent.id) |> length()
+      }
+    end)
+  end
+
+  defp write_bundle(bundle_dir, snapshot, markdown_path, json_path) do
+    File.mkdir_p!(bundle_dir)
+
+    File.write!(
+      Path.join(bundle_dir, "manifest.json"),
+      Jason.encode_to_iodata!(
+        %{
+          generated_at: snapshot.generated_at,
+          markdown_path: markdown_path,
+          json_path: json_path,
+          agent_count: length(snapshot.agents),
+          mcp_server_count: length(snapshot.mcp),
+          agent_mcp_count: length(snapshot.agent_mcp),
+          open_incident_count: length(snapshot.incidents.open),
+          acknowledged_incident_count: length(snapshot.incidents.acknowledged),
+          audit_event_count: length(snapshot.audit)
+        },
+        pretty: true
+      )
+    )
+
+    File.write!(
+      Path.join(bundle_dir, "agents.json"),
+      Jason.encode_to_iodata!(Enum.map(snapshot.agents, &json_agent_snapshot/1), pretty: true)
+    )
+
+    File.write!(
+      Path.join(bundle_dir, "mcp.json"),
+      Jason.encode_to_iodata!(snapshot.mcp, pretty: true)
+    )
+
+    File.write!(
+      Path.join(bundle_dir, "agent_mcp.json"),
+      Jason.encode_to_iodata!(snapshot.agent_mcp, pretty: true)
+    )
+
+    File.write!(
+      Path.join(bundle_dir, "incidents.json"),
+      Jason.encode_to_iodata!(
+        %{
+          open: Enum.map(snapshot.incidents.open, &json_safety_event/1),
+          acknowledged: Enum.map(snapshot.incidents.acknowledged, &json_safety_event/1)
+        },
+        pretty: true
+      )
+    )
+
+    File.write!(
+      Path.join(bundle_dir, "audit.json"),
+      Jason.encode_to_iodata!(Enum.map(snapshot.audit, &json_safety_event/1), pretty: true)
+    )
   end
 
   defp json_ingest_run(run) do
@@ -552,6 +774,9 @@ defmodule HydraX.Report do
   end
 
   defp json_conversation(conversation) do
+    metadata = conversation.metadata || %{}
+    delivery = metadata["last_delivery"] || metadata[:last_delivery]
+
     %{
       id: conversation.id,
       agent_id: conversation.agent_id,
@@ -560,6 +785,7 @@ defmodule HydraX.Report do
       title: conversation.title,
       external_ref: conversation.external_ref,
       metadata: conversation.metadata,
+      last_delivery: delivery,
       last_message_at: conversation.last_message_at,
       inserted_at: conversation.inserted_at,
       updated_at: conversation.updated_at
@@ -579,6 +805,27 @@ defmodule HydraX.Report do
       last_seen_at: memory.last_seen_at,
       inserted_at: memory.inserted_at,
       updated_at: memory.updated_at
+    }
+  end
+
+  defp json_agent_snapshot(agent) do
+    %{
+      id: agent.id,
+      name: agent.name,
+      slug: agent.slug,
+      status: agent.status,
+      runtime: agent.runtime,
+      bulletin: %{
+        content: agent.bulletin.content,
+        updated_at: agent.bulletin.updated_at,
+        memory_count: agent.bulletin.memory_count
+      },
+      compaction_policy: agent.compaction_policy,
+      provider_route: agent.provider_route,
+      tool_policy: agent.tool_policy,
+      control_policy: agent.control_policy,
+      skill_count: agent.skill_count,
+      mcp_count: agent.mcp_count
     }
   end
 end

@@ -10,6 +10,9 @@ defmodule HydraX.Tools.WorkspacePatch do
   def description, do: "Apply a precise search-and-replace patch inside the agent workspace"
 
   @impl true
+  def safety_classification, do: "workspace_write"
+
+  @impl true
   def tool_schema do
     %{
       name: "workspace_patch",
@@ -66,6 +69,16 @@ defmodule HydraX.Tools.WorkspacePatch do
       _ -> {:error, :invalid_patch}
     end
   end
+
+  @impl true
+  def result_summary(%{error: error}) when is_binary(error), do: error
+  def result_summary(%{"error" => error}) when is_binary(error), do: error
+
+  def result_summary(%{path: path, replacements: replacements}) do
+    "patched #{path} (#{replacements} replacements)"
+  end
+
+  def result_summary(payload), do: inspect(payload, limit: 8, printable_limit: 120)
 
   defp apply_patch(original, search, replace, true) do
     count = count_occurrences(original, search)

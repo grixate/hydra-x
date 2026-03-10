@@ -8,6 +8,9 @@ defmodule HydraX.Tools.MemoryRecall do
   def description, do: "Search typed memory"
 
   @impl true
+  def safety_classification, do: "memory_read"
+
+  @impl true
   def tool_schema do
     %{
       name: "memory_recall",
@@ -45,14 +48,24 @@ defmodule HydraX.Tools.MemoryRecall do
            %{
              id: memory.id,
              type: memory.type,
+             status: memory.status,
              content: memory.content,
              importance: memory.importance,
              score: ranked.score,
+             vector_score: ranked[:vector_score],
              reasons: ranked.reasons,
              lexical_rank: ranked.lexical_rank,
-             semantic_rank: ranked.semantic_rank
+             semantic_rank: ranked.semantic_rank,
+             source_file: get_in(memory.metadata || %{}, ["source_file"]),
+             source_section: get_in(memory.metadata || %{}, ["source_section"])
            }
          end)
      }}
   end
+
+  @impl true
+  def result_summary(%{results: results}), do: "recalled #{length(results)} memories"
+  def result_summary(%{error: error}) when is_binary(error), do: error
+  def result_summary(%{"error" => error}) when is_binary(error), do: error
+  def result_summary(payload), do: inspect(payload, limit: 8, printable_limit: 120)
 end

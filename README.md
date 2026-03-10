@@ -6,11 +6,17 @@ Hydra-X is a self-hosted Elixir agent runtime with a Phoenix control plane. The 
 
 - Phoenix + LiveView application with SQLite persistence
 - Agent runtime supervision tree:
-  `HydraX.Agent`, `Channel`, `Worker`, `Cortex`, `Compactor`, with persisted execution checkpoints for channel turns
-- Typed memory storage with SQLite FTS-backed search, hybrid-ranked recall, and markdown export
+  `HydraX.Agent`, `Channel`, `Worker`, `Cortex`, `Compactor`, with persisted execution checkpoints for channel turns and replay-safe cached tool reuse during channel recovery
+- Typed memory storage with SQLite FTS-backed search, hybrid-ranked and vector-weighted recall, and markdown export
+- Structured bulletins:
+  goals, todos, decisions, and context are prioritized into sectioned operator bulletins instead of a flat memory list
 - Ingest pipeline for markdown, text, JSON, and PDF workspace content with archive tracking, restore-on-reimport, and provenance visibility
 - Workspace scaffold contract:
   `SOUL.md`, `IDENTITY.md`, `USER.md`, `TOOLS.md`, `HEARTBEAT.md`, `memory/`, `skills/`, `ingest/`
+- Workspace skills:
+  agent-scoped discovery of `skills/<skill-name>/SKILL.md`, enable/disable controls in `/agents`, CLI inspection, and prompt injection for enabled skills
+- MCP registry:
+  persisted stdio/HTTP MCP server definitions with setup UI, health probes, CLI management, agent-scoped enablement and binding inspection, operator-report export, and prompt visibility for enabled integrations
 - Stable behaviours:
   `HydraX.LLM.Provider`, `HydraX.Gateway.Adapter`, `HydraX.Tool`
 - Provider adapters:
@@ -23,16 +29,18 @@ Hydra-X is a self-hosted Elixir agent runtime with a Phoenix control plane. The 
   persisted token policies, preflight enforcement, usage accounting, and safety event logging
 - Control-plane auth:
   session-based browser login once an operator password is configured on `/setup`, with recent-auth checks for sensitive actions and failed-login throttling
+- Unified control policy:
+  persisted recent-auth freshness, outbound interactive-delivery channels, job-delivery channels, and ingest-root restrictions with global defaults and per-agent overrides
 - Guarded tools:
-  workspace-confined file listing/reads/writes/targeted patch edits, dedicated web search, outbound HTTP fetches with basic SSRF checks, allowlisted shell commands, and a persisted tool policy surface
+  workspace-confined file listing/reads/writes/targeted patch edits, dedicated web search, outbound HTTP fetches with basic SSRF checks, browser-style page fetch or link extraction or form inspection or form-preview or submit or heading/table inspection or snapshot or extract flows, allowlisted shell commands, a persisted tool policy surface, and standardized tool summaries plus safety classifications in execution history
 - Scheduler:
   recurring heartbeat/prompt/backup/ingest/maintenance jobs with persisted run history, CLI/UI controls, cron support, active-hour/timeout/retry/circuit controls, and optional Telegram/Discord/Slack/Webchat delivery-back
 - Agent provider routing:
   per-agent provider defaults, process-specific overrides, fallback order, and warmup/readiness state surfaced in `/agents` and `/health`
 - Observability:
-  telemetry counters for provider, tool, gateway, and scheduler activity surfaced in `/health`, plus a dedicated `/safety` ledger for operator review
+  telemetry counters for provider, tool, gateway, and scheduler activity surfaced in `/health`, plus a dedicated `/safety` ledger for operator review and exportable report bundles with agent snapshots, incidents, and audit events
 - Operator commands:
-  `mix hydra_x.new`, `mix hydra_x.serve`, `mix hydra_x.chat`, `mix hydra_x.migrate`, `mix hydra_x.healthcheck`, `mix hydra_x.telegram.webhook`, `mix hydra_x.providers.test`, `mix hydra_x.agents`, `mix hydra_x.jobs`, `mix hydra_x.conversations`, `mix hydra_x.safety`, `mix hydra_x.backup`, `mix hydra_x.restore`, `mix hydra_x.doctor`, `mix hydra_x.install`, `mix hydra_x.report`
+  `mix hydra_x.new`, `mix hydra_x.serve`, `mix hydra_x.chat`, `mix hydra_x.migrate`, `mix hydra_x.healthcheck`, `mix hydra_x.telegram.webhook`, `mix hydra_x.providers.test`, `mix hydra_x.agents`, `mix hydra_x.jobs`, `mix hydra_x.conversations`, `mix hydra_x.safety`, `mix hydra_x.backup`, `mix hydra_x.restore`, `mix hydra_x.doctor`, `mix hydra_x.install`, `mix hydra_x.report`, `mix hydra_x.mcp`
 
 ## Quick start
 
@@ -73,6 +81,7 @@ The repository also includes a thin command wrapper:
 ./hydra_x provider-test
 ./hydra_x providers
 ./hydra_x agents
+./hydra_x skills 1 --refresh
 ./hydra_x ingest
 ./hydra_x jobs
 ./hydra_x conversations
@@ -83,9 +92,26 @@ The repository also includes a thin command wrapper:
 ./hydra_x doctor
 ./hydra_x install
 ./hydra_x report
+./hydra_x mcp
 ```
 
 If you want to lock the management UI, set an operator password on `/setup`. After that, browser access requires signing in at `/login`, and repeated failed sign-in attempts from the same IP are temporarily blocked by the login throttle window.
+
+Persisted provider keys and channel tokens are encrypted at rest. Set `HYDRA_X_SECRET_KEY` in production so Hydra-X uses an explicit runtime secret instead of the endpoint fallback key, and check `/health` for any remaining plaintext legacy records.
+
+MCP servers can be managed from `/setup` or the CLI:
+
+```bash
+mix hydra_x.mcp
+mix hydra_x.mcp save --name "Docs MCP" --transport stdio --command cat
+mix hydra_x.mcp save --name "Remote MCP" --transport http --url https://mcp.example.test --healthcheck_path /health
+mix hydra_x.mcp test 1
+mix hydra_x.mcp refresh-bindings hydra-primary
+mix hydra_x.mcp bindings hydra-primary
+mix hydra_x.mcp delete 1
+```
+
+Use `mix hydra_x.agents mcp <agent_id> --refresh` to bind the current MCP registry into a specific agent, then `--enable <binding_id>` or `--disable <binding_id>` to tune that agent’s MCP surface. The dedicated `mix hydra_x.mcp bindings <agent>` view exposes per-agent MCP binding health from the registry side as well. Enabled MCP integrations are surfaced in the system prompt under `## MCP Integrations`, `/health` now shows bound MCP status per agent, and report bundles now include both `mcp.json` and `agent_mcp.json`.
 
 Provider lifecycle can be managed from `/settings/providers` or the CLI:
 
@@ -114,9 +140,13 @@ mix hydra_x.agents compaction 2 --soft 8 --medium 12 --hard 16
 mix hydra_x.agents provider-routing 2
 mix hydra_x.agents provider-routing 2 --default-provider 4 --fallbacks 5,6
 mix hydra_x.agents warmup 2
+mix hydra_x.agents skills 2 --refresh
 mix hydra_x.agents tool-policy 2
 mix hydra_x.agents tool-policy 2 --workspace-write true --web-search false --shell false
 mix hydra_x.agents tool-policy 2 --reset
+mix hydra_x.agents control-policy 2
+mix hydra_x.agents control-policy 2 --recent-auth-minutes 5 --interactive-channels cli,webchat --job-delivery-channels discord
+mix hydra_x.agents control-policy 2 --reset
 ```
 
 Typed memory can now be curated from `/memory` or the CLI:
@@ -154,6 +184,7 @@ Recurring heartbeat, prompt, backup, ingest, and maintenance jobs are managed fr
 ```bash
 mix hydra_x.jobs
 mix hydra_x.jobs --kind prompt --enabled true --search workspace
+mix hydra_x.jobs create --name "Standup digest" --kind prompt --schedule "daily 09:30"
 mix hydra_x.jobs create --name "Morning review" --kind prompt --schedule_mode daily --run_hour 6 --run_minute 30
 mix hydra_x.jobs create --name "Weekly review" --kind prompt --schedule_mode weekly --weekday_csv mon,fri --run_hour 8 --run_minute 15
 mix hydra_x.jobs create --name "Ingest sweep" --kind ingest --schedule_mode interval --interval_minutes 30
@@ -167,7 +198,7 @@ mix hydra_x.jobs export-runs --status error --output tmp/reports
 mix hydra_x.jobs delete 1
 ```
 
-Jobs now support fixed intervals plus daily, weekly, and cron UTC schedules. They also support timeout, retry, active-hour, and cooldown-based circuit settings from `/jobs` or the CLI. `ingest` jobs process supported files from the agent workspace `ingest/` directory, and `maintenance` jobs prune old run history, refresh the agent bulletin, and export a fresh operator report snapshot.
+Jobs now support fixed intervals plus daily, weekly, and cron UTC schedules, and the UI/CLI also accept natural schedule text such as `every 2 hours`, `daily 09:30`, `weekly mon,fri 08:15`, or `cron 0 9 * * 1-5`, which is normalized into the persisted schedule fields. They also support timeout, retry, active-hour, retention, and cooldown-based circuit settings from `/jobs` or the CLI. `ingest` jobs process supported files from the agent workspace `ingest/` directory, and `maintenance` jobs prune old run history, refresh the agent bulletin, and export a fresh operator report snapshot. Scheduled delivery-back now also respects the persisted control policy, so operators can allow or block delivery channels without changing job definitions.
 
 Discord, Slack, and Webchat can now be configured from `/setup` as well, and scheduled jobs can deliver to those channels using the same delivery controls.
 
@@ -277,4 +308,4 @@ mix hydra_x.serve
 
 ## Current scope
 
-This is not the full roadmap yet. The repo now has a working multi-channel monolith with ingest, hybrid recall, cron scheduling, operator reporting, public Webchat, targeted workspace patch tooling, persisted execution checkpoints, and cluster-awareness scaffolding. Browser automation, stronger secret isolation, MCP or installable-skill packaging, and true multi-node clustering remain future stages.
+This is not the full roadmap yet. The repo now has a working multi-channel monolith with ingest, hybrid recall, cron scheduling, operator reporting, public Webchat, targeted workspace patch tooling, richer browser-style automation with structured headings and tables, encrypted secrets, unified cross-cutting control policy, installable workspace skills, an MCP registry layer, resumable execution checkpoints with replay-safe tool caching, and cluster-awareness scaffolding. Real browser-backed rendering, deeper MCP execution semantics, and true multi-node clustering remain future stages.

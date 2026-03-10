@@ -21,6 +21,8 @@ defmodule HydraXWeb.WebchatLiveTest do
 
     assert html =~ "Hydra-X Browser"
     assert html =~ "Welcome to Hydra-X Webchat."
+    assert html =~ "awaiting first message"
+    assert html =~ "Turn count"
 
     view
     |> form("form[phx-submit=\"send_message\"]", %{
@@ -31,5 +33,7 @@ defmodule HydraXWeb.WebchatLiveTest do
     rendered = render(view)
     assert rendered =~ "Webchat should persist and respond."
     assert rendered =~ "Mock response"
+    assert rendered =~ "conversation active"
+    assert rendered =~ "Turn count"
   end
 end

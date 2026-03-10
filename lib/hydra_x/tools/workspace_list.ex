@@ -12,6 +12,9 @@ defmodule HydraX.Tools.WorkspaceList do
   def description, do: "List files and directories inside the agent workspace"
 
   @impl true
+  def safety_classification, do: "workspace_read"
+
+  @impl true
   def tool_schema do
     %{
       name: "workspace_list",
@@ -64,6 +67,15 @@ defmodule HydraX.Tools.WorkspaceList do
       {:error, reason} -> {:error, reason}
     end
   end
+
+  @impl true
+  def result_summary(%{error: error}) when is_binary(error), do: error
+  def result_summary(%{"error" => error}) when is_binary(error), do: error
+
+  def result_summary(%{path: path, entries: entries}),
+    do: "listed #{length(entries)} entries in #{path}"
+
+  def result_summary(payload), do: inspect(payload, limit: 8, printable_limit: 120)
 
   defp resolve_target(workspace_root, nil), do: {:ok, ".", Path.expand(workspace_root)}
   defp resolve_target(workspace_root, ""), do: {:ok, ".", Path.expand(workspace_root)}

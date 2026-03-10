@@ -49,8 +49,17 @@ defmodule Mix.Tasks.HydraX.Agents do
       ["tool-policy", id | rest] ->
         manage_tool_policy(id, rest)
 
+      ["control-policy", id | rest] ->
+        manage_control_policy(id, rest)
+
       ["provider-routing", id | rest] ->
         manage_provider_routing(id, rest)
+
+      ["skills", id | rest] ->
+        manage_skills(id, rest)
+
+      ["mcp", id | rest] ->
+        manage_mcp(id, rest)
 
       ["warmup", id] ->
         warm_agent_route(id)
@@ -117,7 +126,9 @@ defmodule Mix.Tasks.HydraX.Agents do
           http_allowlist: :string,
           workspace_write_channels: :string,
           http_fetch_channels: :string,
+          browser: :string,
           web_search_channels: :string,
+          browser_channels: :string,
           shell_channels: :string
         ]
       )
@@ -137,12 +148,14 @@ defmodule Mix.Tasks.HydraX.Agents do
           |> maybe_put_boolean("workspace_read_enabled", opts[:workspace_read])
           |> maybe_put_boolean("workspace_write_enabled", opts[:workspace_write])
           |> maybe_put_boolean("http_fetch_enabled", opts[:http_fetch])
+          |> maybe_put_boolean("browser_automation_enabled", opts[:browser])
           |> maybe_put_boolean("web_search_enabled", opts[:web_search])
           |> maybe_put_boolean("shell_command_enabled", opts[:shell])
           |> maybe_put("shell_allowlist_csv", opts[:shell_allowlist])
           |> maybe_put("http_allowlist_csv", opts[:http_allowlist])
           |> maybe_put("workspace_write_channels_csv", opts[:workspace_write_channels])
           |> maybe_put("http_fetch_channels_csv", opts[:http_fetch_channels])
+          |> maybe_put("browser_automation_channels_csv", opts[:browser_channels])
           |> maybe_put("web_search_channels_csv", opts[:web_search_channels])
           |> maybe_put("shell_command_channels_csv", opts[:shell_channels])
 
@@ -162,15 +175,172 @@ defmodule Mix.Tasks.HydraX.Agents do
     Mix.shell().info("workspace_list=#{policy.workspace_list_enabled}")
     Mix.shell().info("workspace_read=#{policy.workspace_read_enabled}")
     Mix.shell().info("workspace_write=#{policy.workspace_write_enabled}")
+    Mix.shell().info("browser_automation=#{policy.browser_automation_enabled}")
     Mix.shell().info("web_search=#{policy.web_search_enabled}")
     Mix.shell().info("http_fetch=#{policy.http_fetch_enabled}")
     Mix.shell().info("shell=#{policy.shell_command_enabled}")
-    Mix.shell().info("workspace_write_channels=#{Enum.join(policy.workspace_write_channels, ",")}")
+
+    Mix.shell().info(
+      "workspace_write_channels=#{Enum.join(policy.workspace_write_channels, ",")}"
+    )
+
     Mix.shell().info("http_fetch_channels=#{Enum.join(policy.http_fetch_channels, ",")}")
+    Mix.shell().info("browser_channels=#{Enum.join(policy.browser_automation_channels, ",")}")
     Mix.shell().info("web_search_channels=#{Enum.join(policy.web_search_channels, ",")}")
     Mix.shell().info("shell_channels=#{Enum.join(policy.shell_command_channels, ",")}")
     Mix.shell().info("shell_allowlist=#{Enum.join(policy.shell_allowlist, ",")}")
     Mix.shell().info("http_allowlist=#{Enum.join(policy.http_allowlist, ",")}")
+  end
+
+  defp manage_control_policy(id, rest) do
+    {opts, _args, _invalid} =
+      OptionParser.parse(rest,
+        strict: [
+          reset: :boolean,
+          require_recent_auth: :string,
+          recent_auth_minutes: :integer,
+          interactive_channels: :string,
+          job_delivery_channels: :string,
+          ingest_roots: :string
+        ]
+      )
+
+    agent_id = String.to_integer(id)
+
+    cond do
+      opts[:reset] ->
+        HydraX.Runtime.delete_agent_control_policy!(agent_id)
+        Mix.shell().info("agent=#{HydraX.Runtime.get_agent!(agent_id).slug}")
+        Mix.shell().info("control_policy=reset")
+
+      Enum.any?(opts, fn {key, _value} -> key != :reset end) ->
+        attrs =
+          %{}
+          |> maybe_put_boolean(
+            "require_recent_auth_for_sensitive_actions",
+            opts[:require_recent_auth]
+          )
+          |> maybe_put("recent_auth_window_minutes", opts[:recent_auth_minutes])
+          |> maybe_put("interactive_delivery_channels_csv", opts[:interactive_channels])
+          |> maybe_put("job_delivery_channels_csv", opts[:job_delivery_channels])
+          |> maybe_put("ingest_roots_csv", opts[:ingest_roots])
+
+        {:ok, _policy} = HydraX.Runtime.save_agent_control_policy(agent_id, attrs)
+        print_control_policy(agent_id)
+
+      true ->
+        print_control_policy(agent_id)
+    end
+  end
+
+  defp print_control_policy(agent_id) do
+    agent = HydraX.Runtime.get_agent!(agent_id)
+    policy = HydraX.Runtime.effective_control_policy(agent_id)
+
+    Mix.shell().info("agent=#{agent.slug}")
+
+    Mix.shell().info("require_recent_auth=#{policy.require_recent_auth_for_sensitive_actions}")
+
+    Mix.shell().info("recent_auth_minutes=#{policy.recent_auth_window_minutes}")
+
+    Mix.shell().info(
+      "interactive_delivery_channels=#{Enum.join(policy.interactive_delivery_channels, ",")}"
+    )
+
+    Mix.shell().info("job_delivery_channels=#{Enum.join(policy.job_delivery_channels, ",")}")
+    Mix.shell().info("ingest_roots=#{Enum.join(policy.ingest_roots, ",")}")
+  end
+
+  defp manage_skills(id, rest) do
+    {opts, args, _invalid} =
+      OptionParser.parse(rest, strict: [refresh: :boolean, enable: :integer, disable: :integer])
+
+    agent_id = String.to_integer(id)
+
+    cond do
+      opts[:refresh] ->
+        {:ok, skills} = HydraX.Runtime.refresh_agent_skills(agent_id)
+        Mix.shell().info("agent=#{HydraX.Runtime.get_agent!(agent_id).slug}")
+        Mix.shell().info("refreshed=#{length(skills)}")
+
+      opts[:enable] ->
+        skill = HydraX.Runtime.enable_skill!(opts[:enable])
+        Mix.shell().info("skill=#{skill.slug}:enabled")
+
+      opts[:disable] ->
+        skill = HydraX.Runtime.disable_skill!(opts[:disable])
+        Mix.shell().info("skill=#{skill.slug}:disabled")
+
+      args != [] ->
+        Mix.raise("unknown skills arguments: #{Enum.join(args, " ")}")
+
+      true ->
+        :ok
+    end
+
+    HydraX.Runtime.list_skills(agent_id: agent_id)
+    |> Enum.each(fn skill ->
+      Mix.shell().info(
+        Enum.join(
+          [
+            to_string(skill.id),
+            skill.slug,
+            if(skill.enabled, do: "enabled", else: "disabled"),
+            get_in(skill.metadata || %{}, ["relative_path"]) || skill.path,
+            skill.name
+          ],
+          "\t"
+        )
+      )
+    end)
+  end
+
+  defp manage_mcp(id, rest) do
+    {opts, args, _invalid} =
+      OptionParser.parse(rest, strict: [refresh: :boolean, enable: :integer, disable: :integer])
+
+    agent_id = String.to_integer(id)
+
+    cond do
+      opts[:refresh] ->
+        {:ok, bindings} = HydraX.Runtime.refresh_agent_mcp_servers(agent_id)
+        Mix.shell().info("agent=#{HydraX.Runtime.get_agent!(agent_id).slug}")
+        Mix.shell().info("refreshed=#{length(bindings)}")
+
+      opts[:enable] ->
+        binding = HydraX.Runtime.enable_agent_mcp_server!(opts[:enable])
+        Mix.shell().info("mcp=#{binding.mcp_server_config.name}:enabled")
+
+      opts[:disable] ->
+        binding = HydraX.Runtime.disable_agent_mcp_server!(opts[:disable])
+        Mix.shell().info("mcp=#{binding.mcp_server_config.name}:disabled")
+
+      args != [] ->
+        Mix.raise("unknown mcp arguments: #{Enum.join(args, " ")}")
+
+      true ->
+        :ok
+    end
+
+    statuses = HydraX.Runtime.mcp_statuses() |> Map.new(&{&1.id, &1})
+
+    HydraX.Runtime.list_agent_mcp_servers(agent_id)
+    |> Enum.each(fn binding ->
+      status = Map.get(statuses, binding.mcp_server_config_id)
+
+      Mix.shell().info(
+        Enum.join(
+          [
+            to_string(binding.id),
+            binding.mcp_server_config.name,
+            binding.mcp_server_config.transport,
+            if(binding.enabled, do: "enabled", else: "disabled"),
+            if(status, do: Atom.to_string(status.status), else: "unknown")
+          ],
+          "\t"
+        )
+      )
+    end)
   end
 
   defp manage_provider_routing(id, rest) do

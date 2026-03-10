@@ -155,10 +155,11 @@ defmodule HydraXWeb.ConversationsLive do
     case Gateway.retry_conversation_delivery(conversation) do
       {:ok, _updated} ->
         refreshed = Runtime.get_conversation!(conversation.id)
+        channel = retry_delivery_channel(refreshed)
 
         {:noreply,
          socket
-         |> put_flash(:info, "Telegram delivery retried")
+         |> put_flash(:info, "#{String.capitalize(channel)} delivery retried")
          |> assign(:conversations, list_conversations(socket.assigns.filters))
          |> assign(:selected, refreshed)
          |> assign(:compaction, Runtime.conversation_compaction(refreshed.id))
@@ -392,6 +393,12 @@ defmodule HydraXWeb.ConversationsLive do
                 >
                   message {delivery["provider_message_id"]}
                 </span>
+                <span
+                  :for={label <- delivery_context_labels(delivery)}
+                  class="rounded-full border border-white/10 px-3 py-1 font-mono uppercase tracking-[0.18em] text-[var(--hx-mute)]"
+                >
+                  {label}
+                </span>
               </div>
               <p :if={delivery_reason(@selected)} class="mt-3 text-sm text-[var(--hx-mute)]">
                 {delivery_reason(@selected)}
@@ -403,7 +410,7 @@ defmodule HydraXWeb.ConversationsLive do
                   phx-value-id={@selected.id}
                   class="btn btn-outline border-white/10 bg-white/5 text-white hover:bg-white/10"
                 >
-                  Retry Telegram delivery
+                  Retry {String.capitalize(retry_delivery_channel(@selected))} delivery
                 </button>
               </div>
               <div class="mt-4 flex flex-wrap gap-3">
@@ -469,6 +476,12 @@ defmodule HydraXWeb.ConversationsLive do
                     status {(@channel_state && @channel_state.status) || "idle"}
                   </span>
                   <span
+                    :if={@channel_state && @channel_state.resumable}
+                    class="rounded-full border border-amber-400/20 bg-amber-400/10 px-3 py-1 font-mono uppercase tracking-[0.18em] text-amber-200"
+                  >
+                    resumable
+                  </span>
+                  <span
                     :if={@channel_state && @channel_state.provider}
                     class="rounded-full border border-white/10 px-3 py-1 font-mono uppercase tracking-[0.18em] text-[var(--hx-mute)]"
                   >
@@ -483,12 +496,20 @@ defmodule HydraXWeb.ConversationsLive do
                 </p>
                 <div :if={channel_steps(@channel_state) != []} class="mt-3 space-y-2">
                   <div
-                    :for={step <- channel_steps(@channel_state)}
+                    :for={{step, index} <- Enum.with_index(channel_steps(@channel_state))}
                     class="rounded-xl border border-white/10 bg-black/10 px-3 py-3"
                   >
-                    <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--hx-accent)]">
-                      {step["kind"]}
-                      {if step["name"], do: " · #{step["name"]}", else: ""}
+                    <div class="flex items-center justify-between gap-3">
+                      <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--hx-accent)]">
+                        {step["kind"]}
+                        {if step["name"], do: " · #{step["name"]}", else: ""}
+                      </div>
+                      <div class={[
+                        "rounded-full border px-2 py-1 font-mono text-[10px] uppercase tracking-[0.18em]",
+                        step_status_class(step["status"], @channel_state && @channel_state.current_step_index == index)
+                      ]}>
+                        {step_status_label(step["status"], @channel_state && @channel_state.current_step_index == index)}
+                      </div>
                     </div>
                     <p class="mt-2 text-sm text-[var(--hx-mute)]">
                       {step["reason"] || step["label"]}
@@ -522,7 +543,9 @@ defmodule HydraXWeb.ConversationsLive do
                   >
                     <div class="flex items-center justify-between gap-3">
                       <div class="text-sm text-[var(--hx-accent)]">{event["phase"]}</div>
-                      <div class="text-xs text-[var(--hx-mute)]">{format_event_time(event["at"])}</div>
+                      <div class="text-xs text-[var(--hx-mute)]">
+                        {format_event_time(event["at"])}
+                      </div>
                     </div>
                     <p class="mt-2 text-sm text-[var(--hx-mute)]">
                       {channel_event_summary(event)}
@@ -620,11 +643,41 @@ defmodule HydraXWeb.ConversationsLive do
   defp delivery_badge_class("failed"), do: "border-rose-400/30 bg-rose-400/10 text-rose-200"
   defp delivery_badge_class(_), do: "border-white/10 bg-black/10 text-[var(--hx-mute)]"
 
+  defp delivery_context_labels(delivery) when is_map(delivery) do
+    reply_context =
+      delivery["reply_context"] || delivery[:reply_context] || %{}
+
+    []
+    |> maybe_add_delivery_label("reply #{reply_context["reply_to_message_id"] || reply_context[:reply_to_message_id]}")
+    |> maybe_add_delivery_label("thread #{reply_context["thread_ts"] || reply_context[:thread_ts]}")
+    |> maybe_add_delivery_label("source #{reply_context["source_message_id"] || reply_context[:source_message_id]}")
+  end
+
+  defp delivery_context_labels(_), do: []
+
+  defp maybe_add_delivery_label(labels, value) when value in ["reply ", "thread ", "source "], do: labels
+  defp maybe_add_delivery_label(labels, ""), do: labels
+  defp maybe_add_delivery_label(labels, value), do: labels ++ [value]
+
   defp retryable_delivery?(conversation) do
     case last_delivery(conversation) do
-      %{"status" => "failed", "channel" => "telegram"} -> true
-      %{status: "failed", channel: "telegram"} -> true
+      %{"status" => status, "channel" => channel}
+      when status in ["failed", "dead_letter"] and channel in ["telegram", "discord", "slack", "webchat"] ->
+        true
+
+      %{status: status, channel: channel}
+      when status in ["failed", "dead_letter"] and channel in ["telegram", "discord", "slack", "webchat"] ->
+        true
+
       _ -> false
+    end
+  end
+
+  defp retry_delivery_channel(conversation) do
+    case last_delivery(conversation) do
+      %{"channel" => channel} when is_binary(channel) -> channel
+      %{channel: channel} when is_binary(channel) -> channel
+      _ -> "channel"
     end
   end
 
@@ -678,6 +731,7 @@ defmodule HydraXWeb.ConversationsLive do
   end
 
   defp channel_steps(nil), do: []
+  defp channel_steps(%{steps: steps}) when is_list(steps), do: steps
   defp channel_steps(%{plan: %{"steps" => steps}}) when is_list(steps), do: steps
   defp channel_steps(_), do: []
 
@@ -734,6 +788,9 @@ defmodule HydraXWeb.ConversationsLive do
       "stream_completed" ->
         "stream completed via #{details["provider"] || "unknown"}"
 
+      "recovered_after_restart" ->
+        details["summary"] || "Recovered pending execution after restart"
+
       _ ->
         inspect(details)
     end
@@ -744,6 +801,16 @@ defmodule HydraXWeb.ConversationsLive do
   defp format_event_time(%DateTime{} = dt), do: Calendar.strftime(dt, "%H:%M:%S")
   defp format_event_time(value) when is_binary(value), do: String.slice(value, 11, 8)
   defp format_event_time(_value), do: "now"
+
+  defp step_status_label("running", true), do: "current"
+  defp step_status_label(status, _current?) when status in ["pending", "running", "completed", "failed"], do: status
+  defp step_status_label(_status, _current?), do: "pending"
+
+  defp step_status_class("completed", _), do: "border-emerald-400/20 bg-emerald-400/10 text-emerald-200"
+  defp step_status_class("failed", _), do: "border-rose-400/20 bg-rose-400/10 text-rose-200"
+  defp step_status_class("running", true), do: "border-cyan-400/20 bg-cyan-400/10 text-cyan-200"
+  defp step_status_class("running", _), do: "border-cyan-400/20 bg-cyan-400/10 text-cyan-200"
+  defp step_status_class(_, _), do: "border-white/10 bg-black/10 text-[var(--hx-mute)]"
 
   @page_size 25
 
