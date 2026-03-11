@@ -408,6 +408,83 @@ defmodule HydraX.Tools.ToolSafetyTest do
     assert clicked.session.history == ["https://example.com/start", "https://example.com/account"]
   end
 
+  test "browser automation supports simple selector-aware extraction, link following, and form selection" do
+    request_fn = fn opts ->
+      case {opts[:method], opts[:url]} do
+        {:get, "https://example.com/selector"} ->
+          {:ok,
+           %{
+             status: 200,
+             body:
+               ~s(<html><head><title>Selector Page</title></head><body><div id="status-card" class="panel highlighted">Hydra rollout green</div><a id="docs-link" class="nav primary" href="/docs">Docs</a><form id="lookup-form" class="lookup primary" method="post" action="/lookup"><input type="text" name="query" value="hydra" /></form></body></html>),
+             headers: [{"content-type", "text/html"}]
+           }}
+
+        {:get, "https://example.com/docs"} ->
+          {:ok,
+           %{
+             status: 200,
+             body: ~s(<html><head><title>Docs</title></head><body><p>Hydra docs</p></body></html>),
+             headers: [{"content-type", "text/html"}]
+           }}
+
+        {:post, "https://example.com/lookup"} ->
+          assert opts[:form] == %{"query" => "hydra"}
+
+          {:ok,
+           %{
+             status: 200,
+             body: ~s(<html><body><p>Lookup complete</p></body></html>),
+             headers: [{"content-type", "text/html"}]
+           }}
+      end
+    end
+
+    assert {:ok, extracted} =
+             BrowserAutomation.execute(
+               %{action: "extract_elements", url: "https://example.com/selector", selector: ".highlighted"},
+               %{request_fn: request_fn}
+             )
+
+    assert [%{tag: "div", attrs: %{"id" => "status-card"}, text: "Hydra rollout green"}] =
+             extracted.elements
+
+    assert {:ok, snippets} =
+             BrowserAutomation.execute(
+               %{action: "extract_text", url: "https://example.com/selector", selector: "#status-card"},
+               %{request_fn: request_fn}
+             )
+
+    assert snippets.snippets == ["Hydra rollout green"]
+
+    assert {:ok, clicked} =
+             BrowserAutomation.execute(
+               %{action: "click_link", url: "https://example.com/selector", selector: "#docs-link"},
+               %{request_fn: request_fn}
+             )
+
+    assert clicked.title == "Docs"
+    assert clicked.followed_href == "/docs"
+
+    assert {:ok, preview} =
+             BrowserAutomation.execute(
+               %{action: "preview_form_submission", url: "https://example.com/selector", selector: "#lookup-form"},
+               %{request_fn: request_fn}
+             )
+
+    assert preview.url == "https://example.com/lookup"
+    assert preview.form_index == 0
+
+    assert {:ok, submitted} =
+             BrowserAutomation.execute(
+               %{action: "submit_form", url: "https://example.com/selector", selector: "#lookup-form"},
+               %{request_fn: request_fn}
+             )
+
+    assert submitted.url == "https://example.com/lookup"
+    assert submitted.form_index == 0
+  end
+
   test "browser automation blocks localhost targets before issuing a request" do
     request_fn = fn _opts ->
       send(self(), :browser_request_attempted)

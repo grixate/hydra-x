@@ -125,6 +125,7 @@ defmodule HydraX.Agent.Planner do
 
   defp step_kind_for_tool("memory_recall"), do: "memory"
   defp step_kind_for_tool("memory_save"), do: "memory"
+  defp step_kind_for_tool("mcp_catalog"), do: "integration"
   defp step_kind_for_tool("mcp_inspect"), do: "integration"
   defp step_kind_for_tool("mcp_invoke"), do: "integration"
   defp step_kind_for_tool("mcp_probe"), do: "integration"
@@ -141,6 +142,7 @@ defmodule HydraX.Agent.Planner do
 
   defp step_label_for_tool("memory_recall"), do: "Recall relevant memory"
   defp step_label_for_tool("memory_save"), do: "Persist new memory"
+  defp step_label_for_tool("mcp_catalog"), do: "Discover MCP actions"
   defp step_label_for_tool("mcp_inspect"), do: "Inspect MCP integrations"
   defp step_label_for_tool("mcp_invoke"), do: "Invoke MCP action"
   defp step_label_for_tool("mcp_probe"), do: "Probe MCP integrations"
@@ -183,6 +185,12 @@ defmodule HydraX.Agent.Planner do
   defp tool_reason("web_search", message) do
     if contains_any?(message, ["search", "look up", "find online"]),
       do: "search the public web"
+  end
+
+  defp tool_reason("mcp_catalog", message) do
+    if contains_any?(message, ["mcp actions", "integration actions", "available actions", "what can mcp", "what can the integration"]) do
+      "discover actions exposed by enabled MCP integrations"
+    end
   end
 
   defp tool_reason("mcp_inspect", message) do

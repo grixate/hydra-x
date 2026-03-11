@@ -352,7 +352,7 @@ defmodule HydraXWeb.AgentsLiveTest do
 
     File.write!(
       Path.join(skill_dir, "SKILL.md"),
-      "---\nname: Deploy Checks\nsummary: Run deployment verification steps for staged rollouts.\nversion: 1.2.0\ntags: deploy,release,checks\ntools: shell_command,web_search\nchannels: cli,slack\n---\n# Deploy Checks\n\nRun deployment verification steps for staged rollouts."
+      "---\nname: Deploy Checks\nsummary: Run deployment verification steps for staged rollouts.\nversion: 1.2.0\ntags: deploy,release,checks\ntools: shell_command,web_search\nchannels: cli,slack\nrequires: release-window\n---\n# Deploy Checks\n\nRun deployment verification steps for staged rollouts."
     )
 
     {:ok, view, _html} = live(conn, ~p"/agents")
@@ -367,6 +367,7 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "tags: deploy, release, checks"
     assert html =~ "tools: shell_command, web_search"
     assert html =~ "channels: cli, slack"
+    assert html =~ "requires: release-window"
     assert html =~ "1.2.0"
     assert html =~ "enabled"
 
@@ -374,6 +375,7 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert get_in(skill.metadata, ["tags"]) == ["deploy", "release", "checks"]
     assert get_in(skill.metadata, ["tools"]) == ["shell_command", "web_search"]
     assert get_in(skill.metadata, ["channels"]) == ["cli", "slack"]
+    assert get_in(skill.metadata, ["requires"]) == ["release-window"]
     assert get_in(skill.metadata, ["version"]) == "1.2.0"
 
     view
@@ -396,13 +398,37 @@ defmodule HydraXWeb.AgentsLiveTest do
         is_default: false
       })
 
+    previous_request_fn = Application.get_env(:hydra_x, :mcp_http_request_fn)
+
+    Application.put_env(:hydra_x, :mcp_http_request_fn, fn opts ->
+      case opts[:url] do
+        "https://mcp.example.test/actions" ->
+          {:ok,
+           %{status: 200, body: %{"actions" => [%{"name" => "search_docs"}, %{"name" => "get_status"}]}}}
+
+        "https://mcp.example.test/health" ->
+          {:ok, %{status: 200, body: %{"status" => "ok"}}}
+      end
+    end)
+
+    on_exit(fn ->
+      if previous_request_fn do
+        Application.put_env(:hydra_x, :mcp_http_request_fn, previous_request_fn)
+      else
+        Application.delete_env(:hydra_x, :mcp_http_request_fn)
+      end
+    end)
+
     assert {:ok, _server} =
              Runtime.save_mcp_server(%{
                name: "Docs MCP",
-               transport: "stdio",
-               command: "cat",
+               transport: "http",
+               url: "https://mcp.example.test",
                enabled: true
              })
+
+    assert {:ok, _bindings} = Runtime.refresh_agent_mcp_servers(agent.id)
+    assert {:ok, _results} = Runtime.list_agent_mcp_actions(agent.id)
 
     {:ok, view, _html} = live(conn, ~p"/agents")
 
@@ -413,9 +439,14 @@ defmodule HydraXWeb.AgentsLiveTest do
     html = render(view)
     assert html =~ "Discovered 1 MCP integrations"
     assert html =~ "Docs MCP"
+    assert html =~ "2 actions"
     assert html =~ "enabled"
 
     [binding] = Runtime.list_agent_mcp_servers(agent.id)
+    assert get_in(binding.mcp_server_config.metadata || %{}, ["actions"]) == [
+             "search_docs",
+             "get_status"
+           ]
 
     view
     |> element(~s(button[phx-click="toggle_agent_mcp"][phx-value-id="#{binding.id}"]))

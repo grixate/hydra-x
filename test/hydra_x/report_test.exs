@@ -23,10 +23,41 @@ defmodule HydraX.ReportTest do
 
   test "snapshot includes default agent, readiness, and health data" do
     agent = Runtime.ensure_default_agent!()
+    previous_request_fn = Application.get_env(:hydra_x, :mcp_http_request_fn)
+
+    Application.put_env(:hydra_x, :mcp_http_request_fn, fn opts ->
+      case opts[:url] do
+        "https://mcp.example.test/actions" ->
+          {:ok,
+           %{status: 200, body: %{"actions" => [%{"name" => "search_docs"}, %{"name" => "get_status"}]}}}
+
+        "https://mcp.example.test/health" ->
+          {:ok, %{status: 200, body: %{"status" => "ok"}}}
+      end
+    end)
+
+    on_exit(fn ->
+      if previous_request_fn do
+        Application.put_env(:hydra_x, :mcp_http_request_fn, previous_request_fn)
+      else
+        Application.delete_env(:hydra_x, :mcp_http_request_fn)
+      end
+    end)
+
     ingest_dir = Path.join(agent.workspace_root, "ingest")
     File.mkdir_p!(ingest_dir)
     File.write!(Path.join(ingest_dir, "report.md"), "# Report\n\nTrack ingest runs.")
     assert {:ok, _result} = Runtime.ingest_file(agent.id, Path.join(ingest_dir, "report.md"))
+
+    skill_dir = Path.join([agent.workspace_root, "skills", "release-checks"])
+    File.mkdir_p!(skill_dir)
+
+    File.write!(
+      Path.join(skill_dir, "SKILL.md"),
+      "---\nname: Release Checks\nsummary: Validate release readiness.\nversion: 2.0.0\ntags: release,checks\nrequires: release-window\n---\n# Release Checks\n\nValidate release readiness."
+    )
+
+    assert {:ok, _skills} = Runtime.refresh_agent_skills(agent.id)
     Telemetry.tool_execution("workspace_read", :error, %{})
 
     {:ok, _event} =
@@ -40,12 +71,13 @@ defmodule HydraX.ReportTest do
     assert {:ok, _mcp} =
              Runtime.save_mcp_server(%{
                name: "Docs MCP",
-               transport: "stdio",
-               command: "cat",
+               transport: "http",
+               url: "https://mcp.example.test",
                enabled: true
              })
 
     assert {:ok, _bindings} = Runtime.refresh_agent_mcp_servers(agent.id)
+    assert {:ok, %{count: 1}} = Runtime.list_agent_mcp_actions(agent.id)
 
     {:ok, conversation} =
       Runtime.start_conversation(agent, %{
@@ -101,7 +133,12 @@ defmodule HydraX.ReportTest do
     assert is_list(snapshot.agents)
     assert Enum.any?(snapshot.mcp, &(&1.name == "Docs MCP" and &1.status == :ok))
     assert Enum.any?(snapshot.agent_mcp, &(&1.agent_id == agent.id and &1.enabled_bindings == 1))
-    assert Enum.any?(snapshot.agents, &(&1.id == agent.id and &1.mcp_count == 1))
+    assert Enum.any?(
+             snapshot.agents,
+             &(&1.id == agent.id and &1.mcp_count == 1 and &1.skill_requirement_count >= 1 and
+                 &1.mcp_action_count == 2)
+           )
+    assert Enum.any?(snapshot.skills, &(&1.agent_id == agent.id and "release-window" in (&1.metadata["requires"] || [])))
     assert snapshot.cluster.mode == "single_node"
     assert is_map(snapshot.incidents)
     assert is_list(snapshot.audit)
@@ -123,6 +160,46 @@ defmodule HydraX.ReportTest do
     on_exit(fn -> File.rm_rf(output_root) end)
 
     agent = Runtime.ensure_default_agent!()
+    previous_request_fn = Application.get_env(:hydra_x, :mcp_http_request_fn)
+
+    Application.put_env(:hydra_x, :mcp_http_request_fn, fn opts ->
+      case opts[:url] do
+        "https://mcp.example.test/actions" ->
+          {:ok, %{status: 200, body: %{"actions" => [%{"name" => "search_docs"}]}}}
+
+        "https://mcp.example.test/health" ->
+          {:ok, %{status: 200, body: %{"status" => "ok"}}}
+      end
+    end)
+
+    on_exit(fn ->
+      if previous_request_fn do
+        Application.put_env(:hydra_x, :mcp_http_request_fn, previous_request_fn)
+      else
+        Application.delete_env(:hydra_x, :mcp_http_request_fn)
+      end
+    end)
+
+    skill_dir = Path.join([agent.workspace_root, "skills", "report-skill"])
+    File.mkdir_p!(skill_dir)
+
+    File.write!(
+      Path.join(skill_dir, "SKILL.md"),
+      "---\nname: Report Skill\nsummary: Add reporting context.\nrequires: audit-log\n---\n# Report Skill\n\nAdd reporting context."
+    )
+
+    assert {:ok, _skills} = Runtime.refresh_agent_skills(agent.id)
+
+    assert {:ok, _server} =
+             Runtime.save_mcp_server(%{
+               name: "Docs MCP",
+               transport: "http",
+               url: "https://mcp.example.test",
+               enabled: true
+             })
+
+    assert {:ok, _bindings} = Runtime.refresh_agent_mcp_servers(agent.id)
+    assert {:ok, %{count: 1}} = Runtime.list_agent_mcp_actions(agent.id)
 
     {:ok, conversation} =
       Runtime.start_conversation(agent, %{
@@ -203,6 +280,8 @@ defmodule HydraX.ReportTest do
     assert File.exists?(Path.join(export.bundle_dir, "audit.json"))
     assert File.read!(export.markdown_path) =~ "Hydra-X Operator Report"
     assert File.read!(export.markdown_path) =~ "Agent Runtime Snapshots"
+    assert File.read!(export.markdown_path) =~ "skill_requires="
+    assert File.read!(export.markdown_path) =~ "mcp_actions=1"
     assert File.read!(export.markdown_path) =~ "MCP Integrations"
     assert File.read!(export.markdown_path) =~ "Agent MCP Bindings"
     assert File.read!(export.markdown_path) =~ "Audit Trail"
@@ -220,6 +299,9 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.json_path) =~ "\"generated_at\""
     assert File.read!(export.json_path) =~ "\"last_delivery\""
     assert File.read!(export.json_path) =~ "\"skills\""
+    assert File.read!(Path.join(export.bundle_dir, "agents.json")) =~ "\"skill_requirement_count\""
+    assert File.read!(Path.join(export.bundle_dir, "agents.json")) =~ "\"mcp_action_count\""
+    assert File.read!(Path.join(export.bundle_dir, "agents.json")) =~ "\"search_docs\""
     assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~ "\"channel_state\""
     assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~ "\"memory_recall\""
   end

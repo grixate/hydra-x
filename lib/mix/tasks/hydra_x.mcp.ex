@@ -8,6 +8,9 @@ defmodule Mix.Tasks.HydraX.Mcp do
     Mix.Task.run("app.start")
 
     case args do
+      ["actions", agent_ref | rest] ->
+        list_actions(agent_ref, rest)
+
       ["invoke", agent_ref, action | rest] ->
         invoke_binding(agent_ref, action, rest)
 
@@ -75,6 +78,39 @@ defmodule Mix.Tasks.HydraX.Mcp do
         |> Enum.join("\t")
 
       Mix.shell().info(line)
+    end)
+  end
+
+  defp list_actions(agent_ref, args) do
+    {opts, _argv, _invalid} =
+      OptionParser.parse(args,
+        strict: [server: :string]
+      )
+
+    agent = resolve_agent(agent_ref)
+
+    {:ok, result} =
+      HydraX.Runtime.list_agent_mcp_actions(agent.id,
+        server: opts[:server]
+      )
+
+    Mix.shell().info("agent=#{agent.slug}")
+    Mix.shell().info("count=#{result.count}")
+
+    Enum.each(result.results, fn entry ->
+      detail =
+        case entry do
+          %{actions: actions} when is_list(actions) and actions != [] -> Enum.join(actions, ", ")
+          %{actions: []} -> "no actions"
+          %{detail: detail} -> detail
+        end
+
+      Mix.shell().info(
+        Enum.join(
+          [entry.name, entry.transport, entry.status, detail],
+          "\t"
+        )
+      )
     end)
   end
 

@@ -148,6 +148,30 @@ defmodule HydraX.Runtime.MCPServers do
      }}
   end
 
+  def list_agent_mcp_actions(agent_id, opts \\ []) when is_integer(agent_id) do
+    server_filter =
+      opts
+      |> Keyword.get(:server)
+      |> normalize_filter()
+
+    results =
+      list_agent_mcp_servers(agent_id)
+      |> Enum.filter(&(&1.enabled && &1.mcp_server_config.enabled))
+      |> Enum.filter(fn binding ->
+        is_nil(server_filter) or matches_filter?(binding.mcp_server_config, server_filter)
+      end)
+      |> Enum.map(fn binding ->
+        list_binding_actions(binding, opts)
+      end)
+
+    {:ok,
+     %{
+       agent_id: agent_id,
+       count: length(results),
+       results: results
+     }}
+  end
+
   def mcp_prompt_context do
     enabled_mcp_servers()
     |> Enum.map(fn config ->
@@ -177,7 +201,19 @@ defmodule HydraX.Runtime.MCPServers do
 
   def mcp_prompt_context(agent_id) when is_integer(agent_id) do
     enabled_mcp_servers(agent_id)
-    |> Enum.map(fn binding -> mcp_prompt_line(binding.mcp_server_config) end)
+    |> Enum.map(fn binding ->
+      actions =
+        get_in(binding.mcp_server_config.metadata || %{}, ["actions"])
+        |> case do
+          values when is_list(values) and values != [] ->
+            " actions #{Enum.join(Enum.take(values, 3), ", ")}"
+
+          _ ->
+            ""
+        end
+
+      mcp_prompt_line(binding.mcp_server_config) <> actions
+    end)
     |> Enum.join("\n")
   end
 
@@ -395,6 +431,32 @@ defmodule HydraX.Runtime.MCPServers do
     end
   end
 
+  defp list_binding_actions(binding, opts) do
+    config = binding.mcp_server_config
+
+    case list_server_actions(config, opts) do
+      {:ok, actions} ->
+        %{
+          id: binding.id,
+          server_id: config.id,
+          name: config.name,
+          transport: config.transport,
+          status: "ok",
+          actions: actions
+        }
+
+      {:error, reason} ->
+        %{
+          id: binding.id,
+          server_id: config.id,
+          name: config.name,
+          transport: config.transport,
+          status: "warn",
+          detail: format_probe_error(reason)
+        }
+    end
+  end
+
   defp invoke_server(%MCPServerConfig{enabled: false} = config, _action, _params, _opts) do
     {:error, {:disabled, "#{config.name} is disabled"}}
   end
@@ -446,6 +508,48 @@ defmodule HydraX.Runtime.MCPServers do
     end
   end
 
+  defp list_server_actions(%MCPServerConfig{enabled: false} = config, _opts) do
+    {:error, {:disabled, "#{config.name} is disabled"}}
+  end
+
+  defp list_server_actions(%MCPServerConfig{transport: "stdio"}, _opts) do
+    {:error, :stdio_action_catalog_not_supported}
+  end
+
+  defp list_server_actions(%MCPServerConfig{transport: "http"} = config, opts) do
+    request_fn =
+      Keyword.get(opts, :request_fn) || Application.get_env(:hydra_x, :mcp_http_request_fn) ||
+        (&Req.get/1)
+
+    path =
+      get_in(config.metadata || %{}, ["actions_path"])
+      |> Helpers.blank_to_nil()
+      |> Kernel.||("/actions")
+
+    url =
+      config.url
+      |> URI.parse()
+      |> URI.merge(path)
+      |> URI.to_string()
+
+    headers =
+      [{"accept", "application/json"}]
+      |> maybe_add_auth_header(config.auth_token)
+
+    case request_fn.(url: url, headers: headers) do
+      {:ok, %{status: status, body: body}} when status in 200..299 ->
+        actions = normalize_action_list(body)
+        maybe_cache_server_actions(config, actions)
+        {:ok, actions}
+
+      {:ok, %{status: status}} ->
+        {:error, {:http_status, status}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
   defp build_health_url(config) do
     healthcheck_path =
       config.healthcheck_path
@@ -465,6 +569,7 @@ defmodule HydraX.Runtime.MCPServers do
   defp format_probe_error({:disabled, message}), do: message
   defp format_probe_error(:command_not_found), do: "command not found"
   defp format_probe_error(:stdio_invoke_not_supported), do: "stdio invoke not supported"
+  defp format_probe_error(:stdio_action_catalog_not_supported), do: "stdio action catalog not supported"
   defp format_probe_error({:http_status, status}), do: "unexpected HTTP #{status}"
   defp format_probe_error(reason), do: inspect(reason)
 
@@ -483,6 +588,39 @@ defmodule HydraX.Runtime.MCPServers do
   defp normalize_invoke_body(body) when is_map(body), do: body
   defp normalize_invoke_body(body) when is_list(body), do: body
   defp normalize_invoke_body(body), do: inspect(body)
+
+  defp normalize_action_list(%{"actions" => actions}) when is_list(actions),
+    do: Enum.map(actions, &normalize_action_name/1) |> Enum.reject(&is_nil/1)
+
+  defp normalize_action_list(%{actions: actions}) when is_list(actions),
+    do: Enum.map(actions, &normalize_action_name/1) |> Enum.reject(&is_nil/1)
+
+  defp normalize_action_list(actions) when is_list(actions),
+    do: Enum.map(actions, &normalize_action_name/1) |> Enum.reject(&is_nil/1)
+
+  defp normalize_action_list(_body), do: []
+
+  defp normalize_action_name(%{"name" => name}) when is_binary(name), do: name
+  defp normalize_action_name(%{name: name}) when is_binary(name), do: name
+  defp normalize_action_name(name) when is_binary(name), do: name
+  defp normalize_action_name(_value), do: nil
+
+  defp maybe_cache_server_actions(%MCPServerConfig{} = config, actions) when is_list(actions) do
+    metadata =
+      (config.metadata || %{})
+      |> Map.put("actions", actions)
+      |> Map.put("actions_cataloged_at", DateTime.utc_now())
+
+    if metadata == (config.metadata || %{}) do
+      :ok
+    else
+      config
+      |> MCPServerConfig.changeset(%{metadata: metadata})
+      |> Repo.update()
+
+      :ok
+    end
+  end
 
   defp decrypt_config(nil), do: nil
 

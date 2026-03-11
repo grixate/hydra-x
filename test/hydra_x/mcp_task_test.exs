@@ -101,6 +101,42 @@ defmodule HydraX.MCPTaskTest do
     assert output =~ "HTTP 200 https://mcp.example.test/invoke"
   end
 
+  test "mcp task can list actions for an enabled HTTP binding" do
+    agent = create_agent()
+
+    Application.put_env(:hydra_x, :mcp_http_request_fn, fn opts ->
+      assert opts[:url] == "https://mcp.example.test/actions"
+      {:ok, %{status: 200, body: %{"actions" => [%{"name" => "search_docs"}, %{"name" => "get_status"}]}}}
+    end)
+
+    assert {:ok, _server} =
+             Runtime.save_mcp_server(%{
+               name: "Docs HTTP MCP",
+               transport: "http",
+               url: "https://mcp.example.test",
+               enabled: true
+             })
+
+    assert {:ok, _bindings} = Runtime.refresh_agent_mcp_servers(agent.id)
+
+    Mix.Task.reenable("hydra_x.mcp")
+
+    output =
+      capture_io(fn ->
+        Mix.Tasks.HydraX.Mcp.run([
+          "actions",
+          agent.slug,
+          "--server",
+          "Docs"
+        ])
+      end)
+
+    assert output =~ "agent=#{agent.slug}"
+    assert output =~ "count=1"
+    assert output =~ "Docs HTTP MCP"
+    assert output =~ "search_docs, get_status"
+  end
+
   defp create_agent do
     unique = System.unique_integer([:positive])
 

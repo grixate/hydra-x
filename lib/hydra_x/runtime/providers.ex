@@ -5,6 +5,7 @@ defmodule HydraX.Runtime.Providers do
 
   import Ecto.Query
 
+  alias HydraX.Budget
   alias HydraX.Config
   alias HydraX.Repo
   alias HydraX.Security.Secrets
@@ -29,12 +30,20 @@ defmodule HydraX.Runtime.Providers do
     effective_provider_route(agent_id, process_type).provider
   end
 
-  def effective_provider_route(nil, _process_type) do
+  def effective_provider_route(nil, process_type) do
+    effective_provider_route(nil, process_type, [])
+  end
+
+  def effective_provider_route(agent_id, process_type) when is_integer(agent_id) do
+    effective_provider_route(agent_id, process_type, [])
+  end
+
+  def effective_provider_route(nil, _process_type, _opts) do
     provider = enabled_provider()
     %{provider: provider, fallbacks: [], source: if(provider, do: "global", else: "mock")}
   end
 
-  def effective_provider_route(agent_id, process_type) when is_integer(agent_id) do
+  def effective_provider_route(agent_id, process_type, opts) when is_integer(agent_id) do
     agent = Repo.get(AgentProfile, agent_id)
     profile = provider_routing_profile(agent_id)
     override_id = get_in(profile, ["process_overrides", to_string(process_type)])
@@ -52,10 +61,16 @@ defmodule HydraX.Runtime.Providers do
       |> Enum.reject(&is_nil/1)
       |> Enum.reject(&(primary && &1.id == primary.id))
 
+    {selected_provider, selected_fallbacks, budget_state} =
+      maybe_promote_budget_fallback(agent_id, primary, fallbacks, opts)
+
     %{
-      provider: primary,
-      fallbacks: fallbacks,
-      source: route_source(override_id, default_id, primary),
+      provider: selected_provider,
+      fallbacks: selected_fallbacks,
+      source:
+        budget_state[:source] ||
+          route_source(override_id, default_id, selected_provider || primary),
+      budget: budget_state,
       warmup: provider_routing_status(agent)
     }
   end
@@ -541,6 +556,44 @@ defmodule HydraX.Runtime.Providers do
 
   defp route_source(_override_id, _default_id, provider) when not is_nil(provider), do: "global"
   defp route_source(_override_id, _default_id, _provider), do: "mock"
+
+  defp maybe_promote_budget_fallback(agent_id, primary, fallbacks, opts) do
+    estimated_tokens = Keyword.get(opts, :estimated_tokens, 0)
+    conversation_id = Keyword.get(opts, :conversation_id)
+
+    cond do
+      is_nil(primary) or fallbacks == [] or estimated_tokens <= 0 ->
+        {primary, fallbacks, %{estimated_tokens: estimated_tokens, warnings: [], source: nil}}
+
+      true ->
+        case Budget.preflight(agent_id, conversation_id, estimated_tokens) do
+          {:ok, %{warnings: warnings, usage: usage}} when warnings != [] ->
+            promoted = hd(fallbacks)
+            remaining = Enum.reject([primary | tl(fallbacks)], &is_nil/1)
+
+            {promoted, remaining,
+             %{
+               estimated_tokens: estimated_tokens,
+               warnings: warnings,
+               usage: usage,
+               source: "budget:" <> Enum.map_join(warnings, ",", &to_string/1)
+             }}
+
+          {:ok, %{warnings: warnings, usage: usage}} ->
+            {primary, fallbacks,
+             %{estimated_tokens: estimated_tokens, warnings: warnings, usage: usage, source: nil}}
+
+          {:error, %{reason: reason, usage: usage}} ->
+            {primary, fallbacks,
+             %{
+               estimated_tokens: estimated_tokens,
+               warnings: [reason],
+               usage: usage,
+               source: nil
+             }}
+        end
+    end
+  end
 
   defp provider_module(%ProviderConfig{kind: "openai_compatible"}),
     do: HydraX.LLM.Providers.OpenAICompatible

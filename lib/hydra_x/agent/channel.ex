@@ -158,7 +158,11 @@ defmodule HydraX.Agent.Channel do
     prompt =
       PromptBuilder.build(agent, history, bulletin, summary, %{
         tool_policy: tool_policy,
-        skill_context: Runtime.skill_prompt_context(agent.id),
+        skill_context:
+          Runtime.skill_prompt_context(agent.id, %{
+            channel: data.conversation.channel,
+            tool_names: Enum.map(prompt_tools(tool_policy), & &1.name)
+          }),
         mcp_context: Runtime.mcp_prompt_context(agent.id)
       })
 
@@ -741,6 +745,8 @@ defmodule HydraX.Agent.Channel do
       provider -> provider.name || provider.kind || "configured"
     end
   end
+
+  defp prompt_tools(tool_policy), do: HydraX.Tool.Registry.available_schemas(tool_policy)
 
   defp latest_turn_id([]), do: nil
   defp latest_turn_id(turns), do: turns |> List.last() |> then(&(&1 && &1.id))

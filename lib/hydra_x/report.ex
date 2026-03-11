@@ -337,7 +337,7 @@ defmodule HydraX.Report do
 
   defp render_agents(agents) do
     Enum.map_join(agents, "\n", fn agent ->
-      "- #{agent.name} (#{agent.slug}) status=#{agent.status} runtime=#{runtime_label(agent.runtime.running)} readiness=#{agent.runtime.readiness} bulletin_memories=#{agent.bulletin.memory_count} skills=#{agent.skill_count} mcp=#{agent.mcp_count}"
+      "- #{agent.name} (#{agent.slug}) status=#{agent.status} runtime=#{runtime_label(agent.runtime.running)} readiness=#{agent.runtime.readiness} bulletin_memories=#{agent.bulletin.memory_count} skills=#{agent.skill_count} skill_requires=#{agent.skill_requirement_count} mcp=#{agent.mcp_count} mcp_actions=#{agent.mcp_action_count}"
     end)
   end
 
@@ -736,6 +736,9 @@ defmodule HydraX.Report do
   defp agent_snapshots do
     Runtime.list_agents()
     |> Enum.map(fn agent ->
+      skills = Runtime.list_skills(agent_id: agent.id)
+      mcp_actions = agent_mcp_actions(agent.id)
+
       %{
         id: agent.id,
         name: agent.name,
@@ -748,7 +751,14 @@ defmodule HydraX.Report do
         tool_policy: Runtime.effective_tool_policy(agent.id),
         control_policy: Runtime.effective_control_policy(agent.id),
         skill_count: Runtime.enabled_skills(agent.id) |> length(),
-        mcp_count: Runtime.enabled_mcp_servers(agent.id) |> length()
+        skill_requirement_count:
+          skills
+          |> Enum.count(fn skill -> get_in(skill.metadata || %{}, ["requires"]) not in [nil, []] end),
+        mcp_count: Runtime.enabled_mcp_servers(agent.id) |> length(),
+        mcp_action_count:
+          mcp_actions
+          |> Enum.reduce(0, fn entry, acc -> acc + length(Map.get(entry, :actions, [])) end),
+        mcp_actions: mcp_actions
       }
     end)
   end
@@ -1010,7 +1020,17 @@ defmodule HydraX.Report do
       tool_policy: agent.tool_policy,
       control_policy: agent.control_policy,
       skill_count: agent.skill_count,
-      mcp_count: agent.mcp_count
+      skill_requirement_count: agent.skill_requirement_count,
+      mcp_count: agent.mcp_count,
+      mcp_action_count: agent.mcp_action_count,
+      mcp_actions: agent.mcp_actions
     }
+  end
+
+  defp agent_mcp_actions(agent_id) do
+    case Runtime.list_agent_mcp_actions(agent_id) do
+      {:ok, %{results: results}} -> results
+      _ -> []
+    end
   end
 end

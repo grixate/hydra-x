@@ -43,6 +43,7 @@ defmodule HydraX.Runtime do
   defdelegate enabled_provider(), to: HydraX.Runtime.Providers
   defdelegate enabled_provider(agent_id, process_type), to: HydraX.Runtime.Providers
   defdelegate effective_provider_route(agent_id, process_type), to: HydraX.Runtime.Providers
+  defdelegate effective_provider_route(agent_id, process_type, opts), to: HydraX.Runtime.Providers
   defdelegate provider_routing_profile(agent_id), to: HydraX.Runtime.Providers
   defdelegate save_agent_provider_routing(agent_id, attrs), to: HydraX.Runtime.Providers
   defdelegate clear_agent_provider_routing!(agent_id), to: HydraX.Runtime.Providers
@@ -102,12 +103,15 @@ defmodule HydraX.Runtime do
   defdelegate enable_skill!(id), to: HydraX.Runtime.Skills
   defdelegate disable_skill!(id), to: HydraX.Runtime.Skills
   defdelegate skill_prompt_context(agent_id), to: HydraX.Runtime.Skills
+  defdelegate skill_prompt_context(agent_id, opts), to: HydraX.Runtime.Skills
 
   # ── MCP ──────────────────────────────────────────────────────────────────
 
   defdelegate list_mcp_servers(), to: HydraX.Runtime.MCPServers
   defdelegate enabled_mcp_servers(), to: HydraX.Runtime.MCPServers
   defdelegate list_agent_mcp_servers(agent_id), to: HydraX.Runtime.MCPServers
+  defdelegate list_agent_mcp_actions(agent_id), to: HydraX.Runtime.MCPServers
+  defdelegate list_agent_mcp_actions(agent_id, opts), to: HydraX.Runtime.MCPServers
   defdelegate enabled_mcp_servers(agent_id), to: HydraX.Runtime.MCPServers
   defdelegate get_agent_mcp_server!(id), to: HydraX.Runtime.MCPServers
   defdelegate get_mcp_server!(id), to: HydraX.Runtime.MCPServers

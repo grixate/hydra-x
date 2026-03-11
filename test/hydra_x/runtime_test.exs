@@ -278,6 +278,54 @@ defmodule HydraX.RuntimeTest do
     assert [%{name: "Docs HTTP MCP", status: "ok", result: %{status: 200}}] = result.result.results
   end
 
+  test "worker can list actions on enabled HTTP MCP bindings" do
+    agent = create_agent()
+    previous = Application.get_env(:hydra_x, :mcp_http_request_fn)
+
+    Application.put_env(:hydra_x, :mcp_http_request_fn, fn opts ->
+      assert opts[:url] == "https://mcp.example.test/actions"
+
+      {:ok,
+       %{
+         status: 200,
+         body: %{"actions" => [%{"name" => "search_docs"}, %{"name" => "get_status"}]}
+       }}
+    end)
+
+    on_exit(fn ->
+      if previous do
+        Application.put_env(:hydra_x, :mcp_http_request_fn, previous)
+      else
+        Application.delete_env(:hydra_x, :mcp_http_request_fn)
+      end
+    end)
+
+    {:ok, _mcp} =
+      Runtime.save_mcp_server(%{
+        name: "Docs HTTP MCP",
+        transport: "http",
+        url: "https://mcp.example.test",
+        enabled: true
+      })
+
+    assert {:ok, _bindings} = Runtime.refresh_agent_mcp_servers(agent.id)
+    {:ok, pid} = HydraX.Agent.ensure_started(agent)
+    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{channel: "cli", title: "mcp-actions"})
+
+    [result] =
+      Worker.execute_tool_calls(agent.id, conversation, [
+        %{id: "mcp-actions-1", name: "mcp_catalog", arguments: %{"server" => "Docs"}}
+      ])
+
+    refute result.is_error
+    assert result.summary == "listed actions for 1 MCP bindings"
+    assert [%{name: "Docs HTTP MCP", status: "ok", actions: ["search_docs", "get_status"]}] =
+             result.result.results
+  end
+
   test "worker reports unsupported stdio MCP invoke attempts" do
     agent = create_agent()
 
@@ -814,6 +862,45 @@ defmodule HydraX.RuntimeTest do
     assert Runtime.mcp_prompt_context(other_agent.id) == ""
     Runtime.disable_agent_mcp_server!(binding.id)
     assert Runtime.mcp_prompt_context(agent.id) == ""
+  end
+
+  test "skill prompt context filters by channel and available tools" do
+    agent = create_agent()
+    deploy_dir = Path.join([agent.workspace_root, "skills", "deploy-checks"])
+    File.mkdir_p!(deploy_dir)
+
+    File.write!(
+      Path.join(deploy_dir, "SKILL.md"),
+      "---\nname: Deploy Checks\nsummary: Run deployment verification steps.\ntools: shell_command,web_search\nchannels: cli,slack\n---\n# Deploy Checks"
+    )
+
+    browser_dir = Path.join([agent.workspace_root, "skills", "browser-guide"])
+    File.mkdir_p!(browser_dir)
+
+    File.write!(
+      Path.join(browser_dir, "SKILL.md"),
+      "---\nname: Browser Guide\nsummary: Inspect web pages.\ntools: browser_automation\nchannels: webchat\n---\n# Browser Guide"
+    )
+
+    assert {:ok, _skills} = Runtime.refresh_agent_skills(agent.id)
+
+    cli_context =
+      Runtime.skill_prompt_context(agent.id, %{
+        channel: "cli",
+        tool_names: ["shell_command", "web_search"]
+      })
+
+    assert cli_context =~ "Deploy Checks"
+    refute cli_context =~ "Browser Guide"
+
+    webchat_context =
+      Runtime.skill_prompt_context(agent.id, %{
+        channel: "webchat",
+        tool_names: ["browser_automation"]
+      })
+
+    assert webchat_context =~ "Browser Guide"
+    refute webchat_context =~ "Deploy Checks"
   end
 
   test "skill catalog can be exported for an agent" do
@@ -2138,6 +2225,70 @@ defmodule HydraX.RuntimeTest do
                agent_id: agent.id,
                process_type: "channel"
              })
+  end
+
+  test "provider routing can promote a fallback under budget pressure" do
+    agent = create_agent()
+
+    {:ok, primary} =
+      Runtime.save_provider_config(%{
+        name: "Primary Budget Route",
+        kind: "openai_compatible",
+        base_url: "https://primary-budget.test",
+        api_key: "secret",
+        model: "gpt-primary-budget",
+        enabled: false
+      })
+
+    {:ok, fallback} =
+      Runtime.save_provider_config(%{
+        name: "Fallback Budget Route",
+        kind: "openai_compatible",
+        base_url: "https://fallback-budget.test",
+        api_key: "secret",
+        model: "gpt-fallback-budget",
+        enabled: false
+      })
+
+    {:ok, _agent} =
+      Runtime.save_agent_provider_routing(agent.id, %{
+        "default_provider_id" => primary.id,
+        "fallback_provider_ids_csv" => Integer.to_string(fallback.id)
+      })
+
+    policy = Budget.ensure_policy!(agent.id)
+
+    {:ok, _updated} =
+      Budget.save_policy(policy, %{
+        agent_id: agent.id,
+        daily_limit: 20,
+        conversation_limit: 20,
+        soft_warning_at: 0.5,
+        hard_limit_action: "warn",
+        enabled: true
+      })
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{channel: "cli", title: "budget-route"})
+
+    assert {:ok, _usage} =
+             Budget.record_usage(agent.id, conversation.id, %{
+               scope: "llm_completion",
+               tokens_in: 12,
+               tokens_out: 0
+             })
+
+    route =
+      Runtime.effective_provider_route(agent.id, "channel",
+        conversation_id: conversation.id,
+        estimated_tokens: 4
+      )
+
+    assert route.provider.id == fallback.id
+    assert [remaining] = route.fallbacks
+    assert remaining.id == primary.id
+    assert route.source == "budget:soft_limit_reached"
+    assert route.budget.warnings == [:soft_limit_reached]
   end
 
   test "warming an agent provider route updates runtime readiness" do

@@ -1,6 +1,7 @@
 defmodule HydraX.Tools.BrowserAutomation do
   @behaviour HydraX.Tool
 
+  alias HydraX.Runtime.Helpers
   alias HydraX.Safety.UrlGuard
 
   @max_excerpt 2_500
@@ -30,7 +31,7 @@ defmodule HydraX.Tools.BrowserAutomation do
           action: %{
             type: "string",
             description:
-              "One of fetch_page, extract_links, inspect_forms, inspect_headings, inspect_images, inspect_meta, inspect_scripts, inspect_structured_data, extract_tables, preview_form_submission, click_link, submit_form, capture_snapshot, or extract_text"
+              "One of fetch_page, extract_links, inspect_forms, inspect_headings, inspect_images, inspect_meta, inspect_scripts, inspect_structured_data, extract_tables, extract_elements, preview_form_submission, click_link, submit_form, capture_snapshot, or extract_text"
           },
           url: %{type: "string", description: "The starting page URL"},
           link_text: %{
@@ -64,6 +65,11 @@ defmodule HydraX.Tools.BrowserAutomation do
           text_contains: %{
             type: "string",
             description: "For extract_text, return only text snippets containing this substring"
+          },
+          selector: %{
+            type: "string",
+            description:
+              "Optional simple CSS-like selector for tag, #id, .class, or tag.class forms. Used by extract_text, extract_elements, click_link, and form selection."
           },
           session: %{
             type: "object",
@@ -222,10 +228,44 @@ defmodule HydraX.Tools.BrowserAutomation do
     end
   end
 
+  defp dispatch("extract_elements", uri, params, request_fn, _allowlist, session) do
+    with {:ok, page} <- fetch_page(uri, request_fn, session),
+         {:ok, selector} <- parse_selector(params[:selector] || params["selector"]) do
+      {:ok,
+       %{
+         action: "extract_elements",
+         url: page.url,
+         title: page.title,
+         selector: selector.raw,
+         elements: find_elements(page.body, selector),
+         session: page.session
+       }}
+    end
+  end
+
   defp dispatch("extract_text", uri, params, request_fn, _allowlist, session) do
     with {:ok, page} <- fetch_page(uri, request_fn, session) do
-      snippets = extract_snippets(page.text, params[:text_contains] || params["text_contains"])
-      {:ok, Map.put(page, :snippets, snippets)}
+      snippets =
+        case Helpers.blank_to_nil(params[:selector] || params["selector"]) do
+          nil ->
+            extract_snippets(page.text, params[:text_contains] || params["text_contains"])
+
+          selector_value ->
+            with {:ok, selector} <- parse_selector(selector_value) do
+              page.body
+              |> find_elements(selector)
+              |> Enum.map(&(&1.text || ""))
+              |> Enum.join("\n")
+              |> extract_snippets(params[:text_contains] || params["text_contains"])
+            else
+              _ -> []
+            end
+        end
+
+      {:ok,
+       page
+       |> Map.put(:selector, params[:selector] || params["selector"])
+       |> Map.put(:snippets, snippets)}
     end
   end
 
@@ -233,7 +273,9 @@ defmodule HydraX.Tools.BrowserAutomation do
     with {:ok, page} <- fetch_page(uri, request_fn, session),
          {:ok, href} <-
            find_link(
+             page.body,
              page.links,
+             params[:selector] || params["selector"],
              params[:link_text] || params["link_text"],
              params[:href_contains] || params["href_contains"],
              params[:link_index] || params["link_index"]
@@ -262,7 +304,9 @@ defmodule HydraX.Tools.BrowserAutomation do
     with {:ok, page} <- fetch_page(uri, request_fn, session),
          {:ok, form} <-
            find_form(
+             page.body,
              page.forms,
+             params[:selector] || params["selector"],
              params[:form_index] || params["form_index"],
              params[:form_action_contains] || params["form_action_contains"]
            ),
@@ -303,7 +347,9 @@ defmodule HydraX.Tools.BrowserAutomation do
     with {:ok, page} <- fetch_page(uri, request_fn, session),
          {:ok, form} <-
            find_form(
+             page.body,
              page.forms,
+             params[:selector] || params["selector"],
              params[:form_index] || params["form_index"],
              params[:form_action_contains] || params["form_action_contains"]
            ),
@@ -371,6 +417,7 @@ defmodule HydraX.Tools.BrowserAutomation do
          status: response.status,
          title: page_title(body),
          excerpt: String.slice(text, 0, @max_excerpt),
+         body: body,
          text: text,
          content_type: header(response.headers || [], "content-type"),
          links: parse_links(body),
@@ -386,22 +433,40 @@ defmodule HydraX.Tools.BrowserAutomation do
     end
   end
 
-  defp find_link(links, link_text, href_contains, link_index) do
+  defp find_link(body, links, selector, link_text, href_contains, link_index) do
     matched =
       case parse_index(link_index) do
         nil ->
-          Enum.find(links, fn link ->
-            cond do
-              is_binary(link_text) and String.trim(link_text) != "" ->
-                String.contains?(String.downcase(link.text), String.downcase(link_text))
+          case Helpers.blank_to_nil(selector) do
+            nil ->
+              Enum.find(links, fn link ->
+                cond do
+                  is_binary(link_text) and String.trim(link_text) != "" ->
+                    String.contains?(String.downcase(link.text), String.downcase(link_text))
 
-              is_binary(href_contains) and String.trim(href_contains) != "" ->
-                String.contains?(String.downcase(link.href), String.downcase(href_contains))
+                  is_binary(href_contains) and String.trim(href_contains) != "" ->
+                    String.contains?(String.downcase(link.href), String.downcase(href_contains))
 
-              true ->
-                false
-            end
-          end)
+                  true ->
+                    false
+                end
+              end)
+
+            selector_value ->
+              with {:ok, parsed_selector} <- parse_selector(selector_value) do
+                body
+                |> find_elements(parsed_selector)
+                |> Enum.find(fn element ->
+                  element.tag == "a" and is_binary(element.attrs["href"]) and element.attrs["href"] != ""
+                end)
+                |> case do
+                  nil -> nil
+                  element -> %{href: element.attrs["href"], text: element.text}
+                end
+              else
+                _ -> nil
+              end
+          end
 
         index ->
           Enum.find(links, &(&1.index == index))
@@ -434,22 +499,32 @@ defmodule HydraX.Tools.BrowserAutomation do
     end
   end
 
-  defp find_form(forms, form_index, action_contains) do
+  defp find_form(_body, forms, selector, form_index, action_contains) do
     matched =
       case parse_index(form_index) do
         nil ->
-          Enum.find(forms, fn form ->
-            cond do
-              is_binary(action_contains) and String.trim(action_contains) != "" ->
-                String.contains?(
-                  String.downcase(form.action || ""),
-                  String.downcase(action_contains)
-                )
+          case Helpers.blank_to_nil(selector) do
+            nil ->
+              Enum.find(forms, fn form ->
+                cond do
+                  is_binary(action_contains) and String.trim(action_contains) != "" ->
+                    String.contains?(
+                      String.downcase(form.action || ""),
+                      String.downcase(action_contains)
+                    )
 
-              true ->
-                true
-            end
-          end)
+                  true ->
+                    true
+                end
+              end)
+
+            selector_value ->
+              with {:ok, parsed_selector} <- parse_selector(selector_value) do
+                Enum.find(forms, &selector_match_form?(&1, parsed_selector))
+              else
+                _ -> nil
+              end
+          end
 
         index ->
           Enum.find(forms, &(&1.index == index))
@@ -598,6 +673,8 @@ defmodule HydraX.Tools.BrowserAutomation do
     |> Enum.map(fn {[_, attrs, inner_html], index} ->
       %{
         index: index,
+        id: parse_attr(attrs, "id"),
+        classes: parse_classes(attrs),
         method: parse_form_method(attrs),
         action: parse_form_action(attrs),
         fields: parse_form_fields(inner_html)
@@ -782,6 +859,15 @@ defmodule HydraX.Tools.BrowserAutomation do
     end
   end
 
+  defp parse_classes(attrs) do
+    attrs
+    |> parse_attr("class")
+    |> case do
+      nil -> []
+      value -> String.split(value, ~r/\s+/, trim: true)
+    end
+  end
+
   defp parse_dimension(nil), do: nil
 
   defp parse_dimension(value) do
@@ -826,6 +912,99 @@ defmodule HydraX.Tools.BrowserAutomation do
       _ -> nil
     end
   end
+
+  defp parse_selector(nil), do: {:error, :missing_selector}
+  defp parse_selector(""), do: {:error, :missing_selector}
+
+  defp parse_selector(selector) when is_binary(selector) do
+    selector = String.trim(selector)
+
+    case Regex.named_captures(
+           ~r/^(?<tag>[a-z0-9_-]+)?(?<id>#[a-zA-Z0-9_-]+)?(?<classes>(\.[a-zA-Z0-9_-]+)*)$/u,
+           selector
+         ) do
+      %{"tag" => tag, "id" => id, "classes" => classes} ->
+        {:ok,
+         %{
+           raw: selector,
+           tag: blank_to_nil(tag),
+           id: id |> String.trim_leading("#") |> blank_to_nil(),
+           classes:
+             Regex.scan(~r/\.([a-zA-Z0-9_-]+)/u, classes, capture: :all_but_first)
+             |> List.flatten()
+         }}
+
+      _ ->
+        {:error, :unsupported_selector}
+    end
+  end
+
+  defp parse_selector(_selector), do: {:error, :unsupported_selector}
+
+  defp find_elements(body, selector) do
+    candidate_tags =
+      case selector.tag do
+        nil ->
+          ~w(a article button div form h1 h2 h3 h4 h5 h6 label li p section span td th)
+
+        tag ->
+          [String.downcase(tag)]
+      end
+
+    candidate_tags
+    |> Enum.flat_map(&scan_elements_for_tag(body, &1))
+    |> Enum.with_index()
+    |> Enum.map(fn {element, index} -> Map.put(element, :index, index) end)
+    |> Enum.filter(&selector_match?(&1, selector))
+    |> Enum.reject(&(&1.text == "" and map_size(&1.attrs) == 0))
+    |> Enum.take(24)
+  end
+
+  defp scan_elements_for_tag(body, tag) do
+    Regex.scan(~r/<#{tag}([^>]*)>(.*?)<\/#{tag}>/is, body)
+    |> Enum.map(fn [_, attrs, inner_html] ->
+      %{
+        tag: tag,
+        text: strip_tags(inner_html),
+        attrs: extract_element_attrs(attrs)
+      }
+    end)
+  end
+
+  defp extract_element_attrs(attrs) do
+    for key <- ~w(id class href src action name type role aria-label),
+        value = parse_attr(attrs, key),
+        value not in [nil, ""],
+        into: %{} do
+      {key, value}
+    end
+  end
+
+  defp selector_match?(element, %{tag: tag, id: id, classes: classes}) do
+    tag_ok = is_nil(tag) or element.tag == String.downcase(tag)
+    id_ok = is_nil(id) or element.attrs["id"] == id
+
+    element_classes =
+      element.attrs["class"]
+      |> case do
+        nil -> []
+        value -> String.split(value, ~r/\s+/, trim: true)
+      end
+
+    classes_ok = Enum.all?(classes, &(&1 in element_classes))
+    tag_ok and id_ok and classes_ok
+  end
+
+  defp selector_match_form?(form, %{tag: tag, id: id, classes: classes}) do
+    tag_ok = is_nil(tag) or String.downcase(tag) == "form"
+    id_ok = is_nil(id) or form.id == id
+    classes_ok = Enum.all?(classes, &(&1 in (form.classes || [])))
+    tag_ok and id_ok and classes_ok
+  end
+
+  defp blank_to_nil(nil), do: nil
+  defp blank_to_nil(""), do: nil
+  defp blank_to_nil(value), do: value
 
   defp write_snapshot(page) do
     root = Path.join(System.tmp_dir!(), "hydra-x-browser-snapshots")

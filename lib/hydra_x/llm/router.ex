@@ -3,12 +3,20 @@ defmodule HydraX.LLM.Router do
   Routes completions to the enabled provider and falls back to a local mock adapter.
   """
 
+  alias HydraX.Budget
   alias HydraX.Runtime
 
   @spec complete(map()) :: {:ok, map()} | {:error, term()}
   def complete(request) do
+    estimated_tokens = Budget.estimate_prompt_tokens(request[:messages] || [])
+
     route =
-      Runtime.effective_provider_route(request[:agent_id], request[:process_type] || "channel")
+      Runtime.effective_provider_route(
+        request[:agent_id],
+        request[:process_type] || "channel",
+        conversation_id: request[:conversation_id],
+        estimated_tokens: estimated_tokens
+      )
 
     providers = Enum.reject([route.provider | route.fallbacks], &is_nil/1)
 
@@ -29,8 +37,15 @@ defmodule HydraX.LLM.Router do
   """
   @spec complete_stream(map(), pid()) :: {:ok, reference()} | {:error, term()}
   def complete_stream(request, caller_pid) do
+    estimated_tokens = Budget.estimate_prompt_tokens(request[:messages] || [])
+
     route =
-      Runtime.effective_provider_route(request[:agent_id], request[:process_type] || "channel")
+      Runtime.effective_provider_route(
+        request[:agent_id],
+        request[:process_type] || "channel",
+        conversation_id: request[:conversation_id],
+        estimated_tokens: estimated_tokens
+      )
 
     providers = Enum.reject([route.provider | route.fallbacks], &is_nil/1)
 

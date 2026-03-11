@@ -4,6 +4,7 @@ defmodule HydraX.Tool.Registry do
   alias HydraX.Tools.{
     BrowserAutomation,
     HttpFetch,
+    MCPCatalog,
     MCPInspect,
     MCPInvoke,
     MCPProbe,
@@ -28,6 +29,7 @@ defmodule HydraX.Tool.Registry do
     {WorkspaceWrite, :workspace_write_enabled},
     {WorkspacePatch, :workspace_write_enabled},
     {WebSearch, :web_search_enabled},
+    {MCPCatalog, nil},
     {MCPInspect, nil},
     {MCPInvoke, nil},
     {MCPProbe, nil},

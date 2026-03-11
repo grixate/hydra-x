@@ -109,10 +109,15 @@ defmodule HydraX.Runtime.Skills do
   def enable_skill!(id), do: set_enabled!(id, true)
   def disable_skill!(id), do: set_enabled!(id, false)
 
-  def skill_prompt_context(agent_id) do
+  def skill_prompt_context(agent_id), do: skill_prompt_context(agent_id, %{})
+
+  def skill_prompt_context(agent_id, opts) do
     agent = Repo.get!(AgentProfile, agent_id)
+    channel = Helpers.blank_to_nil(opts[:channel] || opts["channel"])
+    tool_names = normalize_tool_names(opts[:tool_names] || opts["tool_names"] || [])
 
     enabled_skills(agent_id)
+    |> Enum.filter(&skill_compatible?(&1, channel, tool_names))
     |> Enum.map(fn skill ->
       relative_path =
         get_in(skill.metadata || %{}, ["relative_path"]) ||
@@ -127,6 +132,7 @@ defmodule HydraX.Runtime.Skills do
       version = Helpers.blank_to_nil(metadata["version"])
       tools = metadata["tools"] || []
       channels = metadata["channels"] || []
+      requires = metadata["requires"] || []
 
       extras =
         []
@@ -134,6 +140,9 @@ defmodule HydraX.Runtime.Skills do
         |> maybe_append_extra(if(tools == [], do: nil, else: "tools #{Enum.join(tools, ", ")}"))
         |> maybe_append_extra(
           if(channels == [], do: nil, else: "channels #{Enum.join(channels, ", ")}")
+        )
+        |> maybe_append_extra(
+          if(requires == [], do: nil, else: "requires #{Enum.join(requires, ", ")}")
         )
         |> Enum.join("; ")
 
@@ -308,6 +317,36 @@ defmodule HydraX.Runtime.Skills do
   defp maybe_append_extra(values, nil), do: values
   defp maybe_append_extra(values, ""), do: values
   defp maybe_append_extra(values, value), do: values ++ [value]
+
+  defp normalize_tool_names(tool_names) when is_list(tool_names) do
+    tool_names
+    |> Enum.map(&to_string/1)
+    |> Enum.reject(&(&1 == ""))
+  end
+
+  defp normalize_tool_names(_tool_names), do: []
+
+  defp skill_compatible?(skill, channel, tool_names) do
+    metadata = skill.metadata || %{}
+    channels = metadata["channels"] || []
+    tools = metadata["tools"] || []
+
+    channel_ok? =
+      cond do
+        is_nil(channel) -> true
+        channels == [] -> true
+        true -> channel in channels
+      end
+
+    tool_ok? =
+      cond do
+        tools == [] -> true
+        tool_names == [] -> true
+        true -> Enum.any?(tools, &(&1 in tool_names))
+      end
+
+    channel_ok? and tool_ok?
+  end
 
   defp maybe_filter_agent(query, nil), do: query
   defp maybe_filter_agent(query, agent_id), do: where(query, [skill], skill.agent_id == ^agent_id)

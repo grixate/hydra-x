@@ -778,6 +778,12 @@ defmodule HydraXWeb.AgentsLive do
                     >
                       channels: {Enum.join(skill_channels(skill), ", ")}
                     </p>
+                    <p
+                      :if={skill_requires(skill) != []}
+                      class="mt-1 text-xs text-[var(--hx-mute)]"
+                    >
+                      requires: {Enum.join(skill_requires(skill), ", ")}
+                    </p>
                     <div class="mt-2 text-xs text-[var(--hx-mute)]">
                       {if skill.enabled, do: "enabled", else: "disabled"} · {skill_version(skill) ||
                         "unversioned"} · {get_in(
@@ -837,10 +843,13 @@ defmodule HydraXWeb.AgentsLive do
                     <div class="mt-2 text-sm text-[var(--hx-mute)]">
                       {mcp_descriptor(binding.mcp_server_config)}
                     </div>
+                    <p :if={mcp_actions(binding) != []} class="mt-2 text-xs text-[var(--hx-mute)]">
+                      actions: {Enum.join(mcp_actions(binding), ", ")}
+                    </p>
                     <div class="mt-2 text-xs text-[var(--hx-mute)]">
                       {if binding.enabled, do: "enabled", else: "disabled"} · {mcp_health_label(
                         agent.mcp_statuses[binding.mcp_server_config_id]
-                      )}
+                      )} · {mcp_action_count(binding)} actions
                     </div>
                   </div>
                   <p :if={agent.mcp_servers == []} class="text-sm text-[var(--hx-mute)]">
@@ -957,6 +966,16 @@ defmodule HydraXWeb.AgentsLive do
   defp skill_version(skill) do
     get_in(skill.metadata || %{}, ["version"])
   end
+
+  defp skill_requires(skill) do
+    get_in(skill.metadata || %{}, ["requires"]) || []
+  end
+
+  defp mcp_actions(binding) do
+    get_in(binding.mcp_server_config.metadata || %{}, ["actions"]) || []
+  end
+
+  defp mcp_action_count(binding), do: length(mcp_actions(binding))
 
   defp agent_tool_policy_form(agent) do
     policy = agent.tool_policy_override || Runtime.get_tool_policy() || %{}

@@ -201,6 +201,10 @@ defmodule HydraX.Agent.Worker do
     Map.put(arguments, :agent_id, context.agent_id)
   end
 
+  defp enrich_params(arguments, "mcp_catalog", context) do
+    Map.put(arguments, :agent_id, context.agent_id)
+  end
+
   defp enrich_params(arguments, "mcp_invoke", context) do
     Map.put(arguments, :agent_id, context.agent_id)
   end
