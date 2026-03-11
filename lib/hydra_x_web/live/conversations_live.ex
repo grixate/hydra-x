@@ -528,6 +528,12 @@ defmodule HydraXWeb.ConversationsLive do
                 >
                   {channel_recovery_summary(@channel_state)}
                 </p>
+                <p
+                  :if={channel_ownership_summary(@channel_state)}
+                  class="mt-2 text-xs text-[var(--hx-mute)]"
+                >
+                  {channel_ownership_summary(@channel_state)}
+                </p>
                 <div :if={channel_steps(@channel_state) != []} class="mt-3 space-y-2">
                   <div
                     :for={{step, index} <- Enum.with_index(channel_steps(@channel_state))}
@@ -1074,6 +1080,21 @@ defmodule HydraXWeb.ConversationsLive do
   end
 
   defp channel_recovery_summary(_state), do: nil
+
+  defp channel_ownership_summary(%{ownership: ownership}) when is_map(ownership) do
+    values =
+      [
+        ownership["mode"],
+        ownership["owner"],
+        ownership["stage"],
+        ownership["contended"] && "contended"
+      ]
+      |> Enum.reject(&(&1 in [nil, ""]))
+
+    if values == [], do: nil, else: "Owner: " <> Enum.join(values, " · ")
+  end
+
+  defp channel_ownership_summary(_state), do: nil
 
   defp step_status_label("running", true), do: "current"
 

@@ -108,11 +108,17 @@ defmodule HydraX.Runtime.Conversations do
   def conversation_channel_state(id) when is_integer(id) do
     checkpoint = get_checkpoint(id, "channel")
     state = (checkpoint && checkpoint.state) || %{}
+    conversation = Repo.get(Conversation, id)
+
+    ownership =
+      state["ownership"] || get_in((conversation && conversation.metadata) || %{}, ["ownership"]) ||
+        %{}
 
     %{
       checkpoint_id: checkpoint && checkpoint.id,
       status: state["status"],
       updated_at: state["updated_at"],
+      ownership: ownership,
       plan: state["plan"] || %{},
       steps: state["steps"] || get_in(state, ["plan", "steps"]) || [],
       current_step_id: state["current_step_id"],
@@ -315,6 +321,7 @@ defmodule HydraX.Runtime.Conversations do
             "## Execution checkpoint",
             "",
             "- status: #{channel_state.status}",
+            maybe_transcript_detail("- owner", render_ownership_line(channel_state.ownership)),
             "- provider: #{channel_state.provider || "n/a"}",
             "- tool_rounds: #{channel_state.tool_rounds || 0}",
             "- resumable: #{if(channel_state.resumable, do: "yes", else: "no")}",
@@ -386,6 +393,19 @@ defmodule HydraX.Runtime.Conversations do
         ]
       end)
   end
+
+  defp render_ownership_line(%{} = ownership) when map_size(ownership) > 0 do
+    [
+      ownership["mode"],
+      ownership["owner"],
+      ownership["stage"],
+      ownership["contended"] && "contended"
+    ]
+    |> Enum.reject(&is_nil_or_empty/1)
+    |> Enum.join(" · ")
+  end
+
+  defp render_ownership_line(_ownership), do: nil
 
   defp render_transcript_events([]), do: []
 

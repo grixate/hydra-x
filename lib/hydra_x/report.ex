@@ -538,9 +538,19 @@ defmodule HydraX.Report do
           end)
           |> Enum.join(" | ")
 
-        " · execution=#{status}; steps=#{if(steps == "", do: "none", else: steps)}"
+        owner = render_conversation_owner(state.ownership)
+
+        " · execution=#{status}; owner=#{owner}; steps=#{if(steps == "", do: "none", else: steps)}"
     end
   end
+
+  defp render_conversation_owner(%{} = ownership) when map_size(ownership) > 0 do
+    [ownership["mode"], ownership["owner"], ownership["stage"]]
+    |> Enum.reject(&is_nil_or_empty/1)
+    |> Enum.join("/")
+  end
+
+  defp render_conversation_owner(_ownership), do: "n/a"
 
   defp render_conversation_delivery(%{metadata: %{"last_delivery" => delivery}}),
     do: " · delivery=#{render_delivery_summary(delivery)}"
@@ -1158,6 +1168,7 @@ defmodule HydraX.Report do
       last_delivery: delivery,
       channel_state: %{
         status: channel_state.status,
+        ownership: channel_state.ownership,
         provider: channel_state.provider,
         tool_rounds: channel_state.tool_rounds,
         resumable: channel_state.resumable,

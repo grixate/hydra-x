@@ -7,6 +7,7 @@ defmodule HydraX.Agent.Channel do
   alias HydraX.Cluster
   alias HydraX.Config
   alias HydraX.LLM.Router
+  alias HydraX.Repo
   alias HydraX.Runtime
   alias HydraX.Safety
   alias HydraX.Telemetry
@@ -37,7 +38,12 @@ defmodule HydraX.Agent.Channel do
 
   def submit(agent, conversation, content, metadata \\ %{}) do
     {:ok, _pid} = ensure_started(agent.id, conversation)
-    :gen_statem.call(channel_name(conversation.id), {:submit, content, metadata}, 30_000)
+
+    response =
+      :gen_statem.call(channel_name(conversation.id), {:submit, content, metadata}, 30_000)
+
+    wait_for_stable_channel_state(conversation.id)
+    response
   end
 
   def ensure_started(agent_id, conversation) do
@@ -46,10 +52,17 @@ defmodule HydraX.Agent.Channel do
         {:ok, pid}
 
       :not_found ->
-        DynamicSupervisor.start_child(
-          HydraX.Agent.channel_supervisor(agent_id),
-          {__MODULE__, agent_id: agent_id, conversation: conversation}
-        )
+        with {:ok, pid} <-
+               DynamicSupervisor.start_child(
+                 HydraX.Agent.channel_supervisor(agent_id),
+                 {__MODULE__, agent_id: agent_id, conversation: conversation}
+               ) do
+          if recovery_pending?(conversation.id) do
+            wait_for_stable_channel_state(conversation.id, 300)
+          end
+
+          {:ok, pid}
+        end
     end
   end
 
@@ -96,8 +109,10 @@ defmodule HydraX.Agent.Channel do
         conversation: conversation,
         turns: turns,
         coalesce_buffer: pending_turns,
-        pending_from: []
+        pending_from: [],
+        ownership: nil
       }
+      |> refresh_conversation_ownership(if(recovered?, do: "recovering", else: "idle"))
 
     if recovered? do
       append_channel_event(conversation.id, "recovered_after_restart", %{
@@ -108,6 +123,7 @@ defmodule HydraX.Agent.Channel do
 
       update_channel_checkpoint(conversation.id, %{
         "status" => "interrupted",
+        "ownership" => data.ownership,
         "resumable" => true,
         "recovery_lineage" => recovered_recovery_lineage(conversation.id, pending_turns),
         "updated_at" => DateTime.utc_now()
@@ -177,6 +193,7 @@ defmodule HydraX.Agent.Channel do
 
     update_channel_checkpoint(data.conversation.id, %{
       "status" => "planned",
+      "ownership" => data.ownership,
       "plan" => plan,
       "steps" => plan["steps"] || [],
       "tool_cache" =>
@@ -232,6 +249,7 @@ defmodule HydraX.Agent.Channel do
 
         update_channel_checkpoint(data.conversation.id, %{
           "status" => "completed",
+          "ownership" => data.ownership,
           "steps" => current_checkpoint_steps(data.conversation.id),
           "current_step_id" => nil,
           "current_step_index" => nil,
@@ -314,6 +332,12 @@ defmodule HydraX.Agent.Channel do
 
   def handle_event(_type, _event, _state, data), do: {:keep_state, data}
 
+  @impl true
+  def terminate(_reason, _state, data) do
+    _ = release_conversation_ownership(data)
+    :ok
+  end
+
   # Tool-calling loop: iteratively call LLM, execute tools, feed results back
   defp run_tool_loop(messages, _tools, data, round, all_tool_results)
        when round >= @max_tool_rounds do
@@ -347,6 +371,7 @@ defmodule HydraX.Agent.Channel do
 
         update_channel_checkpoint(data.conversation.id, %{
           "status" => "executing_tools",
+          "ownership" => data.ownership,
           "steps" => complete_tool_steps(updated_steps, tool_results),
           "current_step_id" =>
             current_step_id_after_tools(complete_tool_steps(updated_steps, tool_results)),
@@ -429,6 +454,7 @@ defmodule HydraX.Agent.Channel do
         })
 
         update_channel_checkpoint(data.conversation.id, %{
+          "ownership" => data.ownership,
           "steps" => steps,
           "current_step_id" => nil,
           "current_step_index" => nil
@@ -456,6 +482,7 @@ defmodule HydraX.Agent.Channel do
 
         update_channel_checkpoint(data.conversation.id, %{
           "status" => "failed",
+          "ownership" => data.ownership,
           "steps" => steps,
           "current_step_id" => current_step_id_after_failure(steps),
           "current_step_index" => current_step_index_after_failure(steps),
@@ -572,6 +599,7 @@ defmodule HydraX.Agent.Channel do
 
               update_channel_checkpoint(data.conversation.id, %{
                 "status" => "streaming",
+                "ownership" => data.ownership,
                 "steps" => steps,
                 "current_step_id" => step_id_for_running(steps),
                 "current_step_index" => step_index_for_running(steps),
@@ -662,6 +690,7 @@ defmodule HydraX.Agent.Channel do
 
     update_channel_checkpoint(data.conversation.id, %{
       "status" => "completed",
+      "ownership" => data.ownership,
       "steps" =>
         current_checkpoint_steps(data.conversation.id)
         |> mark_provider_completed(%{
@@ -767,9 +796,37 @@ defmodule HydraX.Agent.Channel do
   defp latest_turn_id([]), do: nil
   defp latest_turn_id(turns), do: turns |> List.last() |> then(&(&1 && &1.id))
 
+  defp recovery_pending?(conversation_id) do
+    state = Runtime.conversation_channel_state(conversation_id)
+
+    state.status in ["planned", "executing_tools", "streaming", "interrupted"] and
+      is_nil(state.assistant_turn_id)
+  end
+
+  defp wait_for_stable_channel_state(conversation_id, attempts \\ 200)
+
+  defp wait_for_stable_channel_state(_conversation_id, 0), do: :ok
+
+  defp wait_for_stable_channel_state(conversation_id, attempts) do
+    case Runtime.conversation_channel_state(conversation_id).status do
+      status when status in ["planned", "executing_tools", "streaming", "interrupted"] ->
+        Process.sleep(10)
+        wait_for_stable_channel_state(conversation_id, attempts - 1)
+
+      _ ->
+        :ok
+    end
+  end
+
   defp update_channel_checkpoint(conversation_id, attrs) do
     existing = Runtime.get_checkpoint(conversation_id, "channel")
-    state = Map.merge((existing && existing.state) || %{}, attrs)
+    ownership = current_conversation_ownership(conversation_id)
+
+    state =
+      ((existing && existing.state) || %{})
+      |> maybe_put_current_ownership(ownership)
+      |> Map.merge(attrs)
+
     Runtime.upsert_checkpoint(conversation_id, "channel", state)
   end
 
@@ -788,6 +845,111 @@ defmodule HydraX.Agent.Channel do
   defp current_execution_events(conversation_id) do
     Runtime.conversation_channel_state(conversation_id).execution_events || []
   end
+
+  defp refresh_conversation_ownership(data, stage) do
+    ownership = claim_conversation_ownership(data.conversation.id, stage)
+
+    {:ok, conversation} =
+      Runtime.update_conversation_metadata(data.conversation, %{
+        "ownership" => ownership
+      })
+
+    %{data | conversation: conversation, ownership: ownership}
+  end
+
+  defp release_conversation_ownership(%{conversation: conversation} = data) do
+    if Config.repo_multi_writer?() do
+      _ = Runtime.release_lease(conversation_lease_name(conversation.id))
+    end
+
+    ownership =
+      ownership_payload(
+        data.ownership || local_conversation_ownership(conversation.id, "released"),
+        "released"
+      )
+      |> Map.put("active", false)
+      |> Map.put("released_at", DateTime.utc_now())
+
+    Runtime.update_conversation_metadata(conversation, %{"ownership" => ownership})
+  end
+
+  defp claim_conversation_ownership(conversation_id, stage) do
+    if Config.repo_multi_writer?() do
+      case Runtime.claim_lease(conversation_lease_name(conversation_id),
+             ttl_seconds: conversation_lease_ttl_seconds(),
+             metadata: %{
+               "type" => "conversation",
+               "conversation_id" => conversation_id,
+               "stage" => stage
+             }
+           ) do
+        {:ok, lease} ->
+          %{
+            "mode" => "database_lease",
+            "lease_name" => lease.name,
+            "owner" => lease.owner,
+            "owner_node" => lease.owner_node,
+            "expires_at" => lease.expires_at,
+            "active" => true
+          }
+          |> ownership_payload(stage)
+
+        {:error, {:taken, lease}} ->
+          %{
+            "mode" => "database_lease",
+            "lease_name" => lease.name,
+            "owner" => lease.owner,
+            "owner_node" => lease.owner_node,
+            "expires_at" => lease.expires_at,
+            "active" => false,
+            "contended" => true
+          }
+          |> ownership_payload(stage)
+
+        {:error, _reason} ->
+          local_conversation_ownership(conversation_id, stage)
+      end
+    else
+      local_conversation_ownership(conversation_id, stage)
+    end
+  end
+
+  defp local_conversation_ownership(conversation_id, stage) do
+    %{
+      "mode" => "local_process",
+      "lease_name" => conversation_lease_name(conversation_id),
+      "owner" => Runtime.coordination_status().owner,
+      "owner_node" => to_string(Cluster.node_id()),
+      "expires_at" => nil,
+      "active" => true
+    }
+    |> ownership_payload(stage)
+  end
+
+  defp ownership_payload(ownership, stage) do
+    ownership
+    |> Map.put("stage", stage)
+    |> Map.put("updated_at", DateTime.utc_now())
+  end
+
+  defp current_conversation_ownership(conversation_id) do
+    case Repo.get(HydraX.Runtime.Conversation, conversation_id) do
+      nil ->
+        nil
+
+      conversation ->
+        metadata = conversation.metadata || %{}
+        metadata["ownership"] || metadata[:ownership]
+    end
+  end
+
+  defp maybe_put_current_ownership(state, nil), do: state
+
+  defp maybe_put_current_ownership(state, ownership),
+    do: Map.put_new(state, "ownership", ownership)
+
+  defp conversation_lease_name(conversation_id), do: "conversation:#{conversation_id}"
+  defp conversation_lease_ttl_seconds, do: 3_600
 
   defp append_execution_event(events, phase, details) do
     events

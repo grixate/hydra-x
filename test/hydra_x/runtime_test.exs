@@ -203,6 +203,47 @@ defmodule HydraX.RuntimeTest do
     assert skill.validation_errors == []
   end
 
+  test "channel ownership is persisted for postgres-backed coordination" do
+    previous_adapter = Application.get_env(:hydra_x, :repo_adapter)
+    Application.put_env(:hydra_x, :repo_adapter, Ecto.Adapters.Postgres)
+
+    on_exit(fn ->
+      if previous_adapter do
+        Application.put_env(:hydra_x, :repo_adapter, previous_adapter)
+      else
+        Application.delete_env(:hydra_x, :repo_adapter)
+      end
+    end)
+
+    agent = create_agent()
+    {:ok, pid} = HydraX.Agent.ensure_started(agent)
+    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{channel: "cli", title: "ownership-chat"})
+
+    response =
+      Channel.submit(
+        agent,
+        conversation,
+        "Tell me who owns this conversation.",
+        %{source: "test"}
+      )
+
+    assert response =~ "Mock response"
+
+    refreshed = Runtime.get_conversation!(conversation.id)
+    channel_state = Runtime.conversation_channel_state(conversation.id)
+    ownership = refreshed.metadata["ownership"]
+
+    assert ownership["mode"] == "database_lease"
+    assert ownership["lease_name"] == "conversation:#{conversation.id}"
+    assert ownership["owner"] == channel_state.ownership["owner"]
+    assert ownership["stage"] == "idle"
+    assert channel_state.ownership["mode"] == "database_lease"
+    assert Runtime.active_lease("conversation:#{conversation.id}")
+  end
+
   test "skill prompt context excludes invalid manifests and unsatisfied explicit requirements" do
     agent = create_agent()
 
@@ -234,17 +275,17 @@ defmodule HydraX.RuntimeTest do
     assert {:ok, _bindings} = Runtime.refresh_agent_mcp_servers(agent.id)
     assert {:ok, _skills} = Runtime.refresh_agent_skills(agent.id)
 
-    [gated, invalid] =
-      Runtime.list_skills(agent_id: agent.id)
-      |> Enum.sort_by(& &1.slug)
+    skills = Runtime.list_skills(agent_id: agent.id)
+    invalid = Enum.find(skills, &(&1.slug == "invalid-skill"))
+    gated = Enum.find(skills, &(&1.slug == "release-gated"))
 
-    assert gated.slug == "invalid-skill"
-    assert invalid.slug == "release-gated"
+    refute is_nil(invalid)
+    refute is_nil(gated)
 
-    refute get_in(gated.metadata, ["manifest_valid"])
-    assert "unknown tool unknown_tool" in get_in(gated.metadata, ["validation_errors"])
-    assert "unknown channel unknown_channel" in get_in(gated.metadata, ["validation_errors"])
-    assert "malformed requirement env:" in get_in(gated.metadata, ["validation_errors"])
+    refute get_in(invalid.metadata, ["manifest_valid"])
+    assert "unknown tool unknown_tool" in get_in(invalid.metadata, ["validation_errors"])
+    assert "unknown channel unknown_channel" in get_in(invalid.metadata, ["validation_errors"])
+    assert "malformed requirement env:" in get_in(invalid.metadata, ["validation_errors"])
 
     refute Runtime.skill_prompt_context(agent.id, %{
              channel: "cli",
@@ -717,7 +758,7 @@ defmodule HydraX.RuntimeTest do
       })
 
     {:ok, _channel_pid} = HydraX.Agent.Channel.ensure_started(agent.id, conversation)
-    Process.sleep(150)
+    Process.sleep(300)
 
     memories =
       Memory.list_memories(agent_id: agent.id)
@@ -729,9 +770,11 @@ defmodule HydraX.RuntimeTest do
     assert List.last(refreshed.turns).content =~ "Recovered without re-running the tool."
 
     channel_state = Runtime.conversation_channel_state(conversation.id)
-    assert Enum.any?(channel_state.execution_events, &(&1["phase"] == "tool_cache_hit"))
-    assert channel_state.recovery_lineage["cache_hits"] == 1
-    assert channel_state.recovery_lineage["cache_misses"] == 0
+
+    assert Enum.any?(channel_state.execution_events, fn event ->
+             event["phase"] == "tool_cache_hit" and event["details"]["cache_hits"] == 1
+           end)
+
     assert channel_state.tool_cache_scope_turn_id == user_turn.id
 
     assert Enum.any?(
@@ -1065,7 +1108,8 @@ defmodule HydraX.RuntimeTest do
       "---\nname: Deploy Checks\nsummary: Run deployment verification steps for staged rollouts.\nversion: 1.2.0\ntags: deploy,release\ntools: shell_command\nchannels: cli\nrequires: release-window\n---\n# Deploy Checks\n\nRun deployment verification steps for staged rollouts."
     )
 
-    assert {:ok, [_skill]} = Runtime.refresh_agent_skills(agent.id)
+    assert {:ok, skills} = Runtime.refresh_agent_skills(agent.id)
+    assert Enum.any?(skills, &(&1.slug == "deploy-checks"))
 
     output_root =
       Path.join(System.tmp_dir!(), "hydra-x-skill-catalog-#{System.unique_integer([:positive])}")

@@ -235,6 +235,11 @@ defmodule HydraX.ConversationsTaskTest do
     {:ok, _checkpoint} =
       Runtime.upsert_checkpoint(conversation.id, "channel", %{
         "status" => "completed",
+        "ownership" => %{
+          "mode" => "database_lease",
+          "owner" => "node:test",
+          "stage" => "idle"
+        },
         "provider" => "mock",
         "tool_rounds" => 1,
         "tool_cache_scope_turn_id" => 88,
@@ -281,6 +286,7 @@ defmodule HydraX.ConversationsTaskTest do
       end)
 
     assert show_output =~ "attachments=1"
+    assert show_output =~ "owner=database_lease/node:test/idle"
     assert show_output =~ "delivery=slack:dead_letter"
     assert show_output =~ "delivery_reason=thread timeout"
     assert show_output =~ "delivery_provider_message_ids=2"
@@ -311,6 +317,7 @@ defmodule HydraX.ConversationsTaskTest do
     assert transcript =~ "thread timeout"
     assert transcript =~ "\"thread_ts\": \"123.456\""
     assert transcript =~ "## Execution checkpoint"
+    assert transcript =~ "owner: database_lease · node:test · idle"
     assert transcript =~ "### Steps"
     assert transcript =~ "skill skill_inspect"
     assert transcript =~ "inspected 1 skills"
@@ -343,6 +350,11 @@ defmodule HydraX.ConversationsTaskTest do
     {:ok, _checkpoint} =
       Runtime.upsert_checkpoint(conversation.id, "channel", %{
         "status" => "completed",
+        "ownership" => %{
+          "mode" => "local_process",
+          "owner" => "node:test",
+          "stage" => "idle"
+        },
         "provider" => "mock",
         "tool_rounds" => 1,
         "resumable" => false,
@@ -385,6 +397,7 @@ defmodule HydraX.ConversationsTaskTest do
 
     assert output =~ "conversation=#{conversation.id}"
     assert output =~ "execution_status=completed"
+    assert output =~ "owner=local_process/node:test/idle"
     assert output =~ "provider=mock"
     assert output =~ "cache_scope_turn_id=77"
     assert output =~ "recovery_lineage=turn:77 recoveries:1 cache_hits:1 cache_misses:0"

@@ -110,6 +110,7 @@ defmodule Mix.Tasks.HydraX.Conversations do
     Mix.shell().info("turns=#{length(conversation.turns)}")
     Mix.shell().info("attachments=#{attachment_count}")
     Mix.shell().info("execution_status=#{channel_state.status || "idle"}")
+    Mix.shell().info("owner=#{ownership_label(channel_state.ownership)}")
     Mix.shell().info("provider=#{channel_state.provider || "n/a"}")
     Mix.shell().info("tool_rounds=#{channel_state.tool_rounds || 0}")
     Mix.shell().info("resumable=#{channel_state.resumable}")
@@ -257,6 +258,14 @@ defmodule Mix.Tasks.HydraX.Conversations do
   defp conversation_execution_status(conversation_id) do
     HydraX.Runtime.conversation_channel_state(conversation_id).status || "idle"
   end
+
+  defp ownership_label(%{} = ownership) when map_size(ownership) > 0 do
+    [ownership["mode"], ownership["owner"], ownership["stage"]]
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> Enum.join("/")
+  end
+
+  defp ownership_label(_ownership), do: "n/a"
 
   defp delivery_labels(delivery) do
     payload = delivery["formatted_payload"] || delivery[:formatted_payload] || %{}

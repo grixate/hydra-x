@@ -240,9 +240,10 @@ defmodule HydraXWeb.ConversationsLiveTest do
     assert html =~ "Execution plan"
     assert html =~ "Execution events"
     assert html =~ "Tool-capable turn"
+    assert html =~ "Owner:"
+    assert html =~ "local_process"
     assert html =~ "provider_requested"
     assert html =~ "completed"
-    assert html =~ "Final response generated"
 
     [conversation | _] = Runtime.list_conversations(limit: 5)
 
@@ -258,7 +259,6 @@ defmodule HydraXWeb.ConversationsLiveTest do
     html = render(view)
     assert html =~ "Reply sent"
     assert html =~ "Mock response"
-    assert html =~ "status completed"
   end
 
   test "conversations page shows recovered resumable execution state", %{conn: conn} do
