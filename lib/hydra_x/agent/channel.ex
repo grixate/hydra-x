@@ -109,6 +109,7 @@ defmodule HydraX.Agent.Channel do
       update_channel_checkpoint(conversation.id, %{
         "status" => "interrupted",
         "resumable" => true,
+        "recovery_lineage" => recovered_recovery_lineage(conversation.id, pending_turns),
         "updated_at" => DateTime.utc_now()
       })
 
@@ -185,6 +186,8 @@ defmodule HydraX.Agent.Channel do
       "current_step_index" => step_index_for_status(plan["steps"] || [], "pending"),
       "resumable" => true,
       "latest_user_turn_id" => latest_turn_id(data.coalesce_buffer),
+      "recovery_lineage" =>
+        planning_recovery_lineage(data.conversation.id, latest_turn_id(data.coalesce_buffer)),
       "tool_rounds" => 0,
       "tool_results" => [],
       "execution_events" =>
@@ -355,7 +358,20 @@ defmodule HydraX.Agent.Channel do
             Enum.map(tool_calls, fn call ->
               %{"id" => call.id, "name" => call.name}
             end),
-          "tool_cache" => merge_tool_cache(data.conversation.id, tool_results),
+          "tool_cache" =>
+            merge_tool_cache(
+              data.conversation.id,
+              tool_results,
+              latest_turn_id(data.coalesce_buffer),
+              round + 1
+            ),
+          "recovery_lineage" =>
+            update_recovery_lineage_cache_stats(
+              data.conversation.id,
+              cache_hits,
+              cache_misses,
+              tool_results
+            ),
           "tool_results" => summarize_tool_results(all_tool_results ++ tool_results),
           "updated_at" => DateTime.utc_now()
         })
@@ -853,7 +869,11 @@ defmodule HydraX.Agent.Channel do
 
           Worker.execute_tool_calls(data.agent_id, data.conversation, calls)
           |> Enum.map(fn result ->
-            Map.put(result, :fingerprint, Map.fetch!(fingerprints, result.tool_use_id))
+            result
+            |> Map.put(:fingerprint, Map.fetch!(fingerprints, result.tool_use_id))
+            |> Map.put(:cached, false)
+            |> Map.put(:replayed, false)
+            |> Map.put(:result_source, "fresh")
           end)
       end
 
@@ -871,29 +891,36 @@ defmodule HydraX.Agent.Channel do
       result: entry["result"],
       is_error: entry["is_error"] || false,
       cached: true,
+      replayed: true,
+      result_source: "cache",
       fingerprint: entry["fingerprint"],
       summary: entry["summary"],
-      safety_classification: entry["safety_classification"]
+      safety_classification: entry["safety_classification"],
+      cache_recorded_at: entry["cached_at"],
+      cache_scope_turn_id: entry["scope_turn_id"],
+      replay_provenance: entry["replay_provenance"] || %{}
     }
   end
 
-  defp merge_tool_cache(conversation_id, results) do
+  defp merge_tool_cache(conversation_id, results, scope_turn_id, round) do
     existing =
       current_tool_cache(conversation_id)
       |> Map.new(fn entry -> {entry["fingerprint"], entry} end)
 
     results
     |> Enum.reduce(existing, fn result, acc ->
+      entry = tool_result_cache_entry(result, conversation_id, scope_turn_id, round)
+
       Map.put(
         acc,
-        tool_result_cache_entry(result)["fingerprint"],
-        tool_result_cache_entry(result)
+        entry["fingerprint"],
+        entry
       )
     end)
     |> Map.values()
   end
 
-  defp tool_result_cache_entry(result) do
+  defp tool_result_cache_entry(result, conversation_id, scope_turn_id, round) do
     %{
       "fingerprint" => result[:fingerprint],
       "tool_name" => result.tool_name,
@@ -901,7 +928,15 @@ defmodule HydraX.Agent.Channel do
       "is_error" => result[:is_error] || false,
       "summary" => result[:summary],
       "safety_classification" => result[:safety_classification] || "standard",
-      "cached_at" => DateTime.utc_now()
+      "cached_at" => DateTime.utc_now(),
+      "scope_turn_id" => scope_turn_id,
+      "recorded_round" => round,
+      "source_conversation_id" => conversation_id,
+      "source_tool_use_id" => result.tool_use_id,
+      "replay_provenance" => %{
+        "result_source" => result[:result_source] || "fresh",
+        "replayed" => result[:replayed] || false
+      }
     }
   end
 
@@ -971,7 +1006,11 @@ defmodule HydraX.Agent.Channel do
             "reason" => "dynamically requested by provider",
             "status" => "pending",
             "executor" => "channel",
-            "attempt_count" => 0
+            "owner" => "channel",
+            "attempt_count" => 0,
+            "lifecycle" => "planned",
+            "idempotency_key" => "tool-dynamic-#{tool_name}",
+            "replay_strategy" => "cache_or_replay"
           }
           |> transition_step("running")
           |> Map.put("summary", "Executing #{tool_name}")
@@ -982,11 +1021,22 @@ defmodule HydraX.Agent.Channel do
   defp complete_tool_steps(steps, tool_results) do
     Enum.reduce(tool_results, steps, fn result, acc ->
       update_matching_step(acc, "tool", result.tool_name, fn step ->
+        terminal_status = if(result[:is_error] || false, do: "failed", else: "completed")
+
         step
-        |> transition_step(if(result[:is_error] || false, do: "failed", else: "completed"))
+        |> transition_step(terminal_status)
+        |> Map.put("lifecycle", tool_step_lifecycle(result, terminal_status))
         |> Map.put("summary", result[:summary] || summarize_tool_result_payload(result.result))
         |> Map.put("output_excerpt", tool_result_excerpt(result.result))
         |> Map.put("cached", result[:cached] || false)
+        |> Map.put("replayed", result[:replayed] || false)
+        |> Map.put("result_source", result[:result_source] || "fresh")
+        |> Map.put("cache_fingerprint", result[:fingerprint])
+        |> Map.put(
+          "replay_count",
+          (step["replay_count"] || 0) + if(result[:replayed], do: 1, else: 0)
+        )
+        |> Map.put("tool_use_id", result.tool_use_id)
         |> Map.put("safety_classification", result[:safety_classification] || "standard")
       end)
     end)
@@ -1042,7 +1092,11 @@ defmodule HydraX.Agent.Channel do
             "label" => "Final response",
             "status" => "pending",
             "executor" => "channel",
-            "attempt_count" => 0
+            "owner" => "channel",
+            "attempt_count" => 0,
+            "lifecycle" => "planned",
+            "idempotency_key" => "provider-final",
+            "replay_strategy" => "replay"
           }
           |> fun.()
         ]
@@ -1083,11 +1137,28 @@ defmodule HydraX.Agent.Channel do
         "tool_name" => result.tool_name,
         "is_error" => result[:is_error] || false,
         "cached" => result[:cached] || false,
+        "replayed" => result[:replayed] || false,
+        "result_source" => result[:result_source] || "fresh",
+        "fingerprint" => result[:fingerprint],
         "summary" => result[:summary] || summarize_tool_result_payload(result.result),
         "safety_classification" => result[:safety_classification] || "standard"
       }
     end)
   end
+
+  defp tool_step_lifecycle(result, "failed") do
+    if result[:cached], do: "replayed_failed", else: "failed"
+  end
+
+  defp tool_step_lifecycle(result, "completed") do
+    cond do
+      result[:cached] -> "cached"
+      result[:replayed] -> "replayed"
+      true -> "completed"
+    end
+  end
+
+  defp tool_step_lifecycle(_result, status), do: status
 
   defp summarize_tool_result_payload(%{error: error}) when is_binary(error), do: error
   defp summarize_tool_result_payload(%{"error" => error}) when is_binary(error), do: error
@@ -1159,13 +1230,24 @@ defmodule HydraX.Agent.Channel do
   defp dynamic_step_label(tool_name), do: tool_name
 
   defp tool_result_excerpt(%{content: content}) when is_binary(content), do: excerpt_text(content)
-  defp tool_result_excerpt(%{"content" => content}) when is_binary(content), do: excerpt_text(content)
+
+  defp tool_result_excerpt(%{"content" => content}) when is_binary(content),
+    do: excerpt_text(content)
+
   defp tool_result_excerpt(%{text: text}) when is_binary(text), do: excerpt_text(text)
   defp tool_result_excerpt(%{"text" => text}) when is_binary(text), do: excerpt_text(text)
-  defp tool_result_excerpt(%{results: results}) when is_list(results), do: "#{length(results)} results"
-  defp tool_result_excerpt(%{"results" => results}) when is_list(results), do: "#{length(results)} results"
+
+  defp tool_result_excerpt(%{results: results}) when is_list(results),
+    do: "#{length(results)} results"
+
+  defp tool_result_excerpt(%{"results" => results}) when is_list(results),
+    do: "#{length(results)} results"
+
   defp tool_result_excerpt(%{skills: skills}) when is_list(skills), do: "#{length(skills)} skills"
-  defp tool_result_excerpt(%{"skills" => skills}) when is_list(skills), do: "#{length(skills)} skills"
+
+  defp tool_result_excerpt(%{"skills" => skills}) when is_list(skills),
+    do: "#{length(skills)} skills"
+
   defp tool_result_excerpt(%{memories: memories}) when is_list(memories),
     do: "#{length(memories)} memories"
 
@@ -1198,6 +1280,7 @@ defmodule HydraX.Agent.Channel do
 
     step
     |> Map.put("status", status)
+    |> Map.put("lifecycle", if(status == "running", do: "started", else: status))
     |> Map.put("updated_at", now)
     |> maybe_mark_step_started(status, now)
     |> maybe_mark_step_finished(status, now)
@@ -1225,4 +1308,64 @@ defmodule HydraX.Agent.Channel do
   end
 
   defp maybe_mark_step_finished(step, _status, _now), do: step
+
+  defp current_recovery_lineage(conversation_id) do
+    state = (Runtime.get_checkpoint(conversation_id, "channel") || %{state: %{}}).state || %{}
+    Map.get(state, "recovery_lineage", %{})
+  end
+
+  defp planning_recovery_lineage(conversation_id, latest_user_turn_id) do
+    current = current_recovery_lineage(conversation_id)
+
+    if current["turn_scope_id"] == latest_user_turn_id and not is_nil(latest_user_turn_id) do
+      Map.put(current, "last_planned_at", DateTime.utc_now())
+    else
+      %{
+        "turn_scope_id" => latest_user_turn_id,
+        "recovery_count" => 0,
+        "cache_hits" => 0,
+        "cache_misses" => 0,
+        "replayed_tool_names" => [],
+        "last_planned_at" => DateTime.utc_now()
+      }
+    end
+  end
+
+  defp recovered_recovery_lineage(conversation_id, pending_turns) do
+    current = current_recovery_lineage(conversation_id)
+
+    %{
+      "turn_scope_id" => List.last(pending_turns) && List.last(pending_turns).id,
+      "recovery_count" => (current["recovery_count"] || 0) + 1,
+      "cache_hits" => current["cache_hits"] || 0,
+      "cache_misses" => current["cache_misses"] || 0,
+      "replayed_tool_names" => current["replayed_tool_names"] || [],
+      "latest_recovery_at" => DateTime.utc_now(),
+      "latest_recovered_turn_ids" => Enum.map(pending_turns, & &1.id)
+    }
+  end
+
+  defp update_recovery_lineage_cache_stats(
+         conversation_id,
+         cache_hits,
+         cache_misses,
+         tool_results
+       ) do
+    current = current_recovery_lineage(conversation_id)
+
+    replayed_tool_names =
+      tool_results
+      |> Enum.filter(&(&1[:replayed] || false))
+      |> Enum.map(& &1.tool_name)
+
+    current
+    |> Map.update("cache_hits", cache_hits, &((&1 || 0) + cache_hits))
+    |> Map.update("cache_misses", cache_misses, &((&1 || 0) + cache_misses))
+    |> Map.update("replayed_tool_names", replayed_tool_names, fn existing ->
+      (existing || [])
+      |> Kernel.++(replayed_tool_names)
+      |> Enum.uniq()
+    end)
+    |> Map.put("last_cache_activity_at", DateTime.utc_now())
+  end
 end

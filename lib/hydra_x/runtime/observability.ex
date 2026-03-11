@@ -10,6 +10,7 @@ defmodule HydraX.Runtime.Observability do
   alias HydraX.Memory
   alias HydraX.Security.Secrets
   alias HydraX.Security.LoginThrottle
+  alias HydraX.Safety
 
   alias HydraX.Repo
 
@@ -41,6 +42,7 @@ defmodule HydraX.Runtime.Observability do
     backups = backup_status()
     secrets = secret_storage_status()
     control_policy = control_policy_status()
+    effective_policy = effective_policy_status(default_agent && default_agent.id)
     safety_errors = Map.get(safety_counts, "error", 0)
     safety_warnings = Map.get(safety_counts, "warn", 0)
 
@@ -83,28 +85,11 @@ defmodule HydraX.Runtime.Observability do
           cond do
             not operator.configured -> :warn
             operator.password_stale? -> :warn
+            operator.recent_login_failure_count > 0 -> :warn
+            operator.recent_session_expiry_count > 0 -> :warn
             true -> :ok
           end,
-        detail:
-          case operator do
-            %{
-              configured: true,
-              last_rotated_at: rotated_at,
-              password_stale?: true,
-              password_age_days: age
-            }
-            when not is_nil(rotated_at) ->
-              "operator password set; rotated #{Calendar.strftime(rotated_at, "%Y-%m-%d %H:%M UTC")}; age #{age} days; recent-auth window #{div(operator.recent_auth_window_seconds, 60)}m"
-
-            %{configured: true, last_rotated_at: rotated_at} when not is_nil(rotated_at) ->
-              "operator password set; rotated #{Calendar.strftime(rotated_at, "%Y-%m-%d %H:%M UTC")}; recent-auth window #{div(operator.recent_auth_window_seconds, 60)}m"
-
-            %{configured: true} ->
-              "operator password set; recent-auth window #{div(operator.recent_auth_window_seconds, 60)}m"
-
-            _ ->
-              "control plane open until operator password is set"
-          end
+        detail: operator_detail(operator)
       },
       %{
         name: "secrets",
@@ -154,7 +139,7 @@ defmodule HydraX.Runtime.Observability do
         name: "memory",
         status: if(Map.get(memory_status.counts, "conflicted", 0) > 0, do: :warn, else: :ok),
         detail:
-          "active #{Map.get(memory_status.counts, "active", 0)}; conflicted #{Map.get(memory_status.counts, "conflicted", 0)}; superseded #{Map.get(memory_status.counts, "superseded", 0)}"
+          "active #{Map.get(memory_status.counts, "active", 0)}; conflicted #{Map.get(memory_status.counts, "conflicted", 0)}; embedded #{memory_status.embedding.embedded_count}/#{memory_status.embedding.total_count}; missing #{memory_status.embedding.unembedded_count}; stale #{memory_status.embedding.stale_count}; backend #{memory_status.embedding.active_backend}"
       },
       %{
         name: "safety",
@@ -181,6 +166,11 @@ defmodule HydraX.Runtime.Observability do
         status: :ok,
         detail: control_policy_detail(control_policy)
       },
+      %{
+        name: "effective_policy",
+        status: :ok,
+        detail: effective_policy_detail(effective_policy)
+      },
       (
         scheduled_jobs = HydraX.Runtime.Jobs.list_scheduled_jobs(limit: 5)
 
@@ -206,22 +196,13 @@ defmodule HydraX.Runtime.Observability do
       %{
         name: "backups",
         status:
-          if(backups.latest_backup && backups.latest_backup["archive_exists"],
+          if(
+            backups.latest_backup && backups.latest_backup["archive_exists"] &&
+              backups.latest_backup["verified"] != false,
             do: :ok,
             else: :warn
           ),
-        detail:
-          case backups.latest_backup do
-            nil ->
-              "no backup manifests found in #{backups.root}"
-
-            backup ->
-              if backup["archive_exists"] do
-                "latest backup #{backup["archive_path"]}"
-              else
-                "latest backup archive missing for #{backup["archive_path"]}"
-              end
-          end
+        detail: backup_detail(backups)
       },
       %{
         name: "workspace",
@@ -253,6 +234,9 @@ defmodule HydraX.Runtime.Observability do
           last_error: nil,
           default_agent_name: nil,
           retryable_count: diagnostics.retryable_count,
+          dead_letter_count: diagnostics.dead_letter_count,
+          multipart_failure_count: diagnostics.multipart_failure_count,
+          attachment_failure_count: diagnostics.attachment_failure_count,
           recent_failures: diagnostics.recent_failures,
           gateway_events: diagnostics.gateway_events
         }
@@ -270,6 +254,9 @@ defmodule HydraX.Runtime.Observability do
           last_error: config.webhook_last_error,
           default_agent_name: config.default_agent && config.default_agent.name,
           retryable_count: diagnostics.retryable_count,
+          dead_letter_count: diagnostics.dead_letter_count,
+          multipart_failure_count: diagnostics.multipart_failure_count,
+          attachment_failure_count: diagnostics.attachment_failure_count,
           recent_failures: diagnostics.recent_failures,
           gateway_events: diagnostics.gateway_events
         }
@@ -277,6 +264,8 @@ defmodule HydraX.Runtime.Observability do
   end
 
   def discord_status do
+    diagnostics = channel_delivery_diagnostics("discord")
+
     case HydraX.Runtime.DiscordAdmin.enabled_discord_config() ||
            List.first(HydraX.Runtime.DiscordAdmin.list_discord_configs()) do
       nil ->
@@ -286,7 +275,11 @@ defmodule HydraX.Runtime.Observability do
           enabled: false,
           binding: nil,
           default_agent_name: nil,
-          recent_failures: recent_channel_failures("discord"),
+          retryable_count: diagnostics.retryable_count,
+          dead_letter_count: diagnostics.dead_letter_count,
+          multipart_failure_count: diagnostics.multipart_failure_count,
+          attachment_failure_count: diagnostics.attachment_failure_count,
+          recent_failures: diagnostics.recent_failures,
           gateway_events: recent_gateway_events("discord")
         }
 
@@ -297,13 +290,19 @@ defmodule HydraX.Runtime.Observability do
           enabled: config.enabled,
           binding: config.application_id,
           default_agent_name: config.default_agent && config.default_agent.name,
-          recent_failures: recent_channel_failures("discord"),
+          retryable_count: diagnostics.retryable_count,
+          dead_letter_count: diagnostics.dead_letter_count,
+          multipart_failure_count: diagnostics.multipart_failure_count,
+          attachment_failure_count: diagnostics.attachment_failure_count,
+          recent_failures: diagnostics.recent_failures,
           gateway_events: recent_gateway_events("discord")
         }
     end
   end
 
   def slack_status do
+    diagnostics = channel_delivery_diagnostics("slack")
+
     case HydraX.Runtime.SlackAdmin.enabled_slack_config() ||
            List.first(HydraX.Runtime.SlackAdmin.list_slack_configs()) do
       nil ->
@@ -313,7 +312,11 @@ defmodule HydraX.Runtime.Observability do
           enabled: false,
           binding: nil,
           default_agent_name: nil,
-          recent_failures: recent_channel_failures("slack"),
+          retryable_count: diagnostics.retryable_count,
+          dead_letter_count: diagnostics.dead_letter_count,
+          multipart_failure_count: diagnostics.multipart_failure_count,
+          attachment_failure_count: diagnostics.attachment_failure_count,
+          recent_failures: diagnostics.recent_failures,
           gateway_events: recent_gateway_events("slack")
         }
 
@@ -324,13 +327,19 @@ defmodule HydraX.Runtime.Observability do
           enabled: config.enabled,
           binding: "bot token configured",
           default_agent_name: config.default_agent && config.default_agent.name,
-          recent_failures: recent_channel_failures("slack"),
+          retryable_count: diagnostics.retryable_count,
+          dead_letter_count: diagnostics.dead_letter_count,
+          multipart_failure_count: diagnostics.multipart_failure_count,
+          attachment_failure_count: diagnostics.attachment_failure_count,
+          recent_failures: diagnostics.recent_failures,
           gateway_events: recent_gateway_events("slack")
         }
     end
   end
 
   def webchat_status do
+    diagnostics = channel_delivery_diagnostics("webchat")
+
     case HydraX.Runtime.WebchatAdmin.enabled_webchat_config() ||
            List.first(HydraX.Runtime.WebchatAdmin.list_webchat_configs()) do
       nil ->
@@ -340,7 +349,11 @@ defmodule HydraX.Runtime.Observability do
           enabled: false,
           binding: "/webchat",
           default_agent_name: nil,
-          recent_failures: recent_channel_failures("webchat"),
+          retryable_count: diagnostics.retryable_count,
+          dead_letter_count: diagnostics.dead_letter_count,
+          multipart_failure_count: diagnostics.multipart_failure_count,
+          attachment_failure_count: diagnostics.attachment_failure_count,
+          recent_failures: diagnostics.recent_failures,
           gateway_events: recent_gateway_events("webchat")
         }
 
@@ -351,7 +364,17 @@ defmodule HydraX.Runtime.Observability do
           enabled: config.enabled,
           binding: "/webchat",
           default_agent_name: config.default_agent && config.default_agent.name,
-          recent_failures: recent_channel_failures("webchat"),
+          allow_anonymous_messages: config.allow_anonymous_messages,
+          session_max_age_minutes: config.session_max_age_minutes,
+          session_idle_timeout_minutes: config.session_idle_timeout_minutes,
+          attachments_enabled: config.attachments_enabled,
+          max_attachment_count: config.max_attachment_count,
+          max_attachment_size_kb: config.max_attachment_size_kb,
+          retryable_count: diagnostics.retryable_count,
+          dead_letter_count: diagnostics.dead_letter_count,
+          multipart_failure_count: diagnostics.multipart_failure_count,
+          attachment_failure_count: diagnostics.attachment_failure_count,
+          recent_failures: diagnostics.recent_failures,
           gateway_events: recent_gateway_events("webchat")
         }
     end
@@ -445,6 +468,9 @@ defmodule HydraX.Runtime.Observability do
   end
 
   def operator_status do
+    auth_events = Safety.list_events(category: "auth", limit: 40)
+    audit = operator_auth_audit(auth_events)
+
     case Repo.get_by(OperatorSecret, scope: "control_plane") do
       nil ->
         %{
@@ -459,6 +485,7 @@ defmodule HydraX.Runtime.Observability do
           idle_timeout_seconds: HydraXWeb.OperatorAuth.idle_timeout_seconds(),
           recent_auth_window_seconds: HydraXWeb.OperatorAuth.recent_auth_window_seconds()
         }
+        |> Map.merge(audit)
 
       secret ->
         age_days = password_age_days(secret.last_rotated_at)
@@ -475,11 +502,12 @@ defmodule HydraX.Runtime.Observability do
           idle_timeout_seconds: HydraXWeb.OperatorAuth.idle_timeout_seconds(),
           recent_auth_window_seconds: HydraXWeb.OperatorAuth.recent_auth_window_seconds()
         }
+        |> Map.merge(audit)
     end
   end
 
   def tool_status do
-    policy = HydraX.Runtime.Providers.effective_tool_policy()
+    policy = effective_policy_status().tool_policy
 
     %{
       workspace_list_enabled: policy.workspace_list_enabled,
@@ -500,7 +528,7 @@ defmodule HydraX.Runtime.Observability do
   end
 
   def control_policy_status do
-    policy = HydraX.Runtime.effective_control_policy()
+    policy = effective_policy_status().control_policy
 
     %{
       require_recent_auth_for_sensitive_actions: policy.require_recent_auth_for_sensitive_actions,
@@ -511,31 +539,61 @@ defmodule HydraX.Runtime.Observability do
     }
   end
 
+  def effective_policy_status(agent_id \\ nil, opts \\ []) do
+    HydraX.Runtime.effective_policy(agent_id, opts)
+  end
+
   def secret_storage_status do
-    secret_values =
-      provider_secret_values() ++
-        telegram_secret_values() ++ discord_secret_values() ++ slack_secret_values()
+    scopes = [
+      summarize_secret_values("provider", provider_secret_values()),
+      summarize_secret_values("telegram", telegram_secret_values()),
+      summarize_secret_values("discord", discord_secret_values()),
+      summarize_secret_values("slack", slack_secret_values())
+    ]
+
+    total_records = Enum.reduce(scopes, 0, &(&1.total_records + &2))
+    encrypted_records = Enum.reduce(scopes, 0, &(&1.encrypted_records + &2))
+    env_backed_records = Enum.reduce(scopes, 0, &(&1.env_backed_records + &2))
+    unresolved_env_records = Enum.reduce(scopes, 0, &(&1.unresolved_env_records + &2))
+    plaintext_records = Enum.reduce(scopes, 0, &(&1.plaintext_records + &2))
+    protected_records = encrypted_records + env_backed_records
+
+    posture =
+      cond do
+        plaintext_records > 0 -> "warning"
+        unresolved_env_records > 0 -> "degraded"
+        total_records == 0 -> "empty"
+        true -> "hardened"
+      end
+
+    issues =
+      []
+      |> maybe_add_issue(
+        plaintext_records > 0,
+        "#{plaintext_records} plaintext records still stored"
+      )
+      |> maybe_add_issue(
+        unresolved_env_records > 0,
+        "#{unresolved_env_records} env references are unresolved at runtime"
+      )
+      |> maybe_add_issue(
+        total_records == 0,
+        "no persisted provider or channel secrets have been configured"
+      )
 
     %{
-      total_records: Enum.count(secret_values, &(Helpers.blank_to_nil(&1) not in [nil, ""])),
-      encrypted_records:
-        Enum.count(secret_values, fn value ->
-          value not in [nil, ""] and Secrets.encrypted?(value)
-        end),
-      env_backed_records:
-        Enum.count(secret_values, fn value ->
-          value not in [nil, ""] and Secrets.env_reference?(value)
-        end),
-      unresolved_env_records:
-        Enum.count(secret_values, fn value ->
-          value not in [nil, ""] and Secrets.unresolved_env_reference?(value)
-        end),
-      plaintext_records:
-        Enum.count(secret_values, fn value ->
-          value not in [nil, ""] and
-            not Secrets.encrypted?(value) and
-            not Secrets.env_reference?(value)
-        end),
+      posture: posture,
+      issues: issues,
+      scopes: scopes,
+      total_records: total_records,
+      protected_records: protected_records,
+      coverage_percent:
+        if(total_records == 0, do: 100, else: round(protected_records * 100 / total_records)),
+      encrypted_records: encrypted_records,
+      env_backed_records: env_backed_records,
+      resolved_env_records: env_backed_records - unresolved_env_records,
+      unresolved_env_records: unresolved_env_records,
+      plaintext_records: plaintext_records,
       key_source: Secrets.key_source()
     }
   end
@@ -634,6 +692,20 @@ defmodule HydraX.Runtime.Observability do
           end
       },
       %{
+        id: "operator_auth_flow",
+        label: "Operator auth flow is clean",
+        required: false,
+        status:
+          if(
+            operator.recent_login_failure_count > 0 or
+              operator.recent_rate_limited_count > 0 or
+              operator.recent_session_expiry_count > 0,
+            do: :warn,
+            else: :ok
+          ),
+        detail: operator_auth_readiness_detail(operator)
+      },
+      %{
         id: "public_url",
         label: "Public URL points beyond localhost",
         required: true,
@@ -649,7 +721,9 @@ defmodule HydraX.Runtime.Observability do
         label: "Backups are being written",
         required: true,
         status:
-          if(backups.latest_backup && backups.latest_backup["archive_exists"],
+          if(
+            backups.latest_backup && backups.latest_backup["archive_exists"] &&
+              backups.latest_backup["verified"] != false,
             do: :ok,
             else: :warn
           ),
@@ -659,11 +733,7 @@ defmodule HydraX.Runtime.Observability do
               "no backup manifest found in #{backup_root}"
 
             backup ->
-              if backup["archive_exists"] do
-                backup["archive_path"]
-              else
-                "archive missing for #{backup["archive_path"]}"
-              end
+              backup_readiness_detail(backup)
           end
       },
       (
@@ -766,7 +836,7 @@ defmodule HydraX.Runtime.Observability do
         detail:
           cond do
             webchat.configured and webchat.enabled ->
-              "configured#{agent_suffix(webchat.default_agent_name)} at /webchat"
+              "configured#{agent_suffix(webchat.default_agent_name)} at /webchat · #{webchat_policy_detail(webchat)}"
 
             webchat.configured ->
               "saved but disabled"
@@ -826,7 +896,11 @@ defmodule HydraX.Runtime.Observability do
         id: "secrets",
         label: "Runtime secrets are encrypted at rest",
         required: false,
-        status: if(secrets.plaintext_records > 0, do: :warn, else: :ok),
+        status:
+          if(secrets.plaintext_records > 0 or secrets.unresolved_env_records > 0,
+            do: :warn,
+            else: :ok
+          ),
         detail: secret_detail(secrets)
       },
       %{
@@ -851,6 +925,10 @@ defmodule HydraX.Runtime.Observability do
       |> maybe_filter_readiness_search(Keyword.get(opts, :search))
 
     %{
+      counts: readiness_counts(items),
+      blockers: readiness_blockers(items),
+      recommendations: readiness_recommendations(items),
+      next_steps: readiness_next_steps(items),
       summary:
         if(Enum.any?(items, &(&1.required and &1.status != :ok)),
           do: :warn,
@@ -886,6 +964,11 @@ defmodule HydraX.Runtime.Observability do
     %{
       root: root,
       latest_backup: List.first(manifests),
+      latest_verified_backup:
+        Enum.find(manifests, &(&1["archive_exists"] && Map.get(&1, "verified") == true)),
+      verified_count: Enum.count(manifests, &(Map.get(&1, "verified") == true)),
+      verification_failed_count: Enum.count(manifests, &(Map.get(&1, "verified") == false)),
+      unverified_count: Enum.count(manifests, &is_nil(Map.get(&1, "verified"))),
       recent_backups: Enum.take(manifests, 5)
     }
   end
@@ -934,7 +1017,13 @@ defmodule HydraX.Runtime.Observability do
   end
 
   defp do_memory_triage_status(nil) do
-    %{agent_id: nil, agent_name: nil, counts: %{}, recent_conflicts: []}
+    %{
+      agent_id: nil,
+      agent_name: nil,
+      counts: %{},
+      recent_conflicts: [],
+      embedding: HydraX.Memory.embedding_status()
+    }
   end
 
   defp do_memory_triage_status(agent) do
@@ -942,30 +1031,13 @@ defmodule HydraX.Runtime.Observability do
       agent_id: agent.id,
       agent_name: agent.name,
       counts: Memory.status_counts(agent_id: agent.id),
-      recent_conflicts: Memory.list_memories(agent_id: agent.id, status: "conflicted", limit: 8)
+      recent_conflicts: Memory.list_memories(agent_id: agent.id, status: "conflicted", limit: 8),
+      embedding: Memory.embedding_status(agent.id)
     }
   end
 
   defp telegram_delivery_diagnostics do
-    telegram_conversations =
-      HydraX.Runtime.Conversations.list_conversations(channel: "telegram", limit: 50)
-
-    recent_failures =
-      telegram_conversations
-      |> Enum.filter(&failed_telegram_delivery?/1)
-      |> Enum.take(5)
-      |> Enum.map(fn conversation ->
-        delivery = last_delivery(conversation)
-
-        %{
-          id: conversation.id,
-          title: conversation.title || conversation.external_ref || "telegram conversation",
-          external_ref: conversation.external_ref,
-          reason: delivery_value(delivery, "reason"),
-          retry_count: delivery_value(delivery, "retry_count") || 0,
-          updated_at: conversation.updated_at
-        }
-      end)
+    diagnostics = channel_delivery_diagnostics("telegram")
 
     gateway_events =
       HydraX.Safety.list_events(category: "gateway", limit: 5)
@@ -980,16 +1052,54 @@ defmodule HydraX.Runtime.Observability do
       end)
 
     %{
-      retryable_count: Enum.count(telegram_conversations, &failed_telegram_delivery?/1),
-      recent_failures: recent_failures,
+      retryable_count: diagnostics.retryable_count,
+      dead_letter_count: diagnostics.dead_letter_count,
+      multipart_failure_count: diagnostics.multipart_failure_count,
+      attachment_failure_count: diagnostics.attachment_failure_count,
+      recent_failures: diagnostics.recent_failures,
       gateway_events: gateway_events
     }
   end
 
-  defp recent_channel_failures(channel) do
-    HydraX.Runtime.Conversations.list_conversations(channel: channel, limit: 50)
-    |> Enum.filter(&failed_channel_delivery?/1)
-    |> Enum.take(5)
+  defp channel_delivery_diagnostics(channel) do
+    failures =
+      HydraX.Runtime.Conversations.list_conversations(channel: channel, limit: 50)
+      |> Enum.filter(&failed_channel_delivery?/1)
+      |> Enum.take(5)
+      |> Enum.map(&channel_failure_entry/1)
+
+    %{
+      retryable_count: Enum.count(failures, &(&1.status in ["failed", "dead_letter"])),
+      dead_letter_count: Enum.count(failures, &(&1.status == "dead_letter")),
+      multipart_failure_count: Enum.count(failures, &((&1.chunk_count || 0) > 1)),
+      attachment_failure_count: Enum.count(failures, &((&1.attachment_count || 0) > 0)),
+      recent_failures: failures
+    }
+  end
+
+  defp channel_failure_entry(conversation) do
+    delivery = last_delivery(conversation)
+    payload = delivery_value(delivery, "formatted_payload") || %{}
+    provider_message_ids = delivery_value(delivery, "provider_message_ids") || []
+    reply_context = delivery_value(delivery, "reply_context") || %{}
+
+    %{
+      id: conversation.id,
+      title:
+        conversation.title || conversation.external_ref || "#{conversation.channel} conversation",
+      external_ref: conversation.external_ref,
+      status: delivery_value(delivery, "status"),
+      reason: delivery_value(delivery, "reason"),
+      retry_count: delivery_value(delivery, "retry_count") || 0,
+      updated_at: conversation.updated_at,
+      next_retry_at: delivery_value(delivery, "next_retry_at"),
+      dead_lettered_at: delivery_value(delivery, "dead_lettered_at"),
+      chunk_count:
+        delivery_value(delivery, "chunk_count") || delivery_value(payload, "chunk_count"),
+      provider_message_ids_count: length(provider_message_ids),
+      attachment_count: conversation_attachment_count(conversation),
+      reply_context: reply_context
+    }
   end
 
   defp recent_gateway_events(channel) do
@@ -1008,6 +1118,18 @@ defmodule HydraX.Runtime.Observability do
       %{"status" => "dead_letter"} -> true
       %{status: "dead_letter"} -> true
       _ -> false
+    end
+  end
+
+  defp conversation_attachment_count(conversation) do
+    if Ecto.assoc_loaded?(conversation.turns) do
+      Enum.reduce(conversation.turns || [], 0, fn turn, acc ->
+        metadata = turn.metadata || %{}
+        attachments = metadata["attachments"] || metadata[:attachments] || []
+        acc + length(attachments)
+      end)
+    else
+      0
     end
   end
 
@@ -1058,20 +1180,25 @@ defmodule HydraX.Runtime.Observability do
   defp agent_suffix(nil), do: ""
   defp agent_suffix(name), do: " -> #{name}"
 
-  defp failed_telegram_delivery?(conversation) do
-    delivery = last_delivery(conversation)
-
-    delivery_value(delivery, "channel") == "telegram" and
-      delivery_value(delivery, "status") == "failed"
-  end
-
   defp last_delivery(conversation) do
     metadata = conversation.metadata || %{}
     metadata["last_delivery"] || metadata[:last_delivery] || %{}
   end
 
   defp delivery_value(map, key) when is_map(map) do
-    Map.get(map, key) || Map.get(map, String.to_atom(key))
+    Map.get(map, key) ||
+      case key do
+        "formatted_payload" -> Map.get(map, :formatted_payload)
+        "provider_message_ids" -> Map.get(map, :provider_message_ids)
+        "reply_context" -> Map.get(map, :reply_context)
+        "status" -> Map.get(map, :status)
+        "reason" -> Map.get(map, :reason)
+        "retry_count" -> Map.get(map, :retry_count)
+        "next_retry_at" -> Map.get(map, :next_retry_at)
+        "dead_lettered_at" -> Map.get(map, :dead_lettered_at)
+        "chunk_count" -> Map.get(map, :chunk_count)
+        _ -> nil
+      end
   end
 
   defp delivery_value(_map, _key), do: nil
@@ -1092,8 +1219,245 @@ defmodule HydraX.Runtime.Observability do
     "recent auth #{if(control_policy.require_recent_auth_for_sensitive_actions, do: "required", else: "optional")} within #{control_policy.recent_auth_window_minutes}m; interactive delivery via #{describe_channels(control_policy.interactive_delivery_channels)}; job delivery via #{describe_channels(control_policy.job_delivery_channels)}; ingest roots #{describe_allowlist(control_policy.ingest_roots)}"
   end
 
+  defp effective_policy_detail(policy) do
+    tool_summary =
+      policy.tools
+      |> Enum.map_join(", ", fn tool ->
+        channels =
+          case tool.channels do
+            :all -> "all"
+            values -> describe_channels(values)
+          end
+
+        "#{tool.tool_name}=#{enabled_text(tool.enabled?)}(#{channels})"
+      end)
+
+    route =
+      "#{policy.routing.provider_name} via #{policy.routing.source} fallback=#{describe_channels(policy.routing.fallback_names)}"
+
+    workload =
+      case policy.routing.workload do
+        %{pressure: pressure, applied?: applied?, reason: reason} ->
+          "workload #{pressure}/#{if(applied?, do: "shifted", else: "steady")} #{reason}"
+
+        _ ->
+          "workload steady"
+      end
+
+    "auth #{if(policy.auth.recent_auth_required, do: "required", else: "optional")} within #{policy.auth.recent_auth_window_minutes}m; interactive #{describe_channels(policy.deliveries.interactive_channels)}; jobs #{describe_channels(policy.deliveries.job_channels)}; ingest #{describe_allowlist(policy.ingest.roots)}; route #{route}; #{workload}; tools #{tool_summary}"
+  end
+
   defp secret_detail(secrets) do
-    "encrypted #{secrets.encrypted_records}/#{secrets.total_records}; env-backed #{secrets.env_backed_records}; unresolved env #{secrets.unresolved_env_records}; plaintext #{secrets.plaintext_records}; key source #{secrets.key_source}"
+    scopes =
+      secrets.scopes
+      |> Enum.filter(&(&1.total_records > 0))
+      |> Enum.map_join(", ", fn scope ->
+        "#{scope.scope} #{scope.protected_records}/#{scope.total_records}"
+      end)
+
+    "posture #{secrets.posture}; protected #{secrets.protected_records}/#{secrets.total_records} (#{secrets.coverage_percent}%); encrypted #{secrets.encrypted_records}; env-backed #{secrets.env_backed_records}; unresolved env #{secrets.unresolved_env_records}; plaintext #{secrets.plaintext_records}; key source #{secrets.key_source}#{if(scopes == "", do: "", else: "; scopes #{scopes}")}"
+  end
+
+  defp operator_detail(operator) do
+    base =
+      case operator do
+        %{
+          configured: true,
+          last_rotated_at: rotated_at,
+          password_stale?: true,
+          password_age_days: age
+        }
+        when not is_nil(rotated_at) ->
+          "operator password set; rotated #{Calendar.strftime(rotated_at, "%Y-%m-%d %H:%M UTC")}; age #{age} days; recent-auth window #{div(operator.recent_auth_window_seconds, 60)}m"
+
+        %{configured: true, last_rotated_at: rotated_at} when not is_nil(rotated_at) ->
+          "operator password set; rotated #{Calendar.strftime(rotated_at, "%Y-%m-%d %H:%M UTC")}; recent-auth window #{div(operator.recent_auth_window_seconds, 60)}m"
+
+        %{configured: true} ->
+          "operator password set; recent-auth window #{div(operator.recent_auth_window_seconds, 60)}m"
+
+        _ ->
+          "control plane open until operator password is set"
+      end
+
+    audit =
+      "last24h ok #{operator.recent_login_success_count}; failed #{operator.recent_login_failure_count}; reauth blocks #{operator.recent_reauth_block_count}; expiries #{operator.recent_session_expiry_count}"
+
+    [base, audit] |> Enum.join("; ")
+  end
+
+  defp operator_auth_readiness_detail(operator) do
+    [
+      "sign-ins #{operator.recent_login_success_count}",
+      "failed logins #{operator.recent_login_failure_count}",
+      "rate limits #{operator.recent_rate_limited_count}",
+      "reauth blocks #{operator.recent_reauth_block_count}",
+      "session expiries #{operator.recent_session_expiry_count}",
+      operator.last_session_expired_reason &&
+        "last expiry #{operator.last_session_expired_reason}",
+      operator.last_login_at && "last sign-in #{format_datetime(operator.last_login_at)}"
+    ]
+    |> Enum.reject(&is_nil_or_empty/1)
+    |> Enum.join("; ")
+  end
+
+  defp operator_auth_audit(events) do
+    cutoff = DateTime.add(DateTime.utc_now(), -24 * 3600, :second)
+
+    recent_events =
+      Enum.filter(events, fn event ->
+        DateTime.compare(event.inserted_at, cutoff) in [:gt, :eq]
+      end)
+
+    %{
+      audit_window_hours: 24,
+      recent_login_success_count: count_auth_events(recent_events, "Operator login succeeded"),
+      recent_login_failure_count: count_auth_events(recent_events, "Operator login failed"),
+      recent_rate_limited_count:
+        count_auth_events(recent_events, "Blocked operator login due to rate limit"),
+      recent_reauth_block_count:
+        count_auth_events(recent_events, "Blocked sensitive action pending re-authentication"),
+      recent_session_expiry_count: count_auth_events(recent_events, "Operator session expired"),
+      last_login_at: latest_auth_event_at(events, "Operator login succeeded"),
+      last_logout_at: latest_auth_event_at(events, "Operator logged out"),
+      last_login_failure_at: latest_auth_event_at(events, "Operator login failed"),
+      last_rate_limited_at:
+        latest_auth_event_at(events, "Blocked operator login due to rate limit"),
+      last_sensitive_action_block_at:
+        latest_auth_event_at(events, "Blocked sensitive action pending re-authentication"),
+      last_session_expired_at: latest_auth_event_at(events, "Operator session expired"),
+      last_session_expired_reason:
+        latest_auth_event_metadata(events, "Operator session expired", "expired_by"),
+      recent_events: Enum.map(Enum.take(events, 6), &operator_auth_event_entry/1)
+    }
+  end
+
+  defp operator_auth_event_entry(event) do
+    metadata = event.metadata || %{}
+
+    %{
+      id: event.id,
+      level: event.level,
+      message: event.message,
+      inserted_at: event.inserted_at,
+      expired_by: metadata["expired_by"] || metadata[:expired_by],
+      reauth?: metadata["reauth?"] || metadata[:reauth?] || false,
+      ip: metadata["ip"] || metadata[:ip]
+    }
+  end
+
+  defp latest_auth_event_at(events, message) do
+    events
+    |> Enum.find(&(&1.message == message))
+    |> case do
+      nil -> nil
+      event -> event.inserted_at
+    end
+  end
+
+  defp latest_auth_event_metadata(events, message, key) do
+    events
+    |> Enum.find(&(&1.message == message))
+    |> case do
+      %{metadata: metadata} when is_map(metadata) -> metadata[key] || metadata[:expired_by]
+      _ -> nil
+    end
+  end
+
+  defp count_auth_events(events, message) do
+    Enum.count(events, &(&1.message == message))
+  end
+
+  defp summarize_secret_values(scope, values) do
+    values =
+      Enum.filter(values, &(Helpers.blank_to_nil(&1) not in [nil, ""]))
+
+    encrypted_records = Enum.count(values, &Secrets.encrypted?/1)
+    env_backed_records = Enum.count(values, &Secrets.env_reference?/1)
+    unresolved_env_records = Enum.count(values, &Secrets.unresolved_env_reference?/1)
+
+    %{
+      scope: scope,
+      total_records: length(values),
+      protected_records: encrypted_records + env_backed_records,
+      encrypted_records: encrypted_records,
+      env_backed_records: env_backed_records,
+      unresolved_env_records: unresolved_env_records,
+      plaintext_records:
+        Enum.count(values, fn value ->
+          not Secrets.encrypted?(value) and not Secrets.env_reference?(value)
+        end)
+    }
+  end
+
+  defp maybe_add_issue(issues, true, message), do: issues ++ [message]
+  defp maybe_add_issue(issues, false, _message), do: issues
+
+  defp backup_detail(backups) do
+    case backups.latest_backup do
+      nil ->
+        "no backup manifests found in #{backups.root}"
+
+      backup ->
+        [
+          backup_readiness_detail(backup),
+          "verified #{backups.verified_count}",
+          if(backups.verification_failed_count > 0,
+            do: "failed #{backups.verification_failed_count}"
+          ),
+          if(backups.unverified_count > 0, do: "pending #{backups.unverified_count}")
+        ]
+        |> Enum.reject(&is_nil_or_empty/1)
+        |> Enum.join("; ")
+    end
+  end
+
+  defp backup_readiness_detail(backup) do
+    cond do
+      not backup["archive_exists"] ->
+        "archive missing for #{backup["archive_path"]}"
+
+      backup["verified"] == false ->
+        "latest backup #{backup["archive_path"]} failed verification"
+
+      backup["verified"] == true ->
+        "latest backup #{backup["archive_path"]} verified"
+
+      true ->
+        "latest backup #{backup["archive_path"]} not yet verified"
+    end
+  end
+
+  defp readiness_counts(items) do
+    %{
+      total: length(items),
+      ok: Enum.count(items, &(&1.status == :ok)),
+      warn: Enum.count(items, &(&1.status == :warn)),
+      required_warn: Enum.count(items, &(&1.required and &1.status == :warn)),
+      recommended_warn: Enum.count(items, &(!&1.required and &1.status == :warn))
+    }
+  end
+
+  defp readiness_blockers(items) do
+    items
+    |> Enum.filter(&(&1.required and &1.status == :warn))
+    |> Enum.map(&%{id: &1.id, label: &1.label, detail: &1.detail})
+  end
+
+  defp readiness_recommendations(items) do
+    items
+    |> Enum.filter(&(!&1.required and &1.status == :warn))
+    |> Enum.map(&%{id: &1.id, label: &1.label, detail: &1.detail})
+  end
+
+  defp readiness_next_steps(items) do
+    items
+    |> Enum.filter(&(&1.status == :warn))
+    |> Enum.take(5)
+    |> Enum.map(fn item ->
+      prefix = if item.required, do: "Required", else: "Recommended"
+      "#{prefix}: #{item.label} - #{item.detail}"
+    end)
   end
 
   defp provider_secret_values do
@@ -1202,6 +1566,36 @@ defmodule HydraX.Runtime.Observability do
   defp default_port("https"), do: 443
   defp default_port(_scheme), do: 4000
 
+  defp format_datetime(nil), do: "n/a"
+
+  defp format_datetime(%DateTime{} = value),
+    do: Calendar.strftime(value, "%Y-%m-%d %H:%M:%S UTC")
+
+  defp format_datetime(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} -> Calendar.strftime(datetime, "%Y-%m-%d %H:%M:%S UTC")
+      _ -> value
+    end
+  end
+
+  defp webchat_policy_detail(webchat) do
+    identity =
+      if webchat.allow_anonymous_messages do
+        "anonymous ok"
+      else
+        "identity required"
+      end
+
+    attachments =
+      if webchat.attachments_enabled do
+        "attachments #{webchat.max_attachment_count}x#{webchat.max_attachment_size_kb}KB"
+      else
+        "attachments disabled"
+      end
+
+    "#{identity} · max #{webchat.session_max_age_minutes}m · idle #{webchat.session_idle_timeout_minutes}m · #{attachments}"
+  end
+
   defp format_alarm({:system_memory_high_watermark, _details}),
     do: "system memory high watermark"
 
@@ -1261,4 +1655,8 @@ defmodule HydraX.Runtime.Observability do
         String.contains?(String.downcase(item.detail), downcased)
     end)
   end
+
+  defp is_nil_or_empty(nil), do: true
+  defp is_nil_or_empty(""), do: true
+  defp is_nil_or_empty(_value), do: false
 end

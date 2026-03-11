@@ -29,7 +29,10 @@ defmodule HydraX.ReportTest do
       case opts[:url] do
         "https://mcp.example.test/actions" ->
           {:ok,
-           %{status: 200, body: %{"actions" => [%{"name" => "search_docs"}, %{"name" => "get_status"}]}}}
+           %{
+             status: 200,
+             body: %{"actions" => [%{"name" => "search_docs"}, %{"name" => "get_status"}]}
+           }}
 
         "https://mcp.example.test/health" ->
           {:ok, %{status: 200, body: %{"status" => "ok"}}}
@@ -77,7 +80,17 @@ defmodule HydraX.ReportTest do
              })
 
     assert {:ok, _bindings} = Runtime.refresh_agent_mcp_servers(agent.id)
-    assert {:ok, %{count: 1}} = Runtime.list_agent_mcp_actions(agent.id)
+    assert {:ok, %{count: 1}} = Runtime.list_agent_mcp_actions(agent.id, refresh: true)
+
+    Application.put_env(:hydra_x, :mcp_http_request_fn, fn opts ->
+      case opts[:url] do
+        "https://mcp.example.test/actions" ->
+          flunk("report snapshot should reuse cached MCP action catalogs")
+
+        "https://mcp.example.test/health" ->
+          {:ok, %{status: 200, body: %{"status" => "ok"}}}
+      end
+    end)
 
     {:ok, conversation} =
       Runtime.start_conversation(agent, %{
@@ -109,6 +122,11 @@ defmodule HydraX.ReportTest do
           "external_ref" => "C999",
           "provider_message_id" => "999.111",
           "provider_message_ids" => ["999.111", "999.222"],
+          "retry_count" => 1,
+          "attempt_history" => [
+            %{"status" => "failed", "reason" => "thread timeout"},
+            %{"status" => "delivered"}
+          ],
           "formatted_payload" => %{
             "channel" => "C999",
             "thread_ts" => "123.456",
@@ -131,19 +149,28 @@ defmodule HydraX.ReportTest do
     assert snapshot.install.public_url
     assert is_list(snapshot.conversations)
     assert is_list(snapshot.agents)
+    assert is_map(snapshot.channels)
+    assert is_map(snapshot.secrets)
     assert Enum.any?(snapshot.mcp, &(&1.name == "Docs MCP" and &1.status == :ok))
     assert Enum.any?(snapshot.agent_mcp, &(&1.agent_id == agent.id and &1.enabled_bindings == 1))
+
     assert Enum.any?(
              snapshot.agents,
              &(&1.id == agent.id and &1.mcp_count == 1 and &1.skill_requirement_count >= 1 and
                  &1.mcp_action_count == 2)
            )
-    assert Enum.any?(snapshot.skills, &(&1.agent_id == agent.id and "release-window" in (&1.metadata["requires"] || [])))
+
+    assert Enum.any?(
+             snapshot.skills,
+             &(&1.agent_id == agent.id and "release-window" in (&1.metadata["requires"] || []))
+           )
+
     assert snapshot.cluster.mode == "single_node"
     assert is_map(snapshot.incidents)
     assert is_list(snapshot.audit)
     assert Enum.any?(snapshot.ingest, &(&1.source_file == "report.md"))
     assert snapshot.observability.telemetry_summary.tool.error >= 1
+    assert snapshot.secrets.total_records >= 0
     assert Enum.any?(snapshot.observability.telemetry.recent_events, &(&1.namespace == "tool"))
     assert Enum.any?(snapshot.audit, &(&1.category == "operator"))
 
@@ -199,7 +226,17 @@ defmodule HydraX.ReportTest do
              })
 
     assert {:ok, _bindings} = Runtime.refresh_agent_mcp_servers(agent.id)
-    assert {:ok, %{count: 1}} = Runtime.list_agent_mcp_actions(agent.id)
+    assert {:ok, %{count: 1}} = Runtime.list_agent_mcp_actions(agent.id, refresh: true)
+
+    Application.put_env(:hydra_x, :mcp_http_request_fn, fn opts ->
+      case opts[:url] do
+        "https://mcp.example.test/actions" ->
+          flunk("report export should reuse cached MCP action catalogs")
+
+        "https://mcp.example.test/health" ->
+          {:ok, %{status: 200, body: %{"status" => "ok"}}}
+      end
+    end)
 
     {:ok, conversation} =
       Runtime.start_conversation(agent, %{
@@ -214,7 +251,11 @@ defmodule HydraX.ReportTest do
         content: "[Slack attachments: application/pdf]",
         metadata: %{
           "attachments" => [
-            %{"kind" => "file", "file_name" => "export.pdf", "download_ref" => "https://slack.test/export.pdf"}
+            %{
+              "kind" => "file",
+              "file_name" => "export.pdf",
+              "download_ref" => "https://slack.test/export.pdf"
+            }
           ]
         }
       })
@@ -227,6 +268,11 @@ defmodule HydraX.ReportTest do
           "external_ref" => "C555",
           "provider_message_id" => "555.111",
           "provider_message_ids" => ["555.111", "555.222"],
+          "retry_count" => 1,
+          "attempt_history" => [
+            %{"status" => "failed", "reason" => "thread timeout"},
+            %{"status" => "delivered"}
+          ],
           "formatted_payload" => %{
             "channel" => "C555",
             "thread_ts" => "777.888",
@@ -273,6 +319,8 @@ defmodule HydraX.ReportTest do
     assert File.exists?(Path.join(export.bundle_dir, "agents.json"))
     assert File.exists?(Path.join(export.bundle_dir, "cluster.json"))
     assert File.exists?(Path.join(export.bundle_dir, "mcp.json"))
+    assert File.exists?(Path.join(export.bundle_dir, "channels.json"))
+    assert File.exists?(Path.join(export.bundle_dir, "secrets.json"))
     assert File.exists?(Path.join(export.bundle_dir, "agent_mcp.json"))
     assert File.exists?(Path.join(export.bundle_dir, "skills.json"))
     assert File.exists?(Path.join(export.bundle_dir, "conversations.json"))
@@ -286,20 +334,33 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "Agent MCP Bindings"
     assert File.read!(export.markdown_path) =~ "Audit Trail"
     assert File.read!(export.markdown_path) =~ "attachments=1"
+    assert File.read!(export.markdown_path) =~ "attempts=2"
     assert File.read!(export.markdown_path) =~ "msg_ids=2"
     assert File.read!(export.markdown_path) =~ "Readiness"
+    assert File.read!(export.markdown_path) =~ "Total items:"
+    assert File.read!(export.markdown_path) =~ "Required warnings:"
+    assert File.read!(export.markdown_path) =~ "Next steps:"
     assert File.read!(export.markdown_path) =~ "Provider Route"
+    assert File.read!(export.markdown_path) =~ "Secret Posture"
+    assert File.read!(export.markdown_path) =~ "Operator Auth"
+    assert File.read!(export.markdown_path) =~ "Channel Failure Summary"
     assert File.read!(export.markdown_path) =~ "Cluster Posture"
     assert File.read!(export.markdown_path) =~ "ctx=777.888/777.888"
     assert File.read!(export.markdown_path) =~ "chunks=2"
     assert File.read!(export.markdown_path) =~ "payload=channel=C555"
     assert File.read!(export.markdown_path) =~ "thread_ts=777.888"
     assert File.read!(export.markdown_path) =~ "execution=completed"
-    assert File.read!(export.markdown_path) =~ "memory:memory_recall:completed:recalled 2 memories"
+
+    assert File.read!(export.markdown_path) =~
+             "memory:memory_recall:completed:recalled 2 memories"
+
     assert File.read!(export.json_path) =~ "\"generated_at\""
     assert File.read!(export.json_path) =~ "\"last_delivery\""
     assert File.read!(export.json_path) =~ "\"skills\""
-    assert File.read!(Path.join(export.bundle_dir, "agents.json")) =~ "\"skill_requirement_count\""
+
+    assert File.read!(Path.join(export.bundle_dir, "agents.json")) =~
+             "\"skill_requirement_count\""
+
     assert File.read!(Path.join(export.bundle_dir, "agents.json")) =~ "\"mcp_action_count\""
     assert File.read!(Path.join(export.bundle_dir, "agents.json")) =~ "\"search_docs\""
     assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~ "\"channel_state\""

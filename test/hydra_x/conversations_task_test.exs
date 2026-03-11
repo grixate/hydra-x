@@ -181,7 +181,55 @@ defmodule HydraX.ConversationsTaskTest do
       Runtime.append_turn(conversation, %{
         role: "assistant",
         content: "Exportable transcript body",
-        metadata: %{}
+        metadata: %{
+          "attachments" => [
+            %{
+              "kind" => "document",
+              "file_name" => "spec.pdf",
+              "download_ref" => "https://example.test/spec.pdf"
+            }
+          ]
+        }
+      })
+
+    {:ok, _conversation} =
+      Runtime.update_conversation_metadata(conversation, %{
+        "last_delivery" => %{
+          "channel" => "slack",
+          "status" => "dead_letter",
+          "external_ref" => "C4242",
+          "provider_message_id" => "4242.111",
+          "provider_message_ids" => ["4242.111", "4242.112"],
+          "retry_count" => 2,
+          "reason" => "thread timeout",
+          "dead_lettered_at" => "2026-03-11T11:00:00Z",
+          "attempt_history" => [
+            %{
+              "status" => "failed",
+              "reason" => "thread timeout",
+              "retry_count" => 1,
+              "recorded_at" => "2026-03-11T10:30:00Z",
+              "reply_context" => %{"thread_ts" => "123.456"}
+            },
+            %{
+              "status" => "dead_letter",
+              "reason" => "thread timeout",
+              "retry_count" => 2,
+              "recorded_at" => "2026-03-11T11:00:00Z",
+              "reply_context" => %{"thread_ts" => "123.456"}
+            }
+          ],
+          "formatted_payload" => %{
+            "channel" => "C4242",
+            "thread_ts" => "123.456",
+            "chunk_count" => 2,
+            "text" => "Transcript body"
+          },
+          "reply_context" => %{
+            "thread_ts" => "123.456",
+            "source_message_id" => "123.456"
+          }
+        }
       })
 
     {:ok, _checkpoint} =
@@ -189,6 +237,13 @@ defmodule HydraX.ConversationsTaskTest do
         "status" => "completed",
         "provider" => "mock",
         "tool_rounds" => 1,
+        "tool_cache_scope_turn_id" => 88,
+        "recovery_lineage" => %{
+          "turn_scope_id" => 88,
+          "recovery_count" => 1,
+          "cache_hits" => 1,
+          "cache_misses" => 0
+        },
         "steps" => [
           %{
             "id" => "tool-1-skill_inspect",
@@ -196,7 +251,12 @@ defmodule HydraX.ConversationsTaskTest do
             "name" => "skill_inspect",
             "status" => "completed",
             "summary" => "inspected 1 skills",
-            "output_excerpt" => "1 skills"
+            "output_excerpt" => "1 skills",
+            "owner" => "channel",
+            "lifecycle" => "cached",
+            "result_source" => "cache",
+            "idempotency_key" => "tool-1-skill_inspect",
+            "replay_count" => 1
           }
         ],
         "execution_events" => [
@@ -204,9 +264,30 @@ defmodule HydraX.ConversationsTaskTest do
             "phase" => "tool_result",
             "at" => DateTime.utc_now(),
             "details" => %{"summary" => "inspected 1 skills"}
+          },
+          %{
+            "phase" => "tool_cache_hit",
+            "at" => DateTime.utc_now(),
+            "details" => %{"summary" => "cache replay", "cache_hits" => 1}
           }
         ]
       })
+
+    Mix.Task.reenable("hydra_x.conversations")
+
+    show_output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Mix.Tasks.HydraX.Conversations.run(["show", to_string(conversation.id)])
+      end)
+
+    assert show_output =~ "attachments=1"
+    assert show_output =~ "delivery=slack:dead_letter"
+    assert show_output =~ "delivery_reason=thread timeout"
+    assert show_output =~ "delivery_provider_message_ids=2"
+    assert show_output =~ "delivery_reply_context=123.456/123.456"
+    assert show_output =~ "payload_preview={"
+    assert show_output =~ "delivery_attempt\tdead_letter"
+    assert show_output =~ "attachment\tturn=1\tdocument:spec.pdf"
 
     export_output =
       ExUnit.CaptureIO.capture_io(fn ->
@@ -222,10 +303,20 @@ defmodule HydraX.ConversationsTaskTest do
       |> String.replace_prefix("path=", "")
 
     transcript = File.read!(transcript_path)
+    assert transcript =~ "## Delivery state"
+    assert transcript =~ "### Delivery attempts"
+    assert transcript =~ "### Native payload preview"
+    assert transcript =~ "### Attachments"
+    assert transcript =~ "document: spec.pdf"
+    assert transcript =~ "thread timeout"
+    assert transcript =~ "\"thread_ts\": \"123.456\""
     assert transcript =~ "## Execution checkpoint"
     assert transcript =~ "### Steps"
     assert transcript =~ "skill skill_inspect"
     assert transcript =~ "inspected 1 skills"
+    assert transcript =~ "result_source: cache"
+    assert transcript =~ "lifecycle: cached"
+    assert transcript =~ "recovery: turn 88; recoveries 1; cache hits 1; cache misses 0"
     assert transcript =~ "### Recent execution events"
 
     Mix.Task.reenable("hydra_x.conversations")
@@ -255,19 +346,34 @@ defmodule HydraX.ConversationsTaskTest do
         "provider" => "mock",
         "tool_rounds" => 1,
         "resumable" => false,
+        "tool_cache_scope_turn_id" => 77,
+        "recovery_lineage" => %{
+          "turn_scope_id" => 77,
+          "recovery_count" => 1,
+          "cache_hits" => 1,
+          "cache_misses" => 0
+        },
         "steps" => [
           %{
             "id" => "tool-1-mcp_probe",
             "kind" => "integration",
             "name" => "mcp_probe",
             "status" => "completed",
-            "summary" => "probed 1 MCP bindings"
+            "summary" => "probed 1 MCP bindings",
+            "lifecycle" => "cached",
+            "result_source" => "cache",
+            "cached" => true,
+            "replay_count" => 1
           }
         ],
         "execution_events" => [
           %{
             "phase" => "tool_result",
             "details" => %{"summary" => "probed 1 MCP bindings", "round" => 1}
+          },
+          %{
+            "phase" => "tool_cache_hit",
+            "details" => %{"summary" => "cache replay", "round" => 1, "cache_hits" => 1}
           }
         ]
       })
@@ -280,8 +386,11 @@ defmodule HydraX.ConversationsTaskTest do
     assert output =~ "conversation=#{conversation.id}"
     assert output =~ "execution_status=completed"
     assert output =~ "provider=mock"
+    assert output =~ "cache_scope_turn_id=77"
+    assert output =~ "recovery_lineage=turn:77 recoveries:1 cache_hits:1 cache_misses:0"
     assert output =~ "step\tintegration\tmcp_probe\tcompleted\tprobed 1 MCP bindings"
     assert output =~ "event\ttool_result\tprobed 1 MCP bindings\t1"
+    assert output =~ "event\ttool_cache_hit\tcache replay\t1\tcache_hits=1"
   end
 
   test "conversation task can filter archived conversations by status and search" do

@@ -85,13 +85,14 @@ defmodule HydraX.Tools.BrowserAutomation do
   @impl true
   def execute(params, context) do
     request_fn = context[:request_fn] || (&Req.request/1)
+    browser_runtime = browser_runtime(context)
     allowlist = Map.get(context, :http_allowlist, HydraX.Config.http_allowlist())
     session = normalize_session(params[:session] || params["session"])
 
     with action when is_binary(action) <- params[:action] || params["action"],
          url when is_binary(url) <- params[:url] || params["url"],
          {:ok, uri} <- UrlGuard.validate_outbound_url(url, allowlist: allowlist) do
-      dispatch(action, uri, params, request_fn, allowlist, session)
+      dispatch_with_browser(action, uri, params, request_fn, allowlist, session, browser_runtime)
     else
       nil -> {:error, :missing_url}
       {:error, reason} -> {:error, reason}
@@ -107,6 +108,297 @@ defmodule HydraX.Tools.BrowserAutomation do
 
   def result_summary(%{action: action, url: url}) when is_binary(url), do: "#{action} #{url}"
   def result_summary(payload), do: inspect(payload, limit: 8, printable_limit: 120)
+
+  defp dispatch_with_browser(action, uri, params, request_fn, allowlist, session, browser_runtime) do
+    case dispatch_browser(action, uri, params, allowlist, session, browser_runtime) do
+      {:fallback, _reason} -> dispatch(action, uri, params, request_fn, allowlist, session)
+      result -> result
+    end
+  end
+
+  defp dispatch_browser(_action, _uri, _params, _allowlist, _session, nil),
+    do: {:fallback, :browser_runtime_not_configured}
+
+  defp dispatch_browser("fetch_page", uri, params, _allowlist, session, runtime) do
+    with {:ok, page} <- browser_fetch_page(uri, params, session, runtime) do
+      {:ok, Map.put(page, :action, "fetch_page")}
+    end
+  end
+
+  defp dispatch_browser("extract_links", uri, params, _allowlist, session, runtime) do
+    with {:ok, page} <- browser_fetch_page(uri, params, session, runtime) do
+      {:ok,
+       %{
+         action: "extract_links",
+         backend: "browser",
+         url: page.url,
+         title: page.title,
+         links:
+           filter_links(
+             page.links,
+             params[:link_text] || params["link_text"],
+             params[:href_contains] || params["href_contains"],
+             params[:link_index] || params["link_index"]
+           ),
+         session: page.session
+       }}
+    end
+  end
+
+  defp dispatch_browser("inspect_forms", uri, params, _allowlist, session, runtime) do
+    with {:ok, page} <- browser_fetch_page(uri, params, session, runtime) do
+      forms =
+        case params[:form_index] || params["form_index"] do
+          nil -> page.forms
+          value -> Enum.filter(page.forms, &(&1.index == parse_index(value)))
+        end
+
+      {:ok,
+       %{
+         action: "inspect_forms",
+         backend: "browser",
+         url: page.url,
+         title: page.title,
+         forms: forms,
+         session: page.session
+       }}
+    end
+  end
+
+  defp dispatch_browser("inspect_headings", uri, params, _allowlist, session, runtime) do
+    with {:ok, page} <- browser_fetch_page(uri, params, session, runtime) do
+      {:ok,
+       %{
+         action: "inspect_headings",
+         backend: "browser",
+         url: page.url,
+         title: page.title,
+         headings: page.headings,
+         session: page.session
+       }}
+    end
+  end
+
+  defp dispatch_browser("inspect_images", uri, params, _allowlist, session, runtime) do
+    with {:ok, page} <- browser_fetch_page(uri, params, session, runtime) do
+      {:ok,
+       %{
+         action: "inspect_images",
+         backend: "browser",
+         url: page.url,
+         title: page.title,
+         images: page.images,
+         session: page.session
+       }}
+    end
+  end
+
+  defp dispatch_browser("inspect_meta", uri, params, _allowlist, session, runtime) do
+    with {:ok, page} <- browser_fetch_page(uri, params, session, runtime) do
+      {:ok,
+       %{
+         action: "inspect_meta",
+         backend: "browser",
+         url: page.url,
+         title: page.title,
+         meta: page.meta,
+         session: page.session
+       }}
+    end
+  end
+
+  defp dispatch_browser("inspect_scripts", uri, params, _allowlist, session, runtime) do
+    with {:ok, page} <- browser_fetch_page(uri, params, session, runtime) do
+      {:ok,
+       %{
+         action: "inspect_scripts",
+         backend: "browser",
+         url: page.url,
+         title: page.title,
+         scripts: page.scripts,
+         session: page.session
+       }}
+    end
+  end
+
+  defp dispatch_browser("inspect_structured_data", uri, params, _allowlist, session, runtime) do
+    with {:ok, page} <- browser_fetch_page(uri, params, session, runtime) do
+      {:ok,
+       %{
+         action: "inspect_structured_data",
+         backend: "browser",
+         url: page.url,
+         title: page.title,
+         structured_data: page.structured_data,
+         session: page.session
+       }}
+    end
+  end
+
+  defp dispatch_browser("extract_tables", uri, params, _allowlist, session, runtime) do
+    with {:ok, page} <- browser_fetch_page(uri, params, session, runtime) do
+      {:ok,
+       %{
+         action: "extract_tables",
+         backend: "browser",
+         url: page.url,
+         title: page.title,
+         tables: page.tables,
+         session: page.session
+       }}
+    end
+  end
+
+  defp dispatch_browser("extract_elements", uri, params, _allowlist, session, runtime) do
+    with {:ok, result} <- run_browser_action("extract_elements", uri, params, session, runtime),
+         {:ok, page} <- normalize_browser_page(result, "extract_elements", uri, session),
+         {:ok, selector} <- parse_selector(params[:selector] || params["selector"]) do
+      elements =
+        normalize_browser_elements(browser_value(result, :elements)) ||
+          find_elements(page.body, selector)
+
+      {:ok,
+       %{
+         action: "extract_elements",
+         backend: "browser",
+         url: page.url,
+         title: page.title,
+         selector: selector.raw,
+         elements: elements,
+         session: page.session
+       }}
+    end
+  end
+
+  defp dispatch_browser("extract_text", uri, params, _allowlist, session, runtime) do
+    with {:ok, result} <- run_browser_action("extract_text", uri, params, session, runtime),
+         {:ok, page} <- normalize_browser_page(result, "extract_text", uri, session) do
+      snippets =
+        normalize_browser_snippets(browser_value(result, :snippets)) ||
+          case Helpers.blank_to_nil(params[:selector] || params["selector"]) do
+            nil ->
+              extract_snippets(page.text, params[:text_contains] || params["text_contains"])
+
+            selector_value ->
+              with {:ok, selector} <- parse_selector(selector_value) do
+                page.body
+                |> find_elements(selector)
+                |> Enum.map(&(&1.text || ""))
+                |> Enum.join("\n")
+                |> extract_snippets(params[:text_contains] || params["text_contains"])
+              else
+                _ -> []
+              end
+          end
+
+      {:ok,
+       page
+       |> Map.put(:action, "extract_text")
+       |> Map.put(:backend, "browser")
+       |> Map.put(:selector, params[:selector] || params["selector"])
+       |> Map.put(:snippets, snippets)}
+    end
+  end
+
+  defp dispatch_browser("click_link", uri, params, _allowlist, session, runtime) do
+    with {:ok, result} <- run_browser_action("click_link", uri, params, session, runtime),
+         {:ok, page} <- normalize_browser_page(result, "click_link", uri, session) do
+      {:ok,
+       %{
+         action: "click_link",
+         backend: "browser",
+         url: page.url,
+         from_url: browser_value(result, :from_url) || URI.to_string(uri),
+         followed_href: browser_value(result, :followed_href),
+         title: page.title,
+         excerpt: page.excerpt,
+         content_type: page.content_type,
+         links: page.links,
+         forms: page.forms,
+         session: page.session
+       }}
+    end
+  end
+
+  defp dispatch_browser("submit_form", uri, params, _allowlist, session, runtime) do
+    with {:ok, result} <- run_browser_action("submit_form", uri, params, session, runtime),
+         {:ok, page} <- normalize_browser_page(result, "submit_form", uri, session) do
+      {:ok,
+       %{
+         action: "submit_form",
+         backend: "browser",
+         url: page.url,
+         method:
+           browser_value(result, :method) ||
+             normalized_method(params[:method] || params["method"] || "post") |> String.upcase(),
+         form_index: browser_value(result, :form_index),
+         form_action: browser_value(result, :form_action),
+         status: page.status,
+         excerpt: page.excerpt,
+         content_type: page.content_type,
+         session: page.session
+       }}
+    end
+  end
+
+  defp dispatch_browser("preview_form_submission", uri, params, _allowlist, session, runtime) do
+    with {:ok, result} <-
+           run_browser_action("preview_form_submission", uri, params, session, runtime),
+         fields when is_map(fields) <- normalize_browser_fields(browser_value(result, :fields)) do
+      {:ok,
+       %{
+         action: "preview_form_submission",
+         backend: "browser",
+         url: browser_value(result, :url) || URI.to_string(uri),
+         method:
+           browser_value(result, :method) ||
+             normalized_method(params[:method] || params["method"] || "post") |> String.upcase(),
+         form_index: browser_value(result, :form_index),
+         form_action: browser_value(result, :form_action),
+         fields: fields,
+         session: normalize_browser_session(browser_value(result, :session), session)
+       }}
+    else
+      {:fallback, reason} -> {:fallback, reason}
+      nil -> {:error, :browser_runtime_invalid}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp dispatch_browser(action, uri, params, _allowlist, session, runtime)
+       when action in ["capture_snapshot", "capture_screenshot"] do
+    with {:ok, result} <- run_browser_action(action, uri, params, session, runtime),
+         screenshot_path when is_binary(screenshot_path) <-
+           browser_value(result, :screenshot_path),
+         {:ok, page} <- normalize_browser_page(result, action, uri, session) do
+      {:ok,
+       %{
+         action:
+           if(action == "capture_screenshot", do: "capture_screenshot", else: "capture_snapshot"),
+         backend: "browser",
+         url: page.url,
+         title: page.title,
+         snapshot_path: screenshot_path,
+         content_type:
+           if browser_value(result, :content_type) in ["image/png", "image/jpeg", "image/webp"] do
+             browser_value(result, :content_type)
+           else
+             "image/png"
+           end,
+         link_count: length(page.links),
+         heading_count: length(page.headings),
+         image_count: length(page.images),
+         session: page.session
+       }}
+    else
+      {:fallback, reason} -> {:fallback, reason}
+      nil -> {:error, :browser_runtime_invalid}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp dispatch_browser(_action, _uri, _params, _allowlist, _session, _runtime),
+    do: {:fallback, :browser_action_not_supported}
 
   defp dispatch("fetch_page", uri, _params, request_fn, _allowlist, session) do
     fetch_page(uri, request_fn, session)
@@ -405,6 +697,7 @@ defmodule HydraX.Tools.BrowserAutomation do
            ) do
       body = body_to_string(response.body)
       text = plain_text(body)
+
       next_session =
         session
         |> merge_response_cookies(response.headers || [])
@@ -457,7 +750,8 @@ defmodule HydraX.Tools.BrowserAutomation do
                 body
                 |> find_elements(parsed_selector)
                 |> Enum.find(fn element ->
-                  element.tag == "a" and is_binary(element.attrs["href"]) and element.attrs["href"] != ""
+                  element.tag == "a" and is_binary(element.attrs["href"]) and
+                    element.attrs["href"] != ""
                 end)
                 |> case do
                   nil -> nil
@@ -552,7 +846,13 @@ defmodule HydraX.Tools.BrowserAutomation do
       |> Map.get(:history, Map.get(session, "history", []))
       |> normalize_history()
 
+    browser_state =
+      session
+      |> Map.get(:browser_state, Map.get(session, "browser_state"))
+      |> normalize_browser_state()
+
     %{cookies: cookies, history: history}
+    |> maybe_put_browser_state(browser_state)
   end
 
   defp normalize_session(_other), do: %{cookies: %{}, history: []}
@@ -573,6 +873,21 @@ defmodule HydraX.Tools.BrowserAutomation do
   end
 
   defp normalize_history(_history), do: []
+
+  defp normalize_browser_state(nil), do: nil
+
+  defp normalize_browser_state(state) when is_map(state) do
+    state
+    |> Enum.map(fn {key, value} -> {to_string(key), value} end)
+    |> Map.new()
+  end
+
+  defp normalize_browser_state(_state), do: nil
+
+  defp maybe_put_browser_state(session, nil), do: session
+
+  defp maybe_put_browser_state(session, browser_state),
+    do: Map.put(session, :browser_state, browser_state)
 
   defp session_headers(%{cookies: cookies}) when map_size(cookies) > 0 do
     cookie_value =
@@ -617,6 +932,8 @@ defmodule HydraX.Tools.BrowserAutomation do
 
     %{session | history: history}
   end
+
+  defp update_session_history(session, _url), do: session
 
   defp extract_snippets(text, nil), do: take_snippets(text)
   defp extract_snippets(text, ""), do: take_snippets(text)
@@ -766,7 +1083,9 @@ defmodule HydraX.Tools.BrowserAutomation do
         |> Map.new(),
       twitter:
         tags
-        |> Enum.filter(fn {key, _value} -> String.starts_with?(String.downcase(key), "twitter:") end)
+        |> Enum.filter(fn {key, _value} ->
+          String.starts_with?(String.downcase(key), "twitter:")
+        end)
         |> Map.new(),
       all: tags
     }
@@ -778,6 +1097,7 @@ defmodule HydraX.Tools.BrowserAutomation do
     |> Enum.map(fn {[_, attrs, content], index} ->
       type = parse_attr(attrs, "type") || "text/javascript"
       src = parse_attr(attrs, "src")
+
       body_excerpt =
         content
         |> strip_tags()
@@ -902,6 +1222,387 @@ defmodule HydraX.Tools.BrowserAutomation do
     |> to_string()
     |> String.downcase()
   end
+
+  defp browser_runtime(context) do
+    context[:browser_runtime_fn] ||
+      Application.get_env(:hydra_x, :browser_automation_runtime_fn) ||
+      (&default_browser_runtime/1)
+  end
+
+  defp browser_fetch_page(uri, params, session, runtime) do
+    with {:ok, result} <- run_browser_action("fetch_page", uri, params, session, runtime) do
+      normalize_browser_page(result, "fetch_page", uri, session)
+    end
+  end
+
+  defp run_browser_action(action, uri, params, session, runtime) when is_function(runtime, 1) do
+    payload = %{
+      action: action,
+      url: URI.to_string(uri),
+      selector: params[:selector] || params["selector"],
+      link_text: params[:link_text] || params["link_text"],
+      href_contains: params[:href_contains] || params["href_contains"],
+      link_index: params[:link_index] || params["link_index"],
+      method: params[:method] || params["method"],
+      fields: params[:fields] || params["fields"] || %{},
+      form_index: params[:form_index] || params["form_index"],
+      form_action_contains: params[:form_action_contains] || params["form_action_contains"],
+      text_contains: params[:text_contains] || params["text_contains"],
+      session: session
+    }
+
+    case runtime.(payload) do
+      {:ok, result} when is_map(result) -> {:ok, result}
+      {:error, :browser_unavailable} -> {:fallback, :browser_unavailable}
+      {:error, {:browser_runtime_failed, _message} = reason} -> {:fallback, reason}
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :browser_runtime_invalid}
+    end
+  end
+
+  defp normalize_browser_page(result, action, uri, previous_session) when is_map(result) do
+    html = browser_value(result, :html) || browser_value(result, :body) || ""
+    text = browser_value(result, :text) || plain_text(html)
+    url = browser_value(result, :url) || URI.to_string(uri)
+
+    {:ok,
+     %{
+       action: action,
+       backend: "browser",
+       url: url,
+       status: browser_value(result, :status) || 200,
+       title: browser_value(result, :title) || page_title(html),
+       excerpt: browser_value(result, :excerpt) || String.slice(text, 0, @max_excerpt),
+       body: html,
+       text: text,
+       content_type: browser_value(result, :content_type) || "text/html",
+       links: normalize_browser_links(browser_value(result, :links)) || parse_links(html),
+       forms: normalize_browser_forms(browser_value(result, :forms)) || parse_forms(html),
+       headings:
+         normalize_browser_headings(browser_value(result, :headings)) || parse_headings(html),
+       images: normalize_browser_images(browser_value(result, :images)) || parse_images(html),
+       meta: normalize_browser_meta(browser_value(result, :meta)) || parse_meta(html),
+       scripts: normalize_browser_scripts(browser_value(result, :scripts)) || parse_scripts(html),
+       structured_data:
+         normalize_browser_structured_data(browser_value(result, :structured_data)) ||
+           parse_structured_data(html),
+       tables: normalize_browser_tables(browser_value(result, :tables)) || parse_tables(html),
+       session: normalize_browser_session(browser_value(result, :session), previous_session, url)
+     }}
+  end
+
+  defp normalize_browser_session(nil, previous_session, current_url) do
+    previous_session
+    |> normalize_session()
+    |> update_session_history(current_url)
+  end
+
+  defp normalize_browser_session(raw_session, previous_session, current_url) do
+    base = normalize_session(raw_session)
+    previous = normalize_session(previous_session)
+
+    base
+    |> Map.update(:cookies, previous.cookies, &Map.merge(previous.cookies, &1))
+    |> Map.update(:history, previous.history, fn history ->
+      history
+      |> Kernel.++(base.history)
+      |> Enum.uniq()
+      |> Enum.take(-12)
+    end)
+    |> update_session_history(current_url)
+  end
+
+  defp normalize_browser_session(raw_session, previous_session) do
+    normalize_browser_session(raw_session, previous_session, nil)
+  end
+
+  defp browser_value(map, key) when is_map(map) do
+    Map.get(map, key) || Map.get(map, Atom.to_string(key))
+  end
+
+  defp default_browser_runtime(payload) do
+    script_path =
+      Path.expand(
+        Path.join(["..", "..", "..", "priv", "scripts", "browser_automation.mjs"]),
+        __DIR__
+      )
+
+    command =
+      case browser_runtime_command() do
+        nil -> ["node", script_path]
+        parts -> parts ++ [script_path]
+      end
+
+    payload_path =
+      Path.join(
+        System.tmp_dir!(),
+        "hydra-x-browser-payload-#{System.unique_integer([:positive])}.json"
+      )
+
+    try do
+      File.write!(payload_path, Jason.encode!(payload))
+
+      case command do
+        [executable | args] ->
+          case System.cmd(executable, args ++ [payload_path], stderr_to_stdout: true) do
+            {output, 0} -> parse_browser_runtime_output(output)
+            failure -> browser_runtime_failure(failure)
+          end
+
+        _ ->
+          {:error, :browser_runtime_invalid}
+      end
+    rescue
+      error in [ErlangError, File.Error] ->
+        if match?(%ErlangError{original: :enoent}, error) do
+          {:error, :browser_unavailable}
+        else
+          {:error, {:browser_runtime_failed, Exception.message(error)}}
+        end
+    after
+      File.rm(payload_path)
+    end
+  end
+
+  defp parse_browser_runtime_output(output) when is_binary(output) do
+    case Jason.decode(output) do
+      {:ok, %{"ok" => true, "result" => result}} when is_map(result) ->
+        {:ok, result}
+
+      {:ok, %{"ok" => false, "error" => error}} ->
+        browser_runtime_failure(error)
+
+      _ ->
+        {:error, :browser_runtime_invalid}
+    end
+  end
+
+  defp browser_runtime_command do
+    case System.get_env("HYDRA_X_BROWSER_AUTOMATION_COMMAND") do
+      nil -> nil
+      "" -> nil
+      command -> OptionParser.split(command)
+    end
+  end
+
+  defp browser_runtime_failure({output, _status}) when is_binary(output) do
+    browser_runtime_failure(output)
+  end
+
+  defp browser_runtime_failure(error) when is_binary(error) do
+    downcased = String.downcase(error)
+
+    cond do
+      String.contains?(downcased, "cannot find package 'playwright'") ->
+        {:error, :browser_unavailable}
+
+      String.contains?(downcased, "cannot find module 'playwright'") ->
+        {:error, :browser_unavailable}
+
+      String.contains?(downcased, "browser executable") ->
+        {:error, :browser_unavailable}
+
+      true ->
+        {:error, {:browser_runtime_failed, String.slice(String.trim(error), 0, 300)}}
+    end
+  end
+
+  defp browser_runtime_failure(%{"code" => code, "message" => message})
+       when is_binary(code) and is_binary(message) do
+    if code == "browser_unavailable" do
+      {:error, :browser_unavailable}
+    else
+      {:error, {:browser_runtime_failed, message}}
+    end
+  end
+
+  defp browser_runtime_failure(_other), do: {:error, :browser_runtime_invalid}
+
+  defp normalize_browser_links(nil), do: nil
+
+  defp normalize_browser_links(links) when is_list(links) do
+    links
+    |> Enum.with_index()
+    |> Enum.map(fn {link, index} ->
+      %{
+        index: browser_value(link, :index) || index,
+        href: browser_value(link, :href) || "",
+        text: browser_value(link, :text) || ""
+      }
+    end)
+    |> Enum.reject(fn link -> link.href == "" or link.text == "" end)
+  end
+
+  defp normalize_browser_links(_links), do: nil
+
+  defp normalize_browser_forms(nil), do: nil
+
+  defp normalize_browser_forms(forms) when is_list(forms) do
+    forms
+    |> Enum.with_index()
+    |> Enum.map(fn {form, index} ->
+      %{
+        index: browser_value(form, :index) || index,
+        id: browser_value(form, :id),
+        classes: List.wrap(browser_value(form, :classes)),
+        method: normalized_method(browser_value(form, :method) || "post"),
+        action: browser_value(form, :action),
+        fields:
+          browser_value(form, :fields)
+          |> normalize_browser_form_fields()
+      }
+    end)
+  end
+
+  defp normalize_browser_forms(_forms), do: nil
+
+  defp normalize_browser_form_fields(nil), do: []
+
+  defp normalize_browser_form_fields(fields) when is_list(fields) do
+    Enum.map(fields, fn field ->
+      %{
+        name: browser_value(field, :name),
+        type: browser_value(field, :type) || "text",
+        value: browser_value(field, :value)
+      }
+    end)
+  end
+
+  defp normalize_browser_form_fields(_fields), do: []
+
+  defp normalize_browser_headings(nil), do: nil
+
+  defp normalize_browser_headings(headings) when is_list(headings) do
+    headings
+    |> Enum.with_index()
+    |> Enum.map(fn {heading, index} ->
+      %{
+        index: browser_value(heading, :index) || index,
+        level: browser_value(heading, :level) || 1,
+        text: browser_value(heading, :text) || ""
+      }
+    end)
+    |> Enum.reject(&(&1.text == ""))
+  end
+
+  defp normalize_browser_headings(_headings), do: nil
+
+  defp normalize_browser_images(nil), do: nil
+
+  defp normalize_browser_images(images) when is_list(images) do
+    images
+    |> Enum.with_index()
+    |> Enum.map(fn {image, index} ->
+      %{
+        index: browser_value(image, :index) || index,
+        src: browser_value(image, :src),
+        alt: browser_value(image, :alt),
+        width: browser_value(image, :width),
+        height: browser_value(image, :height)
+      }
+    end)
+    |> Enum.reject(&is_nil(&1.src))
+  end
+
+  defp normalize_browser_images(_images), do: nil
+
+  defp normalize_browser_meta(nil), do: nil
+
+  defp normalize_browser_meta(meta) when is_map(meta) do
+    %{
+      description: browser_value(meta, :description),
+      canonical_url: browser_value(meta, :canonical_url),
+      open_graph: normalize_browser_fields(browser_value(meta, :open_graph)),
+      twitter: normalize_browser_fields(browser_value(meta, :twitter)),
+      all: normalize_browser_fields(browser_value(meta, :all))
+    }
+  end
+
+  defp normalize_browser_meta(_meta), do: nil
+
+  defp normalize_browser_scripts(nil), do: nil
+
+  defp normalize_browser_scripts(scripts) when is_list(scripts) do
+    scripts
+    |> Enum.with_index()
+    |> Enum.map(fn {script, index} ->
+      %{
+        index: browser_value(script, :index) || index,
+        src: browser_value(script, :src),
+        type: browser_value(script, :type) || "text/javascript",
+        inline: browser_value(script, :inline) || false,
+        excerpt: browser_value(script, :excerpt) || ""
+      }
+    end)
+  end
+
+  defp normalize_browser_scripts(_scripts), do: nil
+
+  defp normalize_browser_structured_data(nil), do: nil
+
+  defp normalize_browser_structured_data(entries) when is_list(entries) do
+    entries
+    |> Enum.with_index()
+    |> Enum.map(fn {entry, index} ->
+      %{
+        index: browser_value(entry, :index) || index,
+        summary: browser_value(entry, :summary) || "structured data",
+        data: browser_value(entry, :data)
+      }
+    end)
+  end
+
+  defp normalize_browser_structured_data(_entries), do: nil
+
+  defp normalize_browser_tables(nil), do: nil
+
+  defp normalize_browser_tables(tables) when is_list(tables) do
+    tables
+    |> Enum.with_index()
+    |> Enum.map(fn {table, index} ->
+      %{
+        index: browser_value(table, :index) || index,
+        headers: List.wrap(browser_value(table, :headers)),
+        rows: List.wrap(browser_value(table, :rows))
+      }
+    end)
+  end
+
+  defp normalize_browser_tables(_tables), do: nil
+
+  defp normalize_browser_elements(nil), do: nil
+
+  defp normalize_browser_elements(elements) when is_list(elements) do
+    elements
+    |> Enum.with_index()
+    |> Enum.map(fn {element, index} ->
+      %{
+        index: browser_value(element, :index) || index,
+        tag: browser_value(element, :tag) || "div",
+        text: browser_value(element, :text) || "",
+        attrs: normalize_browser_fields(browser_value(element, :attrs))
+      }
+    end)
+  end
+
+  defp normalize_browser_elements(_elements), do: nil
+
+  defp normalize_browser_snippets(nil), do: nil
+
+  defp normalize_browser_snippets(snippets) when is_list(snippets),
+    do: Enum.map(snippets, &to_string/1)
+
+  defp normalize_browser_snippets(_snippets), do: nil
+
+  defp normalize_browser_fields(nil), do: %{}
+
+  defp normalize_browser_fields(fields) when is_map(fields) do
+    fields
+    |> Enum.map(fn {key, value} -> {to_string(key), value} end)
+    |> Map.new()
+  end
+
+  defp normalize_browser_fields(_fields), do: %{}
 
   defp parse_index(nil), do: nil
   defp parse_index(index) when is_integer(index), do: index

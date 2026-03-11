@@ -7,6 +7,7 @@ defmodule HydraXWeb.HealthLive do
   @impl true
   def mount(_params, _session, socket) do
     filters = default_filters()
+    default_agent = Runtime.get_default_agent()
 
     {:ok,
      socket
@@ -18,6 +19,7 @@ defmodule HydraXWeb.HealthLive do
      |> assign(:report_export, nil)
      |> assign(:checks, Runtime.health_snapshot())
      |> assign(:readiness_report, Runtime.readiness_report())
+     |> assign(:secret_status, Runtime.secret_storage_status())
      |> assign(:memory_status, Runtime.memory_triage_status())
      |> assign(:telegram_status, Runtime.telegram_status())
      |> assign(:discord_status, Runtime.discord_status())
@@ -32,6 +34,10 @@ defmodule HydraXWeb.HealthLive do
      |> assign(:operator_status, Runtime.operator_status())
      |> assign(:provider_status, Runtime.provider_status())
      |> assign(:tool_status, Runtime.tool_status())
+     |> assign(
+       :effective_policy,
+       Runtime.effective_policy(default_agent && default_agent.id, process_type: "channel")
+     )
      |> assign(:scheduler_status, Runtime.scheduler_status())}
   end
 
@@ -133,6 +139,50 @@ defmodule HydraXWeb.HealthLive do
       <section class="glass-panel mt-6 p-6">
         <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">Preview readiness</div>
         <h2 class="mt-3 font-display text-4xl">Launch blockers and recommendations</h2>
+        <div class="mt-6 grid gap-3 lg:grid-cols-4">
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Total items
+            </div>
+            <div class="mt-3 font-display text-4xl">{@readiness_report.counts.total}</div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Warnings
+            </div>
+            <div class="mt-3 font-display text-4xl">{@readiness_report.counts.warn}</div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Required blockers
+            </div>
+            <div class="mt-3 font-display text-4xl">{@readiness_report.counts.required_warn}</div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Recommended fixes
+            </div>
+            <div class="mt-3 font-display text-4xl">
+              {@readiness_report.counts.recommended_warn}
+            </div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4 lg:col-span-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Next steps
+            </div>
+            <div class="mt-3 space-y-2">
+              <p :if={@readiness_report.next_steps == []} class="text-sm text-[var(--hx-mute)]">
+                No readiness actions are pending.
+              </p>
+              <p
+                :for={step <- @readiness_report.next_steps}
+                class="rounded-xl border border-white/10 bg-black/10 px-3 py-3 text-sm text-[var(--hx-mute)]"
+              >
+                {step}
+              </p>
+            </div>
+          </article>
+        </div>
         <div class="mt-6 grid gap-3 lg:grid-cols-2">
           <article
             :for={item <- @readiness_report.items}
@@ -195,6 +245,121 @@ defmodule HydraXWeb.HealthLive do
                 Map.get(@memory_status.counts, "superseded", 0)}
             </div>
           </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Embedding backend
+            </div>
+            <div class="mt-3 font-display text-2xl">{@memory_status.embedding.active_backend}</div>
+            <p class="mt-2 text-xs text-[var(--hx-mute)]">
+              model {@memory_status.embedding.active_model}
+            </p>
+            <p :if={@memory_status.embedding.degraded?} class="mt-2 text-xs text-amber-200">
+              configured {@memory_status.embedding.configured_backend} is degraded; fallback active
+            </p>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Embedded
+            </div>
+            <div class="mt-3 font-display text-4xl">{@memory_status.embedding.embedded_count}</div>
+            <p class="mt-2 text-xs text-[var(--hx-mute)]">
+              missing {@memory_status.embedding.unembedded_count} · stale {@memory_status.embedding.stale_count}
+            </p>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Fallback writes
+            </div>
+            <div class="mt-3 font-display text-4xl">{@memory_status.embedding.fallback_count}</div>
+            <p class="mt-2 text-xs text-[var(--hx-mute)]">
+              {if @memory_status.embedding.fallback_enabled?,
+                do: "fallback enabled",
+                else: "fallback disabled"}
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section class="glass-panel mt-6 p-6">
+        <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">Secrets</div>
+        <h2 class="mt-3 font-display text-4xl">Secret posture</h2>
+        <div class="mt-6 grid gap-3 lg:grid-cols-4">
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Posture
+            </div>
+            <div class="mt-3 font-display text-3xl">{@secret_status.posture}</div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Protected
+            </div>
+            <div class="mt-3 font-display text-3xl">
+              {@secret_status.protected_records}/{@secret_status.total_records}
+            </div>
+            <p class="mt-2 text-xs text-[var(--hx-mute)]">
+              coverage {@secret_status.coverage_percent}% · key source {@secret_status.key_source}
+            </p>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Encrypted / env
+            </div>
+            <div class="mt-3 font-display text-3xl">
+              {@secret_status.encrypted_records}/{@secret_status.env_backed_records}
+            </div>
+            <p class="mt-2 text-xs text-[var(--hx-mute)]">
+              encrypted / env-backed
+            </p>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Unresolved / plaintext
+            </div>
+            <div class="mt-3 font-display text-3xl">
+              {@secret_status.unresolved_env_records}/{@secret_status.plaintext_records}
+            </div>
+            <p class="mt-2 text-xs text-[var(--hx-mute)]">
+              unresolved env / plaintext
+            </p>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4 lg:col-span-2">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Scope coverage
+            </div>
+            <div class="mt-3 space-y-2">
+              <div
+                :for={scope <- @secret_status.scopes}
+                class="rounded-xl border border-white/10 bg-black/10 px-3 py-3"
+              >
+                <div class="flex items-center justify-between gap-3">
+                  <div class="text-sm text-[var(--hx-accent)]">{scope.scope}</div>
+                  <div class="text-xs text-[var(--hx-mute)]">
+                    {scope.protected_records}/{scope.total_records} protected
+                  </div>
+                </div>
+                <div class="mt-2 text-xs text-[var(--hx-mute)]">
+                  encrypted {scope.encrypted_records} · env-backed {scope.env_backed_records} · unresolved env {scope.unresolved_env_records} · plaintext {scope.plaintext_records}
+                </div>
+              </div>
+            </div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4 lg:col-span-2">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Current issues
+            </div>
+            <div class="mt-3 space-y-2">
+              <p :if={@secret_status.issues == []} class="text-sm text-[var(--hx-mute)]">
+                No secret storage issues detected.
+              </p>
+              <p
+                :for={issue <- @secret_status.issues}
+                class="rounded-xl border border-white/10 bg-black/10 px-3 py-3 text-sm text-[var(--hx-mute)]"
+              >
+                {issue}
+              </p>
+            </div>
+          </article>
         </div>
       </section>
 
@@ -239,6 +404,11 @@ defmodule HydraXWeb.HealthLive do
             <p class="mt-2 text-xs text-[var(--hx-mute)]">
               Retryable failed deliveries: {@telegram_status.retryable_count}
             </p>
+            <p class="mt-2 text-xs text-[var(--hx-mute)]">
+              dead letter {@telegram_status.dead_letter_count || 0} · multipart {@telegram_status.multipart_failure_count ||
+                0} ·
+              attachment failures {@telegram_status.attachment_failure_count || 0}
+            </p>
             <p :if={@telegram_status.last_error} class="mt-2 text-xs text-amber-200">
               Last Telegram error: {@telegram_status.last_error}
             </p>
@@ -267,7 +437,7 @@ defmodule HydraXWeb.HealthLive do
                   </div>
                 </div>
                 <div class="mt-2 text-xs text-[var(--hx-mute)]">
-                  retry {failure.retry_count} · {failure.reason || "unknown reason"}
+                  {failure_delivery_summary(failure)}
                 </div>
               </div>
             </div>
@@ -285,7 +455,7 @@ defmodule HydraXWeb.HealthLive do
             </div>
             <p class="mt-3 text-sm text-[var(--hx-mute)]">
               {@provider_status.name} · {@provider_status.kind}
-              <span :if={@provider_status.model}> ·   {@provider_status.model}</span>
+              <span :if={@provider_status.model}> ·               {@provider_status.model}</span>
             </p>
             <p class="mt-2 text-xs text-[var(--hx-mute)]">
               source {@provider_status.route_source} · readiness {@provider_status.readiness} · warmup {@provider_status.warmup_status}
@@ -452,6 +622,14 @@ defmodule HydraXWeb.HealthLive do
             <p class="mt-2 text-xs text-[var(--hx-mute)]">
               capabilities: {capability_summary(@channel_capabilities[status.channel])}
             </p>
+            <p :if={channel_policy_summary(status)} class="mt-2 text-xs text-[var(--hx-mute)]">
+              policy: {channel_policy_summary(status)}
+            </p>
+            <p class="mt-2 text-xs text-[var(--hx-mute)]">
+              retryable {status.retryable_count || 0} · dead letter {status.dead_letter_count || 0} ·
+              multipart {status.multipart_failure_count || 0} ·
+              attachment failures {status.attachment_failure_count || 0}
+            </p>
             <div class="mt-3 space-y-2">
               <p
                 :if={status.recent_failures == []}
@@ -532,6 +710,177 @@ defmodule HydraXWeb.HealthLive do
               <span :if={@operator_status.blocked_login_ips > 0}>
                 · blocked IPs {@operator_status.blocked_login_ips}
               </span>
+            </p>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Last sign-in
+            </div>
+            <p class="mt-3 text-sm text-[var(--hx-mute)]">
+              {format_datetime(@operator_status.last_login_at)}
+            </p>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Last failure
+            </div>
+            <p class="mt-3 text-sm text-[var(--hx-mute)]">
+              {format_datetime(@operator_status.last_login_failure_at)}
+            </p>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Last session expiry
+            </div>
+            <p class="mt-3 text-sm text-[var(--hx-mute)]">
+              {format_datetime(@operator_status.last_session_expired_at)}
+            </p>
+            <p
+              :if={@operator_status.last_session_expired_reason}
+              class="mt-2 text-xs text-[var(--hx-mute)]"
+            >
+              reason {@operator_status.last_session_expired_reason}
+            </p>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Last reauth block
+            </div>
+            <p class="mt-3 text-sm text-[var(--hx-mute)]">
+              {format_datetime(@operator_status.last_sensitive_action_block_at)}
+            </p>
+          </article>
+        </div>
+        <div class="mt-6 grid gap-3 lg:grid-cols-4">
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Sign-ins (24h)
+            </div>
+            <div class="mt-3 font-display text-4xl">
+              {@operator_status.recent_login_success_count}
+            </div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Failures (24h)
+            </div>
+            <div class="mt-3 font-display text-4xl">
+              {@operator_status.recent_login_failure_count}
+            </div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Reauth blocks
+            </div>
+            <div class="mt-3 font-display text-4xl">{@operator_status.recent_reauth_block_count}</div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Session expiries
+            </div>
+            <div class="mt-3 font-display text-4xl">
+              {@operator_status.recent_session_expiry_count}
+            </div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4 lg:col-span-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Recent auth audit
+            </div>
+            <div class="mt-3 space-y-2">
+              <p :if={@operator_status.recent_events == []} class="text-sm text-[var(--hx-mute)]">
+                No recent auth audit events.
+              </p>
+              <div
+                :for={event <- @operator_status.recent_events}
+                class="rounded-xl border border-white/10 bg-black/10 px-3 py-3"
+              >
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                  <div class="text-sm text-[var(--hx-accent)]">{event.message}</div>
+                  <div class="text-xs text-[var(--hx-mute)]">
+                    {format_datetime(event.inserted_at)}
+                  </div>
+                </div>
+                <div class="mt-2 text-xs text-[var(--hx-mute)]">
+                  level {event.level}
+                  <span :if={event.expired_by}> · expiry    {event.expired_by}</span>
+                  <span :if={event.reauth?}> · reauth</span>
+                  <span :if={event.ip}> · ip    {event.ip}</span>
+                </div>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="glass-panel mt-6 p-6">
+        <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">Effective policy</div>
+        <h2 class="mt-3 font-display text-4xl">Unified decision surface</h2>
+        <div class="mt-6 grid gap-3 lg:grid-cols-4">
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Recent auth
+            </div>
+            <p class="mt-3 text-sm text-[var(--hx-mute)]">
+              {if @effective_policy.auth.recent_auth_required, do: "required", else: "optional"} within {@effective_policy.auth.recent_auth_window_minutes}m
+            </p>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Interactive delivery
+            </div>
+            <p class="mt-3 text-sm text-[var(--hx-mute)]">
+              {channel_summary(@effective_policy.deliveries.interactive_channels)}
+            </p>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Job delivery
+            </div>
+            <p class="mt-3 text-sm text-[var(--hx-mute)]">
+              {channel_summary(@effective_policy.deliveries.job_channels)}
+            </p>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Ingest roots
+            </div>
+            <p class="mt-3 text-sm text-[var(--hx-mute)]">
+              {channel_summary(@effective_policy.ingest.roots)}
+            </p>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4 lg:col-span-2">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Provider route
+            </div>
+            <p class="mt-3 text-sm text-[var(--hx-mute)]">
+              {@effective_policy.routing.provider_name} via {@effective_policy.routing.source}
+            </p>
+            <p class="mt-2 text-xs text-[var(--hx-mute)]">
+              fallbacks {channel_summary(@effective_policy.routing.fallback_names)}
+            </p>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Budget routing
+            </div>
+            <p class="mt-3 text-sm text-[var(--hx-mute)]">
+              {policy_budget_summary(@effective_policy)}
+            </p>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Workload routing
+            </div>
+            <p class="mt-3 text-sm text-[var(--hx-mute)]">
+              {policy_workload_summary(@effective_policy)}
+            </p>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4 lg:col-span-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Tool access matrix
+            </div>
+            <p class="mt-3 text-sm text-[var(--hx-mute)]">
+              {effective_tool_summary(@effective_policy)}
             </p>
           </article>
         </div>
@@ -790,6 +1139,9 @@ defmodule HydraXWeb.HealthLive do
             <p class="mt-3 text-sm text-[var(--hx-mute)]">
               Root: {@observability_status.backups.root}
             </p>
+            <p class="mt-2 text-xs text-[var(--hx-mute)]">
+              verified {@observability_status.backups.verified_count} · failed {@observability_status.backups.verification_failed_count} · pending {@observability_status.backups.unverified_count}
+            </p>
             <div class="mt-3 space-y-2">
               <p
                 :if={@observability_status.backups.recent_backups == []}
@@ -804,11 +1156,16 @@ defmodule HydraXWeb.HealthLive do
                 <div class="flex flex-wrap items-center justify-between gap-3">
                   <div class="text-sm text-[var(--hx-accent)]">{backup["archive_path"]}</div>
                   <div class="text-xs text-[var(--hx-mute)]">
-                    {if backup["archive_exists"], do: "archive present", else: "archive missing"}
+                    {backup_archive_label(backup)}
                   </div>
                 </div>
                 <div class="mt-1 text-xs text-[var(--hx-mute)]">
-                  entries: {backup["entry_count"]} · created {backup["created_at"]}
+                  entries: {backup["entry_count"]} · size {backup["archive_size_bytes"] || 0} · created {backup[
+                    "created_at"
+                  ]}
+                </div>
+                <div :if={(backup["missing_entries"] || []) != []} class="mt-1 text-xs text-amber-200">
+                  missing {Enum.join(backup["missing_entries"], ", ")}
                 </div>
               </div>
             </div>
@@ -911,9 +1268,46 @@ defmodule HydraXWeb.HealthLive do
   defp blank_to_nil(value), do: value
 
   defp format_datetime(nil), do: "unknown"
+  defp format_datetime(value) when is_binary(value), do: value
   defp format_datetime(value), do: Calendar.strftime(value, "%Y-%m-%d %H:%M:%S UTC")
   defp channel_summary([]), do: "none"
   defp channel_summary(channels), do: Enum.join(channels, ", ")
+
+  defp effective_tool_summary(policy) do
+    policy.tools
+    |> Enum.map_join(" · ", fn tool ->
+      channels =
+        case tool.channels do
+          :all -> "all"
+          values -> channel_summary(values)
+        end
+
+      "#{tool.tool_name} #{if(tool.enabled?, do: "on", else: "off")} (#{channels})"
+    end)
+  end
+
+  defp policy_budget_summary(policy) do
+    case policy.routing.budget do
+      %{warnings: warnings} when warnings != [] ->
+        Enum.map_join(warnings, ", ", &to_string/1)
+
+      %{usage: usage} when is_map(usage) ->
+        "daily #{Map.get(usage, :daily_tokens) || Map.get(usage, "daily_tokens") || 0}"
+
+      _ ->
+        "steady"
+    end
+  end
+
+  defp policy_workload_summary(policy) do
+    case policy.routing.workload do
+      %{pressure: pressure, applied?: applied?, reason: reason} ->
+        "#{pressure}/#{if(applied?, do: "shifted", else: "steady")} #{reason}"
+
+      _ ->
+        "steady"
+    end
+  end
 
   defp provider_capability_summary(capabilities) do
     capabilities
@@ -937,20 +1331,83 @@ defmodule HydraXWeb.HealthLive do
     |> Enum.join(" · ")
   end
 
+  defp channel_policy_summary(%{channel: "webchat", configured: false}), do: nil
+
+  defp channel_policy_summary(%{channel: "webchat"} = status) do
+    identity =
+      if Map.get(status, :allow_anonymous_messages, true) do
+        "anonymous ok"
+      else
+        "identity required"
+      end
+
+    attachments =
+      if Map.get(status, :attachments_enabled, false) do
+        "attachments #{Map.get(status, :max_attachment_count, 0)}x#{Map.get(status, :max_attachment_size_kb, 0)}KB"
+      else
+        "attachments disabled"
+      end
+
+    "#{identity} · max #{Map.get(status, :session_max_age_minutes, 0)}m · idle #{Map.get(status, :session_idle_timeout_minutes, 0)}m · #{attachments}"
+  end
+
+  defp channel_policy_summary(_status), do: nil
+
+  defp backup_archive_label(backup) do
+    cond do
+      not backup["archive_exists"] ->
+        "archive missing"
+
+      backup["verified"] == true ->
+        "archive verified"
+
+      backup["verified"] == false ->
+        "verify failed"
+
+      true ->
+        "archive present"
+    end
+  end
+
   defp failure_delivery_summary(conversation) do
-    delivery = last_delivery(conversation)
+    delivery =
+      case conversation do
+        %{status: status} = failure when status in ["failed", "dead_letter"] ->
+          %{
+            "status" => failure.status,
+            "reason" => failure.reason,
+            "retry_count" => failure.retry_count,
+            "next_retry_at" => failure.next_retry_at,
+            "dead_lettered_at" => failure.dead_lettered_at,
+            "chunk_count" => failure.chunk_count,
+            "provider_message_ids_count" => failure.provider_message_ids_count,
+            "attachment_count" => failure.attachment_count,
+            "reply_context" => failure.reply_context || %{}
+          }
+
+        failure ->
+          last_delivery(failure)
+      end
+
     payload = delivery["formatted_payload"] || %{}
 
     provider_message_ids =
       delivery["provider_message_ids"] ||
         get_in(delivery, ["metadata", "provider_message_ids"]) || []
 
+    provider_message_ids_count =
+      delivery["provider_message_ids_count"] || length(provider_message_ids)
+
     [
       delivery["status"] || "unknown",
+      retry_count_label(delivery["retry_count"]),
       delivery["reason"],
-      if(provider_message_ids != [], do: "msg ids #{length(provider_message_ids)}"),
+      next_retry_label(delivery["next_retry_at"]),
+      dead_letter_label(delivery["dead_lettered_at"]),
+      if(provider_message_ids_count > 0, do: "msg ids #{provider_message_ids_count}"),
+      attachment_count_label(delivery["attachment_count"]),
       delivery_context_summary(delivery),
-      chunk_count_summary(payload)
+      chunk_count_summary(payload, delivery["chunk_count"])
     ]
     |> Enum.reject(&is_nil_or_empty/1)
     |> Enum.join(" · ")
@@ -976,14 +1433,26 @@ defmodule HydraXWeb.HealthLive do
     metadata["last_delivery"] || metadata[:last_delivery] || %{}
   end
 
-  defp chunk_count_summary(payload) when is_map(payload) do
-    case payload["chunk_count"] do
+  defp chunk_count_summary(payload, fallback) when is_map(payload) do
+    case payload["chunk_count"] || fallback do
       count when is_integer(count) and count > 1 -> "chunks #{count}"
       _ -> nil
     end
   end
 
-  defp chunk_count_summary(_payload), do: nil
+  defp retry_count_label(count) when is_integer(count) and count > 0, do: "retry #{count}"
+  defp retry_count_label(_count), do: nil
+
+  defp next_retry_label(%DateTime{} = value), do: "next retry #{format_datetime(value)}"
+  defp next_retry_label(_value), do: nil
+
+  defp dead_letter_label(%DateTime{} = value), do: "dead letter #{format_datetime(value)}"
+  defp dead_letter_label(_value), do: nil
+
+  defp attachment_count_label(count) when is_integer(count) and count > 0,
+    do: "attachments #{count}"
+
+  defp attachment_count_label(_count), do: nil
 
   defp is_nil_or_empty(nil), do: true
   defp is_nil_or_empty(""), do: true

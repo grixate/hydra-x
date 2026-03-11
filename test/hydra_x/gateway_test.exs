@@ -75,7 +75,11 @@ defmodule HydraX.GatewayTest do
 
     assert {:ok, metadata} =
              Telegram.deliver(
-               %{content: long_content, external_ref: "42", metadata: %{"reply_to_message_id" => 501}},
+               %{
+                 content: long_content,
+                 external_ref: "42",
+                 metadata: %{"reply_to_message_id" => 501}
+               },
                state
              )
 
@@ -121,6 +125,10 @@ defmodule HydraX.GatewayTest do
     refreshed = Runtime.get_conversation!(conversation.id)
     assert refreshed.metadata["last_delivery"]["status"] == "failed"
     assert refreshed.metadata["last_delivery"]["reason"] =~ ":timeout"
+    assert refreshed.metadata["last_delivery"]["retry_limit"] == 3
+    assert refreshed.metadata["last_delivery"]["next_retry_in_ms"] == 5_000
+    assert is_binary(refreshed.metadata["last_delivery"]["next_retry_at"])
+    assert [%{"status" => "failed"}] = refreshed.metadata["last_delivery"]["attempt_history"]
 
     [event | _] = HydraX.Safety.recent_events(agent.id, 5)
     assert event.category == "gateway"
@@ -178,6 +186,7 @@ defmodule HydraX.GatewayTest do
     assert refreshed.metadata["last_delivery"]["status"] == "delivered"
     assert refreshed.metadata["last_delivery"]["retry_count"] == 1
     assert refreshed.metadata["last_delivery"]["metadata"]["provider_message_id"] == 99
+    assert length(refreshed.metadata["last_delivery"]["attempt_history"]) >= 2
   end
 
   test "telegram attachment messages preserve attachment metadata" do
@@ -254,6 +263,7 @@ defmodule HydraX.GatewayTest do
 
     assert_receive {:discord_reply,
                     %{channel_id: "chan-42", content: content, reply_to_message_id: metadata}}
+
     assert content =~ "Mock response"
     assert metadata == "discord-source-1"
 
@@ -263,6 +273,7 @@ defmodule HydraX.GatewayTest do
     refreshed = Runtime.get_conversation!(conversation.id)
     assert refreshed.metadata["last_delivery"]["status"] == "delivered"
     assert refreshed.metadata["last_delivery"]["formatted_payload"]["channel_id"] == "chan-42"
+
     assert refreshed.metadata["last_delivery"]["formatted_payload"]["reply_to_message_id"] ==
              "discord-source-1"
 
@@ -311,12 +322,14 @@ defmodule HydraX.GatewayTest do
     assert user_turn.role == "user"
     assert user_turn.content == "[Discord attachments: image/png]"
 
-    assert [%{
-              "file_name" => "diagram.png",
-              "content_type" => "image/png",
-              "download_ref" => "https://cdn.discord.test/diagram.png",
-              "source_url" => "https://cdn.discord.test/diagram.png"
-            }] =
+    assert [
+             %{
+               "file_name" => "diagram.png",
+               "content_type" => "image/png",
+               "download_ref" => "https://cdn.discord.test/diagram.png",
+               "source_url" => "https://cdn.discord.test/diagram.png"
+             }
+           ] =
              user_turn.metadata["attachments"]
   end
 
@@ -470,12 +483,14 @@ defmodule HydraX.GatewayTest do
     assert user_turn.role == "user"
     assert user_turn.content == "[Slack attachments: application/pdf]"
 
-    assert [%{
-              "file_name" => "runbook.pdf",
-              "content_type" => "application/pdf",
-              "download_ref" => "https://slack.test/runbook.pdf",
-              "source_url" => "https://slack.test/runbook.pdf"
-            }] =
+    assert [
+             %{
+               "file_name" => "runbook.pdf",
+               "content_type" => "application/pdf",
+               "download_ref" => "https://slack.test/runbook.pdf",
+               "source_url" => "https://slack.test/runbook.pdf"
+             }
+           ] =
              user_turn.metadata["attachments"]
   end
 
@@ -559,6 +574,71 @@ defmodule HydraX.GatewayTest do
     assert refreshed.metadata["last_delivery"]["status"] == "delivered"
     assert refreshed.metadata["last_delivery"]["external_ref"] == "webchat-session-42"
     assert refreshed.metadata["last_delivery"]["metadata"]["streaming"] == true
+  end
+
+  test "webchat attachment messages preserve attachment metadata and display name" do
+    agent = create_agent()
+    {:ok, pid} = HydraX.Agent.ensure_started(agent)
+    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
+
+    {:ok, _webchat} =
+      Runtime.save_webchat_config(%{
+        title: "Hydra-X Browser",
+        enabled: true,
+        allow_anonymous_messages: false,
+        attachments_enabled: true,
+        max_attachment_count: 2,
+        max_attachment_size_kb: 512,
+        default_agent_id: agent.id
+      })
+
+    assert :ok =
+             HydraX.Gateway.dispatch_webchat_message(%{
+               "session_id" => "webchat-session-attachments",
+               "content" => "",
+               "display_name" => "Operator Visitor",
+               "attachments" => [
+                 %{
+                   "kind" => "upload",
+                   "file_name" => "notes.txt",
+                   "content_type" => "text/plain",
+                   "size" => 120,
+                   "upload_ref" => "upload-1"
+                 }
+               ]
+             })
+
+    [conversation] = Runtime.list_conversations(agent_id: agent.id, limit: 10)
+    [user_turn | _] = Runtime.list_turns(conversation.id)
+
+    assert user_turn.content == "[Webchat attachments: text/plain]"
+    assert user_turn.metadata["display_name"] == "Operator Visitor"
+
+    assert [
+             %{
+               "file_name" => "notes.txt",
+               "content_type" => "text/plain",
+               "upload_ref" => "upload-1"
+             }
+           ] = user_turn.metadata["attachments"]
+  end
+
+  test "webchat rejects anonymous messages when identity is required" do
+    agent = create_agent()
+
+    {:ok, _webchat} =
+      Runtime.save_webchat_config(%{
+        title: "Hydra-X Browser",
+        enabled: true,
+        allow_anonymous_messages: false,
+        default_agent_id: agent.id
+      })
+
+    assert {:error, :webchat_identity_required} =
+             HydraX.Gateway.dispatch_webchat_message(%{
+               "session_id" => "webchat-session-anon",
+               "content" => "Anonymous message"
+             })
   end
 
   defp create_agent do

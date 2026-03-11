@@ -11,6 +11,9 @@ defmodule HydraX.HealthTasksTest do
         Mix.Tasks.HydraX.Healthcheck.run(["--only-warn", "--search", "control plane"])
       end)
 
+    assert output =~ "checks="
+    assert output =~ "warn="
+    assert output =~ "ok="
     assert output =~ "[WARN] auth:"
     refute output =~ "[OK] database:"
   end
@@ -24,6 +27,10 @@ defmodule HydraX.HealthTasksTest do
       end)
 
     assert output =~ "readiness=WARN"
+    assert output =~ "items="
+    assert output =~ "required_warn="
+    assert output =~ "recommended_warn="
+    assert output =~ "next_step="
     assert output =~ "Operator password configured"
     refute output =~ "Primary provider configured"
   end

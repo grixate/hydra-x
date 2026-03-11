@@ -32,6 +32,7 @@ defmodule HydraXWeb.HomeLiveTest do
     {:ok, _view, html} = live(conn, ~p"/")
 
     assert html =~ "Memory triage"
+    assert html =~ "Embedding backend"
     assert html =~ "Conflicted"
     assert html =~ "Daily backups should be authoritative."
     assert html =~ "Recent guardrail activity"

@@ -37,6 +37,8 @@ defmodule HydraXWeb.HealthLiveTest do
 
     html = render(view)
     assert html =~ "Operator password configured"
+    assert html =~ "Required blockers"
+    assert html =~ "Next steps"
     refute html =~ "Primary provider configured"
   end
 
@@ -72,6 +74,16 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "shell cli"
   end
 
+  test "health page shows the unified effective policy surface", %{conn: conn} do
+    {:ok, _view, html} = live(conn, ~p"/health")
+
+    assert html =~ "Unified decision surface"
+    assert html =~ "Provider route"
+    assert html =~ "Budget routing"
+    assert html =~ "Workload routing"
+    assert html =~ "Tool access matrix"
+  end
+
   test "health page shows provider capability summary", %{conn: conn} do
     {:ok, _view, html} = live(conn, ~p"/health")
 
@@ -103,9 +115,41 @@ defmodule HydraXWeb.HealthLiveTest do
 
     {:ok, _view, html} = live(conn, ~p"/health")
 
-    assert html =~ "secrets"
+    assert html =~ "Secret posture"
+    assert html =~ "provider"
     assert html =~ "encrypted"
     assert html =~ "key source"
+  end
+
+  test "health page shows operator auth audit summaries", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+
+    Enum.each(
+      [
+        {"Operator login succeeded", "info", %{"ip" => "127.0.0.1"}},
+        {"Operator login failed", "warn", %{"ip" => "127.0.0.1"}},
+        {"Blocked sensitive action pending re-authentication", "warn", %{}},
+        {"Operator session expired", "warn", %{"expired_by" => "idle_timeout"}}
+      ],
+      fn {message, level, metadata} ->
+        {:ok, _event} =
+          HydraX.Safety.log_event(%{
+            agent_id: agent.id,
+            category: "auth",
+            level: level,
+            message: message,
+            metadata: metadata
+          })
+      end
+    )
+
+    {:ok, _view, html} = live(conn, ~p"/health")
+
+    assert html =~ "Recent auth audit"
+    assert html =~ "Sign-ins (24h)"
+    assert html =~ "Reauth blocks"
+    assert html =~ "Session expiries"
+    assert html =~ "idle_timeout"
   end
 
   test "health page can export an operator report", %{conn: conn} do
@@ -120,6 +164,18 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "hydra-x-report-"
     assert html =~ ".md"
     assert html =~ ".json"
+  end
+
+  test "health page shows verified backup inventory", %{conn: conn} do
+    {:ok, manifest} = HydraX.Backup.create_bundle(HydraX.Config.backup_root())
+    backups = Runtime.backup_status()
+
+    {:ok, _view, html} = live(conn, ~p"/health")
+
+    assert html =~ "Backup inventory"
+    assert html =~ manifest["archive_path"]
+    assert html =~ "archive verified"
+    assert html =~ "verified #{backups.verified_count}"
   end
 
   test "health page shows memory conflict triage", %{conn: conn} do
@@ -146,6 +202,8 @@ defmodule HydraXWeb.HealthLiveTest do
     {:ok, _view, html} = live(conn, ~p"/health")
 
     assert html =~ "Conflict review queue"
+    assert html =~ "Embedding backend"
+    assert html =~ "Fallback writes"
     assert html =~ "Conflicted"
     assert html =~ ">2<"
   end
@@ -184,10 +242,11 @@ defmodule HydraXWeb.HealthLiveTest do
         "last_delivery" => %{
           "channel" => "telegram",
           "external_ref" => "999",
-          "status" => "failed",
+          "status" => "dead_letter",
           "retry_count" => 1,
           "reason" => "timeout",
           "provider_message_ids" => [501, 502],
+          "dead_lettered_at" => "2026-03-11T09:00:00Z",
           "formatted_payload" => %{"chunk_count" => 2}
         }
       })
@@ -197,6 +256,9 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "Retryable failed deliveries: 1"
     assert html =~ "Recent Telegram delivery failures"
     assert html =~ "Delayed reply"
+    assert html =~ "dead letter 1"
+    assert html =~ "multipart 1"
+    assert html =~ "msg ids 2"
   end
 
   test "health page shows Discord and Slack channel readiness", %{conn: conn} do
@@ -255,6 +317,12 @@ defmodule HydraXWeb.HealthLiveTest do
         title: "Hydra-X Browser",
         subtitle: "Public ingress",
         enabled: true,
+        allow_anonymous_messages: false,
+        session_max_age_minutes: 180,
+        session_idle_timeout_minutes: 30,
+        attachments_enabled: true,
+        max_attachment_count: 2,
+        max_attachment_size_kb: 256,
         default_agent_id: agent.id
       })
 
@@ -263,6 +331,10 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "Additional channel readiness"
     assert html =~ "webchat"
     assert html =~ "/webchat"
+    assert html =~ "policy: identity required"
+    assert html =~ "max 180m"
+    assert html =~ "idle 30m"
+    assert html =~ "attachments 2x256KB"
   end
 
   test "health page shows MCP server registry health", %{conn: conn} do

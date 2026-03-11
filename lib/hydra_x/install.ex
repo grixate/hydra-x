@@ -51,6 +51,16 @@ defmodule HydraX.Install do
         "#{marker} #{item.label} (#{requirement}) - #{item.detail}"
       end)
 
+    next_steps =
+      case snapshot.readiness.next_steps do
+        [] ->
+          "1. No additional readiness actions are pending."
+
+        steps ->
+          Enum.with_index(steps, 1)
+          |> Enum.map_join("\n", fn {step, index} -> "#{index}. #{step}" end)
+      end
+
     """
     # Hydra-X Preview Install Snapshot
 
@@ -61,9 +71,18 @@ defmodule HydraX.Install do
     Database path: #{snapshot.database_path}
 
     ## Readiness
+    Summary: #{String.upcase(Atom.to_string(snapshot.readiness.summary))}
+    Total items: #{snapshot.readiness.counts.total}
+    Warnings: #{snapshot.readiness.counts.warn}
+    Required warnings: #{snapshot.readiness.counts.required_warn}
+    Recommended warnings: #{snapshot.readiness.counts.recommended_warn}
+
     #{items}
 
     ## Next Steps
+    #{next_steps}
+
+    ## Deployment Checklist
     1. Replace `SECRET_KEY_BASE`.
     2. Update `DATABASE_PATH` if the preview node should not reuse the local SQLite file.
     3. Set `HYDRA_X_PUBLIC_URL` and `PHX_HOST` to the final externally reachable host.

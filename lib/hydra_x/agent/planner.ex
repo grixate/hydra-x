@@ -81,14 +81,14 @@ defmodule HydraX.Agent.Planner do
       (Enum.with_index(suggested_tools, 1)
        |> Enum.map(fn {tool, index} ->
          step(%{
-            "id" => "tool-#{index}-#{tool["name"]}",
-            "kind" => step_kind_for_tool(tool["name"]),
-            "name" => tool["name"],
-            "label" => step_label_for_tool(tool["name"]),
-            "reason" => tool["reason"],
-            "status" => "pending"
-          })
-        end)) ++
+           "id" => "tool-#{index}-#{tool["name"]}",
+           "kind" => step_kind_for_tool(tool["name"]),
+           "name" => tool["name"],
+           "label" => step_label_for_tool(tool["name"]),
+           "reason" => tool["reason"],
+           "status" => "pending"
+         })
+       end)) ++
       [
         step(%{
           "id" => "provider-final",
@@ -118,10 +118,21 @@ defmodule HydraX.Agent.Planner do
   end
 
   defp step(attrs) do
+    step_id = attrs["id"] || attrs[:id]
+    kind = attrs["kind"] || attrs[:kind]
+
     attrs
     |> Map.put_new("attempt_count", 0)
     |> Map.put_new("executor", "channel")
+    |> Map.put_new("owner", "channel")
+    |> Map.put_new("lifecycle", "planned")
+    |> Map.put_new("idempotency_key", to_string(step_id || System.unique_integer([:positive])))
+    |> Map.put_new("replay_strategy", replay_strategy(kind))
   end
+
+  defp replay_strategy("provider"), do: "replay"
+  defp replay_strategy("skill"), do: "resume"
+  defp replay_strategy(_kind), do: "cache_or_replay"
 
   defp step_kind_for_tool("memory_recall"), do: "memory"
   defp step_kind_for_tool("memory_save"), do: "memory"
@@ -188,7 +199,13 @@ defmodule HydraX.Agent.Planner do
   end
 
   defp tool_reason("mcp_catalog", message) do
-    if contains_any?(message, ["mcp actions", "integration actions", "available actions", "what can mcp", "what can the integration"]) do
+    if contains_any?(message, [
+         "mcp actions",
+         "integration actions",
+         "available actions",
+         "what can mcp",
+         "what can the integration"
+       ]) do
       "discover actions exposed by enabled MCP integrations"
     end
   end
@@ -199,8 +216,13 @@ defmodule HydraX.Agent.Planner do
   end
 
   defp tool_reason("mcp_invoke", message) do
-    if contains_any?(message, ["invoke mcp", "call mcp", "run integration action", "use integration"]),
-      do: "invoke an enabled MCP integration action"
+    if contains_any?(message, [
+         "invoke mcp",
+         "call mcp",
+         "run integration action",
+         "use integration"
+       ]),
+       do: "invoke an enabled MCP integration action"
   end
 
   defp tool_reason("mcp_probe", message) do

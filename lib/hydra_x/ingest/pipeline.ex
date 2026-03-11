@@ -134,13 +134,23 @@ defmodule HydraX.Ingest.Pipeline do
       end
     else
       {:error, :ingest_path_not_allowed} ->
+        allowed_roots =
+          case Runtime.authorize_ingest_path(
+                 agent_id,
+                 Runtime.get_agent!(agent_id).workspace_root,
+                 file_path
+               ) do
+            {:error, {:ingest_path_not_allowed, roots}} -> roots
+            _ -> []
+          end
+
         record_run!(agent_id, %{
           source_file: filename,
           source_path: Path.expand(file_path),
           status: "failed",
           metadata: %{
             "reason" => "ingest_path_not_allowed",
-            "allowed_roots" => Runtime.effective_control_policy(agent_id).ingest_roots
+            "allowed_roots" => allowed_roots
           }
         })
 
@@ -273,16 +283,11 @@ defmodule HydraX.Ingest.Pipeline do
 
   defp validate_ingest_path(agent_id, file_path) do
     agent = Runtime.get_agent!(agent_id)
-    candidate = Path.expand(file_path)
 
-    allowed? =
-      Runtime.effective_control_policy(agent_id).ingest_roots
-      |> Enum.any?(fn root ->
-        allowed_root = Path.expand(root, agent.workspace_root)
-        candidate == allowed_root or String.starts_with?(candidate, allowed_root <> "/")
-      end)
-
-    if allowed?, do: :ok, else: {:error, :ingest_path_not_allowed}
+    case Runtime.authorize_ingest_path(agent_id, agent.workspace_root, file_path) do
+      :ok -> :ok
+      {:error, {:ingest_path_not_allowed, _roots}} -> {:error, :ingest_path_not_allowed}
+    end
   end
 
   defp archive_stale_entries(agent_id, filename, existing_hashes, new_hashes) do

@@ -42,8 +42,16 @@ defmodule HydraX.Runtime do
   defdelegate get_provider_config!(id), to: HydraX.Runtime.Providers
   defdelegate enabled_provider(), to: HydraX.Runtime.Providers
   defdelegate enabled_provider(agent_id, process_type), to: HydraX.Runtime.Providers
-  defdelegate effective_provider_route(agent_id, process_type), to: HydraX.Runtime.Providers
-  defdelegate effective_provider_route(agent_id, process_type, opts), to: HydraX.Runtime.Providers
+
+  defdelegate effective_provider_route(agent_id, process_type),
+    to: HydraX.Runtime.EffectivePolicy
+
+  defdelegate effective_provider_route(agent_id, process_type, opts),
+    to: HydraX.Runtime.EffectivePolicy
+
+  defdelegate effective_policy(), to: HydraX.Runtime.EffectivePolicy
+  defdelegate effective_policy(agent_id), to: HydraX.Runtime.EffectivePolicy
+  defdelegate effective_policy(agent_id, opts), to: HydraX.Runtime.EffectivePolicy
   defdelegate provider_routing_profile(agent_id), to: HydraX.Runtime.Providers
   defdelegate save_agent_provider_routing(agent_id, attrs), to: HydraX.Runtime.Providers
   defdelegate clear_agent_provider_routing!(agent_id), to: HydraX.Runtime.Providers
@@ -285,6 +293,30 @@ defmodule HydraX.Runtime do
   defdelegate readiness_report(opts), to: HydraX.Runtime.Observability
   defdelegate install_snapshot(), to: HydraX.Runtime.Observability
   defdelegate backup_status(), to: HydraX.Runtime.Observability
+  defdelegate authorize_tool(agent_id, tool_name, channel), to: HydraX.Runtime.EffectivePolicy
+
+  defdelegate authorize_tool(agent_id, tool_name, channel, opts),
+    to: HydraX.Runtime.EffectivePolicy
+
+  defdelegate tool_decision(agent_id, tool_name, channel), to: HydraX.Runtime.EffectivePolicy
+
+  defdelegate tool_decision(agent_id, tool_name, channel, opts),
+    to: HydraX.Runtime.EffectivePolicy
+
+  defdelegate authorize_delivery(agent_id, mode, channel), to: HydraX.Runtime.EffectivePolicy
+
+  defdelegate authorize_delivery(agent_id, mode, channel, opts),
+    to: HydraX.Runtime.EffectivePolicy
+
+  defdelegate authorize_ingest_path(agent_id, workspace_root, file_path),
+    to: HydraX.Runtime.EffectivePolicy
+
+  defdelegate authorize_ingest_path(agent_id, workspace_root, file_path, opts),
+    to: HydraX.Runtime.EffectivePolicy
+
+  defdelegate recent_auth_required?(), to: HydraX.Runtime.EffectivePolicy
+  defdelegate recent_auth_required?(agent_id), to: HydraX.Runtime.EffectivePolicy
+  defdelegate recent_auth_required?(agent_id, opts), to: HydraX.Runtime.EffectivePolicy
 
   # ── Ingest ────────────────────────────────────────────────────────────
 

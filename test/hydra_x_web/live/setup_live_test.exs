@@ -34,6 +34,37 @@ defmodule HydraXWeb.SetupLiveTest do
     assert html =~ "Install preflight"
     assert html =~ "Operator password configured"
     assert html =~ "Public URL points beyond localhost"
+    assert html =~ "Required blockers"
+    assert html =~ "Next steps"
+  end
+
+  test "setup page shows secret posture summary", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, _provider} =
+      Runtime.save_provider_config(%{
+        name: "Setup Secret Provider",
+        kind: "openai_compatible",
+        base_url: "https://setup-secret.test",
+        api_key: "provider-secret",
+        model: "gpt-setup-secret",
+        enabled: false
+      })
+
+    {:ok, _telegram} =
+      Runtime.save_telegram_config(%{
+        bot_token: "test-token",
+        webhook_secret: "hook-secret",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
+    {:ok, _view, html} = live(conn, ~p"/setup")
+
+    assert html =~ "Secret posture:"
+    assert html =~ "Protected"
+    assert html =~ "Encrypted"
+    assert html =~ "env-backed"
   end
 
   test "setup page can export install artifacts", %{conn: conn} do
@@ -60,6 +91,7 @@ defmodule HydraXWeb.SetupLiveTest do
     assert html =~ "Backup bundle created"
     assert html =~ "hydra-x-backup-"
     assert html =~ ".tar.gz"
+    assert html =~ "Verification: verified"
   end
 
   test "setup page can save the global control policy", %{conn: conn} do
@@ -248,8 +280,7 @@ defmodule HydraXWeb.SetupLiveTest do
     })
     |> render_submit()
 
-    assert_receive {:setup_slack_test,
-                    %{text: "Slack UI smoke test", channel: "slack-room"}}
+    assert_receive {:setup_slack_test, %{text: "Slack UI smoke test", channel: "slack-room"}}
 
     html = render(view)
     assert html =~ "Slack delivery test succeeded"
@@ -268,7 +299,13 @@ defmodule HydraXWeb.SetupLiveTest do
         "subtitle" => "Public ingress",
         "welcome_prompt" => "Welcome to the browser channel.",
         "composer_placeholder" => "Start typing",
-        "enabled" => "true"
+        "enabled" => "true",
+        "allow_anonymous_messages" => "false",
+        "session_max_age_minutes" => "180",
+        "session_idle_timeout_minutes" => "45",
+        "attachments_enabled" => "true",
+        "max_attachment_count" => "2",
+        "max_attachment_size_kb" => "256"
       }
     })
     |> render_submit()
@@ -277,8 +314,19 @@ defmodule HydraXWeb.SetupLiveTest do
     assert html =~ "Webchat updated"
     assert html =~ "/webchat"
     assert html =~ "Hydra-X Browser"
+    assert html =~ "Allow anonymous sessions"
+    assert html =~ "Session max age"
 
-    assert %{enabled: true, title: "Hydra-X Browser"} = Runtime.enabled_webchat_config()
+    assert %{
+             enabled: true,
+             title: "Hydra-X Browser",
+             allow_anonymous_messages: false,
+             session_max_age_minutes: 180,
+             session_idle_timeout_minutes: 45,
+             attachments_enabled: true,
+             max_attachment_count: 2,
+             max_attachment_size_kb: 256
+           } = Runtime.enabled_webchat_config()
   end
 
   test "setup page can save and test an MCP server", %{conn: conn} do

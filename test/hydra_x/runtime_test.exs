@@ -62,11 +62,14 @@ defmodule HydraX.RuntimeTest do
     assert Enum.all?(channel_state.steps, &(&1["status"] == "completed"))
     assert channel_state.current_step_id == nil
     refute channel_state.resumable
+
     assert Enum.any?(channel_state.steps, fn step ->
              step["kind"] == "provider" and not is_nil(step["summary"]) and
                step["attempt_count"] == 1 and not is_nil(step["started_at"]) and
-               not is_nil(step["completed_at"])
+               not is_nil(step["completed_at"]) and step["owner"] == "channel" and
+               step["lifecycle"] == "completed"
            end)
+
     assert Enum.any?(channel_state.execution_events, &(&1["phase"] == "provider_requested"))
     assert Enum.any?(channel_state.execution_events, &(&1["phase"] == "provider_completed"))
   end
@@ -120,7 +123,9 @@ defmodule HydraX.RuntimeTest do
     plan =
       HydraX.Agent.Planner.build(
         conversation,
-        [%{id: 1, content: "Call MCP to probe the integration health and remember what you know"}],
+        [
+          %{id: 1, content: "Call MCP to probe the integration health and remember what you know"}
+        ],
         tools,
         []
       )
@@ -193,6 +198,78 @@ defmodule HydraX.RuntimeTest do
     assert skill.tools == ["shell_command", "web_search"]
     assert skill.channels == ["cli", "slack"]
     assert skill.requires == ["release-window"]
+    assert skill.advisory_requirements == ["release-window"]
+    assert skill.manifest_valid
+    assert skill.validation_errors == []
+  end
+
+  test "skill prompt context excludes invalid manifests and unsatisfied explicit requirements" do
+    agent = create_agent()
+
+    invalid_dir = Path.join([agent.workspace_root, "skills", "invalid-skill"])
+    File.mkdir_p!(invalid_dir)
+
+    File.write!(
+      Path.join(invalid_dir, "SKILL.md"),
+      "---\nname: Invalid Skill\nsummary: Broken frontmatter.\ntools: shell_command,unknown_tool\nchannels: cli,unknown_channel\nrequires: env:\n---\n# Invalid Skill\n\nShould not load into prompt context."
+    )
+
+    gated_dir = Path.join([agent.workspace_root, "skills", "release-gated"])
+    File.mkdir_p!(gated_dir)
+
+    File.write!(
+      Path.join(gated_dir, "SKILL.md"),
+      "---\nname: Release Gated\nsummary: Only active when explicit requirements are met.\ntools: shell_command\nchannels: cli\nrequires: env:HYDRA_X_RELEASE_WINDOW,mcp:docs-http\n---\n# Release Gated\n\nRuns only when release window and docs MCP are available."
+    )
+
+    {:ok, _mcp} =
+      Runtime.save_mcp_server(%{
+        name: "Docs HTTP MCP",
+        transport: "http",
+        url: "https://mcp.example.test",
+        metadata: %{"slug" => "docs-http"},
+        enabled: true
+      })
+
+    assert {:ok, _bindings} = Runtime.refresh_agent_mcp_servers(agent.id)
+    assert {:ok, _skills} = Runtime.refresh_agent_skills(agent.id)
+
+    [gated, invalid] =
+      Runtime.list_skills(agent_id: agent.id)
+      |> Enum.sort_by(& &1.slug)
+
+    assert gated.slug == "invalid-skill"
+    assert invalid.slug == "release-gated"
+
+    refute get_in(gated.metadata, ["manifest_valid"])
+    assert "unknown tool unknown_tool" in get_in(gated.metadata, ["validation_errors"])
+    assert "unknown channel unknown_channel" in get_in(gated.metadata, ["validation_errors"])
+    assert "malformed requirement env:" in get_in(gated.metadata, ["validation_errors"])
+
+    refute Runtime.skill_prompt_context(agent.id, %{
+             channel: "cli",
+             tool_names: ["shell_command"]
+           }) =~ "Invalid Skill"
+
+    refute Runtime.skill_prompt_context(agent.id, %{
+             channel: "cli",
+             tool_names: ["shell_command"]
+           }) =~ "Release Gated"
+
+    System.put_env("HYDRA_X_RELEASE_WINDOW", "1")
+
+    on_exit(fn ->
+      System.delete_env("HYDRA_X_RELEASE_WINDOW")
+    end)
+
+    context =
+      Runtime.skill_prompt_context(agent.id, %{
+        channel: "cli",
+        tool_names: ["shell_command"]
+      })
+
+    assert context =~ "Release Gated"
+    refute context =~ "Invalid Skill"
   end
 
   test "worker can probe enabled MCP bindings" do
@@ -275,7 +352,9 @@ defmodule HydraX.RuntimeTest do
 
     refute result.is_error
     assert result.summary == "invoked search_docs on 1 MCP bindings"
-    assert [%{name: "Docs HTTP MCP", status: "ok", result: %{status: 200}}] = result.result.results
+
+    assert [%{name: "Docs HTTP MCP", status: "ok", result: %{status: 200}}] =
+             result.result.results
   end
 
   test "worker can list actions on enabled HTTP MCP bindings" do
@@ -322,8 +401,66 @@ defmodule HydraX.RuntimeTest do
 
     refute result.is_error
     assert result.summary == "listed actions for 1 MCP bindings"
-    assert [%{name: "Docs HTTP MCP", status: "ok", actions: ["search_docs", "get_status"]}] =
+
+    assert [
+             %{
+               name: "Docs HTTP MCP",
+               status: "ok",
+               actions: ["search_docs", "get_status"],
+               catalog_source: "live"
+             }
+           ] =
              result.result.results
+  end
+
+  test "cached MCP action catalogs can be reused without live requests" do
+    agent = create_agent()
+    previous = Application.get_env(:hydra_x, :mcp_http_request_fn)
+
+    Application.put_env(:hydra_x, :mcp_http_request_fn, fn opts ->
+      assert opts[:url] == "https://mcp.example.test/actions"
+
+      {:ok,
+       %{
+         status: 200,
+         body: %{
+           "actions" => [
+             %{"name" => "search_docs", "description" => "Search docs"},
+             %{"name" => "get_status", "description" => "Get status"}
+           ]
+         }
+       }}
+    end)
+
+    on_exit(fn ->
+      if previous do
+        Application.put_env(:hydra_x, :mcp_http_request_fn, previous)
+      else
+        Application.delete_env(:hydra_x, :mcp_http_request_fn)
+      end
+    end)
+
+    {:ok, _mcp} =
+      Runtime.save_mcp_server(%{
+        name: "Docs HTTP MCP",
+        transport: "http",
+        url: "https://mcp.example.test",
+        enabled: true
+      })
+
+    assert {:ok, _bindings} = Runtime.refresh_agent_mcp_servers(agent.id)
+    assert {:ok, %{results: [_]}} = Runtime.list_agent_mcp_actions(agent.id, refresh: true)
+
+    Application.put_env(:hydra_x, :mcp_http_request_fn, fn _opts ->
+      flunk("cached MCP action lookup should not perform a live HTTP request")
+    end)
+
+    assert {:ok, %{results: [result]}} = Runtime.list_agent_mcp_actions(agent.id)
+    assert result.actions == ["search_docs", "get_status"]
+    assert result.catalog_source == "live"
+
+    assert [%{"name" => "search_docs"}, %{"name" => "get_status"}] =
+             result.action_catalog["actions"]
   end
 
   test "worker reports unsupported stdio MCP invoke attempts" do
@@ -355,6 +492,7 @@ defmodule HydraX.RuntimeTest do
 
     refute result.is_error
     assert result.summary == "invoked search_docs on 1 MCP bindings"
+
     assert [%{name: "Docs MCP", status: "warn", detail: "stdio invoke not supported"}] =
              result.result.results
   end
@@ -414,6 +552,8 @@ defmodule HydraX.RuntimeTest do
     assert channel_state.status == "completed"
     assert Enum.any?(channel_state.execution_events, &(&1["phase"] == "recovered_after_restart"))
     assert Enum.all?(channel_state.steps, &(&1["status"] == "completed"))
+    assert channel_state.recovery_lineage["recovery_count"] == 1
+    assert channel_state.recovery_lineage["turn_scope_id"] == user_turn.id
   end
 
   test "channel recovery reuses cached tool results instead of repeating side effects" do
@@ -590,11 +730,20 @@ defmodule HydraX.RuntimeTest do
 
     channel_state = Runtime.conversation_channel_state(conversation.id)
     assert Enum.any?(channel_state.execution_events, &(&1["phase"] == "tool_cache_hit"))
+    assert channel_state.recovery_lineage["cache_hits"] == 1
+    assert channel_state.recovery_lineage["cache_misses"] == 0
+    assert channel_state.tool_cache_scope_turn_id == user_turn.id
 
     assert Enum.any?(
              channel_state.tool_results,
-             &(&1["tool_name"] == "memory_save" and &1["cached"])
+             &(&1["tool_name"] == "memory_save" and &1["cached"] and
+                 &1["result_source"] == "cache")
            )
+
+    assert Enum.any?(channel_state.steps, fn step ->
+             step["name"] == "memory_save" and step["cached"] and step["result_source"] == "cache" and
+               step["replay_count"] == 1 and step["lifecycle"] == "cached"
+           end)
   end
 
   test "memory tools work directly" do
@@ -1011,6 +1160,77 @@ defmodule HydraX.RuntimeTest do
     assert get_in(memory.metadata || %{}, ["embedding_model"]) == "text-embedding-3-small"
     assert get_in(memory.metadata || %{}, ["embedding_dimensions"]) == 4
     assert get_in(memory.metadata || %{}, ["embedding_vector"]) == [0.11, 0.22, 0.33, 0.44]
+  end
+
+  test "memory embedding status tracks fallback and stale records" do
+    agent = create_agent()
+    previous_backend = System.get_env("HYDRA_X_EMBEDDING_BACKEND")
+    previous_url = System.get_env("HYDRA_X_EMBEDDING_URL")
+    previous_key = System.get_env("HYDRA_X_EMBEDDING_API_KEY")
+    previous_model = System.get_env("HYDRA_X_EMBEDDING_MODEL")
+    previous_request_fn = Application.get_env(:hydra_x, :embedding_request_fn)
+
+    System.put_env("HYDRA_X_EMBEDDING_BACKEND", "openai_compatible")
+    System.put_env("HYDRA_X_EMBEDDING_URL", "https://embeddings.example.test/v1/embeddings")
+    System.put_env("HYDRA_X_EMBEDDING_API_KEY", "embed-secret")
+    System.put_env("HYDRA_X_EMBEDDING_MODEL", "text-embedding-3-small")
+
+    on_exit(fn ->
+      restore_env("HYDRA_X_EMBEDDING_BACKEND", previous_backend)
+      restore_env("HYDRA_X_EMBEDDING_URL", previous_url)
+      restore_env("HYDRA_X_EMBEDDING_API_KEY", previous_key)
+      restore_env("HYDRA_X_EMBEDDING_MODEL", previous_model)
+
+      if previous_request_fn do
+        Application.put_env(:hydra_x, :embedding_request_fn, previous_request_fn)
+      else
+        Application.delete_env(:hydra_x, :embedding_request_fn)
+      end
+    end)
+
+    Application.put_env(:hydra_x, :embedding_request_fn, fn _opts ->
+      {:ok, %{status: 200, body: %{"data" => [%{"embedding" => [0.21, 0.31, 0.41, 0.51]}]}}}
+    end)
+
+    {:ok, remote_memory} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Fact",
+        content: "OpenAI-compatible embeddings should stay primary when healthy.",
+        importance: 0.7,
+        last_seen_at: DateTime.utc_now()
+      })
+
+    assert get_in(remote_memory.metadata || %{}, ["embedding_backend"]) == "openai_compatible"
+    refute get_in(remote_memory.metadata || %{}, ["embedding_fallback_from"])
+
+    Application.put_env(:hydra_x, :embedding_request_fn, fn _opts ->
+      {:error, :timeout}
+    end)
+
+    {:ok, fallback_memory} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Fact",
+        content: "Fallback embeddings should remain queryable when the remote backend is down.",
+        importance: 0.6,
+        last_seen_at: DateTime.utc_now()
+      })
+
+    assert get_in(fallback_memory.metadata || %{}, ["embedding_backend"]) == "local_hash_v1"
+
+    assert get_in(fallback_memory.metadata || %{}, ["embedding_fallback_from"]) ==
+             "openai_compatible"
+
+    status = Runtime.memory_triage_status(agent.id)
+
+    assert status.embedding.total_count == 2
+    assert status.embedding.embedded_count == 2
+    assert status.embedding.unembedded_count == 0
+    assert status.embedding.fallback_count == 1
+    assert status.embedding.stale_count == 1
+    assert status.embedding.active_backend == "openai_compatible"
+    assert status.embedding.active_model == "text-embedding-3-small"
   end
 
   test "mcp servers can be saved and probed over stdio and http" do
@@ -2291,6 +2511,103 @@ defmodule HydraX.RuntimeTest do
     assert route.budget.warnings == [:soft_limit_reached]
   end
 
+  test "effective policy consolidates tool, delivery, ingest, and auth rules" do
+    agent = create_agent()
+
+    {:ok, _tool_policy} =
+      Runtime.save_agent_tool_policy(agent.id, %{
+        browser_automation_enabled: true,
+        browser_automation_channels_csv: "cli",
+        shell_command_enabled: false
+      })
+
+    {:ok, _control_policy} =
+      Runtime.save_agent_control_policy(agent.id, %{
+        recent_auth_window_minutes: 4,
+        interactive_delivery_channels_csv: "webchat",
+        job_delivery_channels_csv: "discord,slack",
+        ingest_roots_csv: "ingest,docs"
+      })
+
+    policy = Runtime.effective_policy(agent.id, process_type: "channel")
+
+    assert policy.auth.recent_auth_required
+    assert policy.auth.recent_auth_window_minutes == 4
+    assert policy.deliveries.interactive_channels == ["webchat"]
+    assert policy.deliveries.job_channels == ["discord", "slack"]
+    assert policy.ingest.roots == ["ingest", "docs"]
+    assert policy.routing.source in ["global", "mock"]
+
+    assert Runtime.tool_decision(agent.id, "browser_automation", "cli").allowed?
+    refute Runtime.tool_decision(agent.id, "browser_automation", "webchat").allowed?
+    refute Runtime.tool_decision(agent.id, "shell_command", "cli").allowed?
+
+    assert Runtime.authorize_delivery(agent.id, :interactive, "webchat") == :ok
+
+    assert Runtime.authorize_delivery(agent.id, :job, "telegram") ==
+             {:error, {:delivery_channel_blocked_by_policy, "telegram"}}
+
+    assert Runtime.authorize_ingest_path(
+             agent.id,
+             agent.workspace_root,
+             Path.join(agent.workspace_root, "docs/policy.md")
+           ) == :ok
+
+    assert Runtime.authorize_ingest_path(
+             agent.id,
+             agent.workspace_root,
+             Path.join(System.tmp_dir!(), "outside.md")
+           ) == {:error, {:ingest_path_not_allowed, ["ingest", "docs"]}}
+  end
+
+  test "effective provider route can shift background work under workload pressure" do
+    agent = create_agent()
+
+    {:ok, primary} =
+      Runtime.save_provider_config(%{
+        name: "Primary Scheduler Route",
+        kind: "openai_compatible",
+        base_url: "https://primary-scheduler.test",
+        api_key: "secret",
+        model: "gpt-primary-scheduler",
+        enabled: false
+      })
+
+    {:ok, fallback} =
+      Runtime.save_provider_config(%{
+        name: "Fallback Scheduler Route",
+        kind: "openai_compatible",
+        base_url: "https://fallback-scheduler.test",
+        api_key: "secret",
+        model: "gpt-fallback-scheduler",
+        enabled: false
+      })
+
+    {:ok, _agent} =
+      Runtime.save_agent_provider_routing(agent.id, %{
+        "default_provider_id" => primary.id,
+        "fallback_provider_ids_csv" => Integer.to_string(fallback.id)
+      })
+
+    {:ok, _job} =
+      Runtime.save_scheduled_job(%{
+        agent_id: agent.id,
+        name: "Circuit open workload",
+        kind: "prompt",
+        prompt: "check workload",
+        schedule_mode: "interval",
+        interval_minutes: 30,
+        circuit_state: "open"
+      })
+
+    route = Runtime.effective_provider_route(agent.id, "scheduler")
+
+    assert route.provider.id == fallback.id
+    assert route.source == "workload:open_circuit_jobs"
+    assert route.workload.applied?
+    assert route.workload.pressure == "high"
+  end
+
   test "warming an agent provider route updates runtime readiness" do
     previous = Application.get_env(:hydra_x, :provider_test_request_fn)
 
@@ -2488,7 +2805,10 @@ defmodule HydraX.RuntimeTest do
     assert compaction.summary =~ "Turn"
     assert compaction.thresholds == policy
     assert compaction.estimated_tokens > 0
-    assert compaction.conversation_limit_tokens == Budget.ensure_policy!(agent.id).conversation_limit
+
+    assert compaction.conversation_limit_tokens ==
+             Budget.ensure_policy!(agent.id).conversation_limit
+
     assert compaction.token_ratio > 0.0
 
     reset = Runtime.reset_conversation_compaction!(conversation.id)

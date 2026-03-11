@@ -37,8 +37,10 @@ defmodule HydraX.Report do
       cluster: Runtime.cluster_status(),
       mcp: Runtime.mcp_statuses(),
       agent_mcp: Runtime.agent_mcp_statuses(),
+      channels: Runtime.channel_statuses(),
       telegram: Runtime.telegram_status(),
       operator: Runtime.operator_status(),
+      secrets: Runtime.secret_storage_status(),
       tools: Runtime.tool_status(),
       scheduler: scheduler_snapshot(filters.job_limit),
       ingest: Runtime.list_ingest_runs(agent.id, 10),
@@ -111,6 +113,7 @@ defmodule HydraX.Report do
 
     ## Readiness
     Summary: #{String.upcase(Atom.to_string(snapshot.readiness.summary))}
+    #{render_readiness_overview(snapshot.readiness)}
     #{render_readiness(snapshot.readiness.items)}
 
     ## Cluster Posture
@@ -118,6 +121,12 @@ defmodule HydraX.Report do
 
     ## Provider Route
     #{render_provider(snapshot.provider)}
+
+    ## Secret Posture
+    #{render_secret_posture(snapshot.secrets)}
+
+    ## Operator Auth
+    #{render_operator_auth(snapshot.operator)}
 
     ## Default Agent
     - Status: #{snapshot.default_agent.status}
@@ -155,6 +164,9 @@ defmodule HydraX.Report do
     - Last error: #{snapshot.telegram.last_error || "none"}
     - Recent failed conversations:
     #{render_telegram_failures(snapshot.telegram.recent_failures)}
+
+    ## Channel Failure Summary
+    #{render_channel_failures(snapshot.channels)}
 
     ## Tool Policy
     - Workspace guard: #{yes_no(snapshot.tools.workspace_guard)}
@@ -236,6 +248,22 @@ defmodule HydraX.Report do
     end)
   end
 
+  defp render_readiness_overview(readiness) do
+    """
+    - Total items: #{readiness.counts.total}
+    - OK: #{readiness.counts.ok}
+    - Warnings: #{readiness.counts.warn}
+    - Required warnings: #{readiness.counts.required_warn}
+    - Recommended warnings: #{readiness.counts.recommended_warn}
+    - Next steps:
+    #{render_readiness_steps(readiness.next_steps)}
+    """
+    |> String.trim()
+  end
+
+  defp render_readiness_steps([]), do: "- none"
+  defp render_readiness_steps(steps), do: Enum.map_join(steps, "\n", &"- #{&1}")
+
   defp render_bulletin(nil), do: "No bulletin generated."
   defp render_bulletin(""), do: "No bulletin generated."
 
@@ -276,6 +304,78 @@ defmodule HydraX.Report do
     - Readiness: #{provider.readiness}
     - Fallbacks: #{provider.fallback_count}
     - Capabilities: #{if(capabilities == "", do: "none", else: capabilities)}
+    """
+    |> String.trim()
+  end
+
+  defp render_secret_posture(secrets) do
+    scopes =
+      secrets.scopes
+      |> Enum.map_join("\n", fn scope ->
+        "- #{scope.scope}: protected=#{scope.protected_records}/#{scope.total_records} encrypted=#{scope.encrypted_records} env=#{scope.env_backed_records} unresolved=#{scope.unresolved_env_records} plaintext=#{scope.plaintext_records}"
+      end)
+
+    issues =
+      case secrets.issues do
+        [] -> "- none"
+        values -> Enum.map_join(values, "\n", &"- #{&1}")
+      end
+
+    """
+    - Posture: #{secrets.posture}
+    - Coverage: #{secrets.protected_records}/#{secrets.total_records} (#{secrets.coverage_percent}%)
+    - Encrypted: #{secrets.encrypted_records}
+    - Env-backed: #{secrets.env_backed_records}
+    - Unresolved env: #{secrets.unresolved_env_records}
+    - Plaintext: #{secrets.plaintext_records}
+    - Key source: #{secrets.key_source}
+    - Scope coverage:
+    #{scopes}
+    - Current issues:
+    #{issues}
+    """
+    |> String.trim()
+  end
+
+  defp render_operator_auth(operator) do
+    recent_events =
+      case operator.recent_events do
+        [] ->
+          "- none"
+
+        events ->
+          Enum.map_join(events, "\n", fn event ->
+            suffix =
+              [
+                event.expired_by && "expiry=#{event.expired_by}",
+                event.reauth? && "reauth=true",
+                event.ip && "ip=#{event.ip}"
+              ]
+              |> Enum.reject(&is_nil_or_empty/1)
+              |> Enum.join(" ")
+
+            "- #{format_datetime(event.inserted_at)} [#{String.upcase(event.level)}] #{event.message}#{if(suffix == "", do: "", else: " #{suffix}")}"
+          end)
+      end
+
+    """
+    - Configured: #{yes_no(operator.configured)}
+    - Last rotated at: #{format_datetime(operator.last_rotated_at)}
+    - Password age: #{operator.password_age_days || "n/a"}
+    - Session policy: max #{div(operator.session_max_age_seconds, 3600)}h, idle #{div(operator.idle_timeout_seconds, 60)}m, recent auth #{div(operator.recent_auth_window_seconds, 60)}m
+    - Login throttle: #{operator.login_max_attempts} attempts per #{operator.login_window_seconds}s
+    - Blocked IPs: #{operator.blocked_login_ips}
+    - Recent sign-ins (24h): #{operator.recent_login_success_count}
+    - Recent failures (24h): #{operator.recent_login_failure_count}
+    - Recent reauth blocks (24h): #{operator.recent_reauth_block_count}
+    - Recent session expiries (24h): #{operator.recent_session_expiry_count}
+    - Last sign-in: #{format_datetime(operator.last_login_at)}
+    - Last failure: #{format_datetime(operator.last_login_failure_at)}
+    - Last logout: #{format_datetime(operator.last_logout_at)}
+    - Last session expiry: #{format_datetime(operator.last_session_expired_at)}
+    - Last expiry reason: #{operator.last_session_expired_reason || "n/a"}
+    - Recent auth audit:
+    #{recent_events}
     """
     |> String.trim()
   end
@@ -417,6 +517,15 @@ defmodule HydraX.Report do
   defp render_delivery_summary(delivery) do
     status = Map.get(delivery, "status") || Map.get(delivery, :status) || "unknown"
     external_ref = Map.get(delivery, "external_ref") || Map.get(delivery, :external_ref)
+    retry_count = Map.get(delivery, "retry_count") || Map.get(delivery, :retry_count) || 0
+    reason = Map.get(delivery, "reason") || Map.get(delivery, :reason)
+    next_retry_at = Map.get(delivery, "next_retry_at") || Map.get(delivery, :next_retry_at)
+
+    dead_lettered_at =
+      Map.get(delivery, "dead_lettered_at") || Map.get(delivery, :dead_lettered_at)
+
+    attempt_history =
+      Map.get(delivery, "attempt_history") || Map.get(delivery, :attempt_history) || []
 
     provider_message_id =
       Map.get(delivery, "provider_message_id") || Map.get(delivery, :provider_message_id)
@@ -434,8 +543,13 @@ defmodule HydraX.Report do
     [
       status,
       external_ref && "ref=#{external_ref}",
+      retry_count > 0 && "retry=#{retry_count}",
+      reason && "reason=#{reason}",
       provider_message_id && "msg=#{provider_message_id}",
       provider_message_ids != [] && "msg_ids=#{length(provider_message_ids)}",
+      next_retry_at && "next_retry=#{format_datetime(next_retry_at)}",
+      dead_lettered_at && "dead_lettered_at=#{format_datetime(dead_lettered_at)}",
+      attempt_history != [] && "attempts=#{length(attempt_history)}",
       context,
       render_chunk_count(payload),
       render_formatted_payload(payload)
@@ -504,7 +618,14 @@ defmodule HydraX.Report do
     Enum.map_join(backups, "\n", fn backup ->
       status = if backup["archive_exists"], do: "present", else: "missing"
 
-      "- #{backup["archive_path"]} (archive=#{status}, entries=#{backup["entry_count"]}, created=#{backup["created_at"]})"
+      verified =
+        case backup["verified"] do
+          true -> "verified"
+          false -> "verify_failed"
+          _ -> "unverified"
+        end
+
+      "- #{backup["archive_path"]} (archive=#{status}, verify=#{verified}, entries=#{backup["entry_count"]}, size=#{backup["archive_size_bytes"] || 0}, created=#{backup["created_at"]})"
     end)
   end
 
@@ -536,6 +657,29 @@ defmodule HydraX.Report do
   defp render_telegram_failures(failures) do
     Enum.map_join(failures, "\n", fn failure ->
       "- ##{failure.id} #{failure.title} retry=#{failure.retry_count} updated=#{format_datetime(failure.updated_at)} reason=#{failure.reason || "unknown"}"
+    end)
+  end
+
+  defp render_channel_failures(channels) do
+    channels
+    |> Map.values()
+    |> Enum.map_join("\n", fn status ->
+      base =
+        "- #{status.channel}: configured=#{yes_no(status.configured)} enabled=#{yes_no(status.enabled)} retryable=#{status.retryable_count || 0} dead_letter=#{status.dead_letter_count || 0} multipart=#{status.multipart_failure_count || 0} attachments=#{status.attachment_failure_count || 0}"
+
+      failures =
+        case status.recent_failures do
+          [] ->
+            " recent_failures=none"
+
+          values ->
+            " recent_failures=" <>
+              Enum.map_join(values, " | ", fn failure ->
+                "#{failure.title}:#{failure.status}:#{failure.reason || "unknown"}"
+              end)
+        end
+
+      base <> failures
     end)
   end
 
@@ -668,8 +812,10 @@ defmodule HydraX.Report do
       cluster: snapshot.cluster,
       mcp: snapshot.mcp,
       agent_mcp: snapshot.agent_mcp,
+      channels: snapshot.channels,
       telegram: snapshot.telegram,
       operator: snapshot.operator,
+      secrets: snapshot.secrets,
       tools: snapshot.tools,
       scheduler: %{
         jobs: Enum.map(snapshot.scheduler.jobs, &json_job/1),
@@ -748,12 +894,15 @@ defmodule HydraX.Report do
         bulletin: Runtime.agent_bulletin(agent.id),
         compaction_policy: Runtime.compaction_policy(agent.id),
         provider_route: Runtime.effective_provider_route(agent.id, "channel"),
+        effective_policy: Runtime.effective_policy(agent.id, process_type: "channel"),
         tool_policy: Runtime.effective_tool_policy(agent.id),
         control_policy: Runtime.effective_control_policy(agent.id),
         skill_count: Runtime.enabled_skills(agent.id) |> length(),
         skill_requirement_count:
           skills
-          |> Enum.count(fn skill -> get_in(skill.metadata || %{}, ["requires"]) not in [nil, []] end),
+          |> Enum.count(fn skill ->
+            get_in(skill.metadata || %{}, ["requires"]) not in [nil, []]
+          end),
         mcp_count: Runtime.enabled_mcp_servers(agent.id) |> length(),
         mcp_action_count:
           mcp_actions
@@ -803,6 +952,16 @@ defmodule HydraX.Report do
     )
 
     File.write!(
+      Path.join(bundle_dir, "channels.json"),
+      Jason.encode_to_iodata!(snapshot.channels, pretty: true)
+    )
+
+    File.write!(
+      Path.join(bundle_dir, "secrets.json"),
+      Jason.encode_to_iodata!(snapshot.secrets, pretty: true)
+    )
+
+    File.write!(
       Path.join(bundle_dir, "agent_mcp.json"),
       Jason.encode_to_iodata!(snapshot.agent_mcp, pretty: true)
     )
@@ -814,7 +973,9 @@ defmodule HydraX.Report do
 
     File.write!(
       Path.join(bundle_dir, "conversations.json"),
-      Jason.encode_to_iodata!(Enum.map(snapshot.conversations, &json_conversation/1), pretty: true)
+      Jason.encode_to_iodata!(Enum.map(snapshot.conversations, &json_conversation/1),
+        pretty: true
+      )
     )
 
     File.write!(

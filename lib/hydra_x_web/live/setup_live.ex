@@ -57,6 +57,7 @@ defmodule HydraXWeb.SetupLive do
      |> assign(:operator_secret, Runtime.get_operator_secret())
      |> assign(:operator_status, operator_status)
      |> assign(:operator_session, operator_session)
+     |> assign(:secret_status, Runtime.secret_storage_status())
      |> assign(:provider_test_result, nil)
      |> assign(:telegram_test_result, nil)
      |> assign(:discord_test_result, nil)
@@ -117,6 +118,7 @@ defmodule HydraXWeb.SetupLive do
        socket
        |> put_flash(:info, "Provider updated")
        |> assign(:provider, provider)
+       |> assign(:secret_status, Runtime.secret_storage_status())
        |> assign(:readiness_report, Runtime.readiness_report())
        |> assign(:stats, stats())
        |> assign_form(:provider_form, Runtime.change_provider_config(provider))}
@@ -160,6 +162,7 @@ defmodule HydraXWeb.SetupLive do
        socket
        |> put_flash(:info, "Telegram updated")
        |> assign(:telegram, telegram)
+       |> assign(:secret_status, Runtime.secret_storage_status())
        |> assign(:readiness_report, Runtime.readiness_report())
        |> assign(:stats, stats())
        |> assign_form(:telegram_form, Runtime.change_telegram_config(telegram))}
@@ -181,6 +184,7 @@ defmodule HydraXWeb.SetupLive do
        socket
        |> put_flash(:info, "Discord updated")
        |> assign(:discord, discord)
+       |> assign(:secret_status, Runtime.secret_storage_status())
        |> assign(:readiness_report, Runtime.readiness_report())
        |> assign(:stats, stats())
        |> assign_form(:discord_form, Runtime.change_discord_config(discord))}
@@ -202,6 +206,7 @@ defmodule HydraXWeb.SetupLive do
        socket
        |> put_flash(:info, "Slack updated")
        |> assign(:slack, slack)
+       |> assign(:secret_status, Runtime.secret_storage_status())
        |> assign(:readiness_report, Runtime.readiness_report())
        |> assign(:stats, stats())
        |> assign_form(:slack_form, Runtime.change_slack_config(slack))}
@@ -525,6 +530,72 @@ defmodule HydraXWeb.SetupLive do
           <p class="mt-3 max-w-3xl text-sm text-[var(--hx-mute)]">
             Required items should be green before exposing the node publicly. Recommended items improve operator experience and recovery but do not block local boot.
           </p>
+          <div class="mt-6 grid gap-3 lg:grid-cols-4">
+            <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+              <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                Total items
+              </div>
+              <div class="mt-3 font-display text-4xl">{@readiness_report.counts.total}</div>
+            </article>
+            <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+              <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                Warnings
+              </div>
+              <div class="mt-3 font-display text-4xl">{@readiness_report.counts.warn}</div>
+            </article>
+            <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+              <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                Required blockers
+              </div>
+              <div class="mt-3 font-display text-4xl">{@readiness_report.counts.required_warn}</div>
+            </article>
+            <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+              <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                Recommended fixes
+              </div>
+              <div class="mt-3 font-display text-4xl">
+                {@readiness_report.counts.recommended_warn}
+              </div>
+            </article>
+            <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4 lg:col-span-2">
+              <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                Immediate blockers
+              </div>
+              <div class="mt-3 space-y-2">
+                <p
+                  :if={@readiness_report.blockers == []}
+                  class="text-sm text-[var(--hx-mute)]"
+                >
+                  No required launch blockers are pending.
+                </p>
+                <p
+                  :for={item <- @readiness_report.blockers}
+                  class="rounded-xl border border-white/10 bg-black/10 px-3 py-3 text-sm text-[var(--hx-mute)]"
+                >
+                  {item.label}: {item.detail}
+                </p>
+              </div>
+            </article>
+            <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4 lg:col-span-2">
+              <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                Next steps
+              </div>
+              <div class="mt-3 space-y-2">
+                <p
+                  :if={@readiness_report.next_steps == []}
+                  class="text-sm text-[var(--hx-mute)]"
+                >
+                  No readiness actions are pending.
+                </p>
+                <p
+                  :for={step <- @readiness_report.next_steps}
+                  class="rounded-xl border border-white/10 bg-black/10 px-3 py-3 text-sm text-[var(--hx-mute)]"
+                >
+                  {step}
+                </p>
+              </div>
+            </article>
+          </div>
           <div class="mt-6 grid gap-3 lg:grid-cols-2">
             <article
               :for={item <- @readiness_report.items}
@@ -597,6 +668,18 @@ defmodule HydraXWeb.SetupLive do
             </div>
             <p class="mt-2 break-all">Archive: {@backup_export["archive_path"]}</p>
             <p class="mt-1 break-all">Manifest: {@backup_export["manifest_path"]}</p>
+            <p class="mt-1">
+              Verification: {backup_verification_label(@backup_export)}
+            </p>
+            <p :if={@backup_export["archive_size_bytes"]} class="mt-1">
+              Archive size: {@backup_export["archive_size_bytes"]} bytes
+            </p>
+            <p
+              :if={(@backup_export["missing_entries"] || []) != []}
+              class="mt-1 break-all text-amber-200"
+            >
+              Missing entries: {Enum.join(@backup_export["missing_entries"], ", ")}
+            </p>
           </div>
         </article>
       </section>
@@ -631,6 +714,11 @@ defmodule HydraXWeb.SetupLive do
             <span :if={@operator_status.password_age_days != nil}>
               Password age: {@operator_status.password_age_days} days.
             </span>
+          </div>
+          <div class="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-4 text-sm text-[var(--hx-mute)]">
+            Secret posture: {@secret_status.posture}. Protected {@secret_status.protected_records}/{@secret_status.total_records} records ({@secret_status.coverage_percent}%).
+            Encrypted {@secret_status.encrypted_records}, env-backed {@secret_status.env_backed_records},
+            unresolved env {@secret_status.unresolved_env_records}, plaintext {@secret_status.plaintext_records}.
           </div>
           <.form
             for={@operator_form}
@@ -1045,7 +1133,8 @@ defmodule HydraXWeb.SetupLive do
             Enable a session-backed browser channel at
             <span class="mx-1 font-mono text-[var(--hx-accent)]">/webchat</span>
             so visitors can chat with the default agent without going through Telegram, Discord,
-            or Slack.
+            or Slack. Webchat now enforces explicit session age and idle windows, optional named
+            identity, and attachment metadata limits from this form.
           </p>
           <div class="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-4 text-sm text-[var(--hx-mute)]">
             <div>Public route</div>
@@ -1072,9 +1161,39 @@ defmodule HydraXWeb.SetupLive do
               label="Composer placeholder"
             />
             <.input
+              field={@webchat_form[:allow_anonymous_messages]}
+              type="checkbox"
+              label="Allow anonymous sessions"
+            />
+            <.input
               field={@webchat_form[:enabled]}
               type="checkbox"
               label="Enable public Webchat ingress"
+            />
+            <.input
+              field={@webchat_form[:session_max_age_minutes]}
+              type="number"
+              label="Session max age (minutes)"
+            />
+            <.input
+              field={@webchat_form[:session_idle_timeout_minutes]}
+              type="number"
+              label="Session idle timeout (minutes)"
+            />
+            <.input
+              field={@webchat_form[:attachments_enabled]}
+              type="checkbox"
+              label="Allow attachment uploads"
+            />
+            <.input
+              field={@webchat_form[:max_attachment_count]}
+              type="number"
+              label="Maximum attachments per message"
+            />
+            <.input
+              field={@webchat_form[:max_attachment_size_kb]}
+              type="number"
+              label="Maximum attachment size (KB)"
             />
             <.input
               field={@webchat_form[:welcome_prompt]}
@@ -1256,5 +1375,13 @@ defmodule HydraXWeb.SetupLive do
       :recent_auth_expires_at,
       DateTime.from_unix!(now + OperatorAuth.recent_auth_window_seconds())
     )
+  end
+
+  defp backup_verification_label(manifest) do
+    case manifest["verified"] do
+      true -> "verified"
+      false -> "failed"
+      _ -> "pending"
+    end
   end
 end

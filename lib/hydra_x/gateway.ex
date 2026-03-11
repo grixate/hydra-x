@@ -158,6 +158,9 @@ defmodule HydraX.Gateway do
 
   defp schedule_retry(agent_id, conversation_id, message, adapter_mod, config, attempt) do
     delay = Enum.at(@retry_backoffs, attempt, List.last(@retry_backoffs))
+    conversation = Runtime.get_conversation!(conversation_id)
+
+    mark_retry_scheduled(conversation, message, attempt + 1, delay)
 
     Task.Supervisor.start_child(HydraX.TaskSupervisor, fn ->
       Process.sleep(delay)
@@ -234,6 +237,12 @@ defmodule HydraX.Gateway do
       |> delivery_payload(message, retry: true)
       |> Map.put("status", "dead_letter")
       |> Map.put("dead_lettered_at", DateTime.utc_now())
+      |> Map.delete("next_retry_at")
+      |> Map.delete("next_retry_in_ms")
+      |> Map.delete("pending_retry_attempt")
+      |> Map.delete("retry_backoff_ms")
+      |> Map.put("retry_limit", @max_retries)
+      |> with_attempt_history(conversation)
 
     Runtime.update_conversation_metadata(conversation, %{"last_delivery" => delivery})
   end
@@ -286,7 +295,13 @@ defmodule HydraX.Gateway do
       "title" => config && config.title,
       "subtitle" => config && config.subtitle,
       "welcome_prompt" => config && config.welcome_prompt,
-      "composer_placeholder" => config && config.composer_placeholder
+      "composer_placeholder" => config && config.composer_placeholder,
+      "allow_anonymous_messages" => config && config.allow_anonymous_messages,
+      "session_max_age_minutes" => config && config.session_max_age_minutes,
+      "session_idle_timeout_minutes" => config && config.session_idle_timeout_minutes,
+      "attachments_enabled" => config && config.attachments_enabled,
+      "max_attachment_count" => config && config.max_attachment_count,
+      "max_attachment_size_kb" => config && config.max_attachment_size_kb
     }
   end
 
@@ -296,15 +311,24 @@ defmodule HydraX.Gateway do
        when is_map(metadata) do
     Telemetry.gateway_delivery(message.channel, :ok)
 
-    delivery = delivery_payload(conversation, message, opts)
+    stringified_metadata = stringify_keys(metadata)
+
+    delivery =
+      conversation
+      |> delivery_payload(message, opts)
+      |> Map.merge(delivery_result_fields(stringified_metadata))
+      |> Map.put("metadata", stringified_metadata)
+      |> Map.put("status", "delivered")
+      |> Map.put("delivered_at", DateTime.utc_now())
+      |> Map.delete("reason")
+      |> Map.delete("next_retry_at")
+      |> Map.delete("next_retry_in_ms")
+      |> Map.delete("pending_retry_attempt")
+      |> Map.delete("retry_backoff_ms")
+      |> with_attempt_history(conversation)
 
     Runtime.update_conversation_metadata(conversation, %{
-      "last_delivery" =>
-        delivery
-        |> Map.put("status", "delivered")
-        |> Map.put("delivered_at", DateTime.utc_now())
-        |> Map.put("metadata", stringify_keys(metadata))
-        |> Map.delete("reason")
+      "last_delivery" => delivery
     })
   end
 
@@ -335,6 +359,8 @@ defmodule HydraX.Gateway do
       |> Map.put("status", "failed")
       |> Map.put("attempted_at", DateTime.utc_now())
       |> Map.put("reason", reason_text)
+      |> Map.put("retry_limit", @max_retries)
+      |> with_attempt_history(conversation)
 
     Runtime.update_conversation_metadata(conversation, %{"last_delivery" => delivery})
   end
@@ -382,8 +408,10 @@ defmodule HydraX.Gateway do
   end
 
   defp delivery_payload(conversation, message, opts) do
+    previous = last_delivery(conversation) || %{}
+
     retries =
-      case last_delivery(conversation) do
+      case previous do
         %{"retry_count" => count} when is_integer(count) -> count
         %{retry_count: count} when is_integer(count) -> count
         _ -> 0
@@ -401,6 +429,8 @@ defmodule HydraX.Gateway do
         |> Keyword.get(:formatted_payload, %{})
         |> stringify_keys()
     }
+    |> maybe_put_existing("attempt_history", delivery_value(previous, "attempt_history"))
+    |> maybe_put_existing("first_attempted_at", delivery_value(previous, "first_attempted_at"))
   end
 
   defp delivery_context(%{metadata: metadata}) when is_map(metadata) do
@@ -410,6 +440,78 @@ defmodule HydraX.Gateway do
   end
 
   defp delivery_context(_message), do: %{}
+
+  defp mark_retry_scheduled(conversation, message, pending_retry_attempt, delay_ms) do
+    previous = last_delivery(conversation) || %{}
+    next_retry_at = DateTime.add(DateTime.utc_now(), delay_ms, :millisecond)
+
+    delivery =
+      previous
+      |> Map.merge(delivery_payload(conversation, message, retry: false))
+      |> Map.put("next_retry_at", next_retry_at)
+      |> Map.put("next_retry_in_ms", delay_ms)
+      |> Map.put("pending_retry_attempt", pending_retry_attempt)
+      |> Map.put("retry_backoff_ms", delay_ms)
+      |> Map.put("retry_limit", @max_retries)
+
+    Runtime.update_conversation_metadata(conversation, %{"last_delivery" => delivery})
+  end
+
+  defp with_attempt_history(delivery, conversation) do
+    previous = last_delivery(conversation) || %{}
+
+    history =
+      previous
+      |> delivery_value("attempt_history")
+      |> List.wrap()
+      |> Enum.take(-9)
+      |> Kernel.++([delivery_attempt_entry(delivery)])
+
+    delivery
+    |> Map.put("attempt_history", history)
+    |> Map.put_new(
+      "first_attempted_at",
+      delivery["attempted_at"] || delivery["delivered_at"] || delivery["dead_lettered_at"]
+    )
+  end
+
+  defp delivery_attempt_entry(delivery) do
+    %{
+      "status" => delivery["status"],
+      "recorded_at" =>
+        delivery["delivered_at"] || delivery["attempted_at"] || delivery["dead_lettered_at"],
+      "retry_count" => delivery["retry_count"] || 0,
+      "reason" => delivery["reason"],
+      "provider_message_id" => delivery["provider_message_id"],
+      "provider_message_ids" => delivery["provider_message_ids"] || [],
+      "chunk_count" => delivery["chunk_count"],
+      "reply_context" => delivery["reply_context"] || %{}
+    }
+  end
+
+  defp delivery_result_fields(metadata) do
+    %{
+      "provider_message_id" => Map.get(metadata, "provider_message_id"),
+      "provider_message_ids" => Map.get(metadata, "provider_message_ids") || [],
+      "chunk_count" => Map.get(metadata, "chunk_count"),
+      "streaming" => Map.get(metadata, "streaming")
+    }
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
+  end
+
+  defp maybe_put_existing(map, _key, nil), do: map
+  defp maybe_put_existing(map, key, value), do: Map.put(map, key, value)
+
+  defp delivery_value(delivery, key) do
+    Map.get(delivery, key) ||
+      case key do
+        "attempt_history" -> Map.get(delivery, :attempt_history)
+        "first_attempted_at" -> Map.get(delivery, :first_attempted_at)
+        "retry_count" -> Map.get(delivery, :retry_count)
+        _ -> nil
+      end
+  end
 
   defp dispatch_channel_update(nil, _adapter_mod, _adapter_config, _event, error),
     do: {:error, error}
@@ -424,6 +526,9 @@ defmodule HydraX.Gateway do
 
   defp adapter_normalize_inbound(adapter_mod, event, state) do
     cond do
+      function_exported?(adapter_mod, :normalize_inbound, 2) ->
+        adapter_mod.normalize_inbound(event, state)
+
       function_exported?(adapter_mod, :normalize_inbound, 1) ->
         adapter_mod.normalize_inbound(event)
 
@@ -458,7 +563,7 @@ defmodule HydraX.Gateway do
   end
 
   defp interactive_delivery_allowed?(agent_id, channel) do
-    channel in HydraX.Runtime.effective_control_policy(agent_id).interactive_delivery_channels
+    Runtime.authorize_delivery(agent_id, :interactive, channel) == :ok
   end
 
   defp retry_adapter(delivery, opts) do

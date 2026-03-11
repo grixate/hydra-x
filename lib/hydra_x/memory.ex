@@ -43,6 +43,58 @@ defmodule HydraX.Memory do
     |> Repo.all()
   end
 
+  def embedding_status(agent_id \\ nil) do
+    embedding_runtime = Embeddings.status()
+
+    entries =
+      Entry
+      |> maybe_filter_agent(agent_id)
+      |> select([entry], %{metadata: entry.metadata, updated_at: entry.updated_at})
+      |> Repo.all()
+
+    {embedded_count, unembedded_count, stale_count, fallback_count, backend_counts, model_counts,
+     last_generated_at} =
+      Enum.reduce(entries, {0, 0, 0, 0, %{}, %{}, nil}, fn entry,
+                                                           {embedded, unembedded, stale, fallback,
+                                                            backends, models, last_generated} ->
+        metadata = entry.metadata || %{}
+        embedded? = embedded_memory?(metadata)
+        backend = metadata["embedding_backend"]
+        model = metadata["embedding_model"]
+        fallback_from = metadata["embedding_fallback_from"]
+        generated_at = metadata["embedding_generated_at"]
+
+        {
+          embedded + if(embedded?, do: 1, else: 0),
+          unembedded + if(embedded?, do: 0, else: 1),
+          stale + if(stale_embedding?(metadata, embedding_runtime), do: 1, else: 0),
+          fallback + if(is_binary(fallback_from) and fallback_from != "", do: 1, else: 0),
+          increment_count(backends, backend),
+          increment_count(models, model),
+          max_timestamp(last_generated, normalize_datetime(generated_at) || entry.updated_at)
+        }
+      end)
+
+    %{
+      total_count: length(entries),
+      embedded_count: embedded_count,
+      unembedded_count: unembedded_count,
+      stale_count: stale_count,
+      fallback_count: fallback_count,
+      backend_counts: backend_counts,
+      model_counts: model_counts,
+      last_generated_at: last_generated_at,
+      configured_backend: embedding_runtime.configured_backend,
+      active_backend: embedding_runtime.active_backend,
+      configured_model: embedding_runtime.configured_model,
+      active_model: embedding_runtime.active_model,
+      fallback_enabled?: embedding_runtime.fallback_enabled?,
+      degraded?: embedding_runtime.degraded?,
+      url_configured?: embedding_runtime.url_configured?,
+      api_key_configured?: embedding_runtime.api_key_configured?
+    }
+  end
+
   def search(agent_id, query, limit \\ 8, opts \\ [])
 
   def search(agent_id, "", limit, opts),
@@ -77,7 +129,9 @@ defmodule HydraX.Memory do
     search_opts = search_opts(opts)
     query_context = build_query_context(query)
     lexical_results = lexical_search(agent_id, query, max(limit * 3, 12), search_opts)
-    semantic_results = semantic_search(agent_id, query, max(limit * 4, 20), search_opts, query_context)
+
+    semantic_results =
+      semantic_search(agent_id, query, max(limit * 4, 20), search_opts, query_context)
 
     lexical_ranks =
       lexical_results
@@ -673,7 +727,10 @@ defmodule HydraX.Memory do
     |> maybe_add_reason(entry.status == "conflicted", "unresolved conflict")
     |> maybe_add_reason(ingest_backed?(entry), "ingest provenance")
     |> maybe_add_reason(type_intent_boost(entry, query) > 0, type_reason(entry))
-    |> maybe_add_reason(channel_context_boost(entry, query_context.channels) > 0, "channel context")
+    |> maybe_add_reason(
+      channel_context_boost(entry, query_context.channels) > 0,
+      "channel context"
+    )
     |> maybe_add_reason(provenance_boost(entry, query) > 0, "source provenance")
     |> maybe_add_reason(vector_similarity(entry, query_context) >= 0.2, "embedding similarity")
     |> maybe_add_reason(recently_reinforced?(entry), "recently reinforced")
@@ -744,6 +801,8 @@ defmodule HydraX.Memory do
     |> Map.put("embedding_dimensions", embedding.dimensions)
     |> Map.put("embedding_vector", embedding.vector)
     |> Map.put("embedding_generated_at", DateTime.utc_now())
+    |> maybe_put("embedding_fallback_from", Map.get(embedding, :fallback_from))
+    |> maybe_put("embedding_fallback_reason", Map.get(embedding, :fallback_reason))
     |> Map.put("recall_type", type)
     |> Map.put("recall_status", status)
   end
@@ -795,6 +854,23 @@ defmodule HydraX.Memory do
       _ -> []
     end
   end
+
+  defp embedded_memory?(metadata) when is_map(metadata) do
+    case metadata["embedding_vector"] do
+      vector when is_list(vector) and vector != [] -> true
+      _ -> false
+    end
+  end
+
+  defp embedded_memory?(_metadata), do: false
+
+  defp stale_embedding?(metadata, runtime_status) when is_map(metadata) do
+    embedded_memory?(metadata) and
+      (metadata["embedding_backend"] != runtime_status.active_backend or
+         metadata["embedding_model"] != runtime_status.active_model)
+  end
+
+  defp stale_embedding?(_metadata, _runtime_status), do: false
 
   defp provenance_boost(_entry, query) when query in [nil, ""], do: 0.0
 
@@ -946,7 +1022,9 @@ defmodule HydraX.Memory do
       embedding: embedding.vector,
       channels:
         terms
-        |> Enum.filter(&(&1 in ~w(telegram discord slack webchat cli scheduler control plane control_plane)))
+        |> Enum.filter(
+          &(&1 in ~w(telegram discord slack webchat cli scheduler control plane control_plane))
+        )
         |> Enum.map(fn
           "control" -> "control_plane"
           "plane" -> "control_plane"
@@ -976,6 +1054,28 @@ defmodule HydraX.Memory do
   defp recently_reinforced?(entry) do
     timestamp = entry.last_seen_at || entry.updated_at
     timestamp && DateTime.diff(DateTime.utc_now(), timestamp, :day) <= 3
+  end
+
+  defp increment_count(counts, nil), do: counts
+  defp increment_count(counts, ""), do: counts
+  defp increment_count(counts, key), do: Map.update(counts, key, 1, &(&1 + 1))
+
+  defp normalize_datetime(%DateTime{} = value), do: value
+
+  defp normalize_datetime(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} -> datetime
+      _ -> nil
+    end
+  end
+
+  defp normalize_datetime(_value), do: nil
+
+  defp max_timestamp(nil, timestamp), do: timestamp
+  defp max_timestamp(timestamp, nil), do: timestamp
+
+  defp max_timestamp(left, right) do
+    if DateTime.compare(left, right) == :lt, do: right, else: left
   end
 
   defp entry_metadata(nil), do: %{}

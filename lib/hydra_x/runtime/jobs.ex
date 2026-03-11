@@ -1003,8 +1003,7 @@ defmodule HydraX.Runtime.Jobs do
   end
 
   defp delivery_allowed_by_policy?(%ScheduledJob{agent_id: agent_id, delivery_channel: channel}) do
-    allowed = HydraX.Runtime.effective_control_policy(agent_id).job_delivery_channels
-    if channel in allowed, do: :ok, else: {:error, {:delivery_channel_blocked_by_policy, channel}}
+    HydraX.Runtime.authorize_delivery(agent_id, :job, channel)
   end
 
   defp deliver_job_run(

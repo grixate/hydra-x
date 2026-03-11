@@ -119,9 +119,12 @@ defmodule HydraX.Runtime.Conversations do
       current_step_index: state["current_step_index"],
       resumable: state["resumable"] || false,
       execution_events: state["execution_events"] || [],
+      recovery_lineage: state["recovery_lineage"] || %{},
       provider: state["provider"],
       tool_rounds: state["tool_rounds"] || 0,
       tool_results: state["tool_results"] || [],
+      tool_cache_scope_turn_id: state["tool_cache_scope_turn_id"],
+      active_tool_calls: state["active_tool_calls"] || [],
       assistant_turn_id: state["assistant_turn_id"],
       latest_user_turn_id: state["latest_user_turn_id"]
     }
@@ -285,6 +288,8 @@ defmodule HydraX.Runtime.Conversations do
 
   defp render_transcript(conversation) do
     channel_state = conversation_channel_state(conversation.id)
+    delivery = last_delivery(conversation)
+    attachment_count = transcript_attachment_count(conversation.turns)
 
     header = [
       "# #{conversation.title || "Untitled conversation"}",
@@ -292,9 +297,13 @@ defmodule HydraX.Runtime.Conversations do
       "- id: #{conversation.id}",
       "- channel: #{conversation.channel}",
       "- status: #{conversation.status}",
+      maybe_transcript_detail("- external_ref", conversation.external_ref),
+      maybe_transcript_detail("- attachments", attachment_count),
       "- updated_at: #{Calendar.strftime(conversation.updated_at, "%Y-%m-%d %H:%M UTC")}",
       ""
     ]
+
+    delivery_section = render_transcript_delivery(delivery)
 
     execution =
       case channel_state.status do
@@ -309,6 +318,14 @@ defmodule HydraX.Runtime.Conversations do
             "- provider: #{channel_state.provider || "n/a"}",
             "- tool_rounds: #{channel_state.tool_rounds || 0}",
             "- resumable: #{if(channel_state.resumable, do: "yes", else: "no")}",
+            maybe_transcript_detail(
+              "- recovery",
+              render_recovery_lineage(channel_state.recovery_lineage)
+            ),
+            maybe_transcript_detail(
+              "- tool_cache_scope_turn_id",
+              channel_state.tool_cache_scope_turn_id
+            ),
             ""
           ] ++
             render_transcript_steps(channel_state.steps) ++
@@ -322,10 +339,14 @@ defmodule HydraX.Runtime.Conversations do
           "",
           turn.content,
           ""
-        ]
+        ] ++
+          render_turn_attachments(turn) ++
+          [
+            ""
+          ]
       end)
 
-    [header, execution | turns]
+    [header, delivery_section, execution | turns]
     |> List.flatten()
     |> Enum.join("\n")
   end
@@ -343,8 +364,23 @@ defmodule HydraX.Runtime.Conversations do
           maybe_transcript_detail("  summary", step["summary"]),
           maybe_transcript_detail("  reason", step["reason"] || step["label"]),
           maybe_transcript_detail("  output", step["output_excerpt"]),
+          maybe_transcript_detail("  owner", step["owner"] || step["executor"]),
+          maybe_transcript_detail("  lifecycle", step["lifecycle"]),
+          maybe_transcript_detail("  result_source", step["result_source"]),
+          maybe_transcript_detail("  replay_strategy", step["replay_strategy"]),
+          maybe_transcript_detail("  replay_count", step["replay_count"]),
+          maybe_transcript_detail("  idempotency_key", step["idempotency_key"]),
           maybe_transcript_detail("  cached", if(step["cached"], do: "yes", else: nil)),
           maybe_transcript_detail("  safety", step["safety_classification"]),
+          maybe_transcript_detail(
+            "  started",
+            format_transcript_datetime(step["last_started_at"] || step["started_at"])
+          ),
+          maybe_transcript_detail(
+            "  completed",
+            format_transcript_datetime(step["completed_at"])
+          ),
+          maybe_transcript_detail("  failed", format_transcript_datetime(step["failed_at"])),
           maybe_transcript_detail("  updated", format_transcript_datetime(step["updated_at"])),
           ""
         ]
@@ -369,14 +405,145 @@ defmodule HydraX.Runtime.Conversations do
           maybe_transcript_detail("  tool", details["tool_name"]),
           maybe_transcript_detail("  provider", details["provider"]),
           maybe_transcript_detail("  round", details["round"]),
+          maybe_transcript_detail("  cache_hits", details["cache_hits"]),
+          maybe_transcript_detail("  cache_misses", details["cache_misses"]),
           ""
         ]
       end)
   end
 
+  defp render_transcript_delivery(delivery) when delivery == %{}, do: []
+  defp render_transcript_delivery(nil), do: []
+
+  defp render_transcript_delivery(delivery) when is_map(delivery) do
+    payload = delivery["formatted_payload"] || delivery[:formatted_payload] || %{}
+
+    provider_message_ids =
+      delivery["provider_message_ids"] || delivery[:provider_message_ids] || []
+
+    [
+      "## Delivery state",
+      "",
+      maybe_transcript_detail("- channel", delivery["channel"] || delivery[:channel]),
+      maybe_transcript_detail("- status", delivery["status"] || delivery[:status]),
+      maybe_transcript_detail(
+        "- external_ref",
+        delivery["external_ref"] || delivery[:external_ref]
+      ),
+      maybe_transcript_detail(
+        "- provider_message_id",
+        delivery["provider_message_id"] || delivery[:provider_message_id]
+      ),
+      maybe_transcript_detail(
+        "- provider_message_ids",
+        if(provider_message_ids == [], do: nil, else: length(provider_message_ids))
+      ),
+      maybe_transcript_detail("- retry_count", delivery["retry_count"] || delivery[:retry_count]),
+      maybe_transcript_detail("- reason", delivery["reason"] || delivery[:reason]),
+      maybe_transcript_detail(
+        "- next_retry_at",
+        format_transcript_datetime(delivery["next_retry_at"] || delivery[:next_retry_at])
+      ),
+      maybe_transcript_detail(
+        "- dead_lettered_at",
+        format_transcript_datetime(delivery["dead_lettered_at"] || delivery[:dead_lettered_at])
+      ),
+      maybe_transcript_detail(
+        "- reply_context",
+        render_reply_context(delivery["reply_context"] || delivery[:reply_context] || %{})
+      ),
+      maybe_transcript_detail(
+        "- chunk_count",
+        delivery["chunk_count"] || delivery[:chunk_count] || payload["chunk_count"] ||
+          payload[:chunk_count]
+      ),
+      ""
+    ] ++
+      render_transcript_attempts(delivery["attempt_history"] || delivery[:attempt_history] || []) ++
+      render_transcript_payload(payload)
+  end
+
+  defp render_transcript_attempts([]), do: []
+
+  defp render_transcript_attempts(history) do
+    [
+      "### Delivery attempts",
+      ""
+    ] ++
+      Enum.flat_map(Enum.reverse(history), fn entry ->
+        provider_message_ids = entry["provider_message_ids"] || entry[:provider_message_ids] || []
+
+        [
+          "- #{entry["status"] || entry[:status] || "unknown"}",
+          maybe_transcript_detail("  retry_count", entry["retry_count"] || entry[:retry_count]),
+          maybe_transcript_detail("  reason", entry["reason"] || entry[:reason]),
+          maybe_transcript_detail(
+            "  recorded_at",
+            format_transcript_datetime(entry["recorded_at"] || entry[:recorded_at])
+          ),
+          maybe_transcript_detail(
+            "  provider_message_ids",
+            if(provider_message_ids == [], do: nil, else: length(provider_message_ids))
+          ),
+          maybe_transcript_detail(
+            "  reply_context",
+            render_reply_context(entry["reply_context"] || entry[:reply_context] || %{})
+          ),
+          maybe_transcript_detail("  chunk_count", entry["chunk_count"] || entry[:chunk_count]),
+          ""
+        ]
+      end)
+  end
+
+  defp render_transcript_payload(payload) when payload == %{}, do: []
+
+  defp render_transcript_payload(payload) when is_map(payload) do
+    [
+      "### Native payload preview",
+      "",
+      "```json",
+      Jason.encode!(payload, pretty: true),
+      "```",
+      ""
+    ]
+  end
+
+  defp render_turn_attachments(turn) do
+    case turn_attachments(turn) do
+      [] ->
+        []
+
+      attachments ->
+        [
+          "### Attachments",
+          ""
+        ] ++
+          Enum.flat_map(attachments, fn attachment ->
+            [
+              "- #{attachment_label(attachment)}",
+              ""
+            ]
+          end)
+    end
+  end
+
   defp maybe_transcript_detail(_label, nil), do: nil
   defp maybe_transcript_detail(_label, ""), do: nil
   defp maybe_transcript_detail(label, value), do: "#{label}: #{value}"
+
+  defp render_recovery_lineage(lineage) when lineage == %{}, do: nil
+
+  defp render_recovery_lineage(lineage) when is_map(lineage) do
+    [
+      "turn #{lineage["turn_scope_id"] || "n/a"}",
+      "recoveries #{lineage["recovery_count"] || 0}",
+      "cache hits #{lineage["cache_hits"] || 0}",
+      "cache misses #{lineage["cache_misses"] || 0}"
+    ]
+    |> Enum.join("; ")
+  end
+
+  defp render_recovery_lineage(_lineage), do: nil
 
   defp format_transcript_datetime(nil), do: nil
 
@@ -389,6 +556,60 @@ defmodule HydraX.Runtime.Conversations do
       _ -> value
     end
   end
+
+  defp last_delivery(conversation) do
+    metadata = conversation.metadata || %{}
+    metadata["last_delivery"] || metadata[:last_delivery] || %{}
+  end
+
+  defp transcript_attachment_count(turns) do
+    Enum.reduce(turns, 0, fn turn, acc -> acc + length(turn_attachments(turn)) end)
+  end
+
+  defp turn_attachments(turn) do
+    metadata = turn.metadata || %{}
+    metadata["attachments"] || metadata[:attachments] || []
+  end
+
+  defp attachment_label(attachment) do
+    kind = attachment["kind"] || attachment[:kind] || "attachment"
+    file_name = attachment["file_name"] || attachment[:file_name]
+
+    ref =
+      attachment["download_ref"] || attachment[:download_ref] || attachment["source_url"] ||
+        attachment[:source_url]
+
+    base =
+      if is_binary(file_name) and file_name != "" do
+        "#{kind}: #{file_name}"
+      else
+        kind
+      end
+
+    case ref do
+      value when is_binary(value) and value != "" -> "#{base} · #{String.slice(value, 0, 64)}"
+      _ -> base
+    end
+  end
+
+  defp render_reply_context(context) when is_map(context) do
+    [
+      context["thread_ts"] || context[:thread_ts],
+      context["reply_to_message_id"] || context[:reply_to_message_id],
+      context["source_message_id"] || context[:source_message_id]
+    ]
+    |> Enum.reject(&is_nil_or_empty/1)
+    |> case do
+      [] -> nil
+      values -> Enum.join(values, "/")
+    end
+  end
+
+  defp render_reply_context(_context), do: nil
+
+  defp is_nil_or_empty(nil), do: true
+  defp is_nil_or_empty(""), do: true
+  defp is_nil_or_empty(_value), do: false
 
   defp maybe_filter_agent(query, nil), do: query
 

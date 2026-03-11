@@ -262,6 +262,38 @@ defmodule HydraXWeb.AgentsLiveTest do
     refute Runtime.get_agent_control_policy(agent.id)
   end
 
+  test "agents page shows the consolidated effective policy view", %{conn: conn} do
+    {:ok, agent} =
+      Runtime.save_agent(%{
+        name: "Effective Policy Agent",
+        slug: "effective-policy-agent",
+        workspace_root: Path.join(System.tmp_dir!(), "hydra-x-effective-policy-agent"),
+        description: "effective policy",
+        is_default: false
+      })
+
+    {:ok, _tool_policy} =
+      Runtime.save_agent_tool_policy(agent.id, %{
+        browser_automation_enabled: true,
+        browser_automation_channels_csv: "cli"
+      })
+
+    {:ok, _control_policy} =
+      Runtime.save_agent_control_policy(agent.id, %{
+        interactive_delivery_channels_csv: "webchat",
+        job_delivery_channels_csv: "discord,slack",
+        ingest_roots_csv: "ingest,docs"
+      })
+
+    {:ok, _view, html} = live(conn, ~p"/agents")
+
+    assert html =~ "Effective policy"
+    assert html =~ "interactive webchat"
+    assert html =~ "jobs discord, slack"
+    assert html =~ "ingest ingest, docs"
+    assert html =~ "browser_automation on (cli)"
+  end
+
   test "agents page can save and warm provider routing", %{conn: conn} do
     previous = Application.get_env(:hydra_x, :provider_test_request_fn)
 
@@ -370,6 +402,7 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "requires: release-window"
     assert html =~ "1.2.0"
     assert html =~ "enabled"
+    assert html =~ "manifest valid"
 
     [skill] = Runtime.list_skills(agent_id: agent.id)
     assert get_in(skill.metadata, ["tags"]) == ["deploy", "release", "checks"]
@@ -377,6 +410,7 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert get_in(skill.metadata, ["channels"]) == ["cli", "slack"]
     assert get_in(skill.metadata, ["requires"]) == ["release-window"]
     assert get_in(skill.metadata, ["version"]) == "1.2.0"
+    assert get_in(skill.metadata, ["manifest_valid"]) == true
 
     view
     |> element(~s(button[phx-click="toggle_skill"][phx-value-id="#{skill.id}"]))
@@ -386,6 +420,38 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "Skill disabled"
     assert html =~ "disabled"
     refute Runtime.get_skill!(skill.id).enabled
+  end
+
+  test "agents page surfaces invalid skill manifests", %{conn: conn} do
+    {:ok, agent} =
+      Runtime.save_agent(%{
+        name: "Invalid Skills Agent",
+        slug: "invalid-skills-agent",
+        workspace_root: Path.join(System.tmp_dir!(), "hydra-x-invalid-skills-agent"),
+        description: "invalid skills",
+        is_default: false
+      })
+
+    skill_dir = Path.join([agent.workspace_root, "skills", "broken-skill"])
+    File.mkdir_p!(skill_dir)
+
+    File.write!(
+      Path.join(skill_dir, "SKILL.md"),
+      "---\nname: Broken Skill\nsummary: Invalid metadata.\ntools: unknown_tool\nchannels: cli,unknown_channel\nrequires: env:\n---\n# Broken Skill\n\nThis should be flagged."
+    )
+
+    {:ok, view, _html} = live(conn, ~p"/agents")
+
+    view
+    |> element(~s(button[phx-click="refresh_skills"][phx-value-id="#{agent.id}"]))
+    |> render_click()
+
+    html = render(view)
+    assert html =~ "Broken Skill"
+    assert html =~ "manifest invalid"
+    assert html =~ "validation: unknown tool unknown_tool"
+    assert html =~ "unknown channel unknown_channel"
+    assert html =~ "malformed requirement env:"
   end
 
   test "agents page can discover and toggle agent MCP integrations", %{conn: conn} do
@@ -404,7 +470,10 @@ defmodule HydraXWeb.AgentsLiveTest do
       case opts[:url] do
         "https://mcp.example.test/actions" ->
           {:ok,
-           %{status: 200, body: %{"actions" => [%{"name" => "search_docs"}, %{"name" => "get_status"}]}}}
+           %{
+             status: 200,
+             body: %{"actions" => [%{"name" => "search_docs"}, %{"name" => "get_status"}]}
+           }}
 
         "https://mcp.example.test/health" ->
           {:ok, %{status: 200, body: %{"status" => "ok"}}}
@@ -443,6 +512,7 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "enabled"
 
     [binding] = Runtime.list_agent_mcp_servers(agent.id)
+
     assert get_in(binding.mcp_server_config.metadata || %{}, ["actions"]) == [
              "search_docs",
              "get_status"

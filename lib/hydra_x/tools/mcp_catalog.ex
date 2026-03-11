@@ -22,6 +22,11 @@ defmodule HydraX.Tools.MCPCatalog do
           server: %{
             type: "string",
             description: "Optional MCP server name or slug filter"
+          },
+          refresh: %{
+            type: "boolean",
+            description:
+              "Refresh the HTTP action catalog before returning results (default: true)"
           }
         }
       }
@@ -32,8 +37,9 @@ defmodule HydraX.Tools.MCPCatalog do
   def execute(params, _context) do
     agent_id = params[:agent_id] || params["agent_id"]
     server = params[:server] || params["server"]
+    refresh = truthy?(params[:refresh] || params["refresh"], true)
 
-    HydraX.Runtime.list_agent_mcp_actions(agent_id, server: server)
+    HydraX.Runtime.list_agent_mcp_actions(agent_id, server: server, refresh: refresh)
   end
 
   @impl true
@@ -41,4 +47,10 @@ defmodule HydraX.Tools.MCPCatalog do
   def result_summary(%{error: error}) when is_binary(error), do: error
   def result_summary(%{"error" => error}) when is_binary(error), do: error
   def result_summary(payload), do: inspect(payload, limit: 8, printable_limit: 120)
+
+  defp truthy?(nil, default), do: default
+  defp truthy?(value, _default) when is_boolean(value), do: value
+  defp truthy?(value, _default) when value in ["true", "1", 1], do: true
+  defp truthy?(value, _default) when value in ["false", "0", 0], do: false
+  defp truthy?(_value, default), do: default
 end

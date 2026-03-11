@@ -8,7 +8,7 @@ defmodule HydraX.Backup do
 
   @manifest_name "manifest.json"
 
-  def create_bundle(output_root) do
+  def create_bundle(output_root, opts \\ []) do
     File.mkdir_p!(output_root)
 
     stamp = timestamp()
@@ -31,6 +31,11 @@ defmodule HydraX.Backup do
         )
 
         create_archive!(archive_path, staging_root)
+
+        manifest =
+          manifest
+          |> Map.merge(archive_metadata(archive_path))
+          |> Map.merge(verification_metadata(archive_path, opts))
 
         File.write!(manifest_path, Jason.encode_to_iodata!(manifest, pretty: true))
         Map.put(manifest, "manifest_path", manifest_path)
@@ -123,9 +128,15 @@ defmodule HydraX.Backup do
   defp annotate_manifest(manifest) do
     archive_path = manifest["archive_path"]
 
+    archive_exists = is_binary(archive_path) and File.exists?(archive_path)
+
     Map.merge(manifest, %{
-      "archive_exists" => is_binary(archive_path) and File.exists?(archive_path),
-      "verified_at" => DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+      "archive_exists" => archive_exists,
+      "archive_size_bytes" => if(archive_exists, do: File.stat!(archive_path).size, else: nil),
+      "verified" => Map.get(manifest, "verified"),
+      "verified_at" => Map.get(manifest, "verified_at"),
+      "missing_entries" => Map.get(manifest, "missing_entries", []),
+      "verify_error" => Map.get(manifest, "verify_error")
     })
   end
 
@@ -169,9 +180,43 @@ defmodule HydraX.Backup do
     %{
       "created_at" => DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601(),
       "archive_path" => archive_path,
+      "workspace_count" => Enum.count(entries, &(&1["type"] == "workspace")),
       "entry_count" => length(entries),
       "entries" => entries
     }
+  end
+
+  defp archive_metadata(archive_path) do
+    %{
+      "archive_size_bytes" => File.stat!(archive_path).size
+    }
+  end
+
+  defp verification_metadata(archive_path, opts) do
+    if Keyword.get(opts, :verify, true) do
+      case verify_bundle(archive_path) do
+        {:ok, verification} ->
+          %{
+            "verified" => verification["verified"],
+            "verified_at" => now_iso8601(),
+            "missing_entries" => verification["missing_entries"]
+          }
+
+        {:error, reason} ->
+          %{
+            "verified" => false,
+            "verified_at" => now_iso8601(),
+            "missing_entries" => [],
+            "verify_error" => inspect(reason)
+          }
+      end
+    else
+      %{
+        "verified" => nil,
+        "verified_at" => nil,
+        "missing_entries" => []
+      }
+    end
   end
 
   defp create_archive!(archive_path, staging_root) do
@@ -201,6 +246,12 @@ defmodule HydraX.Backup do
 
   defp relative_to_staging(path, staging_root) do
     Path.relative_to(path, staging_root)
+  end
+
+  defp now_iso8601 do
+    DateTime.utc_now()
+    |> DateTime.truncate(:second)
+    |> DateTime.to_iso8601()
   end
 
   defp timestamp do

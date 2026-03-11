@@ -37,7 +37,7 @@ defmodule HydraXWeb.OperatorAuth do
       )
 
   def recent_auth_window_seconds do
-    Runtime.effective_control_policy().recent_auth_window_minutes * 60
+    Runtime.effective_policy().auth.recent_auth_window_minutes * 60
   end
 
   def call(conn, :redirect_if_authenticated) do
@@ -53,10 +53,19 @@ defmodule HydraXWeb.OperatorAuth do
 
   def call(conn, :require_authenticated_operator) do
     if Runtime.operator_password_configured?() and not session_valid?(conn) do
+      state = session_state(conn)
+
+      redirect_target =
+        if get_session(conn, @session_key) == true do
+          "/login?expired=#{expired_by(state)}"
+        else
+          "/login"
+        end
+
       conn
-      |> clear_expired_session()
+      |> clear_expired_session(state)
       |> put_flash(:error, "Sign in to access the Hydra-X control plane.")
-      |> redirect(to: "/login")
+      |> redirect(to: redirect_target)
       |> halt()
     else
       conn
@@ -158,16 +167,18 @@ defmodule HydraXWeb.OperatorAuth do
     put_session(conn, @session_active_key, System.system_time(:second))
   end
 
-  defp clear_expired_session(conn) do
+  defp clear_expired_session(conn, state) do
     if get_session(conn, @session_key) == true do
-      state = session_state(conn)
+      state = state || session_state(conn)
 
       Helpers.audit_auth_action("Operator session expired",
         level: "warn",
         metadata: %{
           expired_by: expired_by(state),
           authenticated_at: state.authenticated_at,
-          last_active_at: state.last_active_at
+          last_active_at: state.last_active_at,
+          session_expires_at: state.session_expires_at,
+          idle_expires_at: state.idle_expires_at
         }
       )
 

@@ -154,6 +154,8 @@ defmodule HydraX.Runtime.MCPServers do
       |> Keyword.get(:server)
       |> normalize_filter()
 
+    refresh? = Keyword.get(opts, :refresh, false)
+
     results =
       list_agent_mcp_servers(agent_id)
       |> Enum.filter(&(&1.enabled && &1.mcp_server_config.enabled))
@@ -161,7 +163,7 @@ defmodule HydraX.Runtime.MCPServers do
         is_nil(server_filter) or matches_filter?(binding.mcp_server_config, server_filter)
       end)
       |> Enum.map(fn binding ->
-        list_binding_actions(binding, opts)
+        list_binding_actions(binding, Keyword.put(opts, :refresh, refresh?))
       end)
 
     {:ok,
@@ -241,7 +243,7 @@ defmodule HydraX.Runtime.MCPServers do
             agent_id: agent.id,
             mcp_server_config_id: config.id,
             enabled: enabled,
-            metadata: %{"name" => config.name, "transport" => config.transport}
+            metadata: binding_metadata(config)
           }
 
           {:ok, saved} =
@@ -435,14 +437,16 @@ defmodule HydraX.Runtime.MCPServers do
     config = binding.mcp_server_config
 
     case list_server_actions(config, opts) do
-      {:ok, actions} ->
+      {:ok, catalog} ->
         %{
           id: binding.id,
           server_id: config.id,
           name: config.name,
           transport: config.transport,
           status: "ok",
-          actions: actions
+          actions: catalog_action_names(catalog),
+          action_catalog: catalog,
+          catalog_source: catalog_source(catalog)
         }
 
       {:error, reason} ->
@@ -489,16 +493,11 @@ defmodule HydraX.Runtime.MCPServers do
       |> maybe_add_auth_header(config.auth_token)
 
     payload = %{action: action, params: params || %{}}
+    action_descriptor = find_cached_action_descriptor(config, action)
 
     case request_fn.(url: url, headers: headers, json: payload) do
       {:ok, %{status: status, body: body}} when status in 200..299 ->
-        {:ok,
-         %{
-           url: url,
-           action: action,
-           status: status,
-           body: normalize_invoke_body(body)
-         }}
+        {:ok, normalize_http_invoke_result(url, action, status, body, action_descriptor)}
 
       {:ok, %{status: status}} ->
         {:error, {:http_status, status}}
@@ -517,36 +516,45 @@ defmodule HydraX.Runtime.MCPServers do
   end
 
   defp list_server_actions(%MCPServerConfig{transport: "http"} = config, opts) do
-    request_fn =
-      Keyword.get(opts, :request_fn) || Application.get_env(:hydra_x, :mcp_http_request_fn) ||
-        (&Req.get/1)
+    cond do
+      Keyword.get(opts, :refresh, false) ->
+        request_fn =
+          Keyword.get(opts, :request_fn) || Application.get_env(:hydra_x, :mcp_http_request_fn) ||
+            (&Req.get/1)
 
-    path =
-      get_in(config.metadata || %{}, ["actions_path"])
-      |> Helpers.blank_to_nil()
-      |> Kernel.||("/actions")
+        path =
+          get_in(config.metadata || %{}, ["actions_path"])
+          |> Helpers.blank_to_nil()
+          |> Kernel.||("/actions")
 
-    url =
-      config.url
-      |> URI.parse()
-      |> URI.merge(path)
-      |> URI.to_string()
+        url =
+          config.url
+          |> URI.parse()
+          |> URI.merge(path)
+          |> URI.to_string()
 
-    headers =
-      [{"accept", "application/json"}]
-      |> maybe_add_auth_header(config.auth_token)
+        headers =
+          [{"accept", "application/json"}]
+          |> maybe_add_auth_header(config.auth_token)
 
-    case request_fn.(url: url, headers: headers) do
-      {:ok, %{status: status, body: body}} when status in 200..299 ->
-        actions = normalize_action_list(body)
-        maybe_cache_server_actions(config, actions)
-        {:ok, actions}
+        case request_fn.(url: url, headers: headers) do
+          {:ok, %{status: status, body: body}} when status in 200..299 ->
+            catalog = normalize_action_catalog(body, url, "live")
+            maybe_cache_server_actions(config, catalog)
+            {:ok, catalog}
 
-      {:ok, %{status: status}} ->
-        {:error, {:http_status, status}}
+          {:ok, %{status: status}} ->
+            {:error, {:http_status, status}}
 
-      {:error, reason} ->
-        {:error, reason}
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      cached = cached_action_catalog(config) ->
+        {:ok, cached}
+
+      true ->
+        {:ok, empty_action_catalog(config)}
     end
   end
 
@@ -569,7 +577,10 @@ defmodule HydraX.Runtime.MCPServers do
   defp format_probe_error({:disabled, message}), do: message
   defp format_probe_error(:command_not_found), do: "command not found"
   defp format_probe_error(:stdio_invoke_not_supported), do: "stdio invoke not supported"
-  defp format_probe_error(:stdio_action_catalog_not_supported), do: "stdio action catalog not supported"
+
+  defp format_probe_error(:stdio_action_catalog_not_supported),
+    do: "stdio action catalog not supported"
+
   defp format_probe_error({:http_status, status}), do: "unexpected HTTP #{status}"
   defp format_probe_error(reason), do: inspect(reason)
 
@@ -589,27 +600,77 @@ defmodule HydraX.Runtime.MCPServers do
   defp normalize_invoke_body(body) when is_list(body), do: body
   defp normalize_invoke_body(body), do: inspect(body)
 
-  defp normalize_action_list(%{"actions" => actions}) when is_list(actions),
-    do: Enum.map(actions, &normalize_action_name/1) |> Enum.reject(&is_nil/1)
+  defp normalize_action_catalog(%{"actions" => actions}, url, source) when is_list(actions),
+    do: build_action_catalog(actions, url, source)
 
-  defp normalize_action_list(%{actions: actions}) when is_list(actions),
-    do: Enum.map(actions, &normalize_action_name/1) |> Enum.reject(&is_nil/1)
+  defp normalize_action_catalog(%{actions: actions}, url, source) when is_list(actions),
+    do: build_action_catalog(actions, url, source)
 
-  defp normalize_action_list(actions) when is_list(actions),
-    do: Enum.map(actions, &normalize_action_name/1) |> Enum.reject(&is_nil/1)
+  defp normalize_action_catalog(actions, url, source) when is_list(actions),
+    do: build_action_catalog(actions, url, source)
 
-  defp normalize_action_list(_body), do: []
+  defp normalize_action_catalog(_body, url, source),
+    do: empty_action_catalog(%{url: url, source: source})
 
-  defp normalize_action_name(%{"name" => name}) when is_binary(name), do: name
-  defp normalize_action_name(%{name: name}) when is_binary(name), do: name
-  defp normalize_action_name(name) when is_binary(name), do: name
-  defp normalize_action_name(_value), do: nil
+  defp build_action_catalog(actions, url, source) do
+    normalized =
+      actions
+      |> Enum.map(&normalize_action_descriptor/1)
+      |> Enum.reject(&is_nil/1)
 
-  defp maybe_cache_server_actions(%MCPServerConfig{} = config, actions) when is_list(actions) do
+    %{
+      "actions" => normalized,
+      "names" => Enum.map(normalized, & &1["name"]),
+      "cataloged_at" => DateTime.utc_now(),
+      "source" => source,
+      "url" => url
+    }
+  end
+
+  defp empty_action_catalog(config_or_meta) do
+    %{
+      "actions" => [],
+      "names" => [],
+      "cataloged_at" => DateTime.utc_now(),
+      "source" => Map.get(config_or_meta, :source) || "cache",
+      "url" =>
+        Map.get(config_or_meta, :url) ||
+          Map.get(config_or_meta, "url") ||
+          build_action_catalog_url(config_or_meta)
+    }
+  end
+
+  defp normalize_action_descriptor(%{"name" => name} = action) when is_binary(name) do
+    %{
+      "name" => name,
+      "title" => action["title"],
+      "description" => action["description"],
+      "input_schema" => action["input_schema"]
+    }
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
+  end
+
+  defp normalize_action_descriptor(%{name: name} = action) when is_binary(name) do
+    %{
+      "name" => name,
+      "title" => action[:title],
+      "description" => action[:description],
+      "input_schema" => action[:input_schema]
+    }
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
+  end
+
+  defp normalize_action_descriptor(name) when is_binary(name), do: %{"name" => name}
+  defp normalize_action_descriptor(_value), do: nil
+
+  defp maybe_cache_server_actions(%MCPServerConfig{} = config, catalog) when is_map(catalog) do
     metadata =
       (config.metadata || %{})
-      |> Map.put("actions", actions)
-      |> Map.put("actions_cataloged_at", DateTime.utc_now())
+      |> Map.put("actions", catalog["names"] || [])
+      |> Map.put("action_catalog", catalog)
+      |> Map.put("actions_cataloged_at", catalog["cataloged_at"] || DateTime.utc_now())
 
     if metadata == (config.metadata || %{}) do
       :ok
@@ -621,6 +682,93 @@ defmodule HydraX.Runtime.MCPServers do
       :ok
     end
   end
+
+  defp binding_metadata(config) do
+    %{
+      "name" => config.name,
+      "transport" => config.transport,
+      "actions" => get_in(config.metadata || %{}, ["actions"]) || [],
+      "action_catalog" => get_in(config.metadata || %{}, ["action_catalog"])
+    }
+  end
+
+  defp cached_action_catalog(%MCPServerConfig{} = config) do
+    case get_in(config.metadata || %{}, ["action_catalog"]) do
+      %{"actions" => _actions} = catalog ->
+        catalog
+
+      %{actions: _actions} = catalog ->
+        catalog
+        |> Enum.map(fn {key, value} -> {to_string(key), value} end)
+        |> Map.new()
+
+      _ ->
+        nil
+    end
+  end
+
+  defp catalog_action_names(%{"names" => names}) when is_list(names), do: names
+  defp catalog_action_names(%{names: names}) when is_list(names), do: names
+  defp catalog_action_names(_catalog), do: []
+
+  defp catalog_source(%{"source" => source}) when is_binary(source), do: source
+  defp catalog_source(%{source: source}) when is_binary(source), do: source
+  defp catalog_source(_catalog), do: "cache"
+
+  defp find_cached_action_descriptor(%MCPServerConfig{} = config, action) do
+    cached_action_catalog(config)
+    |> case do
+      nil ->
+        nil
+
+      catalog ->
+        Enum.find(catalog["actions"] || [], fn entry ->
+          entry["name"] == action
+        end)
+    end
+  end
+
+  defp normalize_http_invoke_result(url, action, status, body, action_descriptor) do
+    normalized_body = normalize_invoke_body(body)
+
+    %{
+      transport: "http_mcp_v1",
+      ok: true,
+      url: url,
+      action: action,
+      status: status,
+      data: extract_invoke_data(normalized_body),
+      text: extract_invoke_text(normalized_body),
+      body: normalized_body,
+      action_descriptor: action_descriptor
+    }
+  end
+
+  defp extract_invoke_data(%{"data" => data}), do: data
+  defp extract_invoke_data(%{data: data}), do: data
+  defp extract_invoke_data(%{"result" => data}), do: data
+  defp extract_invoke_data(%{result: data}), do: data
+  defp extract_invoke_data(body), do: body
+
+  defp extract_invoke_text(%{"text" => text}) when is_binary(text), do: text
+  defp extract_invoke_text(%{text: text}) when is_binary(text), do: text
+  defp extract_invoke_text(body) when is_binary(body), do: body
+  defp extract_invoke_text(_body), do: nil
+
+  defp build_action_catalog_url(%MCPServerConfig{} = config) do
+    path =
+      get_in(config.metadata || %{}, ["actions_path"])
+      |> Helpers.blank_to_nil()
+      |> Kernel.||("/actions")
+
+    config.url
+    |> URI.parse()
+    |> URI.merge(path)
+    |> URI.to_string()
+  end
+
+  defp build_action_catalog_url(%{url: url}) when is_binary(url), do: url
+  defp build_action_catalog_url(_config), do: nil
 
   defp decrypt_config(nil), do: nil
 

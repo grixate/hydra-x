@@ -53,6 +53,40 @@ defmodule HydraX.Runtime.OperatorAuthTest do
     assert operator.idle_timeout_seconds == 45 * 60
   end
 
+  test "operator status summarizes recent auth audit activity" do
+    agent = Runtime.ensure_default_agent!()
+
+    Enum.each(
+      [
+        {"Operator login succeeded", "info", %{"ip" => "127.0.0.1"}},
+        {"Operator login failed", "warn", %{"ip" => "127.0.0.1"}},
+        {"Blocked operator login due to rate limit", "warn", %{"ip" => "127.0.0.1"}},
+        {"Blocked sensitive action pending re-authentication", "warn", %{}},
+        {"Operator session expired", "warn", %{"expired_by" => "idle_timeout"}}
+      ],
+      fn {message, level, metadata} ->
+        {:ok, _event} =
+          Safety.log_event(%{
+            agent_id: agent.id,
+            category: "auth",
+            level: level,
+            message: message,
+            metadata: metadata
+          })
+      end
+    )
+
+    operator = Runtime.operator_status()
+
+    assert operator.recent_login_success_count == 1
+    assert operator.recent_login_failure_count == 1
+    assert operator.recent_rate_limited_count == 1
+    assert operator.recent_reauth_block_count == 1
+    assert operator.recent_session_expiry_count == 1
+    assert operator.last_session_expired_reason == "idle_timeout"
+    assert Enum.any?(operator.recent_events, &(&1.message == "Operator session expired"))
+  end
+
   defp restore_env(key, nil), do: Application.delete_env(:hydra_x, key)
   defp restore_env(key, value), do: Application.put_env(:hydra_x, key, value)
 end

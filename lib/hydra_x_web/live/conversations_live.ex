@@ -394,6 +394,12 @@ defmodule HydraXWeb.ConversationsLive do
                   message {delivery["provider_message_id"]}
                 </span>
                 <span
+                  :for={label <- delivery_meta_labels(delivery)}
+                  class="rounded-full border border-white/10 px-3 py-1 font-mono uppercase tracking-[0.18em] text-[var(--hx-mute)]"
+                >
+                  {label}
+                </span>
+                <span
                   :for={label <- delivery_context_labels(delivery)}
                   class="rounded-full border border-white/10 px-3 py-1 font-mono uppercase tracking-[0.18em] text-[var(--hx-mute)]"
                 >
@@ -403,6 +409,19 @@ defmodule HydraXWeb.ConversationsLive do
               <p :if={delivery_reason(@selected)} class="mt-3 text-sm text-[var(--hx-mute)]">
                 {delivery_reason(@selected)}
               </p>
+              <div
+                :if={delivery_attempt_history(@selected) != []}
+                class="mt-3 rounded-2xl border border-white/10 bg-black/10 px-4 py-4"
+              >
+                <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                  Delivery diagnostics
+                </div>
+                <div class="mt-3 space-y-2 text-xs text-[var(--hx-mute)]">
+                  <div :for={entry <- delivery_attempt_history(@selected)}>
+                    {format_delivery_attempt(entry)}
+                  </div>
+                </div>
+              </div>
               <div
                 :if={formatted_delivery_payload(@selected)}
                 class="mt-3 rounded-2xl border border-white/10 bg-black/10 px-4 py-4"
@@ -503,6 +522,12 @@ defmodule HydraXWeb.ConversationsLive do
                 <p class="mt-3 text-sm text-[var(--hx-mute)]">
                   {channel_plan_summary(@channel_state)}
                 </p>
+                <p
+                  :if={channel_recovery_summary(@channel_state)}
+                  class="mt-2 text-xs text-[var(--hx-mute)]"
+                >
+                  {channel_recovery_summary(@channel_state)}
+                </p>
                 <div :if={channel_steps(@channel_state) != []} class="mt-3 space-y-2">
                   <div
                     :for={{step, index} <- Enum.with_index(channel_steps(@channel_state))}
@@ -535,7 +560,10 @@ defmodule HydraXWeb.ConversationsLive do
                     <p :if={step["output_excerpt"]} class="mt-2 text-sm text-[var(--hx-mute)]">
                       {step["output_excerpt"]}
                     </p>
-                    <div :if={step_detail_labels(step) != []} class="mt-3 flex flex-wrap gap-2 text-xs">
+                    <div
+                      :if={step_detail_labels(step) != []}
+                      class="mt-3 flex flex-wrap gap-2 text-xs"
+                    >
                       <span
                         :for={label <- step_detail_labels(step)}
                         class="rounded-full border border-white/10 px-2 py-1 font-mono uppercase tracking-[0.18em] text-[var(--hx-mute)]"
@@ -709,6 +737,25 @@ defmodule HydraXWeb.ConversationsLive do
 
   defp delivery_context_labels(_), do: []
 
+  defp delivery_meta_labels(delivery) when is_map(delivery) do
+    provider_message_ids =
+      delivery["provider_message_ids"] || delivery[:provider_message_ids] || []
+
+    []
+    |> maybe_add_delivery_label(
+      retry_count_label(delivery["retry_count"] || delivery[:retry_count])
+    )
+    |> maybe_add_delivery_label(message_ids_label(provider_message_ids))
+    |> maybe_add_delivery_label(
+      next_retry_label(delivery["next_retry_at"] || delivery[:next_retry_at])
+    )
+    |> maybe_add_delivery_label(
+      dead_letter_label(delivery["dead_lettered_at"] || delivery[:dead_lettered_at])
+    )
+  end
+
+  defp delivery_meta_labels(_delivery), do: []
+
   defp maybe_add_delivery_label(labels, value) when value in ["reply ", "thread ", "source "],
     do: labels
 
@@ -760,6 +807,31 @@ defmodule HydraXWeb.ConversationsLive do
     end
   end
 
+  defp delivery_attempt_history(conversation) do
+    case last_delivery(conversation) do
+      %{"attempt_history" => history} when is_list(history) -> Enum.reverse(history)
+      %{attempt_history: history} when is_list(history) -> Enum.reverse(history)
+      _ -> []
+    end
+  end
+
+  defp format_delivery_attempt(entry) do
+    recorded_at = entry["recorded_at"] || entry[:recorded_at]
+    provider_message_ids = entry["provider_message_ids"] || entry[:provider_message_ids] || []
+
+    [
+      entry["status"] || entry[:status] || "unknown",
+      retry_count_label(entry["retry_count"] || entry[:retry_count]),
+      entry["reason"] || entry[:reason],
+      if(recorded_at, do: format_delivery_time(recorded_at)),
+      message_ids_label(provider_message_ids),
+      reply_context_attempt_label(entry["reply_context"] || entry[:reply_context] || %{}),
+      chunk_attempt_label(entry["chunk_count"] || entry[:chunk_count])
+    ]
+    |> Enum.reject(&is_nil_or_empty/1)
+    |> Enum.join(" · ")
+  end
+
   defp turn_attachments(turn) do
     metadata = turn.metadata || %{}
     metadata["attachments"] || metadata[:attachments] || []
@@ -802,6 +874,43 @@ defmodule HydraXWeb.ConversationsLive do
         String.slice(ref, 0, 36)
     end
   end
+
+  defp retry_count_label(count) when is_integer(count) and count > 0, do: "retry #{count}"
+  defp retry_count_label(_count), do: nil
+
+  defp message_ids_label(ids) when is_list(ids) and length(ids) > 1, do: "msg ids #{length(ids)}"
+  defp message_ids_label(_ids), do: nil
+
+  defp next_retry_label(%DateTime{} = value), do: "next retry #{format_delivery_time(value)}"
+  defp next_retry_label(value) when is_binary(value), do: "next retry #{value}"
+  defp next_retry_label(_value), do: nil
+
+  defp dead_letter_label(%DateTime{} = value), do: "dead letter #{format_delivery_time(value)}"
+  defp dead_letter_label(value) when is_binary(value), do: "dead letter #{value}"
+  defp dead_letter_label(_value), do: nil
+
+  defp reply_context_attempt_label(context) when is_map(context) do
+    [
+      context["thread_ts"] || context[:thread_ts],
+      context["reply_to_message_id"] || context[:reply_to_message_id]
+    ]
+    |> Enum.reject(&is_nil_or_empty/1)
+    |> case do
+      [] -> nil
+      values -> Enum.join(values, "/")
+    end
+  end
+
+  defp reply_context_attempt_label(_context), do: nil
+
+  defp chunk_attempt_label(count) when is_integer(count) and count > 1, do: "chunks #{count}"
+  defp chunk_attempt_label(_count), do: nil
+
+  defp format_delivery_time(%DateTime{} = value),
+    do: Calendar.strftime(value, "%Y-%m-%d %H:%M:%S UTC")
+
+  defp format_delivery_time(value) when is_binary(value), do: value
+  defp format_delivery_time(_value), do: "unknown"
 
   defp fetch_agent(nil), do: {:error, :missing_agent}
   defp fetch_agent(""), do: {:error, :missing_agent}
@@ -883,6 +992,9 @@ defmodule HydraXWeb.ConversationsLive do
       "tool_result" ->
         "#{details["tool_name"] || "tool"} #{if(details["is_error"], do: "failed", else: "succeeded")}: #{details["summary"] || "completed"}"
 
+      "tool_cache_hit" ->
+        "reused #{details["cache_hits"] || 0} cached tool result(s); #{details["cache_misses"] || 0} fresh execution(s)"
+
       "provider_succeeded" ->
         "provider #{details["provider"] || "unknown"} returned #{details["stop_reason"] || "response"}"
 
@@ -912,6 +1024,9 @@ defmodule HydraXWeb.ConversationsLive do
     []
     |> maybe_add_step_label(step_attempt_label(step["attempt_count"]))
     |> maybe_add_step_label(if(step["cached"], do: "cached", else: nil))
+    |> maybe_add_step_label(step["lifecycle"])
+    |> maybe_add_step_label(step["result_source"])
+    |> maybe_add_step_label(replay_count_label(step["replay_count"]))
     |> maybe_add_step_label(step["safety_classification"])
     |> maybe_add_step_label(step_started_label(step["last_started_at"] || step["started_at"]))
     |> maybe_add_step_label(step_finished_label(step))
@@ -932,6 +1047,10 @@ defmodule HydraXWeb.ConversationsLive do
   defp step_attempt_label(1), do: "attempt 1"
   defp step_attempt_label(value) when is_integer(value), do: "attempt #{value}"
 
+  defp replay_count_label(nil), do: nil
+  defp replay_count_label(0), do: nil
+  defp replay_count_label(value) when is_integer(value), do: "replay #{value}"
+
   defp step_started_label(nil), do: nil
   defp step_started_label(value), do: "started #{format_event_time(value)}"
 
@@ -946,6 +1065,15 @@ defmodule HydraXWeb.ConversationsLive do
   defp format_event_time(%DateTime{} = dt), do: Calendar.strftime(dt, "%H:%M:%S")
   defp format_event_time(value) when is_binary(value), do: String.slice(value, 11, 8)
   defp format_event_time(_value), do: "now"
+
+  defp channel_recovery_summary(nil), do: nil
+
+  defp channel_recovery_summary(%{recovery_lineage: lineage})
+       when is_map(lineage) and lineage != %{} do
+    "Recovery lineage: turn #{lineage["turn_scope_id"] || "n/a"} · recoveries #{lineage["recovery_count"] || 0} · cache hits #{lineage["cache_hits"] || 0} · cache misses #{lineage["cache_misses"] || 0}"
+  end
+
+  defp channel_recovery_summary(_state), do: nil
 
   defp step_status_label("running", true), do: "current"
 
@@ -990,6 +1118,10 @@ defmodule HydraXWeb.ConversationsLive do
   defp blank_to_nil(""), do: nil
   defp blank_to_nil(value), do: value
 
+  defp is_nil_or_empty(nil), do: true
+  defp is_nil_or_empty(""), do: true
+  defp is_nil_or_empty(_value), do: false
+
   defp rename_form(nil), do: to_form(%{"title" => ""}, as: :rename)
   defp rename_form(conversation), do: to_form(%{"title" => conversation.title || ""}, as: :rename)
 
@@ -1002,6 +1134,7 @@ defmodule HydraXWeb.ConversationsLive do
   defp compaction_label(compaction) do
     level = compaction.level || "idle"
     ratio = round((compaction.token_ratio || 0.0) * 100)
+
     "#{compaction.turn_count} turns · #{compaction.estimated_tokens || 0}/#{compaction.conversation_limit_tokens || 0} tokens · #{ratio}% · #{level}"
   end
 

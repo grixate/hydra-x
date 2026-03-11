@@ -59,9 +59,7 @@ defmodule Mix.Tasks.HydraX.Mcp do
     params = build_invoke_params(opts)
 
     {:ok, result} =
-      HydraX.Runtime.invoke_agent_mcp(agent.id, action, params,
-        server: opts[:server]
-      )
+      HydraX.Runtime.invoke_agent_mcp(agent.id, action, params, server: opts[:server])
 
     Mix.shell().info("agent=#{agent.slug}")
     Mix.shell().info("action=#{action}")
@@ -91,7 +89,8 @@ defmodule Mix.Tasks.HydraX.Mcp do
 
     {:ok, result} =
       HydraX.Runtime.list_agent_mcp_actions(agent.id,
-        server: opts[:server]
+        server: opts[:server],
+        refresh: true
       )
 
     Mix.shell().info("agent=#{agent.slug}")
@@ -100,9 +99,14 @@ defmodule Mix.Tasks.HydraX.Mcp do
     Enum.each(result.results, fn entry ->
       detail =
         case entry do
-          %{actions: actions} when is_list(actions) and actions != [] -> Enum.join(actions, ", ")
-          %{actions: []} -> "no actions"
-          %{detail: detail} -> detail
+          %{actions: actions, catalog_source: source} when is_list(actions) and actions != [] ->
+            "#{Enum.join(actions, ", ")} [#{source}]"
+
+          %{actions: []} ->
+            "no actions"
+
+          %{detail: detail} ->
+            detail
         end
 
       Mix.shell().info(

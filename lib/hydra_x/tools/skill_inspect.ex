@@ -45,19 +45,25 @@ defmodule HydraX.Tools.SkillInspect do
         is_nil(tag_filter) or Enum.member?(skill_tags(skill), tag_filter)
       end)
       |> Enum.map(fn skill ->
+        metadata = skill.metadata || %{}
+
         %{
           id: skill.id,
           slug: skill.slug,
           name: skill.name,
           enabled: skill.enabled,
           description: skill.description,
-          version: get_in(skill.metadata || %{}, ["version"]),
+          version: get_in(metadata, ["version"]),
           tags: skill_tags(skill),
-          tools: get_in(skill.metadata || %{}, ["tools"]) || [],
-          channels: get_in(skill.metadata || %{}, ["channels"]) || [],
-          requires: get_in(skill.metadata || %{}, ["requires"]) || [],
-          summary: get_in(skill.metadata || %{}, ["summary"]),
-          path: get_in(skill.metadata || %{}, ["relative_path"]) || skill.path
+          tools: get_in(metadata, ["tools"]) || [],
+          channels: get_in(metadata, ["channels"]) || [],
+          requires: get_in(metadata, ["requires"]) || [],
+          advisory_requirements: get_in(metadata, ["advisory_requirements"]) || [],
+          requirement_specs: get_in(metadata, ["requirement_specs"]) || [],
+          manifest_valid: Map.get(metadata, "manifest_valid", true),
+          validation_errors: get_in(metadata, ["validation_errors"]) || [],
+          summary: get_in(metadata, ["summary"]),
+          path: get_in(metadata, ["relative_path"]) || skill.path
         }
       end)
 

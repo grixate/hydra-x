@@ -17,6 +17,10 @@ defmodule HydraX.BackupTest do
     assert File.exists?(manifest["archive_path"])
     assert File.exists?(manifest["manifest_path"])
     assert manifest["entry_count"] >= 2
+    assert manifest["workspace_count"] >= 1
+    assert manifest["verified"] == true
+    assert manifest["missing_entries"] == []
+    assert manifest["archive_size_bytes"] > 0
 
     assert Enum.any?(manifest["entries"], &(&1["type"] == "database"))
 

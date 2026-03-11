@@ -129,10 +129,34 @@ defmodule HydraXWeb.SessionControllerTest do
       |> OperatorAuth.log_in(authenticated_at: now - 90_000, last_active_at: now - 90_000)
       |> get(~p"/setup")
 
-    assert redirected_to(conn) == "/login"
+    assert redirected_to(conn) == "/login?expired=max_age"
 
     [event | _] = Safety.list_events(category: "auth", limit: 5)
     assert event.level == "warn"
     assert event.message =~ "Operator session expired"
+  end
+
+  test "reauth login preserves context and audit metadata", %{conn: conn} do
+    assert {:ok, _secret} =
+             Runtime.save_operator_secret_password(%{
+               "password" => "hydra-password-123",
+               "password_confirmation" => "hydra-password-123"
+             })
+
+    login_page = get(conn, ~p"/login?reauth=1")
+    assert html_response(login_page, 200) =~ ~s(name="reauth" value="1")
+
+    conn =
+      post(conn, ~p"/login", %{
+        "reauth" => "1",
+        "operator_secret" => %{"password" => "hydra-password-123"}
+      })
+
+    assert redirected_to(conn) == "/"
+    assert Phoenix.Flash.get(conn.assigns.flash, :info) == "Signed in again."
+
+    [event | _] = Safety.list_events(category: "auth", limit: 5)
+    assert event.message =~ "Operator login succeeded"
+    assert event.metadata["reauth?"] == true
   end
 end

@@ -106,7 +106,12 @@ defmodule HydraX.MCPTaskTest do
 
     Application.put_env(:hydra_x, :mcp_http_request_fn, fn opts ->
       assert opts[:url] == "https://mcp.example.test/actions"
-      {:ok, %{status: 200, body: %{"actions" => [%{"name" => "search_docs"}, %{"name" => "get_status"}]}}}
+
+      {:ok,
+       %{
+         status: 200,
+         body: %{"actions" => [%{"name" => "search_docs"}, %{"name" => "get_status"}]}
+       }}
     end)
 
     assert {:ok, _server} =
@@ -134,7 +139,7 @@ defmodule HydraX.MCPTaskTest do
     assert output =~ "agent=#{agent.slug}"
     assert output =~ "count=1"
     assert output =~ "Docs HTTP MCP"
-    assert output =~ "search_docs, get_status"
+    assert output =~ "search_docs, get_status [live]"
   end
 
   defp create_agent do

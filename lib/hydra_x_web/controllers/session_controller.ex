@@ -10,19 +10,22 @@ defmodule HydraXWeb.SessionController do
   def new(conn, params) do
     render_login(conn,
       reauth?: params["reauth"] == "1",
+      expired_reason: Helpers.blank_to_nil(params["expired"]),
       changeset: OperatorSecret.changeset(%OperatorSecret{}, %{})
     )
   end
 
-  def create(conn, %{"operator_secret" => params}) do
+  def create(conn, %{"operator_secret" => params} = request_params) do
     ip = client_ip(conn)
     throttle = LoginThrottle.state(ip)
+    reauth? = request_params["reauth"] == "1"
 
     if throttle.rate_limited? do
       Helpers.audit_auth_action("Blocked operator login due to rate limit",
         level: "warn",
         metadata: %{
           ip: ip,
+          reauth?: reauth?,
           window_seconds: throttle.window_seconds,
           max_attempts: throttle.max_attempts,
           retry_after_seconds: throttle.retry_after_seconds
@@ -30,7 +33,7 @@ defmodule HydraXWeb.SessionController do
       )
 
       render_login(conn,
-        reauth?: false,
+        reauth?: reauth?,
         throttle: throttle,
         changeset:
           OperatorSecret.changeset(%OperatorSecret{}, %{})
@@ -42,12 +45,12 @@ defmodule HydraXWeb.SessionController do
           LoginThrottle.clear_attempts(ip)
 
           Helpers.audit_auth_action("Operator login succeeded",
-            metadata: %{ip: ip}
+            metadata: %{ip: ip, reauth?: reauth?}
           )
 
           conn
           |> OperatorAuth.log_in()
-          |> put_flash(:info, "Signed in.")
+          |> put_flash(:info, if(reauth?, do: "Signed in again.", else: "Signed in."))
           |> redirect(to: "/")
 
         {:error, :not_configured} ->
@@ -63,13 +66,14 @@ defmodule HydraXWeb.SessionController do
             level: "warn",
             metadata: %{
               ip: ip,
+              reauth?: reauth?,
               attempts: attempts,
               window_seconds: LoginThrottle.window_seconds()
             }
           )
 
           render_login(conn,
-            reauth?: false,
+            reauth?: reauth?,
             throttle: LoginThrottle.state(ip),
             changeset:
               OperatorSecret.changeset(%OperatorSecret{}, %{})
@@ -96,6 +100,7 @@ defmodule HydraXWeb.SessionController do
     render(conn, :new,
       password_configured?: Runtime.operator_password_configured?(),
       reauth?: Keyword.get(opts, :reauth?, false),
+      expired_reason: Keyword.get(opts, :expired_reason),
       changeset: Keyword.fetch!(opts, :changeset),
       throttle: throttle,
       session_max_age_seconds: OperatorAuth.session_max_age_seconds(),

@@ -294,7 +294,9 @@ defmodule HydraXWeb.AgentsLive do
   end
 
   def handle_event("refresh_mcp", %{"id" => id}, socket) do
-    {:ok, bindings} = Runtime.refresh_agent_mcp_servers(String.to_integer(id))
+    agent_id = String.to_integer(id)
+    {:ok, bindings} = Runtime.refresh_agent_mcp_servers(agent_id)
+    _ = Runtime.list_agent_mcp_actions(agent_id, refresh: true)
 
     {:noreply,
      socket
@@ -548,6 +550,35 @@ defmodule HydraXWeb.AgentsLive do
               <div class="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-3">
                 <div class="flex items-center justify-between gap-3">
                   <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                    Effective policy
+                  </div>
+                  <span class="text-xs text-[var(--hx-mute)]">
+                    {agent.effective_policy.routing.source}
+                  </span>
+                </div>
+                <div class="mt-2 text-sm text-[var(--hx-mute)]">
+                  auth {if agent.effective_policy.auth.recent_auth_required,
+                    do: "required",
+                    else: "optional"} within {agent.effective_policy.auth.recent_auth_window_minutes}m
+                  · route {agent.effective_policy.routing.provider_name}
+                </div>
+                <div class="mt-2 text-xs text-[var(--hx-mute)]">
+                  interactive {channel_summary(agent.effective_policy.deliveries.interactive_channels)} ·
+                  jobs {channel_summary(agent.effective_policy.deliveries.job_channels)} ·
+                  ingest {channel_summary(agent.effective_policy.ingest.roots)}
+                </div>
+                <div class="mt-2 text-xs text-[var(--hx-mute)]">
+                  {effective_tool_summary(agent.effective_policy)}
+                </div>
+                <div class="mt-2 text-xs text-[var(--hx-mute)]">
+                  fallbacks {channel_summary(agent.effective_policy.routing.fallback_names)} ·
+                  budget {policy_budget_summary(agent.effective_policy)} ·
+                  workload {policy_workload_summary(agent.effective_policy)}
+                </div>
+              </div>
+              <div class="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-3">
+                <div class="flex items-center justify-between gap-3">
+                  <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
                     Tool policy override
                   </div>
                   <span class="text-xs text-[var(--hx-mute)]">
@@ -784,8 +815,21 @@ defmodule HydraXWeb.AgentsLive do
                     >
                       requires: {Enum.join(skill_requires(skill), ", ")}
                     </p>
+                    <p
+                      :if={skill_validation_errors(skill) != []}
+                      class="mt-1 text-xs text-amber-200"
+                    >
+                      validation: {Enum.join(skill_validation_errors(skill), "; ")}
+                    </p>
                     <div class="mt-2 text-xs text-[var(--hx-mute)]">
-                      {if skill.enabled, do: "enabled", else: "disabled"} · {skill_version(skill) ||
+                      {if skill.enabled, do: "enabled", else: "disabled"} · {if skill_manifest_valid?(
+                                                                                  skill
+                                                                                ),
+                                                                                do: "manifest valid",
+                                                                                else:
+                                                                                  "manifest invalid"} · {skill_version(
+                        skill
+                      ) ||
                         "unversioned"} · {get_in(
                         skill.metadata || %{},
                         ["relative_path"]
@@ -845,6 +889,9 @@ defmodule HydraXWeb.AgentsLive do
                     </div>
                     <p :if={mcp_actions(binding) != []} class="mt-2 text-xs text-[var(--hx-mute)]">
                       actions: {Enum.join(mcp_actions(binding), ", ")}
+                      {if mcp_catalog_source(binding),
+                        do: " [#{mcp_catalog_source(binding)}]",
+                        else: ""}
                     </p>
                     <div class="mt-2 text-xs text-[var(--hx-mute)]">
                       {if binding.enabled, do: "enabled", else: "disabled"} · {mcp_health_label(
@@ -918,6 +965,7 @@ defmodule HydraXWeb.AgentsLive do
       agent
       |> Map.put(:runtime, Runtime.agent_runtime_status(agent))
       |> Map.put(:provider_route, Runtime.effective_provider_route(agent.id, "channel"))
+      |> Map.put(:effective_policy, Runtime.effective_policy(agent.id, process_type: "channel"))
       |> Map.put(:bulletin, Runtime.agent_bulletin(agent.id))
       |> Map.put(:compaction_policy, Runtime.compaction_policy(agent.id))
       |> Map.put(:tool_policy_override, Runtime.get_agent_tool_policy(agent.id))
@@ -971,11 +1019,23 @@ defmodule HydraXWeb.AgentsLive do
     get_in(skill.metadata || %{}, ["requires"]) || []
   end
 
+  defp skill_validation_errors(skill) do
+    get_in(skill.metadata || %{}, ["validation_errors"]) || []
+  end
+
+  defp skill_manifest_valid?(skill) do
+    Map.get(skill.metadata || %{}, "manifest_valid", true)
+  end
+
   defp mcp_actions(binding) do
     get_in(binding.mcp_server_config.metadata || %{}, ["actions"]) || []
   end
 
   defp mcp_action_count(binding), do: length(mcp_actions(binding))
+
+  defp mcp_catalog_source(binding) do
+    get_in(binding.mcp_server_config.metadata || %{}, ["action_catalog", "source"])
+  end
 
   defp agent_tool_policy_form(agent) do
     policy = agent.tool_policy_override || Runtime.get_tool_policy() || %{}
@@ -1036,6 +1096,42 @@ defmodule HydraXWeb.AgentsLive do
 
   defp channel_summary([]), do: "none"
   defp channel_summary(channels), do: Enum.join(channels, ", ")
+
+  defp effective_tool_summary(policy) do
+    policy.tools
+    |> Enum.map_join(" · ", fn tool ->
+      channels =
+        case tool.channels do
+          :all -> "all"
+          values -> channel_summary(values)
+        end
+
+      "#{tool.tool_name} #{enabled_label(tool.enabled?)} (#{channels})"
+    end)
+  end
+
+  defp policy_budget_summary(policy) do
+    case policy.routing.budget do
+      %{warnings: warnings} when warnings != [] ->
+        Enum.map_join(warnings, ", ", &to_string/1)
+
+      %{usage: usage} when is_map(usage) ->
+        "daily #{Map.get(usage, :daily_tokens) || Map.get(usage, "daily_tokens") || 0}"
+
+      _ ->
+        "steady"
+    end
+  end
+
+  defp policy_workload_summary(policy) do
+    case policy.routing.workload do
+      %{pressure: pressure, applied?: applied?, reason: reason} ->
+        "#{pressure}/#{if(applied?, do: "shifted", else: "steady")} #{reason}"
+
+      _ ->
+        "steady"
+    end
+  end
 
   defp mcp_descriptor(%{transport: "stdio", command: command}),
     do: "stdio command #{command || "unknown"}"

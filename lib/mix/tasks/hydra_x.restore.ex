@@ -42,6 +42,8 @@ defmodule Mix.Tasks.HydraX.Restore do
           Mix.shell().info("restored_to=#{result["target_root"]}")
           Mix.shell().info("manifest=#{result["manifest_path"]}")
           Mix.shell().info("entries=#{manifest["entry_count"]}")
+          Mix.shell().info("workspaces=#{manifest["workspace_count"] || 0}")
+          Mix.shell().info("verified=#{manifest["verified"]}")
 
         {:error, reason} ->
           Mix.raise("restore failed: #{inspect(reason)}")

@@ -22,6 +22,13 @@ defmodule Mix.Tasks.HydraX.Doctor do
       )
 
     Mix.shell().info("readiness=#{String.upcase(Atom.to_string(report.summary))}")
+    Mix.shell().info("items=#{report.counts.total}")
+    Mix.shell().info("required_warn=#{report.counts.required_warn}")
+    Mix.shell().info("recommended_warn=#{report.counts.recommended_warn}")
+
+    Enum.each(report.next_steps, fn step ->
+      Mix.shell().info("next_step=#{step}")
+    end)
 
     Enum.each(report.items, fn item ->
       required = if item.required, do: "required", else: "recommended"

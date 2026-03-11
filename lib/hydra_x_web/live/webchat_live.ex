@@ -16,16 +16,26 @@ defmodule HydraXWeb.WebchatLive do
         %Runtime.WebchatConfig{}
 
     session_ref = webchat_session_ref(session)
+    session_state = webchat_session_state(session, config)
     conversation = webchat_conversation(config, session_ref)
 
-    {:ok,
-     socket
-     |> assign(:page_title, config.title || "Hydra-X Webchat")
-     |> assign(:config, config)
-     |> assign(:session_ref, session_ref)
-     |> assign(:conversation, conversation)
-     |> assign(:streaming_content, nil)
-     |> assign(:message_form, to_form(%{"message" => ""}, as: :message))}
+    socket =
+      socket
+      |> assign(:page_title, config.title || "Hydra-X Webchat")
+      |> assign(:config, config)
+      |> assign(:session_ref, session_ref)
+      |> assign(:session_state, session_state)
+      |> assign(:conversation, conversation)
+      |> assign(:streaming_content, nil)
+      |> assign(:message_form, to_form(%{"message" => ""}, as: :message))
+      |> assign(
+        :identity_form,
+        to_form(%{"display_name" => session_state.display_name || ""}, as: :webchat_identity)
+      )
+      |> maybe_flash_reset_reason(session_state.reset_reason)
+      |> configure_attachments(config)
+
+    {:ok, socket}
   end
 
   @impl true
@@ -37,14 +47,21 @@ defmodule HydraXWeb.WebchatLive do
       not config.enabled ->
         {:noreply, put_flash(socket, :error, "Webchat is not enabled on this node.")}
 
-      message == "" ->
-        {:noreply, put_flash(socket, :error, "Enter a message first.")}
+      identity_required?(socket.assigns.session_state) ->
+        {:noreply, put_flash(socket, :error, "Set a display name first.")}
+
+      message == "" and pending_attachment_count(socket) == 0 ->
+        {:noreply, put_flash(socket, :error, "Enter a message or upload an attachment first.")}
 
       true ->
+        attachments = consume_webchat_attachments(socket)
+
         case Gateway.dispatch_webchat_message(%{
                "session_id" => socket.assigns.session_ref,
                "content" => message,
-               "title" => config.title
+               "title" => config.title,
+               "display_name" => socket.assigns.session_state.display_name,
+               "attachments" => attachments
              }) do
           :ok ->
             conversation = webchat_conversation(config, socket.assigns.session_ref)
@@ -56,6 +73,10 @@ defmodule HydraXWeb.WebchatLive do
 
           {:error, :webchat_not_configured} ->
             {:noreply, put_flash(socket, :error, "Webchat is not enabled on this node.")}
+
+          {:error, :webchat_identity_required} ->
+            {:noreply,
+             put_flash(socket, :error, "Webchat requires a display name before sending messages.")}
 
           {:error, reason} ->
             {:noreply, put_flash(socket, :error, "Webchat failed: #{inspect(reason)}")}
@@ -136,7 +157,7 @@ defmodule HydraXWeb.WebchatLive do
                   Session state
                 </div>
                 <div class="mt-3 text-sm text-[var(--hx-accent)]">
-                  {session_state(@conversation, @streaming_content)}
+                  {conversation_state(@conversation, @streaming_content, @session_state)}
                 </div>
               </article>
               <article class="rounded-3xl border border-white/10 bg-white/5 px-5 py-4">
@@ -148,11 +169,72 @@ defmodule HydraXWeb.WebchatLive do
                 </div>
               </article>
             </div>
+            <div class="mt-8 grid gap-3 sm:grid-cols-2">
+              <article class="rounded-3xl border border-white/10 bg-white/5 px-5 py-4">
+                <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                  Identity policy
+                </div>
+                <div class="mt-3 text-sm text-[var(--hx-accent)]">
+                  {identity_policy_label(@session_state)}
+                </div>
+              </article>
+              <article class="rounded-3xl border border-white/10 bg-white/5 px-5 py-4">
+                <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                  Attachment policy
+                </div>
+                <div class="mt-3 text-sm text-[var(--hx-accent)]">
+                  {attachment_policy_label(@config)}
+                </div>
+              </article>
+            </div>
             <div
               :if={@config.welcome_prompt not in [nil, ""]}
               class="mt-8 rounded-3xl border border-white/10 bg-[rgba(255,255,255,0.04)] px-5 py-5 text-sm leading-7 text-[var(--hx-mute)]"
             >
               {@config.welcome_prompt}
+            </div>
+            <div class="mt-8 rounded-3xl border border-white/10 bg-[rgba(255,255,255,0.04)] px-5 py-5">
+              <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                Session controls
+              </div>
+              <p class="mt-3 text-sm leading-6 text-[var(--hx-mute)]">
+                Max age {@config.session_max_age_minutes}m · idle timeout {@config.session_idle_timeout_minutes}m
+                · identity {if @session_state.display_name,
+                  do: @session_state.display_name,
+                  else: "anonymous"}
+              </p>
+              <.form
+                for={@identity_form}
+                action={~p"/webchat/session"}
+                method="post"
+                class="mt-4 grid gap-3 sm:grid-cols-[1fr_auto]"
+              >
+                <.input
+                  field={@identity_form[:display_name]}
+                  label={
+                    if @config.allow_anonymous_messages,
+                      do: "Display name (optional)",
+                      else: "Display name (required)"
+                  }
+                  placeholder="Workspace visitor"
+                />
+                <div class="self-end pt-2">
+                  <.button>Save identity</.button>
+                </div>
+              </.form>
+              <.form
+                for={to_form(%{}, as: :webchat_session)}
+                action={~p"/webchat/session"}
+                method="delete"
+                class="mt-3"
+              >
+                <button
+                  type="submit"
+                  class="btn btn-outline border-white/10 bg-white/5 text-white hover:bg-white/10"
+                >
+                  Reset session
+                </button>
+              </.form>
             </div>
           </article>
 
@@ -183,9 +265,17 @@ defmodule HydraXWeb.WebchatLive do
                 ]}
               >
                 <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
-                  {turn.role}
+                  {turn_role_label(turn)}
                 </div>
                 <div class="mt-2 whitespace-pre-wrap">{turn.content}</div>
+                <div :if={turn_attachments(turn) != []} class="mt-3 flex flex-wrap gap-2 text-xs">
+                  <span
+                    :for={attachment <- turn_attachments(turn)}
+                    class="rounded-full border border-white/10 px-3 py-1 font-mono uppercase tracking-[0.18em] text-[var(--hx-mute)]"
+                  >
+                    {attachment_label(attachment)}
+                  </span>
+                </div>
               </div>
 
               <div
@@ -209,9 +299,26 @@ defmodule HydraXWeb.WebchatLive do
                     @config.composer_placeholder || "Ask Hydra-X anything about this workspace..."
                   }
                 />
+                <div :if={attachments_enabled?(@config)} class="grid gap-2">
+                  <label class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                    Attachments
+                  </label>
+                  <.live_file_input
+                    upload={@uploads.attachments}
+                    class="block w-full text-sm text-[var(--hx-mute)]"
+                  />
+                  <div class="flex flex-wrap gap-2 text-xs text-[var(--hx-mute)]">
+                    <span
+                      :for={entry <- @uploads.attachments.entries}
+                      class="rounded-full border border-white/10 px-3 py-1 font-mono uppercase tracking-[0.18em]"
+                    >
+                      {entry.client_name} · {entry.client_size} bytes
+                    </span>
+                  </div>
+                </div>
                 <div class="flex items-center justify-between gap-3">
                   <div class="text-xs text-[var(--hx-mute)]">
-                    Session-backed thread with persisted runtime history.
+                    Session-backed thread with persisted runtime history and upload metadata.
                   </div>
                   <.button disabled={!@config.enabled}>Send</.button>
                 </div>
@@ -235,21 +342,163 @@ defmodule HydraXWeb.WebchatLive do
 
   defp webchat_session_ref(session) do
     base =
-      session["webchat_session_id"] ||
-        session["_csrf_token"] ||
-        session["live_socket_id"] ||
-        "webchat-anonymous"
+      session["webchat_session_id"] || "webchat-anonymous"
 
     "webchat:" <> String.slice(Base.encode16(:crypto.hash(:sha256, base), case: :lower), 0, 20)
   end
 
-  defp session_state(_conversation, streaming_content)
+  defp conversation_state(_conversation, streaming_content, _session_state)
        when is_binary(streaming_content) and streaming_content != "",
        do: "assistant streaming"
 
-  defp session_state(nil, _streaming_content), do: "awaiting first message"
-  defp session_state(%{status: status}, _streaming_content), do: "conversation #{status}"
+  defp conversation_state(_conversation, _streaming_content, %{reset_reason: "idle_timeout"}),
+    do: "session rotated after idle timeout"
+
+  defp conversation_state(_conversation, _streaming_content, %{reset_reason: "max_age"}),
+    do: "session rotated after max age"
+
+  defp conversation_state(_conversation, _streaming_content, %{reset_reason: "manual_reset"}),
+    do: "session reset"
+
+  defp conversation_state(nil, _streaming_content, _session_state), do: "awaiting first message"
+
+  defp conversation_state(%{status: status}, _streaming_content, _session_state),
+    do: "conversation #{status}"
 
   defp conversation_turn_count(nil), do: 0
   defp conversation_turn_count(conversation), do: length(conversation.turns || [])
+
+  defp webchat_session_state(session, config) do
+    %{
+      display_name: blank_to_nil(session["webchat_display_name"]),
+      created_at: integer_session_value(session["webchat_session_created_at"]),
+      last_active_at: integer_session_value(session["webchat_session_last_active_at"]),
+      reset_reason: blank_to_nil(session["webchat_session_reset_reason"]),
+      allow_anonymous_messages: config.allow_anonymous_messages
+    }
+  end
+
+  defp maybe_flash_reset_reason(socket, nil), do: socket
+
+  defp maybe_flash_reset_reason(socket, "idle_timeout"),
+    do:
+      put_flash(socket, :info, "Webchat session expired after the idle timeout and was rotated.")
+
+  defp maybe_flash_reset_reason(socket, "max_age"),
+    do:
+      put_flash(
+        socket,
+        :info,
+        "Webchat session expired after the maximum session age and was rotated."
+      )
+
+  defp maybe_flash_reset_reason(socket, "manual_reset"),
+    do: put_flash(socket, :info, "Webchat session reset.")
+
+  defp maybe_flash_reset_reason(socket, _reason), do: socket
+
+  defp configure_attachments(socket, config) do
+    if attachments_enabled?(config) do
+      allow_upload(socket, :attachments,
+        accept: ~w(.txt .md .csv .json .png .jpg .jpeg .gif .webp .pdf),
+        max_entries: config.max_attachment_count,
+        max_file_size: config.max_attachment_size_kb * 1_024,
+        auto_upload: false
+      )
+    else
+      socket
+    end
+  end
+
+  defp consume_webchat_attachments(socket) do
+    if attachments_enabled?(socket.assigns.config) do
+      consume_uploaded_entries(socket, :attachments, fn _meta, entry ->
+        {:ok,
+         %{
+           "kind" => "upload",
+           "id" => entry.ref,
+           "file_name" => entry.client_name,
+           "content_type" => entry.client_type,
+           "size" => entry.client_size,
+           "upload_ref" => entry.ref
+         }}
+      end)
+    else
+      []
+    end
+  end
+
+  defp pending_attachment_count(socket) do
+    if attachments_enabled?(socket.assigns.config) do
+      length(socket.assigns.uploads.attachments.entries)
+    else
+      0
+    end
+  end
+
+  defp identity_required?(session_state) do
+    not session_state.allow_anonymous_messages and is_nil(session_state.display_name)
+  end
+
+  defp identity_policy_label(%{allow_anonymous_messages: true, display_name: nil}),
+    do: "anonymous allowed"
+
+  defp identity_policy_label(%{allow_anonymous_messages: true, display_name: display_name}),
+    do: "named session #{display_name}"
+
+  defp identity_policy_label(%{allow_anonymous_messages: false, display_name: nil}),
+    do: "display name required"
+
+  defp identity_policy_label(%{allow_anonymous_messages: false, display_name: display_name}),
+    do: "identity locked to #{display_name}"
+
+  defp attachment_policy_label(config) do
+    if attachments_enabled?(config) do
+      "enabled · #{config.max_attachment_count} files · #{config.max_attachment_size_kb} KB each"
+    else
+      "disabled"
+    end
+  end
+
+  defp attachments_enabled?(config), do: config.attachments_enabled == true
+
+  defp turn_role_label(%{role: "user"} = turn) do
+    metadata = turn.metadata || %{}
+
+    display_name =
+      metadata["display_name"] || metadata[:display_name]
+
+    if is_binary(display_name) and display_name != "", do: "user · #{display_name}", else: "user"
+  end
+
+  defp turn_role_label(%{role: role}), do: role
+
+  defp turn_attachments(turn) do
+    metadata = turn.metadata || %{}
+    metadata["attachments"] || metadata[:attachments] || []
+  end
+
+  defp attachment_label(attachment) do
+    kind = attachment["kind"] || attachment[:kind] || "attachment"
+    file_name = attachment["file_name"] || attachment[:file_name]
+    content_type = attachment["content_type"] || attachment[:content_type]
+
+    [kind, file_name, content_type]
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> Enum.join(" · ")
+  end
+
+  defp integer_session_value(value) when is_integer(value), do: value
+
+  defp integer_session_value(value) when is_binary(value) do
+    String.to_integer(value)
+  rescue
+    ArgumentError -> nil
+  end
+
+  defp integer_session_value(_value), do: nil
+
+  defp blank_to_nil(nil), do: nil
+  defp blank_to_nil(""), do: nil
+  defp blank_to_nil(value), do: value
 end

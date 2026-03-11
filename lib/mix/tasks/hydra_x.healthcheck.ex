@@ -17,8 +17,13 @@ defmodule Mix.Tasks.HydraX.Healthcheck do
       search: opts[:search]
     ]
 
-    HydraX.Runtime.health_snapshot(filters)
-    |> Enum.each(fn check ->
+    checks = HydraX.Runtime.health_snapshot(filters)
+
+    Mix.shell().info("checks=#{length(checks)}")
+    Mix.shell().info("warn=#{Enum.count(checks, &(&1.status == :warn))}")
+    Mix.shell().info("ok=#{Enum.count(checks, &(&1.status == :ok))}")
+
+    Enum.each(checks, fn check ->
       Mix.shell().info(
         "[#{String.upcase(Atom.to_string(check.status))}] #{check.name}: #{check.detail}"
       )

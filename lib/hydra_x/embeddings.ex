@@ -11,6 +11,7 @@ defmodule HydraX.Embeddings do
 
   @default_backend "local_hash_v1"
   @default_dimensions 64
+
   def embed(input, opts \\ []) do
     text =
       input
@@ -31,6 +32,24 @@ defmodule HydraX.Embeddings do
     else
       do_embed(text, requested_backend, opts)
     end
+  end
+
+  def status(opts \\ []) do
+    configured_backend = backend(opts)
+    active_backend = active_backend(configured_backend, opts)
+    configured_model = model(opts, configured_backend)
+
+    %{
+      configured_backend: configured_backend,
+      active_backend: active_backend,
+      configured_model: configured_model,
+      active_model: model(opts, active_backend),
+      fallback_enabled?: Keyword.get(opts, :allow_fallback, true),
+      fallback_backend: if(configured_backend == "openai_compatible", do: @default_backend),
+      url_configured?: present?(Keyword.get(opts, :url, Config.embedding_url())),
+      api_key_configured?: present?(Keyword.get(opts, :api_key, Config.embedding_api_key())),
+      degraded?: configured_backend != active_backend
+    }
   end
 
   def cosine_similarity([], _right), do: 0.0
@@ -133,6 +152,20 @@ defmodule HydraX.Embeddings do
     do: Keyword.get(opts, :model, Config.embedding_model())
 
   defp model(_opts, backend), do: backend
+
+  defp active_backend("openai_compatible", opts) do
+    if present?(Keyword.get(opts, :url, Config.embedding_url())) and
+         present?(Keyword.get(opts, :api_key, Config.embedding_api_key())) do
+      "openai_compatible"
+    else
+      @default_backend
+    end
+  end
+
+  defp active_backend(backend, _opts), do: backend
+
+  defp present?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present?(_value), do: false
 
   defp normalize_input(value) when is_binary(value) do
     value

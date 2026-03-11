@@ -232,6 +232,12 @@ defmodule HydraXWeb.HomeLive do
           </article>
         </div>
 
+        <div class="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-4 text-sm text-[var(--hx-mute)]">
+          Embedding backend
+          <span class="text-[var(--hx-copy)]">{@memory_status.embedding.active_backend}</span>
+          · embedded {@memory_status.embedding.embedded_count}/{@memory_status.embedding.total_count} · missing {@memory_status.embedding.unembedded_count} · stale {@memory_status.embedding.stale_count} · fallback writes {@memory_status.embedding.fallback_count}
+        </div>
+
         <div class="mt-6 space-y-3">
           <div
             :if={@memory_status.recent_conflicts == []}

@@ -14,6 +14,10 @@ defmodule HydraXWeb.Router do
     plug HydraXWeb.OperatorAuth, :require_authenticated_operator
   end
 
+  pipeline :webchat_session do
+    plug HydraXWeb.Plugs.WebchatSession
+  end
+
   pipeline :api do
     plug :accepts, ["json"]
   end
@@ -24,6 +28,13 @@ defmodule HydraXWeb.Router do
     get "/login", SessionController, :new
     post "/login", SessionController, :create
     delete "/logout", SessionController, :delete
+  end
+
+  scope "/", HydraXWeb do
+    pipe_through [:browser, :webchat_session]
+
+    post "/webchat/session", WebchatSessionController, :create
+    delete "/webchat/session", WebchatSessionController, :delete
     live "/webchat", WebchatLive
   end
 

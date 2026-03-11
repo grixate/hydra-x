@@ -55,6 +55,7 @@ defmodule HydraX.Tools.MemoryRecall do
              vector_score: ranked[:vector_score],
              embedding_backend: get_in(memory.metadata || %{}, ["embedding_backend"]),
              embedding_model: get_in(memory.metadata || %{}, ["embedding_model"]),
+             embedding_fallback_from: get_in(memory.metadata || %{}, ["embedding_fallback_from"]),
              reasons: ranked.reasons,
              lexical_rank: ranked.lexical_rank,
              semantic_rank: ranked.semantic_rank,

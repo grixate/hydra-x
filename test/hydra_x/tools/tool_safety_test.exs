@@ -223,7 +223,10 @@ defmodule HydraX.Tools.ToolSafetyTest do
              status: 200,
              body:
                ~s(<html><head><title>Form Page</title><meta name="description" content="Hydra docs landing page" /><meta property="og:title" content="Hydra Docs" /><meta property="og:type" content="website" /><meta name="twitter:card" content="summary" /><link rel="canonical" href="https://example.com/form" /><script src="/static/app.js"></script><script>window.hydra = { mode: "docs" };</script><script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"Hydra Docs"}</script></head><body><h1>Hydra Docs</h1><h2>Search</h2><img src="/static/hydra.png" alt="Hydra logo" width="320" height="180" /><form method="post" action="/submit"><input type="text" name="query" value="hydra" /><input type="hidden" name="scope" value="docs" /></form><table><tr><th>Name</th><th>Status</th></tr><tr><td>Hydra</td><td>Ready</td></tr></table></body></html>),
-             headers: [{"content-type", "text/html"}, {"set-cookie", "hydra_session=abc123; Path=/"}]
+             headers: [
+               {"content-type", "text/html"},
+               {"set-cookie", "hydra_session=abc123; Path=/"}
+             ]
            }}
 
         {:post, "https://example.com/submit"} ->
@@ -233,7 +236,7 @@ defmodule HydraX.Tools.ToolSafetyTest do
           {:ok,
            %{
              status: 200,
-              body: ~s(<html><body><p>Submitted hydra x</p></body></html>),
+             body: ~s(<html><body><p>Submitted hydra x</p></body></html>),
              headers: [{"content-type", "text/html"}, {"set-cookie", "hydra_scope=docs; Path=/"}]
            }}
       end
@@ -253,8 +256,8 @@ defmodule HydraX.Tools.ToolSafetyTest do
              BrowserAutomation.execute(
                %{
                  action: "submit_form",
-                  url: "https://example.com/form",
-                  form_index: 0,
+                 url: "https://example.com/form",
+                 form_index: 0,
                  fields: %{"query" => "hydra x"},
                  session: forms.session
                },
@@ -262,6 +265,7 @@ defmodule HydraX.Tools.ToolSafetyTest do
              )
 
     assert submitted.url == "https://example.com/submit"
+
     assert submitted.session.cookies == %{
              "hydra_scope" => "docs",
              "hydra_session" => "abc123"
@@ -322,7 +326,11 @@ defmodule HydraX.Tools.ToolSafetyTest do
                %{request_fn: request_fn}
              )
 
-    assert Enum.any?(scripts.scripts, &(&1.src == "/static/app.js" and &1.type == "text/javascript"))
+    assert Enum.any?(
+             scripts.scripts,
+             &(&1.src == "/static/app.js" and &1.type == "text/javascript")
+           )
+
     assert Enum.any?(scripts.scripts, &(&1.inline and &1.type == "text/javascript"))
     assert Enum.any?(scripts.scripts, &(&1.type == "application/ld+json"))
 
@@ -376,7 +384,8 @@ defmodule HydraX.Tools.ToolSafetyTest do
           {:ok,
            %{
              status: 200,
-             body: ~s(<html><head><title>Account</title></head><body><p>Authenticated</p></body></html>),
+             body:
+               ~s(<html><head><title>Account</title></head><body><p>Authenticated</p></body></html>),
              headers: [{"content-type", "text/html"}]
            }}
       end
@@ -424,7 +433,8 @@ defmodule HydraX.Tools.ToolSafetyTest do
           {:ok,
            %{
              status: 200,
-             body: ~s(<html><head><title>Docs</title></head><body><p>Hydra docs</p></body></html>),
+             body:
+               ~s(<html><head><title>Docs</title></head><body><p>Hydra docs</p></body></html>),
              headers: [{"content-type", "text/html"}]
            }}
 
@@ -442,7 +452,11 @@ defmodule HydraX.Tools.ToolSafetyTest do
 
     assert {:ok, extracted} =
              BrowserAutomation.execute(
-               %{action: "extract_elements", url: "https://example.com/selector", selector: ".highlighted"},
+               %{
+                 action: "extract_elements",
+                 url: "https://example.com/selector",
+                 selector: ".highlighted"
+               },
                %{request_fn: request_fn}
              )
 
@@ -451,7 +465,11 @@ defmodule HydraX.Tools.ToolSafetyTest do
 
     assert {:ok, snippets} =
              BrowserAutomation.execute(
-               %{action: "extract_text", url: "https://example.com/selector", selector: "#status-card"},
+               %{
+                 action: "extract_text",
+                 url: "https://example.com/selector",
+                 selector: "#status-card"
+               },
                %{request_fn: request_fn}
              )
 
@@ -459,7 +477,11 @@ defmodule HydraX.Tools.ToolSafetyTest do
 
     assert {:ok, clicked} =
              BrowserAutomation.execute(
-               %{action: "click_link", url: "https://example.com/selector", selector: "#docs-link"},
+               %{
+                 action: "click_link",
+                 url: "https://example.com/selector",
+                 selector: "#docs-link"
+               },
                %{request_fn: request_fn}
              )
 
@@ -468,7 +490,11 @@ defmodule HydraX.Tools.ToolSafetyTest do
 
     assert {:ok, preview} =
              BrowserAutomation.execute(
-               %{action: "preview_form_submission", url: "https://example.com/selector", selector: "#lookup-form"},
+               %{
+                 action: "preview_form_submission",
+                 url: "https://example.com/selector",
+                 selector: "#lookup-form"
+               },
                %{request_fn: request_fn}
              )
 
@@ -477,7 +503,11 @@ defmodule HydraX.Tools.ToolSafetyTest do
 
     assert {:ok, submitted} =
              BrowserAutomation.execute(
-               %{action: "submit_form", url: "https://example.com/selector", selector: "#lookup-form"},
+               %{
+                 action: "submit_form",
+                 url: "https://example.com/selector",
+                 selector: "#lookup-form"
+               },
                %{request_fn: request_fn}
              )
 
@@ -498,6 +528,121 @@ defmodule HydraX.Tools.ToolSafetyTest do
              )
 
     refute_received :browser_request_attempted
+  end
+
+  test "browser automation prefers a browser-backed runtime when available" do
+    screenshot_root = Path.join(System.tmp_dir!(), "hydra-x-browser-runtime-tests")
+    File.mkdir_p!(screenshot_root)
+    screenshot_path = Path.join(screenshot_root, "runtime-shot.png")
+    File.write!(screenshot_path, "png")
+
+    browser_runtime_fn = fn payload ->
+      send(self(), {:browser_action, payload.action})
+
+      {:ok,
+       %{
+         "url" => "https://example.com/app",
+         "title" => "Rendered App",
+         "html" =>
+           ~s(<html><head><title>Rendered App</title></head><body><div id="status-card" class="highlighted">Hydra browser runtime ready</div><a href="/docs">Docs</a></body></html>),
+         "text" => "Hydra browser runtime ready\nDocs",
+         "content_type" => "text/html",
+         "links" => [%{"index" => 0, "href" => "/docs", "text" => "Docs"}],
+         "headings" => [%{"index" => 0, "level" => 1, "text" => "Rendered App"}],
+         "images" => [],
+         "forms" => [],
+         "meta" => %{"description" => "Rendered app"},
+         "scripts" => [],
+         "structured_data" => [],
+         "tables" => [],
+         "elements" => [
+           %{
+             "index" => 0,
+             "tag" => "div",
+             "text" => "Hydra browser runtime ready",
+             "attrs" => %{"id" => "status-card", "class" => "highlighted"}
+           }
+         ],
+         "snippets" => ["Hydra browser runtime ready"],
+         "screenshot_path" => screenshot_path,
+         "session" => %{
+           "cookies" => %{"browser_session" => "abc123"},
+           "history" => ["https://example.com/app"],
+           "browser_state" => %{"backend" => "playwright"}
+         }
+       }}
+    end
+
+    request_fn = fn _opts ->
+      flunk("HTTP fallback should not be used when browser runtime succeeds")
+    end
+
+    assert {:ok, fetched} =
+             BrowserAutomation.execute(
+               %{action: "fetch_page", url: "https://example.com/app"},
+               %{browser_runtime_fn: browser_runtime_fn, request_fn: request_fn}
+             )
+
+    assert fetched.backend == "browser"
+    assert fetched.title == "Rendered App"
+    assert fetched.links == [%{index: 0, href: "/docs", text: "Docs"}]
+    assert fetched.session.cookies == %{"browser_session" => "abc123"}
+    assert fetched.session.browser_state["backend"] == "playwright"
+
+    assert_received {:browser_action, "fetch_page"}
+
+    assert {:ok, extracted} =
+             BrowserAutomation.execute(
+               %{
+                 action: "extract_elements",
+                 url: "https://example.com/app",
+                 selector: "#status-card"
+               },
+               %{browser_runtime_fn: browser_runtime_fn, request_fn: request_fn}
+             )
+
+    assert extracted.backend == "browser"
+
+    assert [%{tag: "div", text: "Hydra browser runtime ready", attrs: %{"id" => "status-card"}}] =
+             extracted.elements
+
+    assert {:ok, snapshot} =
+             BrowserAutomation.execute(
+               %{action: "capture_screenshot", url: "https://example.com/app"},
+               %{browser_runtime_fn: browser_runtime_fn, request_fn: request_fn}
+             )
+
+    assert snapshot.backend == "browser"
+    assert snapshot.content_type == "image/png"
+    assert snapshot.snapshot_path == screenshot_path
+  end
+
+  test "browser automation falls back to HTTP parsing when browser runtime is unavailable" do
+    browser_runtime_fn = fn _payload ->
+      {:error, :browser_unavailable}
+    end
+
+    request_fn = fn opts ->
+      assert opts[:url] == "https://example.com/fallback"
+
+      {:ok,
+       %{
+         status: 200,
+         body:
+           ~s(<html><head><title>Fallback Page</title></head><body><p>Fallback parser path</p></body></html>),
+         headers: [{"content-type", "text/html"}]
+       }}
+    end
+
+    assert {:ok, result} =
+             BrowserAutomation.execute(
+               %{action: "fetch_page", url: "https://example.com/fallback"},
+               %{browser_runtime_fn: browser_runtime_fn, request_fn: request_fn}
+             )
+
+    refute Map.has_key?(result, :backend)
+    assert result.title == "Fallback Page"
+    assert result.excerpt =~ "Fallback parser path"
   end
 
   test "shell commands run inside the workspace when allowlisted" do

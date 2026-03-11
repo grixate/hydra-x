@@ -178,9 +178,17 @@ defmodule HydraXWeb.ConversationsLiveTest do
       Runtime.update_conversation_metadata(conversation, %{
         "last_delivery" => %{
           "channel" => "slack",
-          "status" => "delivered",
+          "status" => "dead_letter",
           "external_ref" => "C321",
           "provider_message_id" => "321.654",
+          "provider_message_ids" => ["321.654", "321.655"],
+          "retry_count" => 2,
+          "reason" => "thread timeout",
+          "dead_lettered_at" => "2026-03-11T10:00:00Z",
+          "attempt_history" => [
+            %{"status" => "failed", "reason" => "thread timeout", "retry_count" => 1},
+            %{"status" => "dead_letter", "reason" => "thread timeout", "retry_count" => 2}
+          ],
           "formatted_payload" => %{
             "channel" => "C321",
             "thread_ts" => "123.456",
@@ -200,6 +208,10 @@ defmodule HydraXWeb.ConversationsLiveTest do
     assert html =~ "thread 123.456"
     assert html =~ "source 123.456"
     assert html =~ "chunks 2"
+    assert html =~ "retry 2"
+    assert html =~ "msg ids 2"
+    assert html =~ "dead letter 2026-03-11T10:00:00Z"
+    assert html =~ "Delivery diagnostics"
     assert html =~ "Native payload preview"
     assert html =~ "&quot;channel&quot;: &quot;C321&quot;"
     assert html =~ "&quot;thread_ts&quot;: &quot;123.456&quot;"
@@ -264,6 +276,12 @@ defmodule HydraXWeb.ConversationsLiveTest do
         "resumable" => true,
         "current_step_id" => "provider-final",
         "current_step_index" => 0,
+        "recovery_lineage" => %{
+          "turn_scope_id" => 42,
+          "recovery_count" => 1,
+          "cache_hits" => 0,
+          "cache_misses" => 1
+        },
         "steps" => [
           %{
             "id" => "provider-final",
@@ -286,6 +304,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
     html = render(view)
     assert html =~ "resumable"
     assert html =~ "current"
+    assert html =~ "Recovery lineage"
     assert html =~ "Recovered 1 pending user turn(s) after channel restart"
   end
 
@@ -370,6 +389,9 @@ defmodule HydraXWeb.ConversationsLiveTest do
             "started_at" => DateTime.utc_now(),
             "completed_at" => DateTime.utc_now(),
             "cached" => true,
+            "lifecycle" => "cached",
+            "result_source" => "cache",
+            "replay_count" => 1,
             "safety_classification" => "memory_read",
             "updated_at" => DateTime.utc_now()
           }
@@ -384,6 +406,8 @@ defmodule HydraXWeb.ConversationsLiveTest do
     assert html =~ "2 memories"
     assert html =~ "attempt 2"
     assert html =~ "cached"
+    assert html =~ "cache"
+    assert html =~ "replay 1"
     assert html =~ "memory_read"
     assert html =~ "started"
     assert html =~ "finished"

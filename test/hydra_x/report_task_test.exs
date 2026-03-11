@@ -18,6 +18,9 @@ defmodule HydraX.ReportTaskTest do
     assert output =~ "json="
     assert output =~ "bundle="
     assert output =~ "readiness="
+    assert output =~ "health_warn="
+    assert output =~ "required_warn="
+    assert output =~ "recommended_warn="
 
     [markdown_path] = Path.wildcard(Path.join(output_root, "*.md"))
     [json_path] = Path.wildcard(Path.join(output_root, "*.json"))
@@ -27,5 +30,7 @@ defmodule HydraX.ReportTaskTest do
     assert File.read!(json_path) =~ "\"readiness\""
     assert File.exists?(Path.join(bundle_dir, "manifest.json"))
     assert File.exists?(Path.join(bundle_dir, "agent_mcp.json"))
+    assert File.exists?(Path.join(bundle_dir, "channels.json"))
+    assert File.exists?(Path.join(bundle_dir, "secrets.json"))
   end
 end

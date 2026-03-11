@@ -14,6 +14,9 @@
           No operator password is configured yet. The control plane remains open until you set one on setup.
         <% end %>
       </p>
+      <p :if={@expired_reason} class="mt-2 text-xs text-amber-200">
+        Previous session expired due to {@expired_reason}.
+      </p>
       <p :if={@password_configured?} class="mt-2 text-xs text-[var(--hx-mute)]">
         Login throttle: {@throttle.max_attempts} attempts per {@throttle.window_seconds}s window.
         <span :if={@throttle.rate_limited?}>
@@ -35,6 +38,7 @@
         method="post"
         class="mt-6 space-y-4"
       >
+        <input :if={@reauth?} type="hidden" name="reauth" value="1" />
         <.input
           field={to_form(@changeset, as: :operator_secret)[:password]}
           type="password"
