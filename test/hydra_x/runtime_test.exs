@@ -292,6 +292,119 @@ defmodule HydraX.RuntimeTest do
     assert Enum.any?(channel_state.execution_events, &(&1["phase"] == "ownership_deferred"))
   end
 
+  test "owned deferred conversations can be resumed through the runtime" do
+    previous_adapter = Application.get_env(:hydra_x, :repo_adapter)
+    Application.put_env(:hydra_x, :repo_adapter, Ecto.Adapters.Postgres)
+
+    on_exit(fn ->
+      if previous_adapter do
+        Application.put_env(:hydra_x, :repo_adapter, previous_adapter)
+      else
+        Application.delete_env(:hydra_x, :repo_adapter)
+      end
+    end)
+
+    agent = create_agent()
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{channel: "webchat", title: "owned-deferred-runtime"})
+
+    {:ok, user_turn} =
+      Runtime.append_turn(conversation, %{
+        role: "user",
+        kind: "message",
+        content: "Resume this from the ownership handoff queue.",
+        metadata: %{"source" => "test"}
+      })
+
+    current_owner = Runtime.coordination_status().owner
+
+    {:ok, _checkpoint} =
+      Runtime.upsert_checkpoint(conversation.id, "channel", %{
+        "status" => "deferred",
+        "resumable" => true,
+        "pending_turn_id" => user_turn.id,
+        "ownership" => %{
+          "mode" => "database_lease",
+          "lease_name" => "conversation:#{conversation.id}",
+          "owner" => current_owner,
+          "owner_node" => "nonode@nohost",
+          "stage" => "deferred"
+        },
+        "execution_events" => []
+      })
+
+    summary = Runtime.resume_owned_conversations()
+
+    assert summary.resumed_count == 1
+    assert [%{conversation_id: conversation_id, status: "resumed"}] = summary.results
+    assert conversation_id == conversation.id
+
+    Process.sleep(100)
+
+    refreshed = Runtime.get_conversation!(conversation.id)
+    assert List.last(refreshed.turns).role == "assistant"
+
+    channel_state = Runtime.conversation_channel_state(conversation.id)
+    assert channel_state.status == "completed"
+    assert channel_state.recovery_lineage["turn_scope_id"] == user_turn.id
+    assert Enum.any?(channel_state.execution_events, &(&1["phase"] == "recovered_after_restart"))
+  end
+
+  test "scheduler poll resumes owned deferred conversations" do
+    previous_adapter = Application.get_env(:hydra_x, :repo_adapter)
+    Application.put_env(:hydra_x, :repo_adapter, Ecto.Adapters.Postgres)
+
+    on_exit(fn ->
+      if previous_adapter do
+        Application.put_env(:hydra_x, :repo_adapter, previous_adapter)
+      else
+        Application.delete_env(:hydra_x, :repo_adapter)
+      end
+    end)
+
+    agent = create_agent()
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{channel: "webchat", title: "owned-deferred-scheduler"})
+
+    {:ok, user_turn} =
+      Runtime.append_turn(conversation, %{
+        role: "user",
+        kind: "message",
+        content: "Let the scheduler pick this up.",
+        metadata: %{"source" => "test"}
+      })
+
+    {:ok, _checkpoint} =
+      Runtime.upsert_checkpoint(conversation.id, "channel", %{
+        "status" => "deferred",
+        "resumable" => true,
+        "pending_turn_id" => user_turn.id,
+        "ownership" => %{
+          "mode" => "database_lease",
+          "lease_name" => "conversation:#{conversation.id}",
+          "owner" => Runtime.coordination_status().owner,
+          "owner_node" => "nonode@nohost",
+          "stage" => "deferred"
+        },
+        "execution_events" => []
+      })
+
+    scheduler_pid =
+      Process.whereis(HydraX.Scheduler) || start_supervised!({HydraX.Scheduler, %{}})
+
+    send(scheduler_pid, :poll)
+    Process.sleep(150)
+
+    refreshed = Runtime.get_conversation!(conversation.id)
+    assert List.last(refreshed.turns).role == "assistant"
+
+    channel_state = Runtime.conversation_channel_state(conversation.id)
+    assert channel_state.status == "completed"
+    assert channel_state.recovery_lineage["turn_scope_id"] == user_turn.id
+  end
+
   test "skill prompt context excludes invalid manifests and unsatisfied explicit requirements" do
     agent = create_agent()
 

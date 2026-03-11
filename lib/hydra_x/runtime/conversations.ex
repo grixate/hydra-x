@@ -137,6 +137,39 @@ defmodule HydraX.Runtime.Conversations do
     }
   end
 
+  def list_owned_resumable_conversations(opts \\ []) do
+    owner = Keyword.get(opts, :owner, HydraX.Runtime.coordination_status().owner)
+    limit = Keyword.get(opts, :limit, 50)
+
+    Checkpoint
+    |> where([checkpoint], checkpoint.process_type == "channel")
+    |> join(:inner, [checkpoint], conversation in assoc(checkpoint, :conversation))
+    |> where([_checkpoint, conversation], conversation.status == "active")
+    |> preload([_checkpoint, conversation], conversation: [:agent])
+    |> order_by([checkpoint, _conversation], desc: checkpoint.updated_at)
+    |> limit(^limit)
+    |> Repo.all()
+    |> Enum.filter(&owned_resumable_checkpoint?(&1, owner))
+    |> Enum.map(& &1.conversation)
+  end
+
+  def resume_owned_conversations(opts \\ []) do
+    owner = Keyword.get(opts, :owner, HydraX.Runtime.coordination_status().owner)
+    limit = Keyword.get(opts, :limit, 50)
+
+    results =
+      list_owned_resumable_conversations(owner: owner, limit: limit)
+      |> Enum.map(&resume_owned_conversation/1)
+
+    %{
+      owner: owner,
+      resumed_count: Enum.count(results, &(&1.status == "resumed")),
+      skipped_count: Enum.count(results, &(&1.status == "skipped")),
+      error_count: Enum.count(results, &(&1.status == "error")),
+      results: results
+    }
+  end
+
   def review_conversation_compaction!(id) when is_integer(id) do
     conversation = get_conversation!(id)
 
@@ -660,5 +693,39 @@ defmodule HydraX.Runtime.Conversations do
       [conversation],
       like(conversation.title, ^pattern) or like(conversation.external_ref, ^pattern)
     )
+  end
+
+  defp owned_resumable_checkpoint?(%Checkpoint{} = checkpoint, owner) do
+    state = checkpoint.state || %{}
+    ownership = state["ownership"] || get_in((checkpoint.conversation.metadata || %{}), ["ownership"]) || %{}
+
+    state["status"] == "deferred" and state["resumable"] == true and
+      is_nil(state["assistant_turn_id"]) and ownership["owner"] == owner
+  end
+
+  defp resume_owned_conversation(conversation) do
+    agent = conversation.agent || HydraX.Runtime.Agents.get_agent!(conversation.agent_id)
+
+    with {:ok, _agent_pid} <- HydraX.Agent.ensure_started(agent),
+         {:ok, _channel_pid} <- HydraX.Agent.Channel.ensure_started(agent.id, conversation) do
+      %{conversation_id: conversation.id, agent_id: conversation.agent_id, status: "resumed"}
+    else
+      {:error, {:owned_elsewhere, ownership}} ->
+        %{
+          conversation_id: conversation.id,
+          agent_id: conversation.agent_id,
+          status: "skipped",
+          reason: "owned_elsewhere",
+          owner: ownership["owner"]
+        }
+
+      {:error, reason} ->
+        %{
+          conversation_id: conversation.id,
+          agent_id: conversation.agent_id,
+          status: "error",
+          reason: inspect(reason)
+        }
+    end
   end
 end

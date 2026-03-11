@@ -827,7 +827,7 @@ defmodule HydraX.Agent.Channel do
   defp recovery_pending?(conversation_id) do
     state = Runtime.conversation_channel_state(conversation_id)
 
-    state.status in ["planned", "executing_tools", "streaming", "interrupted"] and
+    state.status in ["deferred", "planned", "executing_tools", "streaming", "interrupted"] and
       is_nil(state.assistant_turn_id)
   end
 
@@ -1046,7 +1046,7 @@ defmodule HydraX.Agent.Channel do
     checkpoint = Runtime.get_checkpoint(conversation_id, "channel")
     state = (checkpoint && checkpoint.state) || %{}
 
-    if state["status"] in ["planned", "executing_tools", "streaming", "interrupted"] and
+    if state["status"] in ["deferred", "planned", "executing_tools", "streaming", "interrupted"] and
          is_nil(state["assistant_turn_id"]) do
       turns_after_last_assistant(turns)
     else
