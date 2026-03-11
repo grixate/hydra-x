@@ -184,6 +184,22 @@ defmodule HydraX.Runtime.Conversations do
     |> Enum.filter(&owned_pending_delivery?(&1, owner))
   end
 
+  def list_owned_pending_ingress_conversations(opts \\ []) do
+    owner = Keyword.get(opts, :owner, HydraX.Runtime.coordination_status().owner)
+    limit = Keyword.get(opts, :limit, 50)
+
+    Checkpoint
+    |> where([checkpoint], checkpoint.process_type == "ingress")
+    |> join(:inner, [checkpoint], conversation in assoc(checkpoint, :conversation))
+    |> where([_checkpoint, conversation], conversation.status == "active")
+    |> preload([_checkpoint, conversation], conversation: [:agent])
+    |> order_by([checkpoint, _conversation], desc: checkpoint.updated_at)
+    |> limit(^limit)
+    |> Repo.all()
+    |> Enum.filter(&owned_pending_ingress_checkpoint?(&1, owner))
+    |> Enum.map(& &1.conversation)
+  end
+
   def review_conversation_compaction!(id) when is_integer(id) do
     conversation = get_conversation!(id)
 
@@ -751,5 +767,12 @@ defmodule HydraX.Runtime.Conversations do
       is_binary(delivery["external_ref"]) and delivery["external_ref"] != "" and
       ownership["owner"] == owner and
       Enum.any?(conversation.turns || [], &(&1.role == "assistant"))
+  end
+
+  defp owned_pending_ingress_checkpoint?(%Checkpoint{} = checkpoint, owner) do
+    state = checkpoint.state || %{}
+
+    state["status"] == "queued" and state["owner"] == owner and
+      Enum.any?(state["messages"] || [])
   end
 end

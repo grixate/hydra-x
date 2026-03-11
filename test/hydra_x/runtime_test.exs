@@ -453,6 +453,88 @@ defmodule HydraX.RuntimeTest do
     assert refreshed.metadata["last_delivery"]["status"] == "delivered"
   end
 
+  test "scheduler poll processes owned queued ingress messages" do
+    previous_adapter = Application.get_env(:hydra_x, :repo_adapter)
+    previous_deliver = Application.get_env(:hydra_x, :telegram_deliver)
+    Application.put_env(:hydra_x, :repo_adapter, Ecto.Adapters.Postgres)
+
+    test_pid = self()
+
+    Application.put_env(:hydra_x, :telegram_deliver, fn payload ->
+      send(test_pid, {:scheduler_ingress_delivery, payload})
+      {:ok, %{provider_message_id: "scheduler-ingress-1"}}
+    end)
+
+    on_exit(fn ->
+      if previous_adapter do
+        Application.put_env(:hydra_x, :repo_adapter, previous_adapter)
+      else
+        Application.delete_env(:hydra_x, :repo_adapter)
+      end
+
+      if previous_deliver do
+        Application.put_env(:hydra_x, :telegram_deliver, previous_deliver)
+      else
+        Application.delete_env(:hydra_x, :telegram_deliver)
+      end
+    end)
+
+    agent = create_agent()
+
+    {:ok, _telegram} =
+      Runtime.save_telegram_config(%{
+        bot_token: "test-token",
+        bot_username: "hydrax_bot",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{
+        channel: "telegram",
+        external_ref: "8181",
+        title: "queued-ingress-scheduler"
+      })
+
+    {:ok, _checkpoint} =
+      Runtime.upsert_checkpoint(conversation.id, "ingress", %{
+        "status" => "queued",
+        "channel" => "telegram",
+        "external_ref" => "8181",
+        "owner" => Runtime.coordination_status().owner,
+        "owner_node" => "nonode@nohost",
+        "lease_name" => "ingress:telegram:8181",
+        "message_count" => 1,
+        "messages" => [
+          %{
+            "channel" => "telegram",
+            "external_ref" => "8181",
+            "content" => "Let the scheduler process queued ingress.",
+            "metadata" => %{"reply_to_message_id" => 828}
+          }
+        ]
+      })
+
+    scheduler_pid =
+      Process.whereis(HydraX.Scheduler) || start_supervised!({HydraX.Scheduler, %{}})
+
+    send(scheduler_pid, :poll)
+    wait_for(fn ->
+      checkpoint = Runtime.get_checkpoint(conversation.id, "ingress")
+      checkpoint && checkpoint.state["message_count"] == 0
+    end)
+
+    assert_receive {:scheduler_ingress_delivery,
+                    %{chat_id: "8181", reply_to_message_id: 828, text: delivered_text}}
+
+    assert delivered_text =~ "Let the scheduler process queued ingress."
+
+    refreshed = Runtime.get_conversation!(conversation.id)
+    assert length(refreshed.turns) == 2
+    assert refreshed.metadata["last_delivery"]["status"] == "delivered"
+    assert Runtime.get_checkpoint(conversation.id, "ingress").state["message_count"] == 0
+  end
+
   test "skill prompt context excludes invalid manifests and unsatisfied explicit requirements" do
     agent = create_agent()
 
@@ -3201,6 +3283,19 @@ defmodule HydraX.RuntimeTest do
 
     HydraX.Budget.ensure_policy!(agent.id)
     agent
+  end
+
+  defp wait_for(fun, attempts \\ 20)
+
+  defp wait_for(fun, 0), do: assert(fun.())
+
+  defp wait_for(fun, attempts) do
+    if fun.() do
+      :ok
+    else
+      Process.sleep(25)
+      wait_for(fun, attempts - 1)
+    end
   end
 
   defp restore_env(key, nil), do: System.delete_env(key)

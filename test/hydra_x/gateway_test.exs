@@ -49,6 +49,63 @@ defmodule HydraX.GatewayTest do
     assert refreshed.metadata["last_delivery"]["formatted_payload"]["reply_to_message_id"] == 501
   end
 
+  test "telegram updates queue ingress when ingress ownership is remote" do
+    previous_adapter = Application.get_env(:hydra_x, :repo_adapter)
+    Application.put_env(:hydra_x, :repo_adapter, Ecto.Adapters.Postgres)
+
+    on_exit(fn ->
+      if previous_adapter do
+        Application.put_env(:hydra_x, :repo_adapter, previous_adapter)
+      else
+        Application.delete_env(:hydra_x, :repo_adapter)
+      end
+    end)
+
+    agent = create_agent()
+
+    {:ok, _telegram} =
+      Runtime.save_telegram_config(%{
+        bot_token: "test-token",
+        bot_username: "hydrax_bot",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
+    assert {:ok, _lease} =
+             Runtime.claim_lease("ingress:telegram:4200",
+               owner: "node:remote",
+               ttl_seconds: 60
+             )
+
+    assert :ok =
+             HydraX.Gateway.dispatch_telegram_update(
+               %{
+                 "message" => %{
+                   "chat" => %{"id" => 4200},
+                   "message_id" => 900,
+                   "text" => "Queue this for the ingress owner."
+                 }
+               },
+               %{
+                 deliver: fn payload ->
+                   send(self(), {:telegram_reply, payload})
+                   :ok
+                 end
+               }
+             )
+
+    refute_receive {:telegram_reply, _payload}
+
+    [conversation] = Runtime.list_conversations(agent_id: agent.id, limit: 10)
+    assert Runtime.list_turns(conversation.id) == []
+
+    checkpoint = Runtime.get_checkpoint(conversation.id, "ingress")
+    assert checkpoint.state["status"] == "queued"
+    assert checkpoint.state["owner"] == "node:remote"
+    assert checkpoint.state["message_count"] == 1
+    assert [%{"content" => "Queue this for the ingress owner."}] = checkpoint.state["messages"]
+  end
+
   test "telegram updates defer delivery when conversation ownership is remote" do
     previous_adapter = Application.get_env(:hydra_x, :repo_adapter)
     Application.put_env(:hydra_x, :repo_adapter, Ecto.Adapters.Postgres)
@@ -207,6 +264,79 @@ defmodule HydraX.GatewayTest do
     assert refreshed.metadata["last_delivery"]["status"] == "delivered"
     assert refreshed.metadata["last_delivery"]["metadata"]["provider_message_id"] ==
              "deferred-telegram-1"
+  end
+
+  test "queued telegram ingress can be processed later by the owning node" do
+    previous = Application.get_env(:hydra_x, :telegram_deliver)
+
+    Application.put_env(:hydra_x, :telegram_deliver, fn payload ->
+      send(self(), {:telegram_ingress_delivery, payload})
+      {:ok, %{provider_message_id: "queued-telegram-1"}}
+    end)
+
+    on_exit(fn ->
+      if previous do
+        Application.put_env(:hydra_x, :telegram_deliver, previous)
+      else
+        Application.delete_env(:hydra_x, :telegram_deliver)
+      end
+    end)
+
+    agent = create_agent()
+
+    {:ok, _telegram} =
+      Runtime.save_telegram_config(%{
+        bot_token: "test-token",
+        bot_username: "hydrax_bot",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{
+        channel: "telegram",
+        external_ref: "6161",
+        title: "Queued Telegram 6161"
+      })
+
+    {:ok, _checkpoint} =
+      Runtime.upsert_checkpoint(conversation.id, "ingress", %{
+        "status" => "queued",
+        "channel" => "telegram",
+        "external_ref" => "6161",
+        "owner" => Runtime.coordination_status().owner,
+        "owner_node" => "nonode@nohost",
+        "lease_name" => "ingress:telegram:6161",
+        "message_count" => 1,
+        "messages" => [
+          %{
+            "channel" => "telegram",
+            "external_ref" => "6161",
+            "content" => "Process this queued ingress message.",
+            "metadata" => %{"reply_to_message_id" => 919}
+          }
+        ]
+      })
+
+    summary = HydraX.Gateway.process_owned_ingress()
+
+    assert summary.processed_count == 1
+    assert [%{conversation_id: conversation_id, status: "processed"}] = summary.results
+    assert conversation_id == conversation.id
+
+    assert_receive {:telegram_ingress_delivery,
+                    %{
+                      chat_id: "6161",
+                      reply_to_message_id: 919,
+                      text: delivered_text
+                    }}
+
+    assert delivered_text =~ "Process this queued ingress message."
+
+    refreshed = Runtime.get_conversation!(conversation.id)
+    assert length(refreshed.turns) == 2
+    assert refreshed.metadata["last_delivery"]["status"] == "delivered"
+    assert Runtime.get_checkpoint(conversation.id, "ingress").state["message_count"] == 0
   end
 
   test "telegram adapter chunks long outbound replies and reports chunk metadata" do

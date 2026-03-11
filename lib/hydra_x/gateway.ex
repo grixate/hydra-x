@@ -3,6 +3,7 @@ defmodule HydraX.Gateway do
   Routes inbound adapter messages into agent conversations.
   """
 
+  alias HydraX.Config
   alias HydraX.Gateway.Adapters.{Discord, Slack, Telegram, Webchat}
   alias HydraX.Runtime
   alias HydraX.Runtime.Conversation
@@ -131,70 +132,94 @@ defmodule HydraX.Gateway do
     }
   end
 
+  def process_owned_ingress(opts \\ []) do
+    owner = Keyword.get(opts, :owner, Runtime.coordination_status().owner)
+    limit = Keyword.get(opts, :limit, 50)
+
+    results =
+      Runtime.list_owned_pending_ingress_conversations(owner: owner, limit: limit)
+      |> Enum.map(&process_ingress_conversation(&1, opts))
+
+    %{
+      owner: owner,
+      processed_count: Enum.count(results, &(&1.status == "processed")),
+      skipped_count: Enum.count(results, &(&1.status == "skipped")),
+      error_count: Enum.count(results, &(&1.status == "error")),
+      results: results
+    }
+  end
+
   @max_retries 3
   @retry_backoffs [5_000, 30_000, 120_000]
 
-  defp route_message(message, state, config, adapter_mod) do
+  defp route_message(message, state, config, adapter_mod, opts \\ []) do
     agent = config.default_agent || Runtime.ensure_default_agent!()
-    {:ok, _pid} = HydraX.Agent.ensure_started(agent)
 
-    conversation =
-      Runtime.find_conversation(agent.id, message.channel, message.external_ref) ||
-        start_channel_conversation(agent, message)
-
-    case HydraX.Agent.Channel.submit(
-           agent,
-           conversation,
-           message.content,
-           Map.merge(message.metadata || %{}, %{source: message.channel})
-         ) do
-      {:deferred, reason} ->
-        Runtime.update_conversation_metadata(conversation, %{
-          "last_delivery" => %{
-            "channel" => message.channel,
-            "status" => "deferred",
-            "external_ref" => message.external_ref,
-            "reason" => reason,
-            "reply_context" => delivery_context(message),
-            "metadata" => %{"ownership_deferred" => true}
-          }
-        })
-
+    case maybe_queue_ingress(agent, message, opts) do
+      {:queued, _conversation} ->
         :ok
 
-      response ->
-        payload = %{
-          content: response,
-          external_ref: message.external_ref,
-          metadata: delivery_context(message)
-        }
+      :route ->
+        {:ok, _pid} = HydraX.Agent.ensure_started(agent)
 
-        formatted_payload = adapter_format_message(adapter_mod, payload, state)
+        conversation =
+          Runtime.find_conversation(agent.id, message.channel, message.external_ref) ||
+            start_channel_conversation(agent, message)
 
-        delivery_result =
-          if interactive_delivery_allowed?(agent.id, message.channel) do
-            adapter_deliver(adapter_mod, payload, state)
-          else
-            {:error, :delivery_channel_blocked_by_policy}
-          end
+        case HydraX.Agent.Channel.submit(
+               agent,
+               conversation,
+               message.content,
+               Map.merge(message.metadata || %{}, %{source: message.channel})
+             ) do
+          {:deferred, reason} ->
+            Runtime.update_conversation_metadata(conversation, %{
+              "last_delivery" => %{
+                "channel" => message.channel,
+                "status" => "deferred",
+                "external_ref" => message.external_ref,
+                "reason" => reason,
+                "reply_context" => delivery_context(message),
+                "metadata" => %{"ownership_deferred" => true}
+              }
+            })
 
-        record_delivery_result(
-          agent.id,
-          conversation,
-          message,
-          delivery_result,
-          formatted_payload: formatted_payload
-        )
-
-        case delivery_result do
-          {:error, :delivery_channel_blocked_by_policy} ->
             :ok
 
-          {:error, _reason} ->
-            schedule_retry(agent.id, conversation.id, message, adapter_mod, config, 0)
+          response ->
+            payload = %{
+              content: response,
+              external_ref: message.external_ref,
+              metadata: delivery_context(message)
+            }
 
-          _ ->
-            :ok
+            formatted_payload = adapter_format_message(adapter_mod, payload, state)
+
+            delivery_result =
+              if interactive_delivery_allowed?(agent.id, message.channel) do
+                adapter_deliver(adapter_mod, payload, state)
+              else
+                {:error, :delivery_channel_blocked_by_policy}
+              end
+
+            record_delivery_result(
+              agent.id,
+              conversation,
+              message,
+              delivery_result,
+              formatted_payload: formatted_payload
+            )
+
+            case delivery_result do
+              {:error, :delivery_channel_blocked_by_policy} ->
+                :ok
+
+              {:error, _reason} ->
+                schedule_retry(agent.id, conversation.id, message, adapter_mod, config, 0)
+
+              _ ->
+                :ok
+            end
         end
     end
   end
@@ -298,6 +323,41 @@ defmodule HydraX.Gateway do
     route_message(message, state, config, adapter_mod)
   end
 
+  defp maybe_queue_ingress(agent, message, opts) do
+    external_ref = message.external_ref
+
+    cond do
+      opts[:skip_ingress_claim] ->
+        :route
+
+      not is_binary(external_ref) or external_ref == "" ->
+        :route
+
+      not Config.repo_multi_writer?() ->
+        :route
+
+      true ->
+      case Runtime.claim_lease(
+             ingress_lease_name(message.channel, message.external_ref),
+             ttl_seconds: ingress_lease_ttl_seconds(),
+             metadata: %{
+               "type" => "ingress",
+               "channel" => message.channel,
+               "external_ref" => message.external_ref
+             }
+           ) do
+        {:ok, _lease} ->
+          :route
+
+        {:error, {:taken, lease}} ->
+          {:queued, queue_ingress_message(agent, message, lease)}
+
+        {:error, _reason} ->
+          :route
+      end
+    end
+  end
+
   defp start_channel_conversation(agent, message) do
     {:ok, conversation} =
       Runtime.start_conversation(agent, %{
@@ -306,6 +366,30 @@ defmodule HydraX.Gateway do
         title: "#{String.capitalize(message.channel)} #{message.external_ref}",
         metadata: %{source: message.channel}
       })
+
+    conversation
+  end
+
+  defp queue_ingress_message(agent, message, lease) do
+    conversation =
+      Runtime.find_conversation(agent.id, message.channel, message.external_ref) ||
+        start_channel_conversation(agent, message)
+
+    existing = Runtime.get_checkpoint(conversation.id, "ingress")
+    state = (existing && existing.state) || %{}
+    messages = state["messages"] || []
+
+    Runtime.upsert_checkpoint(conversation.id, "ingress", %{
+      "status" => "queued",
+      "channel" => message.channel,
+      "external_ref" => message.external_ref,
+      "owner" => lease.owner,
+      "owner_node" => lease.owner_node,
+      "lease_name" => lease.name,
+      "message_count" => length(messages) + 1,
+      "messages" => messages ++ [ingress_message_entry(message)],
+      "updated_at" => DateTime.utc_now()
+    })
 
     conversation
   end
@@ -350,6 +434,77 @@ defmodule HydraX.Gateway do
       "max_attachment_count" => config && config.max_attachment_count,
       "max_attachment_size_kb" => config && config.max_attachment_size_kb
     }
+  end
+
+  defp process_ingress_conversation(conversation, opts) do
+    with {:ok, adapter_mod, config, config_map} <- channel_adapter(conversation.channel, opts),
+         {:ok, state} <- adapter_mod.connect(config_map),
+         {:ok, entries} <- ingress_entries(conversation),
+         {:ok, _results} <- replay_ingress_entries(entries, state, config, adapter_mod),
+         {:ok, _checkpoint} <- clear_ingress_queue(conversation, entries) do
+      %{
+        conversation_id: conversation.id,
+        agent_id: conversation.agent_id,
+        status: "processed",
+        message_count: length(entries)
+      }
+    else
+      {:error, :empty_queue} ->
+        %{
+          conversation_id: conversation.id,
+          agent_id: conversation.agent_id,
+          status: "skipped",
+          reason: "empty_queue"
+        }
+
+      {:error, reason} ->
+        %{
+          conversation_id: conversation.id,
+          agent_id: conversation.agent_id,
+          status: "error",
+          reason: inspect(reason)
+        }
+    end
+  end
+
+  defp replay_ingress_entries(entries, state, config, adapter_mod) do
+    Enum.reduce_while(entries, {:ok, []}, fn entry, {:ok, acc} ->
+      message = ingress_entry_message(entry)
+
+      case route_message(message, state, config, adapter_mod, skip_ingress_claim: true) do
+        :ok -> {:cont, {:ok, [message | acc]}}
+        other -> {:halt, {:error, other}}
+      end
+    end)
+  end
+
+  defp ingress_entries(conversation) do
+    checkpoint = Runtime.get_checkpoint(conversation.id, "ingress")
+    state = (checkpoint && checkpoint.state) || %{}
+
+    case state["messages"] || [] do
+      [] -> {:error, :empty_queue}
+      entries -> {:ok, entries}
+    end
+  end
+
+  defp clear_ingress_queue(conversation, processed_entries) do
+    checkpoint = Runtime.get_checkpoint(conversation.id, "ingress")
+    state = (checkpoint && checkpoint.state) || %{}
+    remaining = Enum.drop(state["messages"] || [], length(processed_entries))
+
+    Runtime.upsert_checkpoint(conversation.id, "ingress", %{
+      "status" => if(remaining == [], do: "processed", else: "queued"),
+      "channel" => state["channel"] || conversation.channel,
+      "external_ref" => state["external_ref"] || conversation.external_ref,
+      "owner" => state["owner"],
+      "owner_node" => state["owner_node"],
+      "lease_name" => state["lease_name"],
+      "message_count" => length(remaining),
+      "messages" => remaining,
+      "processed_at" => DateTime.utc_now(),
+      "updated_at" => DateTime.utc_now()
+    })
   end
 
   defp record_delivery_result(agent_id, conversation, message, result, opts)
@@ -666,6 +821,28 @@ defmodule HydraX.Gateway do
   defp maybe_retry_adapter(adapter_mod, config, config_map, _error),
     do: {:ok, adapter_mod, config, config_map}
 
+  defp channel_adapter("telegram", opts) do
+    config = Runtime.enabled_telegram_config()
+    maybe_retry_adapter(Telegram, config, adapter_config(config, Map.new(opts)), :telegram_not_configured)
+  end
+
+  defp channel_adapter("discord", opts) do
+    config = Runtime.enabled_discord_config()
+    maybe_retry_adapter(Discord, config, discord_adapter_config(config, Map.new(opts)), :discord_not_configured)
+  end
+
+  defp channel_adapter("slack", opts) do
+    config = Runtime.enabled_slack_config()
+    maybe_retry_adapter(Slack, config, slack_adapter_config(config, Map.new(opts)), :slack_not_configured)
+  end
+
+  defp channel_adapter("webchat", opts) do
+    config = Runtime.enabled_webchat_config()
+    maybe_retry_adapter(Webchat, config, webchat_adapter_config(config, Map.new(opts)), :webchat_not_configured)
+  end
+
+  defp channel_adapter(channel, _opts), do: {:error, {:unsupported_channel, channel}}
+
   defp retry_adapter_config(Telegram, config), do: adapter_config(config, %{})
   defp retry_adapter_config(Discord, config), do: discord_adapter_config(config, %{})
   defp retry_adapter_config(Slack, config), do: slack_adapter_config(config, %{})
@@ -675,4 +852,26 @@ defmodule HydraX.Gateway do
   defp adapter_channel(Discord), do: "Discord"
   defp adapter_channel(Slack), do: "Slack"
   defp adapter_channel(Webchat), do: "Webchat"
+
+  defp ingress_lease_name(channel, external_ref), do: "ingress:#{channel}:#{external_ref}"
+  defp ingress_lease_ttl_seconds, do: 3_600
+
+  defp ingress_message_entry(message) do
+    %{
+      "channel" => message.channel,
+      "external_ref" => message.external_ref,
+      "content" => message.content,
+      "metadata" => stringify_keys(message.metadata || %{}),
+      "queued_at" => DateTime.utc_now()
+    }
+  end
+
+  defp ingress_entry_message(entry) do
+    %{
+      channel: entry["channel"],
+      external_ref: entry["external_ref"],
+      content: entry["content"],
+      metadata: entry["metadata"] || %{}
+    }
+  end
 end

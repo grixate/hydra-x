@@ -161,6 +161,7 @@ defmodule HydraX.Runtime do
   defdelegate append_turn(conversation, attrs), to: HydraX.Runtime.Conversations
   defdelegate list_owned_resumable_conversations(opts), to: HydraX.Runtime.Conversations
   defdelegate list_owned_pending_deliveries(opts), to: HydraX.Runtime.Conversations
+  defdelegate list_owned_pending_ingress_conversations(opts), to: HydraX.Runtime.Conversations
   defdelegate resume_owned_conversations(), to: HydraX.Runtime.Conversations
   defdelegate resume_owned_conversations(opts), to: HydraX.Runtime.Conversations
   defdelegate get_checkpoint(conversation_id, process_type), to: HydraX.Runtime.Conversations
