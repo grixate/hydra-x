@@ -138,9 +138,11 @@ defmodule HydraX.Agent.Channel do
         turns: turns,
         coalesce_buffer: pending_turns,
         pending_from: [],
-        ownership: nil
+        ownership: nil,
+        release_ownership_on_terminate: true
       }
       |> refresh_conversation_ownership(if(recovered?, do: "recovering", else: "idle"))
+      |> schedule_lease_tick()
 
     if recovered? do
       append_channel_event(conversation.id, "recovered_after_restart", %{
@@ -194,6 +196,60 @@ defmodule HydraX.Agent.Channel do
   end
 
   def handle_event(:internal, :process_buffer, :processing, data) do
+    case refresh_conversation_ownership(data, "processing") do
+      %{ownership: %{"active" => false} = ownership} = refreshed_data ->
+        stop_for_ownership_loss(:processing, refreshed_data, ownership)
+
+      refreshed_data ->
+        process_buffer(refreshed_data)
+    end
+  end
+
+  def handle_event(:info, :lease_tick, state, data) when state in [:ready, :processing] do
+    refreshed_data = refresh_conversation_ownership(data, current_state_stage(state))
+
+    case refreshed_data.ownership do
+      %{"active" => false} = ownership ->
+        stop_for_ownership_loss(state, refreshed_data, ownership)
+
+      _ ->
+        update_channel_checkpoint(refreshed_data.conversation.id, %{
+          "ownership" => refreshed_data.ownership,
+          "updated_at" => DateTime.utc_now()
+        })
+
+        {:keep_state, schedule_lease_tick(refreshed_data)}
+    end
+  end
+
+  def handle_event(:info, :lease_tick, _state, data) do
+    {:keep_state, schedule_lease_tick(data)}
+  end
+
+  # Handle streaming chunk messages — broadcast to PubSub for LiveView
+  def handle_event(:info, {:chunk, ref, delta}, :processing, data) do
+    handle_stream_chunk(ref, delta, data)
+  end
+
+  # Handle streaming completion — finalize the response
+  def handle_event(:info, {:done, ref, response}, :processing, data) do
+    handle_stream_done(ref, response, data)
+  end
+
+  # Handle streaming error — fall back to error response
+  def handle_event(:info, {:stream_error, ref, reason}, :processing, data) do
+    handle_stream_error(ref, reason, data)
+  end
+
+  def handle_event(_type, _event, _state, data), do: {:keep_state, data}
+
+  @impl true
+  def terminate(_reason, _state, data) do
+    _ = release_conversation_ownership(data)
+    :ok
+  end
+
+  defp process_buffer(data) do
     history = Runtime.list_turns(data.conversation.id)
     agent = Runtime.get_agent!(data.agent_id)
     bulletin = HydraX.Agent.Cortex.current_bulletin(data.agent_id)
@@ -275,9 +331,11 @@ defmodule HydraX.Agent.Channel do
             metadata: response_metadata
           })
 
+        idle_data = refresh_conversation_ownership(data, "idle")
+
         update_channel_checkpoint(data.conversation.id, %{
           "status" => "completed",
-          "ownership" => data.ownership,
+          "ownership" => idle_data.ownership,
           "steps" => current_checkpoint_steps(data.conversation.id),
           "current_step_id" => nil,
           "current_step_index" => nil,
@@ -304,7 +362,7 @@ defmodule HydraX.Agent.Channel do
 
         {:next_state, :ready,
          %{
-           data
+           idle_data
            | turns: history ++ [assistant_turn],
              coalesce_buffer: [],
              pending_from: []
@@ -312,8 +370,7 @@ defmodule HydraX.Agent.Channel do
     end
   end
 
-  # Handle streaming chunk messages — broadcast to PubSub for LiveView
-  def handle_event(:info, {:chunk, ref, delta}, :processing, data) do
+  defp handle_stream_chunk(ref, delta, data) do
     if data[:stream_ref] == ref do
       Phoenix.PubSub.broadcast(
         HydraX.PubSub,
@@ -325,8 +382,7 @@ defmodule HydraX.Agent.Channel do
     {:keep_state, data}
   end
 
-  # Handle streaming completion — finalize the response
-  def handle_event(:info, {:done, ref, response}, :processing, data) do
+  defp handle_stream_done(ref, response, data) do
     if data[:stream_ref] == ref do
       finalize_streamed_response(response, data)
     else
@@ -334,8 +390,7 @@ defmodule HydraX.Agent.Channel do
     end
   end
 
-  # Handle streaming error — fall back to error response
-  def handle_event(:info, {:stream_error, ref, reason}, :processing, data) do
+  defp handle_stream_error(ref, reason, data) do
     if data[:stream_ref] == ref do
       Safety.log_event(%{
         agent_id: data.agent_id,
@@ -356,14 +411,6 @@ defmodule HydraX.Agent.Channel do
     else
       {:keep_state, data}
     end
-  end
-
-  def handle_event(_type, _event, _state, data), do: {:keep_state, data}
-
-  @impl true
-  def terminate(_reason, _state, data) do
-    _ = release_conversation_ownership(data)
-    :ok
   end
 
   # Tool-calling loop: iteratively call LLM, execute tools, feed results back
@@ -716,9 +763,11 @@ defmodule HydraX.Agent.Channel do
         metadata: metadata
       })
 
+    idle_data = refresh_conversation_ownership(data, "idle")
+
     update_channel_checkpoint(data.conversation.id, %{
       "status" => "completed",
-      "ownership" => data.ownership,
+      "ownership" => idle_data.ownership,
       "steps" =>
         current_checkpoint_steps(data.conversation.id)
         |> mark_provider_completed(%{
@@ -756,7 +805,7 @@ defmodule HydraX.Agent.Channel do
 
     # Clean up streaming state from data
     cleaned_data =
-      data
+      idle_data
       |> Map.delete(:stream_ref)
       |> Map.delete(:stream_round)
       |> Map.delete(:stream_tool_results)
@@ -886,19 +935,69 @@ defmodule HydraX.Agent.Channel do
   end
 
   defp release_conversation_ownership(%{conversation: conversation} = data) do
-    if Config.repo_multi_writer?() do
-      _ = Runtime.release_lease(conversation_lease_name(conversation.id))
+    if not Map.get(data, :release_ownership_on_terminate, true) do
+      :ok
+    else
+      if Config.repo_multi_writer?() do
+        _ = Runtime.release_lease(conversation_lease_name(conversation.id))
+      end
+
+      ownership =
+        ownership_payload(
+          data.ownership || local_conversation_ownership(conversation.id, "released"),
+          "released"
+        )
+        |> Map.put("active", false)
+        |> Map.put("released_at", DateTime.utc_now())
+
+      Runtime.update_conversation_metadata(conversation, %{"ownership" => ownership})
     end
+  end
 
-    ownership =
-      ownership_payload(
-        data.ownership || local_conversation_ownership(conversation.id, "released"),
-        "released"
-      )
-      |> Map.put("active", false)
-      |> Map.put("released_at", DateTime.utc_now())
+  defp stop_for_ownership_loss(state, data, ownership) do
+    summary = deferred_message(ownership)
+    status = ownership_loss_status(state, data)
+    resumable = status == "deferred"
 
-    Runtime.update_conversation_metadata(conversation, %{"ownership" => ownership})
+    Enum.each(data.pending_from, &:gen_statem.reply(&1, {:deferred, summary}))
+
+    append_channel_event(data.conversation.id, "ownership_lost", %{
+      "summary" => summary,
+      "owner" => ownership["owner"],
+      "owner_node" => ownership["owner_node"],
+      "stage" => ownership["stage"]
+    })
+
+    update_channel_checkpoint(data.conversation.id, %{
+      "status" => status,
+      "ownership" => ownership,
+      "resumable" => resumable,
+      "updated_at" => DateTime.utc_now()
+    })
+
+    Phoenix.PubSub.broadcast(
+      HydraX.PubSub,
+      "conversations",
+      {:conversation_updated, data.conversation.id}
+    )
+
+    {:stop, :ownership_lost,
+     %{
+       data
+       | ownership: ownership,
+         pending_from: [],
+         release_ownership_on_terminate: false
+     }}
+  end
+
+  defp ownership_loss_status(:processing, _data), do: "deferred"
+
+  defp ownership_loss_status(_state, data) do
+    if data.coalesce_buffer != [] or data.pending_from != [] do
+      "deferred"
+    else
+      "ownership_lost"
+    end
   end
 
   defp claim_conversation_ownership(conversation_id, stage) do
@@ -960,6 +1059,18 @@ defmodule HydraX.Agent.Channel do
     |> Map.put("updated_at", DateTime.utc_now())
   end
 
+  defp schedule_lease_tick(data) do
+    if Config.repo_multi_writer?() do
+      Process.send_after(self(), :lease_tick, lease_tick_ms())
+    end
+
+    data
+  end
+
+  defp current_state_stage(:ready), do: "idle"
+  defp current_state_stage(:processing), do: "processing"
+  defp current_state_stage(_state), do: "idle"
+
   defp current_conversation_ownership(conversation_id) do
     case Repo.get(HydraX.Runtime.Conversation, conversation_id) do
       nil ->
@@ -978,6 +1089,7 @@ defmodule HydraX.Agent.Channel do
 
   defp conversation_lease_name(conversation_id), do: "conversation:#{conversation_id}"
   defp conversation_lease_ttl_seconds, do: 3_600
+  defp lease_tick_ms, do: max(div(conversation_lease_ttl_seconds() * 1000, 3), 5_000)
 
   defp ownership_conflict(conversation_id) do
     if Config.repo_multi_writer?() do

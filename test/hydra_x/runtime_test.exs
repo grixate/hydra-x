@@ -244,6 +244,42 @@ defmodule HydraX.RuntimeTest do
     assert Runtime.active_lease("conversation:#{conversation.id}")
   end
 
+  test "channel heartbeat renews the active conversation lease" do
+    previous_adapter = Application.get_env(:hydra_x, :repo_adapter)
+    Application.put_env(:hydra_x, :repo_adapter, Ecto.Adapters.Postgres)
+
+    on_exit(fn ->
+      if previous_adapter do
+        Application.put_env(:hydra_x, :repo_adapter, previous_adapter)
+      else
+        Application.delete_env(:hydra_x, :repo_adapter)
+      end
+    end)
+
+    agent = create_agent()
+    {:ok, pid} = HydraX.Agent.ensure_started(agent)
+    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{channel: "cli", title: "ownership-heartbeat"})
+
+    {:ok, channel_pid} = HydraX.Agent.Channel.ensure_started(agent.id, conversation)
+
+    initial_lease = Runtime.active_lease("conversation:#{conversation.id}")
+    assert initial_lease.owner == Runtime.coordination_status().owner
+
+    send(channel_pid, :lease_tick)
+
+    wait_for(fn ->
+      refreshed_lease = Runtime.active_lease("conversation:#{conversation.id}")
+      DateTime.compare(refreshed_lease.expires_at, initial_lease.expires_at) == :gt
+    end)
+
+    refreshed = Runtime.get_conversation!(conversation.id)
+    assert refreshed.metadata["ownership"]["owner"] == Runtime.coordination_status().owner
+    assert refreshed.metadata["ownership"]["stage"] == "idle"
+  end
+
   test "channel submit defers to remote ownership and persists the pending user turn" do
     previous_adapter = Application.get_env(:hydra_x, :repo_adapter)
     Application.put_env(:hydra_x, :repo_adapter, Ecto.Adapters.Postgres)
@@ -290,6 +326,68 @@ defmodule HydraX.RuntimeTest do
     assert channel_state.pending_turn_id == turn.id
     assert channel_state.ownership["owner"] == "node:remote"
     assert Enum.any?(channel_state.execution_events, &(&1["phase"] == "ownership_deferred"))
+  end
+
+  test "running channel defers and stops when it loses the conversation lease" do
+    previous_adapter = Application.get_env(:hydra_x, :repo_adapter)
+    Application.put_env(:hydra_x, :repo_adapter, Ecto.Adapters.Postgres)
+
+    on_exit(fn ->
+      if previous_adapter do
+        Application.put_env(:hydra_x, :repo_adapter, previous_adapter)
+      else
+        Application.delete_env(:hydra_x, :repo_adapter)
+      end
+    end)
+
+    agent = create_agent()
+    {:ok, pid} = HydraX.Agent.ensure_started(agent)
+    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{channel: "cli", title: "ownership-loss"})
+
+    {:ok, channel_pid} = HydraX.Agent.Channel.ensure_started(agent.id, conversation)
+
+    task =
+      Task.async(fn ->
+        Channel.submit(
+          agent,
+          conversation,
+          "Lose this lease before processing.",
+          %{source: "test"}
+        )
+      end)
+
+    wait_for(fn ->
+      Runtime.list_turns(conversation.id) |> length() == 1
+    end)
+
+    stale_lease = Runtime.get_lease("conversation:#{conversation.id}")
+
+    stale_lease
+    |> Ecto.Changeset.change(expires_at: DateTime.add(DateTime.utc_now(), -60, :second))
+    |> Repo.update!()
+
+    assert {:ok, _lease} =
+             Runtime.claim_lease("conversation:#{conversation.id}",
+               owner: "node:remote",
+               ttl_seconds: 60
+             )
+
+    send(channel_pid, :lease_tick)
+
+    assert {:deferred, reason} = Task.await(task, 5_000)
+    assert reason =~ "node:remote"
+
+    wait_for(fn -> not Process.alive?(channel_pid) end)
+
+    channel_state = Runtime.conversation_channel_state(conversation.id)
+    assert channel_state.status == "deferred"
+    assert channel_state.resumable
+    assert channel_state.ownership["owner"] == "node:remote"
+    assert Enum.any?(channel_state.execution_events, &(&1["phase"] == "ownership_lost"))
+    refute Enum.any?(Runtime.list_turns(conversation.id), &(&1.role == "assistant"))
   end
 
   test "owned deferred conversations can be resumed through the runtime" do
