@@ -7,8 +7,16 @@
 # General application configuration
 import Config
 
+repo_adapter =
+  case System.get_env("HYDRA_X_REPO_ADAPTER", "sqlite") do
+    "postgres" -> Ecto.Adapters.Postgres
+    "postgresql" -> Ecto.Adapters.Postgres
+    _ -> Ecto.Adapters.SQLite3
+  end
+
 config :hydra_x,
   ecto_repos: [HydraX.Repo],
+  repo_adapter: repo_adapter,
   generators: [timestamp_type: :utc_datetime]
 
 # Configures the endpoint

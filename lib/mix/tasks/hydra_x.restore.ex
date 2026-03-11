@@ -43,6 +43,11 @@ defmodule Mix.Tasks.HydraX.Restore do
           Mix.shell().info("manifest=#{result["manifest_path"]}")
           Mix.shell().info("entries=#{manifest["entry_count"]}")
           Mix.shell().info("workspaces=#{manifest["workspace_count"] || 0}")
+
+          Mix.shell().info(
+            "backup_mode=#{get_in(manifest, ["persistence", "backup_mode"]) || "bundled_database"}"
+          )
+
           Mix.shell().info("verified=#{manifest["verified"]}")
 
         {:error, reason} ->

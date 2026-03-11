@@ -5,17 +5,73 @@ defmodule HydraX.Config do
 
   @default_workspace_root "workspace"
 
+  @spec repo_adapter() :: module()
+  def repo_adapter do
+    Application.get_env(:hydra_x, :repo_adapter, Ecto.Adapters.SQLite3)
+  end
+
+  @spec repo_backend() :: String.t()
+  def repo_backend do
+    case repo_adapter() do
+      Ecto.Adapters.Postgres -> "postgres"
+      _ -> "sqlite"
+    end
+  end
+
+  @spec repo_sqlite?() :: boolean()
+  def repo_sqlite?, do: repo_backend() == "sqlite"
+
+  @spec repo_postgres?() :: boolean()
+  def repo_postgres?, do: repo_backend() == "postgres"
+
+  @spec repo_multi_writer?() :: boolean()
+  def repo_multi_writer?, do: repo_postgres?()
+
   @spec workspace_root() :: String.t()
   def workspace_root do
     System.get_env("HYDRA_X_WORKSPACE_ROOT") ||
       Path.expand(@default_workspace_root, File.cwd!())
   end
 
-  @spec repo_database_path() :: String.t()
+  @spec repo_database_path() :: String.t() | nil
   def repo_database_path do
-    Application.get_env(:hydra_x, HydraX.Repo, [])
-    |> Keyword.fetch!(:database)
-    |> Path.expand()
+    repo_config()
+    |> Keyword.get(:database)
+    |> case do
+      nil -> nil
+      path -> Path.expand(path)
+    end
+  end
+
+  @spec repo_database_url() :: String.t() | nil
+  def repo_database_url do
+    repo_config()
+    |> Keyword.get(:url)
+  end
+
+  @spec repo_target() :: String.t() | nil
+  def repo_target do
+    case repo_backend() do
+      "postgres" -> repo_database_url() || postgres_target_from_config()
+      _ -> repo_database_path()
+    end
+  end
+
+  @spec repo_target_kind() :: String.t()
+  def repo_target_kind do
+    if repo_postgres?(), do: "database_url", else: "database_path"
+  end
+
+  @spec repo_persistence_status() :: map()
+  def repo_persistence_status do
+    %{
+      backend: repo_backend(),
+      adapter: repo_adapter() |> Module.split() |> List.last(),
+      target: repo_target(),
+      target_kind: repo_target_kind(),
+      multi_writer: repo_multi_writer?(),
+      backup_mode: if(repo_postgres?(), do: "external_database", else: "bundled_database")
+    }
   end
 
   @spec backup_root() :: String.t()
@@ -137,6 +193,22 @@ defmodule HydraX.Config do
     case System.get_env(name) do
       nil -> default
       value -> String.to_integer(value)
+    end
+  end
+
+  defp repo_config do
+    Application.get_env(:hydra_x, HydraX.Repo, [])
+  end
+
+  defp postgres_target_from_config do
+    config = repo_config()
+    hostname = Keyword.get(config, :hostname)
+    database = Keyword.get(config, :database)
+
+    case {hostname, database} do
+      {host, db} when is_binary(host) and is_binary(db) -> "ecto://#{host}/#{db}"
+      {host, _db} when is_binary(host) -> "ecto://#{host}"
+      _ -> nil
     end
   end
 end

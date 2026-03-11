@@ -368,6 +368,8 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "Cluster posture"
     assert html =~ "single_node"
     assert html =~ "sqlite_single_writer"
+    assert html =~ "Persistence: sqlite"
+    assert html =~ "Backup mode: bundled_database"
   end
 
   test "health page shows open scheduler circuits", %{conn: conn} do

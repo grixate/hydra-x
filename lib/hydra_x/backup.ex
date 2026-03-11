@@ -143,13 +143,12 @@ defmodule HydraX.Backup do
   defp collect_entries(staging_root) do
     database_root = Path.join(staging_root, "database")
     workspace_root = Path.join(staging_root, "workspaces")
+    persistence = Config.repo_persistence_status()
 
     File.mkdir_p!(database_root)
     File.mkdir_p!(workspace_root)
 
-    database_source = Config.repo_database_path()
-    database_target = Path.join(database_root, Path.basename(database_source))
-    File.cp!(database_source, database_target)
+    database_entry = database_entry(database_root, persistence, staging_root)
 
     workspace_entries =
       Runtime.list_agents()
@@ -166,20 +165,14 @@ defmodule HydraX.Backup do
         }
       end)
 
-    [
-      %{
-        "type" => "database",
-        "source_path" => database_source,
-        "bundle_path" => relative_to_staging(database_target, staging_root)
-      }
-      | workspace_entries
-    ]
+    [database_entry | workspace_entries]
   end
 
   defp build_manifest(archive_path, entries) do
     %{
       "created_at" => DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601(),
       "archive_path" => archive_path,
+      "persistence" => persistence_manifest(),
       "workspace_count" => Enum.count(entries, &(&1["type"] == "workspace")),
       "entry_count" => length(entries),
       "entries" => entries
@@ -242,6 +235,52 @@ defmodule HydraX.Backup do
   defp copy_tree!(source, target) do
     File.rm_rf!(target)
     File.cp_r!(source, target)
+  end
+
+  defp persistence_manifest do
+    Config.repo_persistence_status()
+    |> Enum.into(%{}, fn {key, value} -> {to_string(key), value} end)
+  end
+
+  defp database_entry(database_root, %{backend: "postgres"} = persistence, staging_root) do
+    reference_path = Path.join(database_root, "external_database.json")
+
+    File.write!(
+      reference_path,
+      Jason.encode_to_iodata!(
+        %{
+          "backend" => persistence.backend,
+          "target" => persistence.target,
+          "target_kind" => persistence.target_kind,
+          "backup_mode" => persistence.backup_mode,
+          "note" =>
+            "Hydra-X does not bundle PostgreSQL contents in local preview archives; take an external database backup separately."
+        },
+        pretty: true
+      )
+    )
+
+    %{
+      "type" => "database_reference",
+      "source_path" => persistence.target,
+      "bundle_path" => relative_to_staging(reference_path, staging_root),
+      "backend" => persistence.backend,
+      "backup_mode" => persistence.backup_mode
+    }
+  end
+
+  defp database_entry(database_root, _persistence, staging_root) do
+    database_source = Config.repo_database_path()
+    database_target = Path.join(database_root, Path.basename(database_source))
+    File.cp!(database_source, database_target)
+
+    %{
+      "type" => "database",
+      "source_path" => database_source,
+      "bundle_path" => relative_to_staging(database_target, staging_root),
+      "backend" => "sqlite",
+      "backup_mode" => "bundled_database"
+    }
   end
 
   defp relative_to_staging(path, staging_root) do

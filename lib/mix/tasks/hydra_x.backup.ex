@@ -18,6 +18,11 @@ defmodule Mix.Tasks.HydraX.Backup do
     Mix.shell().info("backup=#{manifest["archive_path"]}")
     Mix.shell().info("manifest=#{manifest["manifest_path"]}")
     Mix.shell().info("entries=#{manifest["entry_count"]}")
+
+    Mix.shell().info(
+      "backup_mode=#{get_in(manifest, ["persistence", "backup_mode"]) || "bundled_database"}"
+    )
+
     Mix.shell().info("verified=#{manifest["verified"]}")
     Mix.shell().info("archive_size=#{manifest["archive_size_bytes"] || 0}")
 

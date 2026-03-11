@@ -19,6 +19,7 @@ defmodule HydraX.ReportTaskTest do
     assert output =~ "bundle="
     assert output =~ "readiness="
     assert output =~ "health_warn="
+    assert output =~ "persistence=sqlite"
     assert output =~ "required_warn="
     assert output =~ "recommended_warn="
 

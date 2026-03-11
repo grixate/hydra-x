@@ -32,7 +32,8 @@ defmodule HydraX.Install do
     PHX_SERVER=true
     PHX_HOST=#{snapshot.phx_host}
     PORT=#{snapshot.port}
-    DATABASE_PATH=#{snapshot.database_path}
+    HYDRA_X_REPO_ADAPTER=#{snapshot.persistence.backend}
+    #{database_env_line(snapshot)}
     SECRET_KEY_BASE=CHANGE_ME_WITH_mix_phx.gen.secret
     HYDRA_X_PUBLIC_URL=#{snapshot.public_url}
     HYDRA_X_WORKSPACE_ROOT=#{snapshot.workspace_root}
@@ -68,7 +69,9 @@ defmodule HydraX.Install do
     Public URL: #{snapshot.public_url}
     Workspace root: #{snapshot.workspace_root}
     Backup root: #{snapshot.backup_root}
-    Database path: #{snapshot.database_path}
+    Persistence backend: #{snapshot.persistence.backend}
+    Persistence target: #{snapshot.persistence.target || "not configured"}
+    Backup mode: #{snapshot.persistence.backup_mode}
 
     ## Readiness
     Summary: #{String.upcase(Atom.to_string(snapshot.readiness.summary))}
@@ -84,9 +87,25 @@ defmodule HydraX.Install do
 
     ## Deployment Checklist
     1. Replace `SECRET_KEY_BASE`.
-    2. Update `DATABASE_PATH` if the preview node should not reuse the local SQLite file.
+    2. #{database_checklist_step(snapshot)}
     3. Set `HYDRA_X_PUBLIC_URL` and `PHX_HOST` to the final externally reachable host.
     4. Run `mix hydra_x.doctor` after deploying the generated env file.
     """
+  end
+
+  defp database_env_line(%{persistence: %{backend: "postgres"}, database_url: url}) do
+    "DATABASE_URL=#{url || "ecto://postgres:postgres@db.example.com/hydra_x"}"
+  end
+
+  defp database_env_line(%{database_path: path}) do
+    "DATABASE_PATH=#{path}"
+  end
+
+  defp database_checklist_step(%{persistence: %{backend: "postgres"}}) do
+    "Set `DATABASE_URL` to the shared PostgreSQL instance that will back the node."
+  end
+
+  defp database_checklist_step(_snapshot) do
+    "Update `DATABASE_PATH` if the preview node should not reuse the local SQLite file."
   end
 end

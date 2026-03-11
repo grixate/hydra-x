@@ -21,6 +21,7 @@ defmodule Mix.Tasks.HydraX.Install do
       "readiness=#{String.upcase(Atom.to_string(export.snapshot.readiness.summary))}"
     )
 
+    Mix.shell().info("persistence=#{export.snapshot.persistence.backend}")
     Mix.shell().info("required_warn=#{export.snapshot.readiness.counts.required_warn}")
     Mix.shell().info("recommended_warn=#{export.snapshot.readiness.counts.recommended_warn}")
   end

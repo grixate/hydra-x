@@ -97,6 +97,7 @@ defmodule HydraX.Cluster do
     enabled = enabled?()
     nodes = nodes()
     leader_pid = if(enabled, do: :global.whereis_name(@leader_key), else: self())
+    persistence = HydraX.Config.repo_persistence_status()
 
     %{
       enabled: enabled,
@@ -107,7 +108,9 @@ defmodule HydraX.Cluster do
       nodes: Enum.map(nodes, &to_string/1),
       leader_registered: leader_pid != :undefined,
       leader_node: leader_node(leader_pid),
-      persistence: "sqlite_single_writer",
+      persistence: persistence_label(persistence),
+      persistence_backend: persistence.backend,
+      persistence_target: persistence.target,
       multi_node_ready: false
     }
     |> Map.put(:detail, detail(enabled, leader_pid, nodes))
@@ -120,14 +123,29 @@ defmodule HydraX.Cluster do
   defp leader_node(pid) when is_pid(pid), do: pid |> node() |> to_string()
 
   defp detail(false, _leader_pid, nodes) do
-    "single-node mode on #{node_id()}; #{length(nodes)} visible node; SQLite is acceptable until federation begins"
+    if HydraX.Config.repo_multi_writer?() do
+      "single-node mode on #{node_id()}; #{length(nodes)} visible node; PostgreSQL persistence is configured for post-preview architecture work"
+    else
+      "single-node mode on #{node_id()}; #{length(nodes)} visible node; SQLite is acceptable until federation begins"
+    end
   end
 
   defp detail(true, :undefined, nodes) do
-    "cluster awareness enabled on #{node_id()} with #{length(nodes)} visible nodes; no leader registered yet; SQLite still blocks production multi-node operation"
+    if HydraX.Config.repo_multi_writer?() do
+      "cluster awareness enabled on #{node_id()} with #{length(nodes)} visible nodes; no leader registered yet; PostgreSQL persistence is configured but distributed ownership and routing are still pending"
+    else
+      "cluster awareness enabled on #{node_id()} with #{length(nodes)} visible nodes; no leader registered yet; SQLite still blocks production multi-node operation"
+    end
   end
 
   defp detail(true, leader_pid, nodes) when is_pid(leader_pid) do
-    "cluster awareness enabled on #{node_id()} with #{length(nodes)} visible nodes; leader #{leader_node(leader_pid)}; SQLite still blocks production multi-node operation"
+    if HydraX.Config.repo_multi_writer?() do
+      "cluster awareness enabled on #{node_id()} with #{length(nodes)} visible nodes; leader #{leader_node(leader_pid)}; PostgreSQL persistence is configured but distributed ownership and routing are still pending"
+    else
+      "cluster awareness enabled on #{node_id()} with #{length(nodes)} visible nodes; leader #{leader_node(leader_pid)}; SQLite still blocks production multi-node operation"
+    end
   end
+
+  defp persistence_label(%{backend: "postgres"}), do: "postgres_multi_writer_ready"
+  defp persistence_label(_), do: "sqlite_single_writer"
 end

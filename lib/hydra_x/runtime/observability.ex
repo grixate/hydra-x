@@ -57,7 +57,7 @@ defmodule HydraX.Runtime.Observability do
     cluster = cluster_status()
 
     checks = [
-      %{name: "database", status: :ok, detail: "SQLite repo online"},
+      %{name: "database", status: :ok, detail: database_health_detail(system.persistence)},
       %{
         name: "agents",
         status: if(agents == [], do: :warn, else: :ok),
@@ -625,7 +625,9 @@ defmodule HydraX.Runtime.Observability do
 
     %{
       alarms: alarms,
-      database_path: Config.repo_database_path()
+      database_path: Config.repo_database_path(),
+      database_url: Config.repo_database_url(),
+      persistence: Config.repo_persistence_status()
     }
   end
 
@@ -905,16 +907,10 @@ defmodule HydraX.Runtime.Observability do
       },
       %{
         id: "cluster",
-        label: "Cluster posture matches single-node persistence",
+        label: "Cluster posture matches configured persistence",
         required: false,
-        status: if(cluster.enabled, do: :warn, else: :ok),
-        detail:
-          if(cluster.enabled,
-            do:
-              "cluster awareness is enabled, but SQLite still blocks production multi-node failover",
-            else:
-              "single-node mode is active; enable clustering only after moving coordination to PostgreSQL"
-          )
+        status: if(cluster.enabled or cluster.multi_node_ready, do: :warn, else: :ok),
+        detail: cluster_readiness_detail(cluster)
       }
     ]
 
@@ -948,6 +944,8 @@ defmodule HydraX.Runtime.Observability do
       phx_host: uri.host || "localhost",
       port: uri.port || default_port(uri.scheme),
       database_path: Config.repo_database_path(),
+      database_url: Config.repo_database_url(),
+      persistence: Config.repo_persistence_status(),
       workspace_root: Config.workspace_root(),
       backup_root: Config.backup_root(),
       cluster: cluster_status(),
@@ -1166,16 +1164,52 @@ defmodule HydraX.Runtime.Observability do
       "#{cluster.mode} · node #{cluster.node_id} · nodes #{cluster.node_count} · persistence #{cluster.persistence}"
 
     cond do
+      cluster.enabled and cluster.leader_node and cluster.persistence_backend == "postgres" ->
+        "#{base} · leader #{cluster.leader_node} · PostgreSQL is in place, but ownership/routing failover is still pending"
+
       cluster.enabled and cluster.leader_node ->
         "#{base} · leader #{cluster.leader_node} · PostgreSQL migration still required for real multi-node"
 
+      cluster.enabled and cluster.persistence_backend == "postgres" ->
+        "#{base} · no leader registered yet · PostgreSQL is in place, but ownership/routing failover is still pending"
+
       cluster.enabled ->
         "#{base} · no leader registered yet · PostgreSQL migration still required for real multi-node"
+
+      cluster.persistence_backend == "postgres" ->
+        "#{base} · persistence is ready for multi-node follow-up work; federation intentionally disabled"
 
       true ->
         "#{base} · federation intentionally disabled"
     end
   end
+
+  defp database_health_detail(%{backend: "postgres", target: target}) do
+    "PostgreSQL repo configured#{format_persistence_target(target)}"
+  end
+
+  defp database_health_detail(%{target: target}) do
+    "SQLite repo online#{format_persistence_target(target)}"
+  end
+
+  defp cluster_readiness_detail(cluster) do
+    cond do
+      cluster.enabled and cluster.persistence_backend == "postgres" ->
+        "cluster awareness is enabled with PostgreSQL backing, but ownership, routing, and failover are still pending"
+
+      cluster.enabled ->
+        "cluster awareness is enabled, but SQLite still blocks production multi-node failover"
+
+      cluster.persistence_backend == "postgres" ->
+        "single-node mode is active; PostgreSQL persistence is configured for the post-preview architecture rollout"
+
+      true ->
+        "single-node mode is active; enable clustering only after moving coordination to PostgreSQL"
+    end
+  end
+
+  defp format_persistence_target(nil), do: ""
+  defp format_persistence_target(target), do: " (#{target})"
 
   defp agent_suffix(nil), do: ""
   defp agent_suffix(name), do: " -> #{name}"
@@ -1413,6 +1447,8 @@ defmodule HydraX.Runtime.Observability do
   end
 
   defp backup_readiness_detail(backup) do
+    mode = get_in(backup, ["persistence", "backup_mode"]) || "bundled_database"
+
     cond do
       not backup["archive_exists"] ->
         "archive missing for #{backup["archive_path"]}"
@@ -1421,12 +1457,17 @@ defmodule HydraX.Runtime.Observability do
         "latest backup #{backup["archive_path"]} failed verification"
 
       backup["verified"] == true ->
-        "latest backup #{backup["archive_path"]} verified"
+        "latest backup #{backup["archive_path"]} verified#{backup_mode_suffix(mode)}"
 
       true ->
-        "latest backup #{backup["archive_path"]} not yet verified"
+        "latest backup #{backup["archive_path"]} not yet verified#{backup_mode_suffix(mode)}"
     end
   end
+
+  defp backup_mode_suffix("external_database"),
+    do: " (PostgreSQL reference only; external DB backup still required)"
+
+  defp backup_mode_suffix(_mode), do: ""
 
   defp readiness_counts(items) do
     %{

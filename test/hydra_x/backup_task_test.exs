@@ -24,6 +24,7 @@ defmodule HydraX.BackupTaskTest do
     assert output =~ "backup="
     assert output =~ "manifest="
     assert output =~ "entries="
+    assert output =~ "backup_mode=bundled_database"
     assert output =~ "verified=true"
     assert output =~ "archive_size="
   end
@@ -60,6 +61,7 @@ defmodule HydraX.BackupTaskTest do
     assert output =~ "manifest="
     assert output =~ "entries="
     assert output =~ "workspaces="
+    assert output =~ "backup_mode=bundled_database"
     assert output =~ "verified="
   end
 end

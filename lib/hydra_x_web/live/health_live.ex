@@ -455,7 +455,7 @@ defmodule HydraXWeb.HealthLive do
             </div>
             <p class="mt-3 text-sm text-[var(--hx-mute)]">
               {@provider_status.name} · {@provider_status.kind}
-              <span :if={@provider_status.model}> ·               {@provider_status.model}</span>
+              <span :if={@provider_status.model}> ·                 {@provider_status.model}</span>
             </p>
             <p class="mt-2 text-xs text-[var(--hx-mute)]">
               source {@provider_status.route_source} · readiness {@provider_status.readiness} · warmup {@provider_status.warmup_status}
@@ -499,6 +499,10 @@ defmodule HydraXWeb.HealthLive do
               {@cluster_status.persistence} · {if @cluster_status.multi_node_ready,
                 do: "multi-node ready",
                 else: "single-node only"}
+            </p>
+            <p class="mt-2 text-xs text-[var(--hx-mute)]">
+              {@cluster_status.persistence_backend} · {@cluster_status.persistence_target ||
+                "no persistence target"}
             </p>
             <p class="mt-2 text-xs text-[var(--hx-mute)]">
               {@cluster_status.detail}
@@ -802,9 +806,9 @@ defmodule HydraXWeb.HealthLive do
                 </div>
                 <div class="mt-2 text-xs text-[var(--hx-mute)]">
                   level {event.level}
-                  <span :if={event.expired_by}> · expiry    {event.expired_by}</span>
+                  <span :if={event.expired_by}> · expiry      {event.expired_by}</span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip    {event.ip}</span>
+                  <span :if={event.ip}> · ip      {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -1115,7 +1119,11 @@ defmodule HydraXWeb.HealthLive do
               System alarms
             </div>
             <p class="mt-3 text-sm text-[var(--hx-mute)]">
-              Database path: {@observability_status.system.database_path}
+              Persistence: {@observability_status.system.persistence.backend} · {@observability_status.system.persistence.target ||
+                "not configured"}
+            </p>
+            <p class="mt-2 text-xs text-[var(--hx-mute)]">
+              Backup mode: {@observability_status.system.persistence.backup_mode}
             </p>
             <div class="mt-3 space-y-2">
               <p

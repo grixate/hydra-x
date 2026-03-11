@@ -100,7 +100,9 @@ defmodule HydraX.Report do
     Default agent: #{snapshot.default_agent.name} (#{snapshot.default_agent.slug})
     Default agent runtime: #{runtime_label(snapshot.default_agent.runtime.running)}
     Workspace root: #{snapshot.install.workspace_root}
-    Database path: #{snapshot.install.database_path}
+    Persistence backend: #{snapshot.install.persistence.backend}
+    Persistence target: #{snapshot.install.persistence.target || "not configured"}
+    Backup mode: #{snapshot.install.persistence.backup_mode}
     Backup root: #{snapshot.install.backup_root}
 
     ## Filters
@@ -197,6 +199,7 @@ defmodule HydraX.Report do
     ### Recent Telemetry Events
     #{render_recent_telemetry_events(snapshot.observability.telemetry.recent_events)}
 
+    - Persistence: #{render_persistence_summary(snapshot.observability.system.persistence)}
     - OTP alarms: #{render_alarms(snapshot.observability.system.alarms)}
 
     ## Backup Inventory
@@ -282,6 +285,8 @@ defmodule HydraX.Report do
     - Visible nodes: #{cluster.node_count}
     - Leader: #{cluster.leader_node || "none"}
     - Persistence: #{cluster.persistence}
+    - Persistence backend: #{cluster.persistence_backend}
+    - Persistence target: #{cluster.persistence_target || "not configured"}
     - Multi-node ready: #{yes_no(cluster.multi_node_ready)}
     - Detail: #{cluster.detail}
     """
@@ -625,8 +630,12 @@ defmodule HydraX.Report do
           _ -> "unverified"
         end
 
-      "- #{backup["archive_path"]} (archive=#{status}, verify=#{verified}, entries=#{backup["entry_count"]}, size=#{backup["archive_size_bytes"] || 0}, created=#{backup["created_at"]})"
+      "- #{backup["archive_path"]} (archive=#{status}, verify=#{verified}, entries=#{backup["entry_count"]}, size=#{backup["archive_size_bytes"] || 0}, created=#{backup["created_at"]}, backup_mode=#{backup["persistence"]["backup_mode"] || "bundled_database"})"
     end)
+  end
+
+  defp render_persistence_summary(persistence) do
+    "#{persistence.backend} target=#{persistence.target || "not configured"} backup_mode=#{persistence.backup_mode}"
   end
 
   defp render_observability_summary(summary) do

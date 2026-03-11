@@ -972,7 +972,10 @@ defmodule HydraX.RuntimeTest do
       "---\nname: Deploy Checks\nsummary: Run deployment verification steps for staged rollouts.\nversion: 1.2.0\ntools: shell_command\nchannels: cli\n---\n# Deploy Checks\n\nRun deployment verification steps for staged rollouts."
     )
 
-    assert {:ok, [skill]} = Runtime.refresh_agent_skills(agent.id)
+    assert {:ok, skills} = Runtime.refresh_agent_skills(agent.id)
+    skill = Enum.find(skills, &(&1.slug == "deploy-checks"))
+
+    refute is_nil(skill)
     assert skill.slug == "deploy-checks"
     assert skill.enabled
     assert get_in(skill.metadata, ["version"]) == "1.2.0"
@@ -1589,6 +1592,10 @@ defmodule HydraX.RuntimeTest do
 
     assert is_binary(system.database_path)
     assert String.ends_with?(system.database_path, ".db")
+    assert system.database_url == nil
+    assert system.persistence.backend == "sqlite"
+    assert system.persistence.target == system.database_path
+    assert system.persistence.backup_mode == "bundled_database"
     assert is_list(system.alarms)
   end
 
@@ -1635,6 +1642,9 @@ defmodule HydraX.RuntimeTest do
 
     assert is_binary(snapshot.public_url)
     assert is_binary(snapshot.database_path)
+    assert snapshot.database_url == nil
+    assert snapshot.persistence.backend == "sqlite"
+    assert snapshot.persistence.target == snapshot.database_path
     assert is_binary(snapshot.workspace_root)
     assert is_binary(snapshot.backup_root)
     assert snapshot.cluster.mode == "single_node"

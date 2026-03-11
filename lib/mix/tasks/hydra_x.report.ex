@@ -51,6 +51,7 @@ defmodule Mix.Tasks.HydraX.Report do
       "health_warn=#{Enum.count(export.snapshot.health_checks, &(&1.status == :warn))}"
     )
 
+    Mix.shell().info("persistence=#{export.snapshot.install.persistence.backend}")
     Mix.shell().info("required_warn=#{export.snapshot.readiness.counts.required_warn}")
     Mix.shell().info("recommended_warn=#{export.snapshot.readiness.counts.recommended_warn}")
   end
