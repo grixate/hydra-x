@@ -4,6 +4,7 @@ defmodule HydraX.Scheduler do
 
   alias HydraX.Cluster
   alias HydraX.Config
+  alias HydraX.Gateway
   alias HydraX.Runtime
 
   def start_link(_opts) do
@@ -22,7 +23,8 @@ defmodule HydraX.Scheduler do
      %{
        running_jobs: MapSet.new(),
        coordination: scheduler_coordination_snapshot(),
-       ownership_handoffs: ownership_handoff_snapshot()
+       ownership_handoffs: ownership_handoff_snapshot(),
+       deferred_deliveries: deferred_delivery_snapshot()
      }}
   end
 
@@ -53,6 +55,7 @@ defmodule HydraX.Scheduler do
   defp do_poll(state) do
     due_jobs = Runtime.list_due_scheduled_jobs(DateTime.utc_now())
     ownership_handoffs = Runtime.resume_owned_conversations(limit: 50)
+    deferred_deliveries = Gateway.process_deferred_deliveries(limit: 50)
 
     # Skip jobs that are already in-flight
     new_jobs = Enum.reject(due_jobs, fn job -> MapSet.member?(state.running_jobs, job.id) end)
@@ -74,7 +77,13 @@ defmodule HydraX.Scheduler do
       end)
 
     schedule_poll()
-    {:noreply, %{state | running_jobs: running_ids, ownership_handoffs: ownership_handoffs}}
+    {:noreply,
+     %{
+       state
+       | running_jobs: running_ids,
+         ownership_handoffs: ownership_handoffs,
+         deferred_deliveries: deferred_deliveries
+     }}
   end
 
   defp schedule_poll do
@@ -136,6 +145,16 @@ defmodule HydraX.Scheduler do
     %{
       owner: Runtime.coordination_status().owner,
       resumed_count: 0,
+      skipped_count: 0,
+      error_count: 0,
+      results: []
+    }
+  end
+
+  defp deferred_delivery_snapshot do
+    %{
+      owner: Runtime.coordination_status().owner,
+      delivered_count: 0,
       skipped_count: 0,
       error_count: 0,
       results: []

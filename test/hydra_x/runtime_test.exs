@@ -354,6 +354,14 @@ defmodule HydraX.RuntimeTest do
   test "scheduler poll resumes owned deferred conversations" do
     previous_adapter = Application.get_env(:hydra_x, :repo_adapter)
     Application.put_env(:hydra_x, :repo_adapter, Ecto.Adapters.Postgres)
+    previous_deliver = Application.get_env(:hydra_x, :telegram_deliver)
+
+    test_pid = self()
+
+    Application.put_env(:hydra_x, :telegram_deliver, fn payload ->
+      send(test_pid, {:scheduler_deferred_delivery, payload})
+      {:ok, %{provider_message_id: "scheduler-telegram-1"}}
+    end)
 
     on_exit(fn ->
       if previous_adapter do
@@ -361,12 +369,30 @@ defmodule HydraX.RuntimeTest do
       else
         Application.delete_env(:hydra_x, :repo_adapter)
       end
+
+      if previous_deliver do
+        Application.put_env(:hydra_x, :telegram_deliver, previous_deliver)
+      else
+        Application.delete_env(:hydra_x, :telegram_deliver)
+      end
     end)
 
     agent = create_agent()
 
+    {:ok, _telegram} =
+      Runtime.save_telegram_config(%{
+        bot_token: "test-token",
+        bot_username: "hydrax_bot",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
     {:ok, conversation} =
-      Runtime.start_conversation(agent, %{channel: "webchat", title: "owned-deferred-scheduler"})
+      Runtime.start_conversation(agent, %{
+        channel: "telegram",
+        external_ref: "7171",
+        title: "owned-deferred-scheduler"
+      })
 
     {:ok, user_turn} =
       Runtime.append_turn(conversation, %{
@@ -388,21 +414,43 @@ defmodule HydraX.RuntimeTest do
           "owner_node" => "nonode@nohost",
           "stage" => "deferred"
         },
+        "latest_user_turn_id" => user_turn.id,
         "execution_events" => []
+      })
+
+    {:ok, _conversation} =
+      Runtime.update_conversation_metadata(conversation, %{
+        "ownership" => %{
+          "mode" => "database_lease",
+          "owner" => Runtime.coordination_status().owner,
+          "owner_node" => "nonode@nohost",
+          "stage" => "deferred"
+        },
+        "last_delivery" => %{
+          "channel" => "telegram",
+          "status" => "deferred",
+          "external_ref" => "7171",
+          "reply_context" => %{"reply_to_message_id" => 808},
+          "metadata" => %{"ownership_deferred" => true}
+        }
       })
 
     scheduler_pid =
       Process.whereis(HydraX.Scheduler) || start_supervised!({HydraX.Scheduler, %{}})
 
     send(scheduler_pid, :poll)
-    Process.sleep(150)
+    Process.sleep(250)
 
     refreshed = Runtime.get_conversation!(conversation.id)
     assert List.last(refreshed.turns).role == "assistant"
+    assert_receive {:scheduler_deferred_delivery,
+                    %{chat_id: "7171", reply_to_message_id: 808, text: delivered_text}}
+    assert delivered_text =~ "Let the scheduler pick this up."
 
     channel_state = Runtime.conversation_channel_state(conversation.id)
     assert channel_state.status == "completed"
     assert channel_state.recovery_lineage["turn_scope_id"] == user_turn.id
+    assert refreshed.metadata["last_delivery"]["status"] == "delivered"
   end
 
   test "skill prompt context excludes invalid manifests and unsatisfied explicit requirements" do

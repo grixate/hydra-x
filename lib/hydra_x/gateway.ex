@@ -98,6 +98,39 @@ defmodule HydraX.Gateway do
     end
   end
 
+  def process_deferred_deliveries(opts \\ []) do
+    owner = Keyword.get(opts, :owner, Runtime.coordination_status().owner)
+    limit = Keyword.get(opts, :limit, 50)
+
+    results =
+      Runtime.list_owned_pending_deliveries(owner: owner, limit: limit)
+      |> Enum.map(fn conversation ->
+        case retry_conversation_delivery(conversation, Map.new(opts)) do
+          {:ok, _updated} ->
+            %{conversation_id: conversation.id, agent_id: conversation.agent_id, status: "delivered"}
+
+          {:error, :no_assistant_turn} ->
+            %{conversation_id: conversation.id, agent_id: conversation.agent_id, status: "skipped", reason: "no_assistant_turn"}
+
+          {:error, reason} ->
+            %{
+              conversation_id: conversation.id,
+              agent_id: conversation.agent_id,
+              status: "error",
+              reason: inspect(reason)
+            }
+        end
+      end)
+
+    %{
+      owner: owner,
+      delivered_count: Enum.count(results, &(&1.status == "delivered")),
+      skipped_count: Enum.count(results, &(&1.status == "skipped")),
+      error_count: Enum.count(results, &(&1.status == "error")),
+      results: results
+    }
+  end
+
   @max_retries 3
   @retry_backoffs [5_000, 30_000, 120_000]
 

@@ -116,6 +116,99 @@ defmodule HydraX.GatewayTest do
     assert turn.content == "Route this to the owning node."
   end
 
+  test "deferred telegram deliveries can be processed later by the owning node" do
+    previous = Application.get_env(:hydra_x, :telegram_deliver)
+
+    Application.put_env(:hydra_x, :telegram_deliver, fn payload ->
+      send(self(), {:telegram_deferred_delivery, payload})
+      {:ok, %{provider_message_id: "deferred-telegram-1"}}
+    end)
+
+    on_exit(fn ->
+      if previous do
+        Application.put_env(:hydra_x, :telegram_deliver, previous)
+      else
+        Application.delete_env(:hydra_x, :telegram_deliver)
+      end
+    end)
+
+    agent = create_agent()
+
+    {:ok, _telegram} =
+      Runtime.save_telegram_config(%{
+        bot_token: "test-token",
+        bot_username: "hydrax_bot",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{
+        channel: "telegram",
+        external_ref: "5151",
+        title: "Deferred Telegram 5151",
+        metadata: %{
+          "ownership" => %{
+            "mode" => "database_lease",
+            "owner" => Runtime.coordination_status().owner,
+            "owner_node" => "nonode@nohost",
+            "stage" => "released"
+          }
+        }
+      })
+
+    {:ok, _user_turn} =
+      Runtime.append_turn(conversation, %{
+        role: "user",
+        kind: "message",
+        content: "Deferred inbound",
+        metadata: %{"source" => "telegram"}
+      })
+
+    {:ok, _assistant_turn} =
+      Runtime.append_turn(conversation, %{
+        role: "assistant",
+        kind: "message",
+        content: "Delivered after deferred ownership handoff.",
+        metadata: %{"provider" => "mock"}
+      })
+
+    {:ok, _conversation} =
+      Runtime.update_conversation_metadata(conversation, %{
+        "ownership" => %{
+          "mode" => "database_lease",
+          "owner" => Runtime.coordination_status().owner,
+          "owner_node" => "nonode@nohost",
+          "stage" => "released"
+        },
+        "last_delivery" => %{
+          "channel" => "telegram",
+          "status" => "deferred",
+          "external_ref" => "5151",
+          "reply_context" => %{"reply_to_message_id" => 707},
+          "metadata" => %{"ownership_deferred" => true}
+        }
+      })
+
+    summary = HydraX.Gateway.process_deferred_deliveries()
+
+    assert summary.delivered_count == 1
+    assert [%{conversation_id: conversation_id, status: "delivered"}] = summary.results
+    assert conversation_id == conversation.id
+
+    assert_receive {:telegram_deferred_delivery,
+                    %{
+                      chat_id: "5151",
+                      reply_to_message_id: 707,
+                      text: "Delivered after deferred ownership handoff."
+                    }}
+
+    refreshed = Runtime.get_conversation!(conversation.id)
+    assert refreshed.metadata["last_delivery"]["status"] == "delivered"
+    assert refreshed.metadata["last_delivery"]["metadata"]["provider_message_id"] ==
+             "deferred-telegram-1"
+  end
+
   test "telegram adapter chunks long outbound replies and reports chunk metadata" do
     {:ok, state} =
       Telegram.connect(%{

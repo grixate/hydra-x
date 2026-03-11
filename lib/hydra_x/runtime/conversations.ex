@@ -170,6 +170,20 @@ defmodule HydraX.Runtime.Conversations do
     }
   end
 
+  def list_owned_pending_deliveries(opts \\ []) do
+    owner = Keyword.get(opts, :owner, HydraX.Runtime.coordination_status().owner)
+    limit = Keyword.get(opts, :limit, 50)
+    turns_query = from(turn in Turn, order_by: turn.sequence)
+
+    Conversation
+    |> where([conversation], conversation.status == "active")
+    |> preload([:agent, turns: ^turns_query])
+    |> order_by([conversation], desc: conversation.updated_at)
+    |> limit(^limit)
+    |> Repo.all()
+    |> Enum.filter(&owned_pending_delivery?(&1, owner))
+  end
+
   def review_conversation_compaction!(id) when is_integer(id) do
     conversation = get_conversation!(id)
 
@@ -727,5 +741,15 @@ defmodule HydraX.Runtime.Conversations do
           reason: inspect(reason)
         }
     end
+  end
+
+  defp owned_pending_delivery?(conversation, owner) do
+    delivery = last_delivery(conversation)
+    ownership = get_in((conversation.metadata || %{}), ["ownership"]) || %{}
+
+    is_map(delivery) and delivery["status"] == "deferred" and
+      is_binary(delivery["external_ref"]) and delivery["external_ref"] != "" and
+      ownership["owner"] == owner and
+      Enum.any?(conversation.turns || [], &(&1.role == "assistant"))
   end
 end
