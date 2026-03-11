@@ -37,13 +37,35 @@ defmodule HydraX.Agent.Channel do
   end
 
   def submit(agent, conversation, content, metadata \\ %{}) do
-    {:ok, _pid} = ensure_started(agent.id, conversation)
+    case ensure_started(agent.id, conversation) do
+      {:ok, _pid} ->
+        response =
+          :gen_statem.call(channel_name(conversation.id), {:submit, content, metadata}, 30_000)
 
-    response =
-      :gen_statem.call(channel_name(conversation.id), {:submit, content, metadata}, 30_000)
+        wait_for_stable_channel_state(conversation.id)
+        response
 
-    wait_for_stable_channel_state(conversation.id)
-    response
+      {:error, {:owned_elsewhere, ownership}} ->
+        {:ok, turn} =
+          append_deferred_turn(conversation, content, metadata, ownership)
+
+        update_channel_checkpoint(conversation.id, %{
+          "status" => "deferred",
+          "ownership" => ownership,
+          "resumable" => true,
+          "pending_turn_id" => turn.id,
+          "updated_at" => DateTime.utc_now()
+        })
+
+        append_channel_event(conversation.id, "ownership_deferred", %{
+          "summary" => deferred_message(ownership),
+          "pending_turn_id" => turn.id,
+          "owner" => ownership["owner"],
+          "owner_node" => ownership["owner_node"]
+        })
+
+        {:deferred, deferred_message(ownership)}
+    end
   end
 
   def ensure_started(agent_id, conversation) do
@@ -52,16 +74,22 @@ defmodule HydraX.Agent.Channel do
         {:ok, pid}
 
       :not_found ->
-        with {:ok, pid} <-
-               DynamicSupervisor.start_child(
-                 HydraX.Agent.channel_supervisor(agent_id),
-                 {__MODULE__, agent_id: agent_id, conversation: conversation}
-               ) do
-          if recovery_pending?(conversation.id) do
-            wait_for_stable_channel_state(conversation.id, 300)
-          end
+        case ownership_conflict(conversation.id) do
+          {:error, ownership} ->
+            {:error, {:owned_elsewhere, ownership}}
 
-          {:ok, pid}
+          :ok ->
+            with {:ok, pid} <-
+                   DynamicSupervisor.start_child(
+                     HydraX.Agent.channel_supervisor(agent_id),
+                     {__MODULE__, agent_id: agent_id, conversation: conversation}
+                   ) do
+              if recovery_pending?(conversation.id) do
+                wait_for_stable_channel_state(conversation.id, 300)
+              end
+
+              {:ok, pid}
+            end
         end
     end
   end
@@ -950,6 +978,54 @@ defmodule HydraX.Agent.Channel do
 
   defp conversation_lease_name(conversation_id), do: "conversation:#{conversation_id}"
   defp conversation_lease_ttl_seconds, do: 3_600
+
+  defp ownership_conflict(conversation_id) do
+    if Config.repo_multi_writer?() do
+      current_owner = Runtime.coordination_status().owner
+
+      case Runtime.active_lease(conversation_lease_name(conversation_id)) do
+        %{owner: owner} = lease ->
+          if owner != current_owner do
+            {:error,
+             %{
+               "mode" => "database_lease",
+               "lease_name" => lease.name,
+               "owner" => lease.owner,
+               "owner_node" => lease.owner_node,
+               "expires_at" => lease.expires_at,
+               "active" => false,
+               "contended" => true,
+               "stage" => "deferred",
+               "updated_at" => DateTime.utc_now()
+             }}
+          else
+            :ok
+          end
+
+        nil ->
+          :ok
+      end
+    else
+      :ok
+    end
+  end
+
+  defp deferred_message(ownership) do
+    "Conversation ownership is held by #{ownership["owner"] || "another node"}; local execution deferred."
+  end
+
+  defp append_deferred_turn(conversation, content, metadata, ownership) do
+    Runtime.append_turn(conversation, %{
+      role: "user",
+      kind: "message",
+      content: content,
+      metadata:
+        Map.merge(metadata || %{}, %{
+          "deferred_to_owner" => ownership["owner"],
+          "deferred_owner_node" => ownership["owner_node"]
+        })
+    })
+  end
 
   defp append_execution_event(events, phase, details) do
     events

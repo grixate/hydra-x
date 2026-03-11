@@ -244,6 +244,54 @@ defmodule HydraX.RuntimeTest do
     assert Runtime.active_lease("conversation:#{conversation.id}")
   end
 
+  test "channel submit defers to remote ownership and persists the pending user turn" do
+    previous_adapter = Application.get_env(:hydra_x, :repo_adapter)
+    Application.put_env(:hydra_x, :repo_adapter, Ecto.Adapters.Postgres)
+
+    on_exit(fn ->
+      if previous_adapter do
+        Application.put_env(:hydra_x, :repo_adapter, previous_adapter)
+      else
+        Application.delete_env(:hydra_x, :repo_adapter)
+      end
+    end)
+
+    agent = create_agent()
+    {:ok, pid} = HydraX.Agent.ensure_started(agent)
+    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{channel: "cli", title: "ownership-deferred"})
+
+    assert {:ok, _lease} =
+             Runtime.claim_lease("conversation:#{conversation.id}",
+               owner: "node:remote",
+               ttl_seconds: 60
+             )
+
+    assert {:deferred, reason} =
+             Channel.submit(
+               agent,
+               conversation,
+               "Hold this for the owning node.",
+               %{source: "test"}
+             )
+
+    assert reason =~ "node:remote"
+
+    [turn] = Runtime.list_turns(conversation.id)
+    assert turn.role == "user"
+    assert turn.content == "Hold this for the owning node."
+    assert turn.metadata["deferred_to_owner"] == "node:remote"
+
+    channel_state = Runtime.conversation_channel_state(conversation.id)
+    assert channel_state.status == "deferred"
+    assert channel_state.resumable
+    assert channel_state.pending_turn_id == turn.id
+    assert channel_state.ownership["owner"] == "node:remote"
+    assert Enum.any?(channel_state.execution_events, &(&1["phase"] == "ownership_deferred"))
+  end
+
   test "skill prompt context excludes invalid manifests and unsatisfied explicit requirements" do
     agent = create_agent()
 

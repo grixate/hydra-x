@@ -31,6 +31,9 @@ defmodule Mix.Tasks.HydraX.Chat do
 
     response = HydraX.Agent.Channel.submit(agent, conversation, message, %{source: "cli"})
     HydraX.Memory.sync_markdown(agent)
-    Mix.shell().info(response)
+    Mix.shell().info(render_channel_response(response))
   end
+
+  defp render_channel_response({:deferred, message}), do: message
+  defp render_channel_response(message), do: message
 end

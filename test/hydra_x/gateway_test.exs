@@ -49,6 +49,73 @@ defmodule HydraX.GatewayTest do
     assert refreshed.metadata["last_delivery"]["formatted_payload"]["reply_to_message_id"] == 501
   end
 
+  test "telegram updates defer delivery when conversation ownership is remote" do
+    previous_adapter = Application.get_env(:hydra_x, :repo_adapter)
+    Application.put_env(:hydra_x, :repo_adapter, Ecto.Adapters.Postgres)
+
+    on_exit(fn ->
+      if previous_adapter do
+        Application.put_env(:hydra_x, :repo_adapter, previous_adapter)
+      else
+        Application.delete_env(:hydra_x, :repo_adapter)
+      end
+    end)
+
+    agent = create_agent()
+    {:ok, pid} = HydraX.Agent.ensure_started(agent)
+    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
+
+    {:ok, _telegram} =
+      Runtime.save_telegram_config(%{
+        bot_token: "test-token",
+        bot_username: "hydrax_bot",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{
+        channel: "telegram",
+        external_ref: "4242",
+        title: "Telegram Remote 4242"
+      })
+
+    assert {:ok, _lease} =
+             Runtime.claim_lease("conversation:#{conversation.id}",
+               owner: "node:remote",
+               ttl_seconds: 60
+             )
+
+    assert :ok =
+             HydraX.Gateway.dispatch_telegram_update(
+               %{
+                 "message" => %{
+                   "chat" => %{"id" => 4242},
+                   "message_id" => 901,
+                   "text" => "Route this to the owning node."
+                 }
+               },
+               %{
+                 deliver: fn payload ->
+                   send(self(), {:telegram_reply, payload})
+                   :ok
+                 end
+               }
+             )
+
+    refute_receive {:telegram_reply, _payload}
+
+    refreshed = Runtime.get_conversation!(conversation.id)
+    assert refreshed.metadata["last_delivery"]["status"] == "deferred"
+    assert refreshed.metadata["last_delivery"]["metadata"]["ownership_deferred"]
+    assert refreshed.metadata["last_delivery"]["reason"] =~ "node:remote"
+    assert refreshed.metadata["last_delivery"]["reply_context"]["reply_to_message_id"] == 901
+
+    [turn] = Runtime.list_turns(conversation.id)
+    assert turn.role == "user"
+    assert turn.content == "Route this to the owning node."
+  end
+
   test "telegram adapter chunks long outbound replies and reports chunk metadata" do
     {:ok, state} =
       Telegram.connect(%{

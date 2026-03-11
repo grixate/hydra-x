@@ -132,6 +132,7 @@ defmodule HydraX.Runtime.Conversations do
       tool_cache_scope_turn_id: state["tool_cache_scope_turn_id"],
       active_tool_calls: state["active_tool_calls"] || [],
       assistant_turn_id: state["assistant_turn_id"],
+      pending_turn_id: state["pending_turn_id"],
       latest_user_turn_id: state["latest_user_turn_id"]
     }
   end

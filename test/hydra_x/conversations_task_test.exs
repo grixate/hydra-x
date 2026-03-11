@@ -167,6 +167,50 @@ defmodule HydraX.ConversationsTaskTest do
     assert length(refreshed.turns) == 4
   end
 
+  test "conversation task shows deferred ownership when sending to a remotely owned conversation" do
+    Mix.Task.reenable("hydra_x.conversations")
+    previous_adapter = Application.get_env(:hydra_x, :repo_adapter)
+    Application.put_env(:hydra_x, :repo_adapter, Ecto.Adapters.Postgres)
+
+    on_exit(fn ->
+      if previous_adapter do
+        Application.put_env(:hydra_x, :repo_adapter, previous_adapter)
+      else
+        Application.delete_env(:hydra_x, :repo_adapter)
+      end
+    end)
+
+    agent = create_agent()
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{
+        channel: "control_plane",
+        title: "Deferred Task Chat"
+      })
+
+    assert {:ok, _lease} =
+             Runtime.claim_lease("conversation:#{conversation.id}",
+               owner: "node:remote",
+               ttl_seconds: 60
+             )
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Mix.Tasks.HydraX.Conversations.run([
+          "send",
+          to_string(conversation.id),
+          "Forward this to the remote owner."
+        ])
+      end)
+
+    assert output =~ "conversation=#{conversation.id}"
+    assert output =~ "Conversation ownership is held by node:remote"
+
+    [turn] = Runtime.list_turns(conversation.id)
+    assert turn.content == "Forward this to the remote owner."
+    assert turn.metadata["deferred_to_owner"] == "node:remote"
+  end
+
   test "conversation task can archive and export transcripts" do
     Mix.Task.reenable("hydra_x.conversations")
     agent = create_agent()

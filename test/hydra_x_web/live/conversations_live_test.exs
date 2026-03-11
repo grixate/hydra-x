@@ -261,6 +261,52 @@ defmodule HydraXWeb.ConversationsLiveTest do
     assert html =~ "Mock response"
   end
 
+  test "conversations page surfaces deferred ownership when replying", %{conn: conn} do
+    previous_adapter = Application.get_env(:hydra_x, :repo_adapter)
+    Application.put_env(:hydra_x, :repo_adapter, Ecto.Adapters.Postgres)
+
+    on_exit(fn ->
+      if previous_adapter do
+        Application.put_env(:hydra_x, :repo_adapter, previous_adapter)
+      else
+        Application.delete_env(:hydra_x, :repo_adapter)
+      end
+    end)
+
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{
+        channel: "control_plane",
+        title: "Deferred UI Chat"
+      })
+
+    assert {:ok, _lease} =
+             Runtime.claim_lease("conversation:#{conversation.id}",
+               owner: "node:remote",
+               ttl_seconds: 60
+             )
+
+    {:ok, view, _html} = live(conn, ~p"/conversations?conversation_id=#{conversation.id}")
+
+    view
+    |> form("form[phx-submit=\"send_reply\"]", %{
+      "reply" => %{"message" => "Hold this for the owner."}
+    })
+    |> render_submit()
+
+    html = render(view)
+    assert html =~ "Reply deferred: Conversation ownership is held by node:remote"
+    assert html =~ "status deferred"
+    assert html =~ "resumable"
+    assert html =~ "node:remote"
+
+    refreshed = Runtime.get_conversation!(conversation.id)
+    [turn] = refreshed.turns
+    assert turn.content == "Hold this for the owner."
+    assert turn.metadata["deferred_to_owner"] == "node:remote"
+  end
+
   test "conversations page shows recovered resumable execution state", %{conn: conn} do
     agent = Runtime.ensure_default_agent!()
 

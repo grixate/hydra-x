@@ -107,13 +107,19 @@ defmodule HydraXWeb.ConversationsLive do
              title: blank_to_default(params["title"], "Control plane · #{Date.utc_today()}"),
              metadata: %{"source" => "control_plane"}
            }),
-         {:ok, selected} <-
-           submit_reply(agent, conversation, params["message"], %{"source" => "control_plane"}) do
+         {:ok, selected, flash_message} <-
+           submit_reply(
+             agent,
+             conversation,
+             params["message"],
+             %{"source" => "control_plane"},
+             :start
+           ) do
       conversations = list_conversations(socket.assigns.filters)
 
       {:noreply,
        socket
-       |> put_flash(:info, "Conversation started")
+       |> put_flash(:info, flash_message)
        |> assign(:conversations, conversations)
        |> assign(:selected, selected)
        |> assign(:compaction, Runtime.conversation_compaction(selected.id))
@@ -131,11 +137,11 @@ defmodule HydraXWeb.ConversationsLive do
     conversation = socket.assigns.selected
     agent = conversation.agent || Runtime.get_agent!(conversation.agent_id)
 
-    case submit_reply(agent, conversation, message, %{"source" => "control_plane"}) do
-      {:ok, selected} ->
+    case submit_reply(agent, conversation, message, %{"source" => "control_plane"}, :reply) do
+      {:ok, selected, flash_message} ->
         {:noreply,
          socket
-         |> put_flash(:info, "Reply sent")
+         |> put_flash(:info, flash_message)
          |> assign(:conversations, list_conversations(socket.assigns.filters))
          |> assign(:selected, selected)
          |> assign(:compaction, Runtime.conversation_compaction(selected.id))
@@ -927,13 +933,19 @@ defmodule HydraXWeb.ConversationsLive do
     Ecto.NoResultsError -> {:error, :agent_not_found}
   end
 
-  defp submit_reply(_agent, _conversation, message, _metadata) when message in [nil, ""] do
+  defp submit_reply(_agent, _conversation, message, _metadata, _action) when message in [nil, ""] do
     {:error, :empty_message}
   end
 
-  defp submit_reply(agent, conversation, message, metadata) do
-    _response = HydraX.Agent.Channel.submit(agent, conversation, message, metadata)
-    {:ok, Runtime.get_conversation!(conversation.id)}
+  defp submit_reply(agent, conversation, message, metadata, action) do
+    case HydraX.Agent.Channel.submit(agent, conversation, message, metadata) do
+      {:deferred, reason} ->
+        {:ok, Runtime.get_conversation!(conversation.id), "Reply deferred: #{reason}"}
+
+      _response ->
+        flash_message = if action == :start, do: "Conversation started", else: "Reply sent"
+        {:ok, Runtime.get_conversation!(conversation.id), flash_message}
+    end
   rescue
     error -> {:error, Exception.message(error)}
   end

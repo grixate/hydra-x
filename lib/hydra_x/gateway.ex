@@ -109,46 +109,60 @@ defmodule HydraX.Gateway do
       Runtime.find_conversation(agent.id, message.channel, message.external_ref) ||
         start_channel_conversation(agent, message)
 
-    response =
-      HydraX.Agent.Channel.submit(
-        agent,
-        conversation,
-        message.content,
-        Map.merge(message.metadata || %{}, %{source: message.channel})
-      )
+    case HydraX.Agent.Channel.submit(
+           agent,
+           conversation,
+           message.content,
+           Map.merge(message.metadata || %{}, %{source: message.channel})
+         ) do
+      {:deferred, reason} ->
+        Runtime.update_conversation_metadata(conversation, %{
+          "last_delivery" => %{
+            "channel" => message.channel,
+            "status" => "deferred",
+            "external_ref" => message.external_ref,
+            "reason" => reason,
+            "reply_context" => delivery_context(message),
+            "metadata" => %{"ownership_deferred" => true}
+          }
+        })
 
-    payload = %{
-      content: response,
-      external_ref: message.external_ref,
-      metadata: delivery_context(message)
-    }
-
-    formatted_payload = adapter_format_message(adapter_mod, payload, state)
-
-    delivery_result =
-      if interactive_delivery_allowed?(agent.id, message.channel) do
-        adapter_deliver(adapter_mod, payload, state)
-      else
-        {:error, :delivery_channel_blocked_by_policy}
-      end
-
-    record_delivery_result(
-      agent.id,
-      conversation,
-      message,
-      delivery_result,
-      formatted_payload: formatted_payload
-    )
-
-    case delivery_result do
-      {:error, :delivery_channel_blocked_by_policy} ->
         :ok
 
-      {:error, _reason} ->
-        schedule_retry(agent.id, conversation.id, message, adapter_mod, config, 0)
+      response ->
+        payload = %{
+          content: response,
+          external_ref: message.external_ref,
+          metadata: delivery_context(message)
+        }
 
-      _ ->
-        :ok
+        formatted_payload = adapter_format_message(adapter_mod, payload, state)
+
+        delivery_result =
+          if interactive_delivery_allowed?(agent.id, message.channel) do
+            adapter_deliver(adapter_mod, payload, state)
+          else
+            {:error, :delivery_channel_blocked_by_policy}
+          end
+
+        record_delivery_result(
+          agent.id,
+          conversation,
+          message,
+          delivery_result,
+          formatted_payload: formatted_payload
+        )
+
+        case delivery_result do
+          {:error, :delivery_channel_blocked_by_policy} ->
+            :ok
+
+          {:error, _reason} ->
+            schedule_retry(agent.id, conversation.id, message, adapter_mod, config, 0)
+
+          _ ->
+            :ok
+        end
     end
   end
 

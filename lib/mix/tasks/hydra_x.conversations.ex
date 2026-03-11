@@ -74,7 +74,7 @@ defmodule Mix.Tasks.HydraX.Conversations do
       HydraX.Agent.Channel.submit(agent, conversation, message, %{"source" => "control_plane"})
 
     Mix.shell().info("conversation=#{conversation.id}")
-    Mix.shell().info(response)
+    Mix.shell().info(render_channel_response(response))
   end
 
   defp send_message(id, message) do
@@ -87,7 +87,7 @@ defmodule Mix.Tasks.HydraX.Conversations do
       HydraX.Agent.Channel.submit(agent, conversation, message, %{"source" => "control_plane"})
 
     Mix.shell().info("conversation=#{conversation.id}")
-    Mix.shell().info(response)
+    Mix.shell().info(render_channel_response(response))
   end
 
   defp archive_conversation(id) do
@@ -266,6 +266,9 @@ defmodule Mix.Tasks.HydraX.Conversations do
   end
 
   defp ownership_label(_ownership), do: "n/a"
+
+  defp render_channel_response({:deferred, message}), do: message
+  defp render_channel_response(message), do: message
 
   defp delivery_labels(delivery) do
     payload = delivery["formatted_payload"] || delivery[:formatted_payload] || %{}

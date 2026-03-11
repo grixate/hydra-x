@@ -928,6 +928,7 @@ defmodule HydraX.Runtime.Jobs do
         end
 
       case output do
+        {:deferred, reason} -> {:error, reason}
         {:error, reason} -> {:error, reason}
         text -> {:ok, text, %{"conversation_id" => conversation.id}}
       end
