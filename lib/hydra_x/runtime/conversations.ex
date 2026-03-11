@@ -149,8 +149,13 @@ defmodule HydraX.Runtime.Conversations do
     |> order_by([checkpoint, _conversation], desc: checkpoint.updated_at)
     |> limit(^limit)
     |> Repo.all()
-    |> Enum.filter(&owned_resumable_checkpoint?(&1, owner))
-    |> Enum.map(& &1.conversation)
+    |> Enum.reduce([], fn checkpoint, acc ->
+      case claim_resumable_conversation(checkpoint, owner) do
+        {:ok, conversation} -> [conversation | acc]
+        _ -> acc
+      end
+    end)
+    |> Enum.reverse()
   end
 
   def resume_owned_conversations(opts \\ []) do
@@ -181,7 +186,13 @@ defmodule HydraX.Runtime.Conversations do
     |> order_by([conversation], desc: conversation.updated_at)
     |> limit(^limit)
     |> Repo.all()
-    |> Enum.filter(&owned_pending_delivery?(&1, owner))
+    |> Enum.reduce([], fn conversation, acc ->
+      case claim_delivery_conversation(conversation, owner) do
+        {:ok, refreshed} -> [refreshed | acc]
+        _ -> acc
+      end
+    end)
+    |> Enum.reverse()
   end
 
   def list_owned_pending_ingress_conversations(opts \\ []) do
@@ -196,8 +207,13 @@ defmodule HydraX.Runtime.Conversations do
     |> order_by([checkpoint, _conversation], desc: checkpoint.updated_at)
     |> limit(^limit)
     |> Repo.all()
-    |> Enum.filter(&owned_pending_ingress_checkpoint?(&1, owner))
-    |> Enum.map(& &1.conversation)
+    |> Enum.reduce([], fn checkpoint, acc ->
+      case claim_ingress_conversation(checkpoint, owner) do
+        {:ok, conversation} -> [conversation | acc]
+        _ -> acc
+      end
+    end)
+    |> Enum.reverse()
   end
 
   def review_conversation_compaction!(id) when is_integer(id) do
@@ -725,14 +741,6 @@ defmodule HydraX.Runtime.Conversations do
     )
   end
 
-  defp owned_resumable_checkpoint?(%Checkpoint{} = checkpoint, owner) do
-    state = checkpoint.state || %{}
-    ownership = state["ownership"] || get_in((checkpoint.conversation.metadata || %{}), ["ownership"]) || %{}
-
-    state["status"] == "deferred" and state["resumable"] == true and
-      is_nil(state["assistant_turn_id"]) and ownership["owner"] == owner
-  end
-
   defp resume_owned_conversation(conversation) do
     agent = conversation.agent || HydraX.Runtime.Agents.get_agent!(conversation.agent_id)
 
@@ -759,20 +767,211 @@ defmodule HydraX.Runtime.Conversations do
     end
   end
 
-  defp owned_pending_delivery?(conversation, owner) do
-    delivery = last_delivery(conversation)
-    ownership = get_in((conversation.metadata || %{}), ["ownership"]) || %{}
-
-    is_map(delivery) and delivery["status"] == "deferred" and
-      is_binary(delivery["external_ref"]) and delivery["external_ref"] != "" and
-      ownership["owner"] == owner and
-      Enum.any?(conversation.turns || [], &(&1.role == "assistant"))
-  end
-
-  defp owned_pending_ingress_checkpoint?(%Checkpoint{} = checkpoint, owner) do
+  defp claim_resumable_conversation(%Checkpoint{} = checkpoint, owner) do
     state = checkpoint.state || %{}
 
-    state["status"] == "queued" and state["owner"] == owner and
-      Enum.any?(state["messages"] || [])
+    cond do
+      state["status"] != "deferred" ->
+        :skip
+
+      state["resumable"] != true ->
+        :skip
+
+      not is_nil(state["assistant_turn_id"]) ->
+        :skip
+
+      true ->
+        claim_conversation_processing_ownership(checkpoint.conversation, state, owner, "deferred")
+    end
   end
+
+  defp claim_delivery_conversation(conversation, owner) do
+    delivery = last_delivery(conversation)
+
+    cond do
+      not is_map(delivery) ->
+        :skip
+
+      delivery["status"] != "deferred" ->
+        :skip
+
+      not (is_binary(delivery["external_ref"]) and delivery["external_ref"] != "") ->
+        :skip
+
+      not Enum.any?(conversation.turns || [], &(&1.role == "assistant")) ->
+        :skip
+
+      true ->
+        claim_conversation_processing_ownership(
+          conversation,
+          get_in((conversation.metadata || %{}), ["ownership"]) || %{},
+          owner,
+          "delivering"
+        )
+    end
+  end
+
+  defp claim_ingress_conversation(%Checkpoint{} = checkpoint, owner) do
+    state = checkpoint.state || %{}
+
+    cond do
+      state["status"] != "queued" ->
+        :skip
+
+      Enum.empty?(state["messages"] || []) ->
+        :skip
+
+      true ->
+        claim_ingress_processing_ownership(checkpoint.conversation, checkpoint, owner)
+    end
+  end
+
+  defp claim_conversation_processing_ownership(conversation, ownership_state, owner, stage) do
+    case HydraX.Runtime.claim_lease(
+           conversation_lease_name(conversation.id),
+           owner: owner,
+           ttl_seconds: conversation_lease_ttl_seconds(),
+           metadata: %{
+             "type" => "conversation",
+             "conversation_id" => conversation.id,
+             "stage" => stage
+           }
+         ) do
+      {:ok, lease} ->
+        ownership =
+          conversation_ownership_payload(lease, stage, true)
+          |> maybe_put_reassigned_at(ownership_state)
+
+        {:ok, persist_conversation_ownership(conversation, ownership)}
+
+      {:error, {:taken, lease}} ->
+        ownership =
+          conversation_ownership_payload(lease, stage, false)
+          |> maybe_put_reassigned_at(ownership_state)
+
+        _ = persist_conversation_ownership(conversation, ownership)
+        :skip
+
+      {:error, _reason} ->
+        :skip
+    end
+  end
+
+  defp claim_ingress_processing_ownership(conversation, checkpoint, owner) do
+    state = checkpoint.state || %{}
+    channel = state["channel"] || conversation.channel
+    external_ref = state["external_ref"] || conversation.external_ref
+
+    case HydraX.Runtime.claim_lease(
+           ingress_lease_name(channel, external_ref),
+           owner: owner,
+           ttl_seconds: ingress_lease_ttl_seconds(),
+           metadata: %{
+             "type" => "ingress",
+             "channel" => channel,
+             "external_ref" => external_ref
+           }
+         ) do
+      {:ok, lease} ->
+        _ =
+          persist_ingress_checkpoint_owner(
+            conversation.id,
+            checkpoint,
+            ingress_owner_payload(lease, state, true)
+          )
+
+        {:ok, conversation}
+
+      {:error, {:taken, lease}} ->
+        _ =
+          persist_ingress_checkpoint_owner(
+            conversation.id,
+            checkpoint,
+            ingress_owner_payload(lease, state, false)
+          )
+
+        :skip
+
+      {:error, _reason} ->
+        :skip
+    end
+  end
+
+  defp persist_conversation_ownership(conversation, ownership) do
+    _ = update_conversation_metadata(conversation, %{"ownership" => ownership})
+    _ = persist_conversation_checkpoint_ownership(conversation.id, ownership)
+    %{conversation | metadata: Map.put(conversation.metadata || %{}, "ownership", ownership)}
+  end
+
+  defp persist_ingress_checkpoint_owner(conversation_id, checkpoint, owner_payload) do
+    state = (checkpoint && checkpoint.state) || %{}
+
+    upsert_checkpoint(
+      conversation_id,
+      "ingress",
+      Map.merge(state, owner_payload)
+    )
+  end
+
+  defp persist_conversation_checkpoint_ownership(conversation_id, ownership) do
+    case get_checkpoint(conversation_id, "channel") do
+      nil ->
+        :ok
+
+      checkpoint ->
+        state = checkpoint.state || %{}
+
+        upsert_checkpoint(
+          conversation_id,
+          "channel",
+          Map.put(state, "ownership", ownership)
+        )
+    end
+  end
+
+  defp conversation_ownership_payload(lease, stage, active?) do
+    %{
+      "mode" => "database_lease",
+      "lease_name" => lease.name,
+      "owner" => lease.owner,
+      "owner_node" => lease.owner_node,
+      "expires_at" => lease.expires_at,
+      "active" => active?,
+      "contended" => not active?,
+      "stage" => stage,
+      "updated_at" => DateTime.utc_now()
+    }
+  end
+
+  defp ingress_owner_payload(lease, previous_state, active?) do
+    %{
+      "status" => previous_state["status"] || "queued",
+      "channel" => previous_state["channel"],
+      "external_ref" => previous_state["external_ref"],
+      "owner" => lease.owner,
+      "owner_node" => lease.owner_node,
+      "lease_name" => lease.name,
+      "expires_at" => lease.expires_at,
+      "active" => active?,
+      "contended" => not active?,
+      "updated_at" => DateTime.utc_now()
+    }
+    |> maybe_put_reassigned_at(previous_state)
+  end
+
+  defp maybe_put_reassigned_at(payload, previous) do
+    previous_owner =
+      previous["owner"] || get_in(previous, ["ownership", "owner"])
+
+    if is_binary(previous_owner) and previous_owner != payload["owner"] do
+      Map.put(payload, "reassigned_at", DateTime.utc_now())
+    else
+      payload
+    end
+  end
+
+  defp conversation_lease_name(conversation_id), do: "conversation:#{conversation_id}"
+  defp ingress_lease_name(channel, external_ref), do: "ingress:#{channel}:#{external_ref}"
+  defp conversation_lease_ttl_seconds, do: 3_600
+  defp ingress_lease_ttl_seconds, do: 3_600
 end

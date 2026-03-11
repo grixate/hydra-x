@@ -266,6 +266,106 @@ defmodule HydraX.GatewayTest do
              "deferred-telegram-1"
   end
 
+  test "deferred telegram deliveries can be taken over after lease expiry" do
+    previous_adapter = Application.get_env(:hydra_x, :repo_adapter)
+    previous = Application.get_env(:hydra_x, :telegram_deliver)
+
+    Application.put_env(:hydra_x, :repo_adapter, Ecto.Adapters.Postgres)
+    Application.put_env(:hydra_x, :telegram_deliver, fn payload ->
+      send(self(), {:telegram_expired_delivery, payload})
+      {:ok, %{provider_message_id: "expired-telegram-1"}}
+    end)
+
+    on_exit(fn ->
+      if previous_adapter do
+        Application.put_env(:hydra_x, :repo_adapter, previous_adapter)
+      else
+        Application.delete_env(:hydra_x, :repo_adapter)
+      end
+
+      if previous do
+        Application.put_env(:hydra_x, :telegram_deliver, previous)
+      else
+        Application.delete_env(:hydra_x, :telegram_deliver)
+      end
+    end)
+
+    agent = create_agent()
+
+    {:ok, _telegram} =
+      Runtime.save_telegram_config(%{
+        bot_token: "test-token",
+        bot_username: "hydrax_bot",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{
+        channel: "telegram",
+        external_ref: "5252",
+        title: "Expired Deferred Telegram 5252"
+      })
+
+    assert {:ok, stale_lease} =
+             Runtime.claim_lease("conversation:#{conversation.id}",
+               owner: "node:stale",
+               ttl_seconds: 60
+             )
+
+    stale_lease
+    |> Ecto.Changeset.change(expires_at: DateTime.add(DateTime.utc_now(), -60, :second))
+    |> HydraX.Repo.update!()
+
+    {:ok, _user_turn} =
+      Runtime.append_turn(conversation, %{
+        role: "user",
+        kind: "message",
+        content: "Expired deferred inbound",
+        metadata: %{"source" => "telegram"}
+      })
+
+    {:ok, _assistant_turn} =
+      Runtime.append_turn(conversation, %{
+        role: "assistant",
+        kind: "message",
+        content: "Delivered after expired lease takeover.",
+        metadata: %{"provider" => "mock"}
+      })
+
+    {:ok, _conversation} =
+      Runtime.update_conversation_metadata(conversation, %{
+        "ownership" => %{
+          "mode" => "database_lease",
+          "lease_name" => "conversation:#{conversation.id}",
+          "owner" => "node:stale",
+          "owner_node" => "stale@node",
+          "stage" => "released"
+        },
+        "last_delivery" => %{
+          "channel" => "telegram",
+          "status" => "deferred",
+          "external_ref" => "5252",
+          "reply_context" => %{"reply_to_message_id" => 727},
+          "metadata" => %{"ownership_deferred" => true}
+        }
+      })
+
+    summary = HydraX.Gateway.process_deferred_deliveries()
+
+    assert summary.delivered_count == 1
+    assert_receive {:telegram_expired_delivery,
+                    %{
+                      chat_id: "5252",
+                      reply_to_message_id: 727,
+                      text: "Delivered after expired lease takeover."
+                    }}
+
+    refreshed = Runtime.get_conversation!(conversation.id)
+    assert refreshed.metadata["ownership"]["owner"] == Runtime.coordination_status().owner
+    assert refreshed.metadata["last_delivery"]["status"] == "delivered"
+  end
+
   test "queued telegram ingress can be processed later by the owning node" do
     previous = Application.get_env(:hydra_x, :telegram_deliver)
 
@@ -337,6 +437,93 @@ defmodule HydraX.GatewayTest do
     assert length(refreshed.turns) == 2
     assert refreshed.metadata["last_delivery"]["status"] == "delivered"
     assert Runtime.get_checkpoint(conversation.id, "ingress").state["message_count"] == 0
+  end
+
+  test "queued telegram ingress can be taken over after ingress lease expiry" do
+    previous_adapter = Application.get_env(:hydra_x, :repo_adapter)
+    previous = Application.get_env(:hydra_x, :telegram_deliver)
+
+    Application.put_env(:hydra_x, :repo_adapter, Ecto.Adapters.Postgres)
+    Application.put_env(:hydra_x, :telegram_deliver, fn payload ->
+      send(self(), {:telegram_expired_ingress_delivery, payload})
+      {:ok, %{provider_message_id: "expired-ingress-1"}}
+    end)
+
+    on_exit(fn ->
+      if previous_adapter do
+        Application.put_env(:hydra_x, :repo_adapter, previous_adapter)
+      else
+        Application.delete_env(:hydra_x, :repo_adapter)
+      end
+
+      if previous do
+        Application.put_env(:hydra_x, :telegram_deliver, previous)
+      else
+        Application.delete_env(:hydra_x, :telegram_deliver)
+      end
+    end)
+
+    agent = create_agent()
+
+    {:ok, _telegram} =
+      Runtime.save_telegram_config(%{
+        bot_token: "test-token",
+        bot_username: "hydrax_bot",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{
+        channel: "telegram",
+        external_ref: "6262",
+        title: "Expired Queued Telegram 6262"
+      })
+
+    assert {:ok, stale_lease} =
+             Runtime.claim_lease("ingress:telegram:6262",
+               owner: "node:stale",
+               ttl_seconds: 60
+             )
+
+    stale_lease
+    |> Ecto.Changeset.change(expires_at: DateTime.add(DateTime.utc_now(), -60, :second))
+    |> HydraX.Repo.update!()
+
+    {:ok, _checkpoint} =
+      Runtime.upsert_checkpoint(conversation.id, "ingress", %{
+        "status" => "queued",
+        "channel" => "telegram",
+        "external_ref" => "6262",
+        "owner" => "node:stale",
+        "owner_node" => "stale@node",
+        "lease_name" => "ingress:telegram:6262",
+        "message_count" => 1,
+        "messages" => [
+          %{
+            "channel" => "telegram",
+            "external_ref" => "6262",
+            "content" => "Take over this expired ingress queue.",
+            "metadata" => %{"reply_to_message_id" => 929}
+          }
+        ]
+      })
+
+    summary = HydraX.Gateway.process_owned_ingress()
+
+    assert summary.processed_count == 1
+    assert_receive {:telegram_expired_ingress_delivery,
+                    %{
+                      chat_id: "6262",
+                      reply_to_message_id: 929,
+                      text: delivered_text
+                    }}
+
+    assert delivered_text =~ "Take over this expired ingress queue."
+
+    checkpoint = Runtime.get_checkpoint(conversation.id, "ingress")
+    assert checkpoint.state["owner"] == Runtime.coordination_status().owner
+    assert checkpoint.state["message_count"] == 0
   end
 
   test "telegram adapter chunks long outbound replies and reports chunk metadata" do

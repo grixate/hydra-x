@@ -351,6 +351,77 @@ defmodule HydraX.RuntimeTest do
     assert Enum.any?(channel_state.execution_events, &(&1["phase"] == "recovered_after_restart"))
   end
 
+  test "runtime can take over expired deferred conversation ownership" do
+    previous_adapter = Application.get_env(:hydra_x, :repo_adapter)
+    Application.put_env(:hydra_x, :repo_adapter, Ecto.Adapters.Postgres)
+
+    on_exit(fn ->
+      if previous_adapter do
+        Application.put_env(:hydra_x, :repo_adapter, previous_adapter)
+      else
+        Application.delete_env(:hydra_x, :repo_adapter)
+      end
+    end)
+
+    agent = create_agent()
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{channel: "webchat", title: "expired-deferred-runtime"})
+
+    {:ok, user_turn} =
+      Runtime.append_turn(conversation, %{
+        role: "user",
+        kind: "message",
+        content: "Take over this expired deferred conversation.",
+        metadata: %{"source" => "test"}
+      })
+
+    assert {:ok, stale_lease} =
+             Runtime.claim_lease("conversation:#{conversation.id}",
+               owner: "node:stale",
+               ttl_seconds: 60
+             )
+
+    stale_lease
+    |> Ecto.Changeset.change(expires_at: DateTime.add(DateTime.utc_now(), -60, :second))
+    |> Repo.update!()
+
+    {:ok, _checkpoint} =
+      Runtime.upsert_checkpoint(conversation.id, "channel", %{
+        "status" => "deferred",
+        "resumable" => true,
+        "pending_turn_id" => user_turn.id,
+        "ownership" => %{
+          "mode" => "database_lease",
+          "lease_name" => "conversation:#{conversation.id}",
+          "owner" => "node:stale",
+          "owner_node" => "stale@node",
+          "stage" => "deferred"
+        },
+        "execution_events" => []
+      })
+
+    {:ok, _conversation} =
+      Runtime.update_conversation_metadata(conversation, %{
+        "ownership" => %{
+          "mode" => "database_lease",
+          "lease_name" => "conversation:#{conversation.id}",
+          "owner" => "node:stale",
+          "owner_node" => "stale@node",
+          "stage" => "deferred"
+        }
+      })
+
+    summary = Runtime.resume_owned_conversations()
+
+    assert summary.resumed_count == 1
+    Process.sleep(100)
+
+    refreshed = Runtime.get_conversation!(conversation.id)
+    assert refreshed.metadata["ownership"]["owner"] == Runtime.coordination_status().owner
+    assert List.last(refreshed.turns).role == "assistant"
+  end
+
   test "scheduler poll resumes owned deferred conversations" do
     previous_adapter = Application.get_env(:hydra_x, :repo_adapter)
     Application.put_env(:hydra_x, :repo_adapter, Ecto.Adapters.Postgres)
