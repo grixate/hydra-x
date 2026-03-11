@@ -166,6 +166,17 @@ defmodule HydraX.Runtime do
 
   defdelegate update_conversation_metadata(conversation, attrs), to: HydraX.Runtime.Conversations
 
+  # ── Coordination ────────────────────────────────────────────────────────
+
+  defdelegate claim_lease(name), to: HydraX.Runtime.Coordination
+  defdelegate claim_lease(name, opts), to: HydraX.Runtime.Coordination
+  defdelegate release_lease(name), to: HydraX.Runtime.Coordination
+  defdelegate release_lease(name, opts), to: HydraX.Runtime.Coordination
+  defdelegate get_lease(name), to: HydraX.Runtime.Coordination
+  defdelegate active_lease(name), to: HydraX.Runtime.Coordination
+  defdelegate list_active_leases(), to: HydraX.Runtime.Coordination
+  defdelegate coordination_status(), to: HydraX.Runtime.Coordination, as: :status
+
   # ── Jobs ────────────────────────────────────────────────────────────────
 
   defdelegate list_scheduled_jobs(), to: HydraX.Runtime.Jobs

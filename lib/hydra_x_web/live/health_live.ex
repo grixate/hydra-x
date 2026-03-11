@@ -455,7 +455,7 @@ defmodule HydraXWeb.HealthLive do
             </div>
             <p class="mt-3 text-sm text-[var(--hx-mute)]">
               {@provider_status.name} · {@provider_status.kind}
-              <span :if={@provider_status.model}> ·                 {@provider_status.model}</span>
+              <span :if={@provider_status.model}> ·                  {@provider_status.model}</span>
             </p>
             <p class="mt-2 text-xs text-[var(--hx-mute)]">
               source {@provider_status.route_source} · readiness {@provider_status.readiness} · warmup {@provider_status.warmup_status}
@@ -506,6 +506,18 @@ defmodule HydraXWeb.HealthLive do
             </p>
             <p class="mt-2 text-xs text-[var(--hx-mute)]">
               {@cluster_status.detail}
+            </p>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4 lg:col-span-2">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Coordination mode
+            </div>
+            <p class="mt-3 text-sm text-[var(--hx-mute)]">
+              {@observability_status.coordination.mode} · scheduler owner {@observability_status.coordination.scheduler_owner ||
+                "none"}
+            </p>
+            <p class="mt-2 text-xs text-[var(--hx-mute)]">
+              active leases {@observability_status.coordination.lease_count} · backend {@observability_status.coordination.backend}
             </p>
           </article>
         </div>
@@ -806,9 +818,9 @@ defmodule HydraXWeb.HealthLive do
                 </div>
                 <div class="mt-2 text-xs text-[var(--hx-mute)]">
                   level {event.level}
-                  <span :if={event.expired_by}> · expiry      {event.expired_by}</span>
+                  <span :if={event.expired_by}> · expiry       {event.expired_by}</span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip      {event.ip}</span>
+                  <span :if={event.ip}> · ip       {event.ip}</span>
                 </div>
               </div>
             </div>

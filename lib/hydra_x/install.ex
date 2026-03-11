@@ -72,6 +72,7 @@ defmodule HydraX.Install do
     Persistence backend: #{snapshot.persistence.backend}
     Persistence target: #{snapshot.persistence.target || "not configured"}
     Backup mode: #{snapshot.persistence.backup_mode}
+    Coordination mode: #{snapshot.coordination.mode}
 
     ## Readiness
     Summary: #{String.upcase(Atom.to_string(snapshot.readiness.summary))}

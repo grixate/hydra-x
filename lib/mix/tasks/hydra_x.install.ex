@@ -22,6 +22,7 @@ defmodule Mix.Tasks.HydraX.Install do
     )
 
     Mix.shell().info("persistence=#{export.snapshot.persistence.backend}")
+    Mix.shell().info("coordination=#{export.snapshot.coordination.mode}")
     Mix.shell().info("required_warn=#{export.snapshot.readiness.counts.required_warn}")
     Mix.shell().info("recommended_warn=#{export.snapshot.readiness.counts.recommended_warn}")
   end

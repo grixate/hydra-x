@@ -18,17 +18,18 @@ defmodule HydraX.Scheduler do
   def init(_opts) do
     schedule_poll()
     schedule_retention()
-    {:ok, %{running_jobs: MapSet.new()}}
+    {:ok, %{running_jobs: MapSet.new(), coordination: scheduler_coordination_snapshot()}}
   end
 
   @impl true
   def handle_info(:poll, state) do
-    # In cluster mode, only the leader node runs scheduled jobs
-    if Cluster.leader?() do
-      do_poll(state)
-    else
-      schedule_poll()
-      {:noreply, state}
+    case scheduler_owner_check() do
+      {:run, coordination} ->
+        do_poll(%{state | coordination: coordination})
+
+      {:skip, coordination} ->
+        schedule_poll()
+        {:noreply, %{state | coordination: coordination}}
     end
   end
 
@@ -76,5 +77,52 @@ defmodule HydraX.Scheduler do
 
   defp schedule_retention do
     Process.send_after(self(), :retention_cleanup, @retention_interval_ms)
+  end
+
+  defp scheduler_owner_check do
+    if Config.repo_multi_writer?() do
+      case Runtime.claim_lease("scheduler:poller",
+             ttl_seconds: scheduler_ttl_seconds(),
+             metadata: %{
+               "role" => "scheduler",
+               "poll_ms" => Config.scheduler_poll_ms()
+             }
+           ) do
+        {:ok, lease} ->
+          {:run, coordination_snapshot("database_lease", lease.owner, lease.expires_at)}
+
+        {:error, {:taken, lease}} ->
+          {:skip, coordination_snapshot("database_lease", lease.owner, lease.expires_at)}
+
+        {:error, _reason} ->
+          {:skip, coordination_snapshot("database_lease", "unavailable", nil)}
+      end
+    else
+      if Cluster.leader?() do
+        {:run, coordination_snapshot("local_leader", to_string(Cluster.node_id()), nil)}
+      else
+        {:skip, coordination_snapshot("local_leader", "other_node", nil)}
+      end
+    end
+  end
+
+  defp scheduler_ttl_seconds do
+    max(div(Config.scheduler_poll_ms() * 3, 1000), 15)
+  end
+
+  defp scheduler_coordination_snapshot do
+    coordination_snapshot(
+      if(Config.repo_multi_writer?(), do: "database_lease", else: "local_leader"),
+      to_string(Cluster.node_id()),
+      nil
+    )
+  end
+
+  defp coordination_snapshot(mode, owner, expires_at) do
+    %{
+      mode: mode,
+      owner: owner,
+      expires_at: expires_at
+    }
   end
 end

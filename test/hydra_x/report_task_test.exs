@@ -20,6 +20,7 @@ defmodule HydraX.ReportTaskTest do
     assert output =~ "readiness="
     assert output =~ "health_warn="
     assert output =~ "persistence=sqlite"
+    assert output =~ "coordination=local_single_node"
     assert output =~ "required_warn="
     assert output =~ "recommended_warn="
 
@@ -32,6 +33,7 @@ defmodule HydraX.ReportTaskTest do
     assert File.exists?(Path.join(bundle_dir, "manifest.json"))
     assert File.exists?(Path.join(bundle_dir, "agent_mcp.json"))
     assert File.exists?(Path.join(bundle_dir, "channels.json"))
+    assert File.exists?(Path.join(bundle_dir, "coordination.json"))
     assert File.exists?(Path.join(bundle_dir, "secrets.json"))
   end
 end

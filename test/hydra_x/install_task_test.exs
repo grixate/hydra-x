@@ -23,6 +23,7 @@ defmodule HydraX.InstallTaskTest do
     assert output =~ "note="
     assert output =~ "readiness="
     assert output =~ "persistence=sqlite"
+    assert output =~ "coordination=local_single_node"
     assert output =~ "required_warn="
     assert output =~ "recommended_warn="
     assert File.exists?(env_path)
@@ -32,6 +33,7 @@ defmodule HydraX.InstallTaskTest do
     assert File.read!(env_path) =~ "DATABASE_PATH="
     assert File.read!(note_path) =~ "Hydra-X Preview Install Snapshot"
     assert File.read!(note_path) =~ "Persistence backend: sqlite"
+    assert File.read!(note_path) =~ "Coordination mode: local_single_node"
     assert File.read!(note_path) =~ "Summary:"
     assert File.read!(note_path) =~ "Required warnings:"
     assert File.read!(note_path) =~ "Deployment Checklist"

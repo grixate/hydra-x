@@ -35,6 +35,7 @@ defmodule HydraX.Report do
         ),
       provider: Runtime.provider_status(),
       cluster: Runtime.cluster_status(),
+      coordination: Runtime.coordination_status(),
       mcp: Runtime.mcp_statuses(),
       agent_mcp: Runtime.agent_mcp_statuses(),
       channels: Runtime.channel_statuses(),
@@ -103,6 +104,7 @@ defmodule HydraX.Report do
     Persistence backend: #{snapshot.install.persistence.backend}
     Persistence target: #{snapshot.install.persistence.target || "not configured"}
     Backup mode: #{snapshot.install.persistence.backup_mode}
+    Coordination mode: #{snapshot.coordination.mode}
     Backup root: #{snapshot.install.backup_root}
 
     ## Filters
@@ -120,6 +122,9 @@ defmodule HydraX.Report do
 
     ## Cluster Posture
     #{render_cluster(snapshot.cluster)}
+
+    ## Coordination
+    #{render_coordination(snapshot.coordination)}
 
     ## Provider Route
     #{render_provider(snapshot.provider)}
@@ -289,6 +294,32 @@ defmodule HydraX.Report do
     - Persistence target: #{cluster.persistence_target || "not configured"}
     - Multi-node ready: #{yes_no(cluster.multi_node_ready)}
     - Detail: #{cluster.detail}
+    """
+    |> String.trim()
+  end
+
+  defp render_coordination(coordination) do
+    leases =
+      case coordination.active_leases do
+        [] ->
+          "- none"
+
+        values ->
+          Enum.map_join(values, "\n", fn lease ->
+            "- #{lease.name}: #{lease.owner} expires=#{format_datetime(lease.expires_at)}"
+          end)
+      end
+
+    """
+    - Mode: #{coordination.mode}
+    - Backend: #{coordination.backend}
+    - Enabled: #{yes_no(coordination.enabled)}
+    - Local owner: #{coordination.owner}
+    - Active leases: #{coordination.lease_count}
+    - Scheduler owner: #{coordination.scheduler_owner || "none"}
+    - Scheduler expires at: #{format_datetime(coordination.scheduler_expires_at)}
+    - Lease catalog:
+    #{leases}
     """
     |> String.trim()
   end
@@ -819,6 +850,7 @@ defmodule HydraX.Report do
       readiness: snapshot.readiness,
       provider: snapshot.provider,
       cluster: snapshot.cluster,
+      coordination: snapshot.coordination,
       mcp: snapshot.mcp,
       agent_mcp: snapshot.agent_mcp,
       channels: snapshot.channels,
@@ -934,6 +966,7 @@ defmodule HydraX.Report do
           agent_count: length(snapshot.agents),
           cluster_mode: snapshot.cluster.mode,
           cluster_node_count: snapshot.cluster.node_count,
+          coordination_mode: snapshot.coordination.mode,
           mcp_server_count: length(snapshot.mcp),
           agent_mcp_count: length(snapshot.agent_mcp),
           skill_count: length(snapshot.skills),
@@ -953,6 +986,11 @@ defmodule HydraX.Report do
     File.write!(
       Path.join(bundle_dir, "cluster.json"),
       Jason.encode_to_iodata!(snapshot.cluster, pretty: true)
+    )
+
+    File.write!(
+      Path.join(bundle_dir, "coordination.json"),
+      Jason.encode_to_iodata!(snapshot.coordination, pretty: true)
     )
 
     File.write!(

@@ -1596,6 +1596,7 @@ defmodule HydraX.RuntimeTest do
     assert system.persistence.backend == "sqlite"
     assert system.persistence.target == system.database_path
     assert system.persistence.backup_mode == "bundled_database"
+    assert system.coordination.mode == "local_single_node"
     assert is_list(system.alarms)
   end
 
@@ -1645,6 +1646,7 @@ defmodule HydraX.RuntimeTest do
     assert snapshot.database_url == nil
     assert snapshot.persistence.backend == "sqlite"
     assert snapshot.persistence.target == snapshot.database_path
+    assert snapshot.coordination.mode == "local_single_node"
     assert is_binary(snapshot.workspace_root)
     assert is_binary(snapshot.backup_root)
     assert snapshot.cluster.mode == "single_node"

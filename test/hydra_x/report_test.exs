@@ -166,6 +166,7 @@ defmodule HydraX.ReportTest do
            )
 
     assert snapshot.cluster.mode == "single_node"
+    assert snapshot.coordination.mode == "local_single_node"
     assert is_map(snapshot.incidents)
     assert is_list(snapshot.audit)
     assert Enum.any?(snapshot.ingest, &(&1.source_file == "report.md"))
@@ -318,6 +319,7 @@ defmodule HydraX.ReportTest do
     assert File.exists?(Path.join(export.bundle_dir, "manifest.json"))
     assert File.exists?(Path.join(export.bundle_dir, "agents.json"))
     assert File.exists?(Path.join(export.bundle_dir, "cluster.json"))
+    assert File.exists?(Path.join(export.bundle_dir, "coordination.json"))
     assert File.exists?(Path.join(export.bundle_dir, "mcp.json"))
     assert File.exists?(Path.join(export.bundle_dir, "channels.json"))
     assert File.exists?(Path.join(export.bundle_dir, "secrets.json"))
@@ -345,6 +347,8 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "Operator Auth"
     assert File.read!(export.markdown_path) =~ "Channel Failure Summary"
     assert File.read!(export.markdown_path) =~ "Cluster Posture"
+    assert File.read!(export.markdown_path) =~ "Coordination"
+    assert File.read!(export.markdown_path) =~ "Coordination mode: local_single_node"
     assert File.read!(export.markdown_path) =~ "ctx=777.888/777.888"
     assert File.read!(export.markdown_path) =~ "chunks=2"
     assert File.read!(export.markdown_path) =~ "payload=channel=C555"

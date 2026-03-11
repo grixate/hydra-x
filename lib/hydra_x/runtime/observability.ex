@@ -55,6 +55,7 @@ defmodule HydraX.Runtime.Observability do
     mcp_statuses = HydraX.Runtime.MCPServers.mcp_statuses()
     operator = operator_status()
     cluster = cluster_status()
+    coordination = coordination_status()
 
     checks = [
       %{name: "database", status: :ok, detail: database_health_detail(system.persistence)},
@@ -125,6 +126,11 @@ defmodule HydraX.Runtime.Observability do
         name: "cluster",
         status: if(cluster.enabled, do: :warn, else: :ok),
         detail: cluster_detail(cluster)
+      },
+      %{
+        name: "coordination",
+        status: if(coordination.enabled, do: :warn, else: :ok),
+        detail: coordination_detail(coordination)
       },
       %{
         name: "budget",
@@ -609,6 +615,7 @@ defmodule HydraX.Runtime.Observability do
         recent_runs: HydraX.Runtime.Jobs.recent_job_runs(10)
       },
       cluster: cluster_status(),
+      coordination: coordination_status(),
       system: system_status(),
       backups: backup_status()
     }
@@ -616,6 +623,10 @@ defmodule HydraX.Runtime.Observability do
 
   def cluster_status do
     Cluster.status()
+  end
+
+  def coordination_status do
+    HydraX.Runtime.Coordination.status()
   end
 
   def system_status do
@@ -627,7 +638,8 @@ defmodule HydraX.Runtime.Observability do
       alarms: alarms,
       database_path: Config.repo_database_path(),
       database_url: Config.repo_database_url(),
-      persistence: Config.repo_persistence_status()
+      persistence: Config.repo_persistence_status(),
+      coordination: coordination_status()
     }
   end
 
@@ -655,6 +667,7 @@ defmodule HydraX.Runtime.Observability do
 
     operator = operator_status()
     cluster = cluster_status()
+    coordination = coordination_status()
 
     items = [
       %{
@@ -911,6 +924,13 @@ defmodule HydraX.Runtime.Observability do
         required: false,
         status: if(cluster.enabled or cluster.multi_node_ready, do: :warn, else: :ok),
         detail: cluster_readiness_detail(cluster)
+      },
+      %{
+        id: "coordination",
+        label: "Coordination mode matches the persistence rollout",
+        required: false,
+        status: if(coordination.enabled, do: :warn, else: :ok),
+        detail: coordination_readiness_detail(coordination)
       }
     ]
 
@@ -946,6 +966,7 @@ defmodule HydraX.Runtime.Observability do
       database_path: Config.repo_database_path(),
       database_url: Config.repo_database_url(),
       persistence: Config.repo_persistence_status(),
+      coordination: coordination_status(),
       workspace_root: Config.workspace_root(),
       backup_root: Config.backup_root(),
       cluster: cluster_status(),
@@ -1205,6 +1226,26 @@ defmodule HydraX.Runtime.Observability do
 
       true ->
         "single-node mode is active; enable clustering only after moving coordination to PostgreSQL"
+    end
+  end
+
+  defp coordination_detail(coordination) do
+    case coordination.mode do
+      "database_leases" ->
+        "database leases active; scheduler owner #{coordination.scheduler_owner || "none"}; active leases #{coordination.lease_count}"
+
+      _ ->
+        "local single-node ownership only"
+    end
+  end
+
+  defp coordination_readiness_detail(coordination) do
+    case coordination.mode do
+      "database_leases" ->
+        "database lease coordination is active; distributed ownership and failover logic are still pending"
+
+      _ ->
+        "coordination remains local-only until PostgreSQL-backed ownership is enabled"
     end
   end
 
