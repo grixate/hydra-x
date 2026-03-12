@@ -1130,6 +1130,77 @@ defmodule HydraX.GatewayTest do
              "Partial streamed delivery with more detail"
   end
 
+  test "telegram streaming previews persist transport metadata and stream message id" do
+    agent = create_agent()
+    previous_stream = Application.get_env(:hydra_x, :telegram_deliver_stream)
+
+    Application.put_env(:hydra_x, :telegram_deliver_stream, fn payload ->
+      send(self(), {:telegram_stream_preview, payload})
+
+      {:ok,
+       %{
+         provider_message_id: payload[:stream_message_id] || 9001
+       }}
+    end)
+
+    on_exit(fn ->
+      if previous_stream do
+        Application.put_env(:hydra_x, :telegram_deliver_stream, previous_stream)
+      else
+        Application.delete_env(:hydra_x, :telegram_deliver_stream)
+      end
+    end)
+
+    {:ok, _telegram} =
+      Runtime.save_telegram_config(%{
+        bot_token: "test-token",
+        bot_username: "hydrax_bot",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{
+        channel: "telegram",
+        title: "Telegram Streaming Delivery",
+        external_ref: "4242"
+      })
+
+    assert {:ok, _conversation} =
+             HydraX.Gateway.mark_streaming_delivery(conversation,
+               preview: "Partial telegram stream",
+               chunk_count: 1,
+               provider: "Mock Provider"
+             )
+
+    assert_receive {:telegram_stream_preview,
+                    %{chat_id: "4242", text: "Partial telegram stream", stream_message_id: nil}}
+
+    refreshed = Runtime.get_conversation!(conversation.id)
+    assert refreshed.metadata["last_delivery"]["status"] == "streaming"
+    assert refreshed.metadata["last_delivery"]["provider_message_id"] == 9001
+    assert refreshed.metadata["last_delivery"]["reply_context"]["stream_message_id"] == 9001
+    assert refreshed.metadata["last_delivery"]["metadata"]["transport"] == "telegram_message_edit"
+
+    assert {:ok, _conversation} =
+             HydraX.Gateway.mark_streaming_delivery(conversation,
+               preview: "Partial telegram stream updated",
+               chunk_count: 4,
+               provider: "Mock Provider"
+             )
+
+    assert_receive {:telegram_stream_preview,
+                    %{
+                      chat_id: "4242",
+                      text: "Partial telegram stream updated",
+                      stream_message_id: 9001
+                    }}
+
+    refreshed = Runtime.get_conversation!(conversation.id)
+    assert refreshed.metadata["last_delivery"]["provider_message_id"] == 9001
+    assert refreshed.metadata["last_delivery"]["chunk_count"] == 4
+  end
+
   test "webchat attachment messages preserve attachment metadata and display name" do
     agent = create_agent()
     {:ok, pid} = HydraX.Agent.ensure_started(agent)

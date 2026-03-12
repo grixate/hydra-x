@@ -13,7 +13,8 @@ defmodule HydraX.Gateway.Adapters.Telegram do
        bot_token: token,
        bot_username: config["bot_username"],
        webhook_secret: config["webhook_secret"],
-       deliver: config["deliver"]
+       deliver: config["deliver"],
+       deliver_stream: config["deliver_stream"]
      }}
   end
 
@@ -79,6 +80,17 @@ defmodule HydraX.Gateway.Adapters.Telegram do
   end
 
   @impl true
+  def deliver_stream(%{content: content, external_ref: external_ref} = message, %{
+        bot_token: token,
+        deliver_stream: deliver_stream
+      }) do
+    metadata = Map.get(message, :metadata) || %{}
+    chunk_count = Map.get(message, :chunk_count, 0)
+
+    do_deliver_stream(content, external_ref, token, deliver_stream, metadata, chunk_count)
+  end
+
+  @impl true
   def health(state) do
     %{
       channel: "telegram",
@@ -86,7 +98,7 @@ defmodule HydraX.Gateway.Adapters.Telegram do
       supports_threads: false,
       supports_rich_formatting: false,
       supports_attachments: true,
-      supports_streaming: false,
+      supports_streaming: true,
       webhook_secret: present?(state[:webhook_secret])
     }
   end
@@ -116,7 +128,8 @@ defmodule HydraX.Gateway.Adapters.Telegram do
       threads: false,
       attachments: true,
       rich_formatting: false,
-      streaming: false
+      streaming: true,
+      stream_transport: "telegram_message_edit"
     }
   end
 
@@ -173,82 +186,156 @@ defmodule HydraX.Gateway.Adapters.Telegram do
     end
   end
 
-  defp do_send_response(content, external_ref, _token, deliver, metadata) when is_function(deliver, 1) do
-    content
-    |> chunk_message(@telegram_message_limit)
-    |> Enum.with_index()
-    |> Enum.reduce_while(
-      {:ok, %{channel: "telegram", chunk_count: 0, provider_message_ids: []}},
-      fn {chunk, index}, {:ok, acc} ->
+  defp do_send_response(content, external_ref, _token, deliver, metadata)
+       when is_function(deliver, 1) do
+    case metadata["stream_message_id"] do
+      nil ->
+        content
+        |> chunk_message(@telegram_message_limit)
+        |> Enum.with_index()
+        |> Enum.reduce_while(
+          {:ok, %{channel: "telegram", chunk_count: 0, provider_message_ids: []}},
+          fn {chunk, index}, {:ok, acc} ->
+            payload = %{
+              text: chunk,
+              chat_id: external_ref,
+              reply_to_message_id: if(index == 0, do: metadata["reply_to_message_id"])
+            }
+
+            case deliver.(payload) do
+              :ok ->
+                {:cont, {:ok, %{acc | chunk_count: acc.chunk_count + 1}}}
+
+              {:ok, metadata} when is_map(metadata) ->
+                provider_message_id =
+                  metadata[:provider_message_id] || metadata["provider_message_id"]
+
+                updated =
+                  acc
+                  |> Map.put(:chunk_count, acc.chunk_count + 1)
+                  |> Map.put(
+                    :provider_message_id,
+                    provider_message_id || acc[:provider_message_id]
+                  )
+                  |> Map.update!(:provider_message_ids, fn ids ->
+                    if provider_message_id, do: ids ++ [provider_message_id], else: ids
+                  end)
+
+                {:cont, {:ok, updated}}
+
+              other ->
+                {:halt, other}
+            end
+          end
+        )
+
+      stream_message_id ->
         payload = %{
-          text: chunk,
+          text: truncate_stream_text(content),
           chat_id: external_ref,
-          reply_to_message_id: if(index == 0, do: metadata["reply_to_message_id"])
+          stream_message_id: stream_message_id
         }
 
         case deliver.(payload) do
           :ok ->
-            {:cont, {:ok, %{acc | chunk_count: acc.chunk_count + 1}}}
+            {:ok,
+             %{
+               channel: "telegram",
+               chunk_count: 1,
+               provider_message_id: stream_message_id,
+               provider_message_ids: [stream_message_id]
+             }}
 
-          {:ok, metadata} when is_map(metadata) ->
-            provider_message_id = metadata[:provider_message_id] || metadata["provider_message_id"]
+          {:ok, response_metadata} when is_map(response_metadata) ->
+            provider_message_id =
+              response_metadata[:provider_message_id] ||
+                response_metadata["provider_message_id"] ||
+                stream_message_id
 
-            updated =
-              acc
-              |> Map.put(:chunk_count, acc.chunk_count + 1)
-              |> Map.put(:provider_message_id, provider_message_id || acc[:provider_message_id])
-              |> Map.update!(:provider_message_ids, fn ids ->
-                if provider_message_id, do: ids ++ [provider_message_id], else: ids
-              end)
-
-            {:cont, {:ok, updated}}
+            {:ok,
+             %{
+               channel: "telegram",
+               chunk_count: 1,
+               provider_message_id: provider_message_id,
+               provider_message_ids: [provider_message_id]
+             }}
 
           other ->
-            {:halt, other}
+            other
         end
-      end
-    )
+    end
   end
 
   defp do_send_response(content, external_ref, token, _deliver, metadata) do
-    content
-    |> chunk_message(@telegram_message_limit)
-    |> Enum.with_index()
-    |> Enum.reduce_while(
-      {:ok, %{channel: "telegram", status: 200, chunk_count: 0, provider_message_ids: []}},
-      fn {chunk, index}, {:ok, acc} ->
-        form =
-          [chat_id: external_ref, text: chunk]
-          |> maybe_add_reply_to(if(index == 0, do: metadata["reply_to_message_id"]))
+    case metadata["stream_message_id"] do
+      nil ->
+        content
+        |> chunk_message(@telegram_message_limit)
+        |> Enum.with_index()
+        |> Enum.reduce_while(
+          {:ok, %{channel: "telegram", status: 200, chunk_count: 0, provider_message_ids: []}},
+          fn {chunk, index}, {:ok, acc} ->
+            form =
+              [chat_id: external_ref, text: chunk]
+              |> maybe_add_reply_to(if(index == 0, do: metadata["reply_to_message_id"]))
 
+            case Req.post(
+                   url: "https://api.telegram.org/bot#{token}/sendMessage",
+                   form: form
+                 ) do
+              {:ok, %{status: 200, body: %{"ok" => true, "result" => result}}} ->
+                provider_message_id = Map.get(result, "message_id")
+
+                updated =
+                  acc
+                  |> Map.put(:chunk_count, acc.chunk_count + 1)
+                  |> Map.put(
+                    :provider_message_id,
+                    provider_message_id || acc[:provider_message_id]
+                  )
+                  |> Map.update!(:provider_message_ids, fn ids ->
+                    if provider_message_id, do: ids ++ [provider_message_id], else: ids
+                  end)
+
+                {:cont, {:ok, updated}}
+
+              {:ok, %{status: 200}} ->
+                {:cont, {:ok, %{acc | chunk_count: acc.chunk_count + 1}}}
+
+              {:ok, response} ->
+                {:halt, {:error, {:telegram_error, response.status}}}
+
+              {:error, reason} ->
+                {:halt, {:error, reason}}
+            end
+          end
+        )
+
+      stream_message_id ->
         case Req.post(
-               url: "https://api.telegram.org/bot#{token}/sendMessage",
-               form: form
+               url: "https://api.telegram.org/bot#{token}/editMessageText",
+               form: [chat_id: external_ref, message_id: stream_message_id, text: content]
              ) do
-          {:ok, %{status: 200, body: %{"ok" => true, "result" => result}}} ->
-            provider_message_id = Map.get(result, "message_id")
+          {:ok, %{status: 200, body: %{"ok" => true}}} ->
+            {:ok,
+             %{
+               channel: "telegram",
+               status: 200,
+               chunk_count: 1,
+               provider_message_id: stream_message_id,
+               provider_message_ids: [stream_message_id]
+             }}
 
-            updated =
-              acc
-              |> Map.put(:chunk_count, acc.chunk_count + 1)
-              |> Map.put(:provider_message_id, provider_message_id || acc[:provider_message_id])
-              |> Map.update!(:provider_message_ids, fn ids ->
-                if provider_message_id, do: ids ++ [provider_message_id], else: ids
-              end)
-
-            {:cont, {:ok, updated}}
-
-          {:ok, %{status: 200}} ->
-            {:cont, {:ok, %{acc | chunk_count: acc.chunk_count + 1}}}
+          {:ok, %{status: 200, body: %{"ok" => false} = body}} ->
+            {:error, {:telegram_error, body}}
 
           {:ok, response} ->
-            {:halt, {:error, {:telegram_error, response.status}}}
+            {:error, {:telegram_error, response.status}}
 
           {:error, reason} ->
-            {:halt, {:error, reason}}
+            {:error, reason}
         end
-      end
-    )
+    end
   end
 
   defp chunk_message(text, max_length) do
@@ -261,6 +348,103 @@ defmodule HydraX.Gateway.Adapters.Telegram do
       |> Enum.map(&Enum.join/1)
     end
   end
+
+  defp do_deliver_stream(content, external_ref, _token, deliver_stream, metadata, chunk_count)
+       when is_function(deliver_stream, 1) do
+    payload = %{
+      text: truncate_stream_text(content),
+      chat_id: external_ref,
+      reply_to_message_id: metadata["reply_to_message_id"],
+      stream_message_id: metadata["stream_message_id"],
+      chunk_count: chunk_count,
+      stream: true
+    }
+
+    case deliver_stream.(payload) do
+      :ok ->
+        {:ok, %{channel: "telegram", streaming: true, transport: "telegram_message_edit"}}
+
+      {:ok, response_metadata} when is_map(response_metadata) ->
+        {:ok,
+         %{
+           channel: "telegram",
+           streaming: true,
+           transport: "telegram_message_edit",
+           provider_message_id:
+             response_metadata[:provider_message_id] || response_metadata["provider_message_id"]
+         }}
+
+      {:error, reason} ->
+        {:error, reason}
+
+      other ->
+        {:error, {:unexpected_stream_response, other}}
+    end
+  end
+
+  defp do_deliver_stream(content, external_ref, token, _deliver_stream, metadata, _chunk_count) do
+    text = truncate_stream_text(content)
+
+    case metadata["stream_message_id"] do
+      nil ->
+        form =
+          [chat_id: external_ref, text: text]
+          |> maybe_add_reply_to(metadata["reply_to_message_id"])
+
+        case Req.post(
+               url: "https://api.telegram.org/bot#{token}/sendMessage",
+               form: form
+             ) do
+          {:ok, %{status: 200, body: %{"ok" => true, "result" => result}}} ->
+            {:ok,
+             %{
+               channel: "telegram",
+               streaming: true,
+               transport: "telegram_message_edit",
+               provider_message_id: Map.get(result, "message_id")
+             }}
+
+          {:ok, %{status: 200, body: %{"ok" => false} = body}} ->
+            {:error, {:telegram_error, body}}
+
+          {:ok, response} ->
+            {:error, {:telegram_error, response.status}}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      stream_message_id ->
+        case Req.post(
+               url: "https://api.telegram.org/bot#{token}/editMessageText",
+               form: [chat_id: external_ref, message_id: stream_message_id, text: text]
+             ) do
+          {:ok, %{status: 200, body: %{"ok" => true}}} ->
+            {:ok,
+             %{
+               channel: "telegram",
+               streaming: true,
+               transport: "telegram_message_edit",
+               provider_message_id: stream_message_id
+             }}
+
+          {:ok, %{status: 200, body: %{"ok" => false} = body}} ->
+            {:error, {:telegram_error, body}}
+
+          {:ok, response} ->
+            {:error, {:telegram_error, response.status}}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+    end
+  end
+
+  defp truncate_stream_text(text) when is_binary(text) do
+    String.slice(text, 0, @telegram_message_limit)
+  end
+
+  defp truncate_stream_text(_text), do: ""
 
   defp maybe_put_secret(body, nil), do: body
   defp maybe_put_secret(body, ""), do: body

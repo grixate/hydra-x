@@ -135,6 +135,7 @@ defmodule HydraX.Gateway do
         |> delivery_payload(streaming_message(conversation, previous),
           formatted_payload: formatted_payload
         )
+        |> Map.merge(delivery_result_fields(stream_metadata))
         |> Map.put("status", "streaming")
         |> Map.put("attempted_at", DateTime.utc_now())
         |> Map.put("chunk_count", chunk_count)
@@ -149,13 +150,12 @@ defmodule HydraX.Gateway do
         |> Map.put_new("streaming_started_at", DateTime.utc_now())
         |> Map.delete("delivered_at")
         |> Map.delete("dead_lettered_at")
-        |> Map.delete("provider_message_id")
-        |> Map.delete("provider_message_ids")
         |> Map.delete("reason")
         |> Map.delete("next_retry_at")
         |> Map.delete("next_retry_in_ms")
         |> Map.delete("pending_retry_attempt")
         |> Map.delete("retry_backoff_ms")
+        |> with_stream_reply_context()
 
       Runtime.update_conversation_metadata(conversation, %{"last_delivery" => delivery})
     else
@@ -267,10 +267,12 @@ defmodule HydraX.Gateway do
             :ok
 
           response ->
+            delivery_conversation = Runtime.get_conversation!(conversation.id)
+
             payload = %{
               content: response,
               external_ref: message.external_ref,
-              metadata: delivery_context(message)
+              metadata: delivery_context_for(delivery_conversation, message)
             }
 
             formatted_payload = adapter_format_message(adapter_mod, payload, state)
@@ -284,7 +286,7 @@ defmodule HydraX.Gateway do
 
             record_delivery_result(
               agent.id,
-              conversation,
+              delivery_conversation,
               message,
               delivery_result,
               formatted_payload: formatted_payload
@@ -295,7 +297,14 @@ defmodule HydraX.Gateway do
                 :ok
 
               {:error, _reason} ->
-                schedule_retry(agent.id, conversation.id, message, adapter_mod, config, 0)
+                schedule_retry(
+                  agent.id,
+                  delivery_conversation.id,
+                  message,
+                  adapter_mod,
+                  config,
+                  0
+                )
 
               _ ->
                 :ok
@@ -328,7 +337,7 @@ defmodule HydraX.Gateway do
       payload = %{
         content: content,
         external_ref: message.external_ref,
-        metadata: delivery_context(message)
+        metadata: delivery_context_for(conversation, message)
       }
 
       formatted_payload = adapter_format_message(adapter_mod, payload, state)
@@ -479,7 +488,9 @@ defmodule HydraX.Gateway do
       "bot_token" => config && config.bot_token,
       "bot_username" => config && config.bot_username,
       "webhook_secret" => config && config.webhook_secret,
-      "deliver" => Map.get(opts, :deliver) || Application.get_env(:hydra_x, :telegram_deliver)
+      "deliver" => Map.get(opts, :deliver) || Application.get_env(:hydra_x, :telegram_deliver),
+      "deliver_stream" =>
+        Map.get(opts, :deliver_stream) || Application.get_env(:hydra_x, :telegram_deliver_stream)
     }
   end
 
@@ -724,10 +735,39 @@ defmodule HydraX.Gateway do
   defp delivery_context(%{metadata: metadata}) when is_map(metadata) do
     metadata
     |> stringify_keys()
-    |> Map.take(["reply_to_message_id", "thread_ts", "source_message_id"])
+    |> Map.take(["reply_to_message_id", "thread_ts", "source_message_id", "stream_message_id"])
   end
 
   defp delivery_context(_message), do: %{}
+
+  defp delivery_context_for(conversation, message) do
+    message
+    |> delivery_context()
+    |> maybe_put_stream_message_id(
+      conversation
+      |> last_delivery()
+      |> previous_stream_message_id()
+    )
+  end
+
+  defp maybe_put_stream_message_id(context, nil), do: context
+
+  defp maybe_put_stream_message_id(context, message_id),
+    do: Map.put(context, "stream_message_id", message_id)
+
+  defp with_stream_reply_context(delivery) do
+    message_id = delivery["provider_message_id"] || delivery[:provider_message_id]
+
+    if is_nil(message_id) do
+      delivery
+    else
+      Map.update(delivery, "reply_context", %{"stream_message_id" => message_id}, fn context ->
+        context
+        |> stringify_keys()
+        |> Map.put("stream_message_id", message_id)
+      end)
+    end
+  end
 
   defp mark_retry_scheduled(conversation, message, pending_retry_attempt, delay_ms) do
     previous = last_delivery(conversation) || %{}
@@ -812,7 +852,10 @@ defmodule HydraX.Gateway do
   end
 
   defp streaming_reply_context(_conversation, previous) do
-    delivery_value(previous, "reply_context") || %{}
+    previous
+    |> delivery_value("reply_context")
+    |> Kernel.||(%{})
+    |> maybe_put_stream_message_id(previous_stream_message_id(previous))
   end
 
   defp maybe_put_existing(map, _key, nil), do: map
@@ -827,6 +870,16 @@ defmodule HydraX.Gateway do
         _ -> nil
       end
   end
+
+  defp previous_stream_message_id(%{"status" => "streaming"} = delivery) do
+    delivery["provider_message_id"] || delivery[:provider_message_id]
+  end
+
+  defp previous_stream_message_id(%{status: "streaming"} = delivery) do
+    delivery[:provider_message_id] || delivery["provider_message_id"]
+  end
+
+  defp previous_stream_message_id(_delivery), do: nil
 
   defp dispatch_channel_update(nil, _adapter_mod, _adapter_config, _event, error),
     do: {:error, error}

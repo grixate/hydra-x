@@ -1,6 +1,7 @@
 defmodule HydraX.TelegramRuntimeTest do
   use HydraX.DataCase
 
+  alias HydraX.Gateway.Adapters.Telegram
   alias HydraX.Runtime
 
   test "register_telegram_webhook stores registration metadata" do
@@ -111,10 +112,42 @@ defmodule HydraX.TelegramRuntimeTest do
                deliver: deliver
              )
 
-    assert_receive {:telegram_test_delivery,
-                    %{text: "Hydra-X smoke test", chat_id: "4242"}}
+    assert_receive {:telegram_test_delivery, %{text: "Hydra-X smoke test", chat_id: "4242"}}
 
     assert result.metadata[:provider_message_id] == 456
+  end
+
+  test "telegram adapter reuses stream message id for final delivery edits" do
+    deliver = fn payload ->
+      send(self(), {:telegram_delivery, payload})
+      {:ok, %{provider_message_id: payload[:stream_message_id] || 777}}
+    end
+
+    assert {:ok, state} =
+             Telegram.connect(%{
+               "bot_token" => "test-token",
+               "deliver" => deliver
+             })
+
+    assert {:ok, metadata} =
+             Telegram.send_response(
+               %{
+                 content: "Final streamed Telegram reply",
+                 external_ref: "4242",
+                 metadata: %{"stream_message_id" => 777}
+               },
+               state
+             )
+
+    assert_receive {:telegram_delivery,
+                    %{
+                      chat_id: "4242",
+                      text: "Final streamed Telegram reply",
+                      stream_message_id: 777
+                    }}
+
+    assert metadata[:provider_message_id] == 777
+    assert metadata[:provider_message_ids] == [777]
   end
 
   defp create_agent do
