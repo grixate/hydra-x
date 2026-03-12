@@ -409,6 +409,15 @@ defmodule HydraX.Runtime.Conversations do
             "- provider: #{channel_state.provider || "n/a"}",
             "- tool_rounds: #{channel_state.tool_rounds || 0}",
             "- resumable: #{if(channel_state.resumable, do: "yes", else: "no")}",
+            maybe_transcript_detail("- handoff", render_handoff_line(channel_state.handoff)),
+            maybe_transcript_detail(
+              "- pending_response",
+              render_pending_response_line(channel_state.pending_response)
+            ),
+            maybe_transcript_detail(
+              "- stream_capture",
+              render_stream_capture_line(channel_state.stream_capture)
+            ),
             maybe_transcript_detail(
               "- recovery",
               render_recovery_lineage(channel_state.recovery_lineage)
@@ -419,6 +428,8 @@ defmodule HydraX.Runtime.Conversations do
             ),
             ""
           ] ++
+            render_transcript_pending_response(channel_state.pending_response) ++
+            render_transcript_stream_capture(channel_state.stream_capture) ++
             render_transcript_steps(channel_state.steps) ++
             render_transcript_events(channel_state.execution_events)
       end
@@ -491,6 +502,63 @@ defmodule HydraX.Runtime.Conversations do
 
   defp render_ownership_line(_ownership), do: nil
 
+  defp render_handoff_line(%{} = handoff) when map_size(handoff) > 0 do
+    [handoff["status"], handoff["waiting_for"], handoff["owner"]]
+    |> Enum.reject(&is_nil_or_empty/1)
+    |> Enum.join(" · ")
+  end
+
+  defp render_handoff_line(_handoff), do: nil
+
+  defp render_pending_response_line(%{} = response) when map_size(response) > 0 do
+    provider = get_in(response, ["metadata", "provider"]) || "provider"
+    content = response["content"] || ""
+    "#{provider} · #{String.slice(content, 0, 120)}"
+  end
+
+  defp render_pending_response_line(_response), do: nil
+
+  defp render_stream_capture_line(%{} = capture) when map_size(capture) > 0 do
+    [
+      capture["provider"],
+      capture["chunk_count"] && "chunks #{capture["chunk_count"]}",
+      capture["captured_at"] && format_transcript_datetime(capture["captured_at"])
+    ]
+    |> Enum.reject(&is_nil_or_empty/1)
+    |> Enum.join(" · ")
+  end
+
+  defp render_stream_capture_line(_capture), do: nil
+
+  defp render_transcript_pending_response(response) when response in [nil, %{}], do: []
+
+  defp render_transcript_pending_response(response) when is_map(response) do
+    [
+      "### Pending response snapshot",
+      "",
+      maybe_transcript_detail("  provider", get_in(response, ["metadata", "provider"])),
+      maybe_transcript_detail("  content", response["content"]),
+      ""
+    ]
+  end
+
+  defp render_transcript_stream_capture(capture) when capture in [nil, %{}], do: []
+
+  defp render_transcript_stream_capture(capture) when is_map(capture) do
+    [
+      "### Partial stream capture",
+      "",
+      maybe_transcript_detail("  provider", capture["provider"]),
+      maybe_transcript_detail("  chunk_count", capture["chunk_count"]),
+      maybe_transcript_detail(
+        "  captured_at",
+        format_transcript_datetime(capture["captured_at"])
+      ),
+      maybe_transcript_detail("  content", capture["content"]),
+      ""
+    ]
+  end
+
   defp render_transcript_events([]), do: []
 
   defp render_transcript_events(events) do
@@ -509,8 +577,11 @@ defmodule HydraX.Runtime.Conversations do
           maybe_transcript_detail("  tool", details["tool_name"]),
           maybe_transcript_detail("  provider", details["provider"]),
           maybe_transcript_detail("  round", details["round"]),
+          maybe_transcript_detail("  waiting_for", details["waiting_for"]),
           maybe_transcript_detail("  cache_hits", details["cache_hits"]),
           maybe_transcript_detail("  cache_misses", details["cache_misses"]),
+          maybe_transcript_detail("  captured_chars", details["captured_chars"]),
+          maybe_transcript_detail("  captured_chunks", details["captured_chunks"]),
           ""
         ]
       end)

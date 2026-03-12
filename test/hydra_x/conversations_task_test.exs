@@ -286,6 +286,21 @@ defmodule HydraX.ConversationsTaskTest do
         },
         "provider" => "mock",
         "tool_rounds" => 1,
+        "handoff" => %{
+          "status" => "pending",
+          "waiting_for" => "stream_response",
+          "owner" => "node:remote"
+        },
+        "pending_response" => %{
+          "content" => "Captured provider reply waiting for replay.",
+          "metadata" => %{"provider" => "mock"}
+        },
+        "stream_capture" => %{
+          "content" => "Partial streamed transcript preview",
+          "chunk_count" => 2,
+          "provider" => "mock",
+          "captured_at" => "2026-03-11T10:45:00Z"
+        },
         "tool_cache_scope_turn_id" => 88,
         "recovery_lineage" => %{
           "turn_scope_id" => 88,
@@ -362,6 +377,12 @@ defmodule HydraX.ConversationsTaskTest do
     assert transcript =~ "\"thread_ts\": \"123.456\""
     assert transcript =~ "## Execution checkpoint"
     assert transcript =~ "owner: database_lease · node:test · idle"
+    assert transcript =~ "handoff: pending · stream_response · node:remote"
+    assert transcript =~ "pending_response: mock · Captured provider reply waiting for replay."
+    assert transcript =~ "stream_capture: mock · chunks 2 · 2026-03-11 10:45:00 UTC"
+    assert transcript =~ "### Pending response snapshot"
+    assert transcript =~ "### Partial stream capture"
+    assert transcript =~ "Partial streamed transcript preview"
     assert transcript =~ "### Steps"
     assert transcript =~ "skill skill_inspect"
     assert transcript =~ "inspected 1 skills"
@@ -393,15 +414,29 @@ defmodule HydraX.ConversationsTaskTest do
 
     {:ok, _checkpoint} =
       Runtime.upsert_checkpoint(conversation.id, "channel", %{
-        "status" => "completed",
+        "status" => "deferred",
         "ownership" => %{
           "mode" => "local_process",
           "owner" => "node:test",
-          "stage" => "idle"
+          "stage" => "deferred"
         },
         "provider" => "mock",
         "tool_rounds" => 1,
-        "resumable" => false,
+        "resumable" => true,
+        "handoff" => %{
+          "status" => "pending",
+          "waiting_for" => "stream_response",
+          "owner" => "node:remote"
+        },
+        "pending_response" => %{
+          "content" => "Captured provider response waiting for replay.",
+          "metadata" => %{"provider" => "mock"}
+        },
+        "stream_capture" => %{
+          "content" => "Partial streamed response",
+          "chunk_count" => 2,
+          "provider" => "mock"
+        },
         "tool_cache_scope_turn_id" => 77,
         "recovery_lineage" => %{
           "turn_scope_id" => 77,
@@ -430,6 +465,15 @@ defmodule HydraX.ConversationsTaskTest do
           %{
             "phase" => "tool_cache_hit",
             "details" => %{"summary" => "cache replay", "round" => 1, "cache_hits" => 1}
+          },
+          %{
+            "phase" => "handoff_restart",
+            "details" => %{
+              "summary" => "Restarted execution after an unfinished ownership handoff",
+              "waiting_for" => "stream_response",
+              "captured_chars" => 25,
+              "captured_chunks" => 2
+            }
           }
         ]
       })
@@ -440,14 +484,24 @@ defmodule HydraX.ConversationsTaskTest do
       end)
 
     assert output =~ "conversation=#{conversation.id}"
-    assert output =~ "execution_status=completed"
-    assert output =~ "owner=local_process/node:test/idle"
+    assert output =~ "execution_status=deferred"
+    assert output =~ "owner=local_process/node:test/deferred"
     assert output =~ "provider=mock"
+    assert output =~ "handoff=pending/stream_response/node:remote"
+    assert output =~ "pending_response=mock:Captured provider response waiting for replay."
+    assert output =~ "stream_capture=mock:chunks=2"
+    assert output =~ "stream_capture_preview=Partial streamed response"
     assert output =~ "cache_scope_turn_id=77"
     assert output =~ "recovery_lineage=turn:77 recoveries:1 cache_hits:1 cache_misses:0"
     assert output =~ "step\tintegration\tmcp_probe\tcompleted\tprobed 1 MCP bindings"
     assert output =~ "event\ttool_result\tprobed 1 MCP bindings\t1"
     assert output =~ "event\ttool_cache_hit\tcache replay\t1\tcache_hits=1"
+
+    assert output =~
+             "event\thandoff_restart\tRestarted execution after an unfinished ownership handoff"
+
+    assert output =~ "waiting_for=stream_response"
+    assert output =~ "captured_chunks=2"
   end
 
   test "conversation task can filter archived conversations by status and search" do

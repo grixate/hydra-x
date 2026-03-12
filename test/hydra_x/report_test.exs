@@ -292,6 +292,20 @@ defmodule HydraX.ReportTest do
         "status" => "completed",
         "provider" => "mock",
         "tool_rounds" => 1,
+        "handoff" => %{
+          "status" => "pending",
+          "waiting_for" => "stream_response",
+          "owner" => "node:remote"
+        },
+        "pending_response" => %{
+          "content" => "Captured provider reply waiting for replay.",
+          "metadata" => %{"provider" => "mock"}
+        },
+        "stream_capture" => %{
+          "content" => "Partial streamed report preview",
+          "chunk_count" => 2,
+          "provider" => "mock"
+        },
         "steps" => [
           %{
             "id" => "tool-1-memory_recall",
@@ -354,6 +368,12 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "payload=channel=C555"
     assert File.read!(export.markdown_path) =~ "thread_ts=777.888"
     assert File.read!(export.markdown_path) =~ "execution=completed"
+    assert File.read!(export.markdown_path) =~ "handoff=pending/stream_response/node:remote"
+
+    assert File.read!(export.markdown_path) =~
+             "pending_response=mock:Captured provider reply waiting for replay."
+
+    assert File.read!(export.markdown_path) =~ "stream_capture=mock:chunks=2"
 
     assert File.read!(export.markdown_path) =~
              "memory:memory_recall:completed:recalled 2 memories"
@@ -369,6 +389,10 @@ defmodule HydraX.ReportTest do
     assert File.read!(Path.join(export.bundle_dir, "agents.json")) =~ "\"search_docs\""
     assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~ "\"channel_state\""
     assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~ "\"memory_recall\""
+    assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~ "\"stream_capture\""
+
+    assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~
+             "\"pending_response\""
   end
 
   defp restore_env(key, nil), do: System.delete_env(key)

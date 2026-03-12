@@ -354,6 +354,58 @@ defmodule HydraXWeb.ConversationsLiveTest do
     assert html =~ "Recovered 1 pending user turn(s) after channel restart"
   end
 
+  test "conversations page shows handoff and partial stream diagnostics", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{
+        channel: "webchat",
+        title: "Stream Handoff UI"
+      })
+
+    {:ok, _checkpoint} =
+      Runtime.upsert_checkpoint(conversation.id, "channel", %{
+        "status" => "deferred",
+        "resumable" => true,
+        "handoff" => %{
+          "status" => "pending",
+          "waiting_for" => "stream_response",
+          "owner" => "node:remote"
+        },
+        "pending_response" => %{
+          "content" => "Captured provider reply waiting for the new owner.",
+          "metadata" => %{"provider" => "Mock Provider"}
+        },
+        "stream_capture" => %{
+          "content" => "Partial streamed response from the previous owner.",
+          "chunk_count" => 3,
+          "provider" => "Mock Provider",
+          "captured_at" => DateTime.utc_now()
+        },
+        "execution_events" => [
+          %{
+            "phase" => "handoff_restart",
+            "at" => DateTime.utc_now(),
+            "details" => %{
+              "waiting_for" => "stream_response",
+              "captured_chars" => 44,
+              "captured_chunks" => 3
+            }
+          }
+        ]
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/conversations?conversation_id=#{conversation.id}")
+
+    html = render(view)
+    assert html =~ "Ownership handoff pending"
+    assert html =~ "Pending provider response from Mock Provider"
+    assert html =~ "Partial stream capture"
+    assert html =~ "Partial streamed response from the previous owner."
+    assert html =~ "chunks 3"
+    assert html =~ "resumed after stream_response"
+  end
+
   test "conversations page shows planner skill hints", %{conn: conn} do
     agent = Runtime.ensure_default_agent!()
 

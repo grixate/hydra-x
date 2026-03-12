@@ -116,6 +116,22 @@ defmodule Mix.Tasks.HydraX.Conversations do
     Mix.shell().info("resumable=#{channel_state.resumable}")
     Mix.shell().info("cache_scope_turn_id=#{channel_state.tool_cache_scope_turn_id || "n/a"}")
 
+    if handoff = handoff_label(channel_state.handoff) do
+      Mix.shell().info("handoff=#{handoff}")
+    end
+
+    if pending_response = pending_response_label(channel_state.pending_response) do
+      Mix.shell().info("pending_response=#{pending_response}")
+    end
+
+    if stream_capture = stream_capture_label(channel_state.stream_capture) do
+      Mix.shell().info("stream_capture=#{stream_capture}")
+    end
+
+    if preview = stream_capture_preview(channel_state.stream_capture) do
+      Mix.shell().info("stream_capture_preview=#{preview}")
+    end
+
     if is_map(channel_state.recovery_lineage) and channel_state.recovery_lineage != %{} do
       Mix.shell().info(
         "recovery_lineage=turn:#{channel_state.recovery_lineage["turn_scope_id"] || "n/a"} recoveries:#{channel_state.recovery_lineage["recovery_count"] || 0} cache_hits:#{channel_state.recovery_lineage["cache_hits"] || 0} cache_misses:#{channel_state.recovery_lineage["cache_misses"] || 0}"
@@ -172,7 +188,16 @@ defmodule Mix.Tasks.HydraX.Conversations do
             details["summary"] || details["tool_name"] || details["provider"] || "",
             to_string(details["round"] || ""),
             if(details["cache_hits"], do: "cache_hits=#{details["cache_hits"]}", else: ""),
-            if(details["cache_misses"], do: "cache_misses=#{details["cache_misses"]}", else: "")
+            if(details["cache_misses"], do: "cache_misses=#{details["cache_misses"]}", else: ""),
+            if(details["waiting_for"], do: "waiting_for=#{details["waiting_for"]}", else: ""),
+            if(details["captured_chars"],
+              do: "captured_chars=#{details["captured_chars"]}",
+              else: ""
+            ),
+            if(details["captured_chunks"],
+              do: "captured_chunks=#{details["captured_chunks"]}",
+              else: ""
+            )
           ],
           "\t"
         )
@@ -258,6 +283,38 @@ defmodule Mix.Tasks.HydraX.Conversations do
   defp conversation_execution_status(conversation_id) do
     HydraX.Runtime.conversation_channel_state(conversation_id).status || "idle"
   end
+
+  defp handoff_label(handoff) when is_map(handoff) and handoff != %{} do
+    [handoff["status"], handoff["waiting_for"], handoff["owner"]]
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> Enum.join("/")
+  end
+
+  defp handoff_label(_handoff), do: nil
+
+  defp pending_response_label(response) when is_map(response) and response != %{} do
+    provider = get_in(response, ["metadata", "provider"]) || "provider"
+    content = response["content"] || ""
+    "#{provider}:#{String.slice(content, 0, 80)}"
+  end
+
+  defp pending_response_label(_response), do: nil
+
+  defp stream_capture_label(capture) when is_map(capture) and capture != %{} do
+    provider = capture["provider"] || "provider"
+    chunk_count = capture["chunk_count"] || 0
+    "#{provider}:chunks=#{chunk_count}"
+  end
+
+  defp stream_capture_label(_capture), do: nil
+
+  defp stream_capture_preview(capture) when is_map(capture) and capture != %{} do
+    capture["content"]
+    |> to_string()
+    |> String.slice(0, 120)
+  end
+
+  defp stream_capture_preview(_capture), do: nil
 
   defp ownership_label(%{} = ownership) when map_size(ownership) > 0 do
     [ownership["mode"], ownership["owner"], ownership["stage"]]

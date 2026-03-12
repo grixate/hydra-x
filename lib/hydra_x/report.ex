@@ -539,8 +539,21 @@ defmodule HydraX.Report do
           |> Enum.join(" | ")
 
         owner = render_conversation_owner(state.ownership)
+        handoff = render_conversation_handoff(state.handoff)
+        pending_response = render_conversation_pending_response(state.pending_response)
+        stream_capture = render_conversation_stream_capture(state.stream_capture)
 
-        " · execution=#{status}; owner=#{owner}; steps=#{if(steps == "", do: "none", else: steps)}"
+        [
+          "execution=#{status}",
+          "owner=#{owner}",
+          handoff && "handoff=#{handoff}",
+          pending_response && "pending_response=#{pending_response}",
+          stream_capture && "stream_capture=#{stream_capture}",
+          "steps=#{if(steps == "", do: "none", else: steps)}"
+        ]
+        |> Enum.reject(&is_nil_or_empty/1)
+        |> Enum.join("; ")
+        |> then(&(" · " <> &1))
     end
   end
 
@@ -551,6 +564,30 @@ defmodule HydraX.Report do
   end
 
   defp render_conversation_owner(_ownership), do: "n/a"
+
+  defp render_conversation_handoff(%{} = handoff) when map_size(handoff) > 0 do
+    [handoff["status"], handoff["waiting_for"], handoff["owner"]]
+    |> Enum.reject(&is_nil_or_empty/1)
+    |> Enum.join("/")
+  end
+
+  defp render_conversation_handoff(_handoff), do: nil
+
+  defp render_conversation_pending_response(%{} = response) when map_size(response) > 0 do
+    provider = get_in(response, ["metadata", "provider"]) || "provider"
+    content = response["content"] || ""
+    "#{provider}:#{String.slice(content, 0, 60)}"
+  end
+
+  defp render_conversation_pending_response(_response), do: nil
+
+  defp render_conversation_stream_capture(%{} = capture) when map_size(capture) > 0 do
+    provider = capture["provider"] || "provider"
+    chunk_count = capture["chunk_count"] || 0
+    "#{provider}:chunks=#{chunk_count}"
+  end
+
+  defp render_conversation_stream_capture(_capture), do: nil
 
   defp render_conversation_delivery(%{metadata: %{"last_delivery" => delivery}}),
     do: " · delivery=#{render_delivery_summary(delivery)}"
@@ -1174,6 +1211,9 @@ defmodule HydraX.Report do
         resumable: channel_state.resumable,
         current_step_id: channel_state.current_step_id,
         current_step_index: channel_state.current_step_index,
+        handoff: channel_state.handoff,
+        pending_response: channel_state.pending_response,
+        stream_capture: channel_state.stream_capture,
         steps: channel_state.steps,
         execution_events: Enum.take(channel_state.execution_events, -10),
         tool_results: channel_state.tool_results

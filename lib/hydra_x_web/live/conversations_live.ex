@@ -540,6 +540,37 @@ defmodule HydraXWeb.ConversationsLive do
                 >
                   {channel_ownership_summary(@channel_state)}
                 </p>
+                <p
+                  :if={channel_handoff_summary(@channel_state)}
+                  class="mt-2 text-xs text-amber-200"
+                >
+                  {channel_handoff_summary(@channel_state)}
+                </p>
+                <p
+                  :if={channel_pending_response_summary(@channel_state)}
+                  class="mt-2 text-xs text-[var(--hx-mute)]"
+                >
+                  {channel_pending_response_summary(@channel_state)}
+                </p>
+                <div
+                  :if={channel_stream_capture(@channel_state)}
+                  class="mt-3 rounded-2xl border border-amber-400/20 bg-amber-400/5 px-4 py-4"
+                >
+                  <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-amber-200">
+                    Partial stream capture
+                  </div>
+                  <div class="mt-3 flex flex-wrap gap-2 text-xs">
+                    <span
+                      :for={label <- channel_stream_capture_labels(@channel_state)}
+                      class="rounded-full border border-amber-400/20 bg-amber-400/10 px-3 py-1 font-mono uppercase tracking-[0.18em] text-amber-200"
+                    >
+                      {label}
+                    </span>
+                  </div>
+                  <p class="mt-3 whitespace-pre-wrap text-sm leading-6 text-white/80">
+                    {stream_capture_preview(channel_stream_capture(@channel_state))}
+                  </p>
+                </div>
                 <div :if={channel_steps(@channel_state) != []} class="mt-3 space-y-2">
                   <div
                     :for={{step, index} <- Enum.with_index(channel_steps(@channel_state))}
@@ -933,7 +964,8 @@ defmodule HydraXWeb.ConversationsLive do
     Ecto.NoResultsError -> {:error, :agent_not_found}
   end
 
-  defp submit_reply(_agent, _conversation, message, _metadata, _action) when message in [nil, ""] do
+  defp submit_reply(_agent, _conversation, message, _metadata, _action)
+       when message in [nil, ""] do
     {:error, :empty_message}
   end
 
@@ -1028,6 +1060,19 @@ defmodule HydraXWeb.ConversationsLive do
       "stream_completed" ->
         "stream completed via #{details["provider"] || "unknown"}"
 
+      "ownership_handoff_pending" ->
+        "waiting for #{details["awaiting"] || "handoff"} on #{details["owner"] || "new owner"}"
+
+      "handoff_restart" ->
+        waiting_for = details["waiting_for"] || "handoff"
+        captured_chars = details["captured_chars"] || 0
+        captured_chunks = details["captured_chunks"] || 0
+
+        "resumed after #{waiting_for}; preserved #{captured_chars} chars across #{captured_chunks} chunks"
+
+      "handoff_response_replayed" ->
+        details["summary"] || "Completed a captured response after handoff"
+
       "recovered_after_restart" ->
         details["summary"] || "Recovered pending execution after restart"
 
@@ -1107,6 +1152,55 @@ defmodule HydraXWeb.ConversationsLive do
   end
 
   defp channel_ownership_summary(_state), do: nil
+
+  defp channel_handoff_summary(nil), do: nil
+
+  defp channel_handoff_summary(%{handoff: handoff}) when is_map(handoff) and handoff != %{} do
+    waiting_for = handoff["waiting_for"] || "handoff"
+    owner = handoff["owner"] || "owner"
+    "Ownership handoff pending: waiting for #{waiting_for} on #{owner}"
+  end
+
+  defp channel_handoff_summary(_state), do: nil
+
+  defp channel_pending_response_summary(nil), do: nil
+
+  defp channel_pending_response_summary(%{pending_response: response})
+       when is_map(response) and response != %{} do
+    provider = get_in(response, ["metadata", "provider"]) || "provider"
+    content = response["content"] || ""
+    "Pending provider response from #{provider}: #{String.slice(content, 0, 120)}"
+  end
+
+  defp channel_pending_response_summary(_state), do: nil
+
+  defp channel_stream_capture(nil), do: nil
+
+  defp channel_stream_capture(%{stream_capture: capture}) when is_map(capture) and capture != %{},
+    do: capture
+
+  defp channel_stream_capture(_state), do: nil
+
+  defp channel_stream_capture_labels(state) do
+    capture = channel_stream_capture(state) || %{}
+
+    []
+    |> maybe_add_step_label(capture["provider"])
+    |> maybe_add_step_label(stream_capture_chunks_label(capture["chunk_count"]))
+    |> maybe_add_step_label(stream_capture_time_label(capture["captured_at"]))
+  end
+
+  defp stream_capture_preview(nil), do: nil
+  defp stream_capture_preview(%{"content" => content}) when is_binary(content), do: content
+  defp stream_capture_preview(_capture), do: nil
+
+  defp stream_capture_chunks_label(count) when is_integer(count) and count > 0,
+    do: "chunks #{count}"
+
+  defp stream_capture_chunks_label(_count), do: nil
+
+  defp stream_capture_time_label(nil), do: nil
+  defp stream_capture_time_label(value), do: "captured #{format_event_time(value)}"
 
   defp step_status_label("running", true), do: "current"
 
