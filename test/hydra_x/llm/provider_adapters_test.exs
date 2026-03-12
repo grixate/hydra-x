@@ -60,6 +60,57 @@ defmodule HydraX.LLM.ProviderAdaptersTest do
     assert detail =~ "chat completions"
   end
 
+  test "openai compatible streaming adapter emits chunks and final response via request_fn" do
+    provider = %ProviderConfig{
+      name: "OpenAI Stream Test",
+      kind: "openai_compatible",
+      base_url: "https://example.test",
+      api_key: "secret",
+      model: "gpt-stream-test"
+    }
+
+    request_fn = fn opts ->
+      into = Keyword.fetch!(opts, :into)
+
+      {:cont, state} =
+        into.(
+          {:data,
+           "data: {\"choices\":[{\"delta\":{\"content\":\"Hello \"},\"finish_reason\":null}]}\n\n"},
+          {%{}, %{}}
+        )
+
+      {:cont, state} =
+        into.(
+          {:data,
+           "data: {\"choices\":[{\"delta\":{\"content\":\"stream\"},\"finish_reason\":null}]}\n\n"},
+          state
+        )
+
+      {:cont, _state} =
+        into.(
+          {:data,
+           "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"},
+          state
+        )
+
+      {:ok, %{status: 200}}
+    end
+
+    assert {:ok, ref} =
+             OpenAICompatible.complete_stream(
+               %{
+                 provider_config: provider,
+                 messages: [%{role: "user", content: "hello"}],
+                 request_fn: request_fn
+               },
+               self()
+             )
+
+    assert_receive {:chunk, ^ref, "Hello "}
+    assert_receive {:chunk, ^ref, "stream"}
+    assert_receive {:done, ^ref, %{content: "Hello stream", provider: "OpenAI Stream Test"}}
+  end
+
   test "anthropic provider preserves system prompt separately" do
     provider = %ProviderConfig{
       name: "Anthropic Test",
@@ -118,5 +169,56 @@ defmodule HydraX.LLM.ProviderAdaptersTest do
              Anthropic.healthcheck(provider, request_fn: request_fn)
 
     assert detail =~ "messages API"
+  end
+
+  test "anthropic streaming adapter emits chunks and final response via request_fn" do
+    provider = %ProviderConfig{
+      name: "Anthropic Stream Test",
+      kind: "anthropic",
+      base_url: "https://anthropic.test",
+      api_key: "secret",
+      model: "claude-stream-test"
+    }
+
+    request_fn = fn opts ->
+      into = Keyword.fetch!(opts, :into)
+
+      {:cont, state} =
+        into.(
+          {:data,
+           "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello \"}}\n\n"},
+          {%{}, %{}}
+        )
+
+      {:cont, state} =
+        into.(
+          {:data,
+           "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"anthropic\"}}\n\n"},
+          state
+        )
+
+      {:cont, _state} =
+        into.(
+          {:data,
+           "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\n"},
+          state
+        )
+
+      {:ok, %{status: 200}}
+    end
+
+    assert {:ok, ref} =
+             Anthropic.complete_stream(
+               %{
+                 provider_config: provider,
+                 messages: [%{role: "user", content: "hello"}],
+                 request_fn: request_fn
+               },
+               self()
+             )
+
+    assert_receive {:chunk, ^ref, "Hello "}
+    assert_receive {:chunk, ^ref, "anthropic"}
+    assert_receive {:done, ^ref, %{content: "Hello anthropic", provider: "Anthropic Stream Test"}}
   end
 end

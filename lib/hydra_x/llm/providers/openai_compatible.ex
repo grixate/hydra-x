@@ -123,6 +123,7 @@ defmodule HydraX.LLM.Providers.OpenAICompatible do
     provider = request.provider_config
     base_url = provider.base_url || "https://api.openai.com"
     request_options = request[:request_options] || []
+    request_fn = request[:request_fn] || (&Req.post/1)
     ref = make_ref()
 
     body =
@@ -134,7 +135,7 @@ defmodule HydraX.LLM.Providers.OpenAICompatible do
       |> maybe_put_tools(request[:tools])
 
     Task.Supervisor.start_child(HydraX.TaskSupervisor, fn ->
-      stream_request(base_url, provider, body, request_options, caller_pid, ref)
+      stream_request(base_url, provider, body, request_options, request_fn, caller_pid, ref)
     end)
 
     {:ok, ref}
@@ -171,7 +172,7 @@ defmodule HydraX.LLM.Providers.OpenAICompatible do
     end
   end
 
-  defp stream_request(base_url, provider, body, request_options, caller_pid, ref) do
+  defp stream_request(base_url, provider, body, request_options, request_fn, caller_pid, ref) do
     acc = %{text: "", tool_calls: %{}, stop_reason: nil}
 
     into_fun = fn {:data, data}, {req, resp} ->
@@ -189,7 +190,7 @@ defmodule HydraX.LLM.Providers.OpenAICompatible do
     Process.put(:stream_acc, acc)
 
     result =
-      Req.post(
+      request_fn.(
         url: build_url(base_url, "/v1/chat/completions"),
         headers: auth_headers(provider.api_key),
         json: body,

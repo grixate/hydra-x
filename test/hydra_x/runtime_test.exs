@@ -713,6 +713,181 @@ defmodule HydraX.RuntimeTest do
     assert :atomics.get(counter, 1) == 3
   end
 
+  test "unfinished handoff work can be resumed after the original channel process dies" do
+    previous_adapter = Application.get_env(:hydra_x, :repo_adapter)
+    previous_request_fn = Application.get_env(:hydra_x, :provider_request_fn)
+    Application.put_env(:hydra_x, :repo_adapter, Ecto.Adapters.Postgres)
+
+    counter = :atomics.new(1, [])
+    test_pid = self()
+
+    on_exit(fn ->
+      if previous_adapter do
+        Application.put_env(:hydra_x, :repo_adapter, previous_adapter)
+      else
+        Application.delete_env(:hydra_x, :repo_adapter)
+      end
+
+      if previous_request_fn do
+        Application.put_env(:hydra_x, :provider_request_fn, previous_request_fn)
+      else
+        Application.delete_env(:hydra_x, :provider_request_fn)
+      end
+    end)
+
+    agent = create_agent()
+    marker_path = Path.join(agent.workspace_root, "restartable-tool-started.txt")
+    command = "sh -c \"echo started > #{marker_path} && sleep 2 && echo ready\""
+
+    Application.put_env(:hydra_x, :provider_request_fn, fn _opts ->
+      call_number = :atomics.add_get(counter, 1, 1)
+
+      body =
+        case call_number do
+          number when number in [1, 2] ->
+            send(test_pid, {:restartable_tool_round_requested, call_number})
+
+            %{
+              "choices" => [
+                %{
+                  "message" => %{
+                    "content" => nil,
+                    "tool_calls" => [
+                      %{
+                        "id" => "call-shell-restart",
+                        "function" => %{
+                          "name" => "shell_command",
+                          "arguments" => Jason.encode!(%{"command" => command})
+                        }
+                      }
+                    ]
+                  },
+                  "finish_reason" => "tool_calls"
+                }
+              ]
+            }
+
+          _ ->
+            %{
+              "choices" => [
+                %{
+                  "message" => %{
+                    "content" => "Recovered after the original channel died.",
+                    "tool_calls" => nil
+                  },
+                  "finish_reason" => "stop"
+                }
+              ]
+            }
+        end
+
+      {:ok, %{status: 200, body: body}}
+    end)
+
+    {:ok, provider} =
+      Runtime.save_provider_config(%{
+        name: "Restartable Handoff Provider",
+        kind: "openai_compatible",
+        base_url: "https://restartable-handoff.test",
+        api_key: "secret",
+        model: "gpt-restartable-handoff",
+        enabled: false
+      })
+
+    {:ok, _agent} =
+      Runtime.save_agent_provider_routing(agent.id, %{
+        "default_provider_id" => provider.id
+      })
+
+    {:ok, _policy} =
+      Runtime.save_agent_tool_policy(agent.id, %{
+        "shell_command_enabled" => true,
+        "shell_command_channels_csv" => "cli",
+        "shell_allowlist_csv" => "sh"
+      })
+
+    {:ok, pid} = HydraX.Agent.ensure_started(agent)
+    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{channel: "cli", title: "handoff-restart-after-crash"})
+
+    {:ok, channel_pid} = HydraX.Agent.Channel.ensure_started(agent.id, conversation)
+
+    task =
+      Task.Supervisor.async_nolink(HydraX.TaskSupervisor, fn ->
+        Channel.submit(
+          agent,
+          conversation,
+          "Resume this after the original channel disappears.",
+          %{source: "test"}
+        )
+      end)
+
+    assert_receive {:restartable_tool_round_requested, 1}, 1_000
+    wait_for(fn -> File.exists?(marker_path) end, 80)
+
+    stale_lease = Runtime.get_lease("conversation:#{conversation.id}")
+
+    stale_lease
+    |> Ecto.Changeset.change(expires_at: DateTime.add(DateTime.utc_now(), -60, :second))
+    |> Repo.update!()
+
+    assert {:ok, _lease} =
+             Runtime.claim_lease("conversation:#{conversation.id}",
+               owner: "node:remote",
+               ttl_seconds: 60
+             )
+
+    send(channel_pid, :lease_tick)
+
+    wait_for(
+      fn ->
+        handoff = Runtime.conversation_channel_state(conversation.id).handoff || %{}
+        state = Runtime.conversation_channel_state(conversation.id)
+        state.status == "deferred" and handoff["waiting_for"] == "tool_results"
+      end,
+      80
+    )
+
+    shutdown_process(channel_pid)
+    wait_for(fn -> not Process.alive?(channel_pid) end)
+
+    assert catch_exit(Task.await(task, 5_000))
+
+    remote_lease = Runtime.get_lease("conversation:#{conversation.id}")
+
+    remote_lease
+    |> Ecto.Changeset.change(expires_at: DateTime.add(DateTime.utc_now(), -60, :second))
+    |> Repo.update!()
+
+    assert {:ok, _lease} =
+             Runtime.claim_lease("conversation:#{conversation.id}", ttl_seconds: 60)
+
+    {:ok, resumed_channel_pid} = HydraX.Agent.Channel.ensure_started(agent.id, conversation)
+
+    on_exit(fn ->
+      if Process.alive?(resumed_channel_pid), do: shutdown_process(resumed_channel_pid)
+    end)
+
+    assert_receive {:restartable_tool_round_requested, 2}, 1_000
+
+    wait_for(
+      fn ->
+        Runtime.list_turns(conversation.id)
+        |> Enum.any?(
+          &(&1.role == "assistant" and &1.content == "Recovered after the original channel died.")
+        )
+      end,
+      120
+    )
+
+    final_state = Runtime.conversation_channel_state(conversation.id)
+    assert final_state.status == "completed"
+    assert final_state.handoff == nil
+    assert Enum.any?(final_state.execution_events, &(&1["phase"] == "handoff_restart"))
+  end
+
   test "owned deferred conversations can be resumed through the runtime" do
     previous_adapter = Application.get_env(:hydra_x, :repo_adapter)
     Application.put_env(:hydra_x, :repo_adapter, Ecto.Adapters.Postgres)

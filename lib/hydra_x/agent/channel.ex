@@ -260,6 +260,8 @@ defmodule HydraX.Agent.Channel do
   end
 
   defp process_buffer(data) do
+    maybe_record_handoff_restart(data.conversation.id)
+
     case pending_response_state(data.conversation.id) do
       %{"content" => content, "metadata" => metadata} ->
         finalize_pending_response(content, metadata, data)
@@ -298,6 +300,7 @@ defmodule HydraX.Agent.Channel do
     update_channel_checkpoint(data.conversation.id, %{
       "status" => "planned",
       "ownership" => data.ownership,
+      "handoff" => nil,
       "plan" => plan,
       "steps" => plan["steps"] || [],
       "tool_cache" =>
@@ -973,6 +976,7 @@ defmodule HydraX.Agent.Channel do
     update_channel_checkpoint(data.conversation.id, %{
       "status" => "completed",
       "ownership" => idle_data.ownership,
+      "handoff" => nil,
       "steps" => steps,
       "current_step_id" => nil,
       "current_step_index" => nil,
@@ -1210,6 +1214,7 @@ defmodule HydraX.Agent.Channel do
     end
 
     update_channel_checkpoint(data.conversation.id, %{
+      "status" => "deferred",
       "ownership" => ownership,
       "resumable" => true,
       "handoff" => handoff_payload(ownership, waiting_for),
@@ -1442,6 +1447,18 @@ defmodule HydraX.Agent.Channel do
 
   defp pending_response_state(conversation_id) do
     Runtime.conversation_channel_state(conversation_id).pending_response
+  end
+
+  defp maybe_record_handoff_restart(conversation_id) do
+    state = Runtime.conversation_channel_state(conversation_id)
+    handoff = state.handoff || %{}
+
+    if is_map(handoff) and handoff["status"] == "pending" and is_nil(state.pending_response) do
+      append_channel_event(conversation_id, "handoff_restart", %{
+        "summary" => "Restarted execution after an unfinished ownership handoff",
+        "waiting_for" => handoff["waiting_for"]
+      })
+    end
   end
 
   defp pending_response_attrs(response, round, all_tool_results, opts \\ []) do
