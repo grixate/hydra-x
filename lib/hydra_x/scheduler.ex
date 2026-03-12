@@ -19,6 +19,7 @@ defmodule HydraX.Scheduler do
   def init(_opts) do
     schedule_poll()
     schedule_retention()
+
     {:ok,
      %{
        running_jobs: MapSet.new(),
@@ -79,6 +80,7 @@ defmodule HydraX.Scheduler do
       end)
 
     schedule_poll()
+
     {:noreply,
      %{
        state

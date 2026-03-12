@@ -128,9 +128,15 @@ defmodule HydraX.Agent.Compactor do
 
   defp fallback_summary(transcript), do: String.slice(transcript, 0, 800)
 
-  defp level_for(count, thresholds, ratio) when count >= thresholds.hard or ratio >= 0.95, do: "hard"
-  defp level_for(count, thresholds, ratio) when count >= thresholds.medium or ratio >= 0.9, do: "medium"
-  defp level_for(count, thresholds, ratio) when count >= thresholds.soft or ratio >= 0.8, do: "soft"
+  defp level_for(count, thresholds, ratio) when count >= thresholds.hard or ratio >= 0.95,
+    do: "hard"
+
+  defp level_for(count, thresholds, ratio) when count >= thresholds.medium or ratio >= 0.9,
+    do: "medium"
+
+  defp level_for(count, thresholds, ratio) when count >= thresholds.soft or ratio >= 0.8,
+    do: "soft"
+
   defp level_for(_, _, _), do: nil
 
   defp token_usage(agent_id, turns) do

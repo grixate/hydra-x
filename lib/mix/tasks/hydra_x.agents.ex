@@ -254,7 +254,13 @@ defmodule Mix.Tasks.HydraX.Agents do
   defp manage_skills(id, rest) do
     {opts, args, _invalid} =
       OptionParser.parse(rest,
-        strict: [refresh: :boolean, enable: :integer, disable: :integer, show: :integer, export: :string]
+        strict: [
+          refresh: :boolean,
+          enable: :integer,
+          disable: :integer,
+          show: :integer,
+          export: :string
+        ]
       )
 
     agent_id = String.to_integer(id)

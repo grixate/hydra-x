@@ -864,7 +864,12 @@ defmodule HydraXWeb.MemoryLive do
     case blank_to_nil(filters["query"]) do
       nil ->
         memories =
-          Memory.search(parse_integer(filters["agent_id"]), filters["query"], @memory_page_size, opts)
+          Memory.search(
+            parse_integer(filters["agent_id"]),
+            filters["query"],
+            @memory_page_size,
+            opts
+          )
 
         {memories, %{}}
 
