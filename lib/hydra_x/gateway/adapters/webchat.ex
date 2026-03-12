@@ -33,10 +33,12 @@ defmodule HydraX.Gateway.Adapters.Webchat do
 
   @impl true
   def send_response(%{content: _content, external_ref: external_ref}, _state) do
+    publish_session_event(external_ref, {:webchat_delivery, external_ref})
     {:ok, %{channel: "webchat", external_ref: external_ref, streaming: true}}
   end
 
   def send_response(%{text: _content, session_id: external_ref}, _state) do
+    publish_session_event(external_ref, {:webchat_delivery, external_ref})
     {:ok, %{channel: "webchat", external_ref: external_ref, streaming: true}}
   end
 
@@ -107,6 +109,25 @@ defmodule HydraX.Gateway.Adapters.Webchat do
   end
 
   @impl true
+  def deliver_stream(%{content: content, external_ref: external_ref} = message, _state) do
+    chunk_count = Map.get(message, :chunk_count, 0)
+
+    publish_session_event(
+      external_ref,
+      {:webchat_stream_preview, external_ref, content, chunk_count}
+    )
+
+    {:ok,
+     %{
+       channel: "webchat",
+       external_ref: external_ref,
+       streaming: true,
+       transport: "session_pubsub",
+       topic: session_topic(external_ref)
+     }}
+  end
+
+  @impl true
   def health(state) do
     %{
       channel: "webchat",
@@ -151,6 +172,10 @@ defmodule HydraX.Gateway.Adapters.Webchat do
   @impl true
   def format_message(%{content: content, external_ref: external_ref}, _state) do
     %{text: content, session_id: external_ref}
+  end
+
+  def session_topic(session_ref) when is_binary(session_ref) and session_ref != "" do
+    "webchat:session:" <> session_ref
   end
 
   defp normalize_content(content, attachments) when is_binary(content) do
@@ -219,5 +244,10 @@ defmodule HydraX.Gateway.Adapters.Webchat do
       |> Enum.join(", ")
 
     "[Webchat attachments: #{kinds}]"
+  end
+
+  defp publish_session_event(session_ref, event)
+       when is_binary(session_ref) and session_ref != "" do
+    Phoenix.PubSub.broadcast(HydraX.PubSub, session_topic(session_ref), event)
   end
 end

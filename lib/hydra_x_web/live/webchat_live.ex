@@ -6,16 +6,22 @@ defmodule HydraXWeb.WebchatLive do
 
   @impl true
   def mount(_params, session, socket) do
+    session_ref = webchat_session_ref(session)
+
     if connected?(socket) do
       Phoenix.PubSub.subscribe(HydraX.PubSub, "conversations")
       Phoenix.PubSub.subscribe(HydraX.PubSub, "conversations:stream")
+
+      Phoenix.PubSub.subscribe(
+        HydraX.PubSub,
+        HydraX.Gateway.Adapters.Webchat.session_topic(session_ref)
+      )
     end
 
     config =
       Runtime.enabled_webchat_config() || List.first(Runtime.list_webchat_configs()) ||
         %Runtime.WebchatConfig{}
 
-    session_ref = webchat_session_ref(session)
     session_state = webchat_session_state(session, config)
     conversation = webchat_conversation(config, session_ref)
     channel_state = conversation && Runtime.conversation_channel_state(conversation.id)
@@ -125,6 +131,24 @@ defmodule HydraXWeb.WebchatLive do
 
       _ ->
         {:noreply, socket}
+    end
+  end
+
+  @impl true
+  def handle_info({:webchat_stream_preview, session_ref, preview, _chunk_count}, socket) do
+    if socket.assigns.session_ref == session_ref do
+      {:noreply, assign(socket, :streaming_content, preview)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  @impl true
+  def handle_info({:webchat_delivery, session_ref}, socket) do
+    if socket.assigns.session_ref == session_ref do
+      {:noreply, assign(socket, :streaming_content, nil)}
+    else
+      {:noreply, socket}
     end
   end
 

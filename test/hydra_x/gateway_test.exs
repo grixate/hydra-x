@@ -1032,6 +1032,13 @@ defmodule HydraX.GatewayTest do
     {:ok, pid} = HydraX.Agent.ensure_started(agent)
     on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
 
+    session_ref = "webchat-session-42"
+
+    Phoenix.PubSub.subscribe(
+      HydraX.PubSub,
+      HydraX.Gateway.Adapters.Webchat.session_topic(session_ref)
+    )
+
     {:ok, _webchat} =
       Runtime.save_webchat_config(%{
         title: "Hydra-X Browser",
@@ -1044,9 +1051,11 @@ defmodule HydraX.GatewayTest do
 
     assert :ok =
              HydraX.Gateway.dispatch_webchat_message(%{
-               "session_id" => "webchat-session-42",
+               "session_id" => session_ref,
                "content" => "Webchat should reach the runtime."
              })
+
+    assert_receive {:webchat_delivery, ^session_ref}
 
     [conversation] = Runtime.list_conversations(agent_id: agent.id, limit: 10)
     assert conversation.channel == "webchat"
@@ -1060,6 +1069,12 @@ defmodule HydraX.GatewayTest do
 
   test "streaming-capable deliveries update last_delivery while chunks are in flight" do
     agent = create_agent()
+    session_ref = "webchat-session-streaming"
+
+    Phoenix.PubSub.subscribe(
+      HydraX.PubSub,
+      HydraX.Gateway.Adapters.Webchat.session_topic(session_ref)
+    )
 
     {:ok, _webchat} =
       Runtime.save_webchat_config(%{
@@ -1072,7 +1087,7 @@ defmodule HydraX.GatewayTest do
       Runtime.start_conversation(agent, %{
         channel: "webchat",
         title: "Streaming Delivery",
-        external_ref: "webchat-session-streaming"
+        external_ref: session_ref
       })
 
     assert {:ok, _conversation} =
@@ -1082,12 +1097,15 @@ defmodule HydraX.GatewayTest do
                provider: "Mock Provider"
              )
 
+    assert_receive {:webchat_stream_preview, ^session_ref, "Partial streamed delivery", 1}
+
     refreshed = Runtime.get_conversation!(conversation.id)
     assert refreshed.metadata["last_delivery"]["status"] == "streaming"
-    assert refreshed.metadata["last_delivery"]["external_ref"] == "webchat-session-streaming"
+    assert refreshed.metadata["last_delivery"]["external_ref"] == session_ref
     assert refreshed.metadata["last_delivery"]["chunk_count"] == 1
     assert refreshed.metadata["last_delivery"]["metadata"]["streaming"] == true
     assert refreshed.metadata["last_delivery"]["metadata"]["provider"] == "Mock Provider"
+    assert refreshed.metadata["last_delivery"]["metadata"]["transport"] == "session_pubsub"
 
     assert refreshed.metadata["last_delivery"]["formatted_payload"]["text"] ==
              "Partial streamed delivery"
@@ -1100,6 +1118,9 @@ defmodule HydraX.GatewayTest do
                chunk_count: 4,
                provider: "Mock Provider"
              )
+
+    assert_receive {:webchat_stream_preview, ^session_ref,
+                    "Partial streamed delivery with more detail", 4}
 
     refreshed = Runtime.get_conversation!(conversation.id)
     assert refreshed.metadata["last_delivery"]["status"] == "streaming"

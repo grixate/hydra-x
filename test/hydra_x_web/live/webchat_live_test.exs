@@ -194,6 +194,56 @@ defmodule HydraXWeb.WebchatLiveTest do
     assert render(view) =~ "Partial streamed webchat reply with more detail"
   end
 
+  test "webchat responds to adapter-native session stream previews", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+    {:ok, _pid} = HydraX.Agent.ensure_started(agent)
+    now = System.system_time(:second)
+
+    conn =
+      init_test_session(conn,
+        webchat_session_id: "adapter-stream-session",
+        webchat_session_created_at: now,
+        webchat_session_last_active_at: now
+      )
+
+    {:ok, _webchat} =
+      Runtime.save_webchat_config(%{
+        title: "Hydra-X Browser",
+        enabled: true,
+        allow_anonymous_messages: true,
+        default_agent_id: agent.id
+      })
+
+    session_ref = webchat_session_ref("adapter-stream-session")
+
+    {:ok, _conversation} =
+      Runtime.start_conversation(agent, %{
+        channel: "webchat",
+        title: "Adapter Streaming Webchat",
+        external_ref: session_ref
+      })
+
+    {:ok, view, html} = live(conn, ~p"/webchat")
+    refute html =~ "Adapter-native preview"
+
+    Phoenix.PubSub.broadcast(
+      HydraX.PubSub,
+      HydraX.Gateway.Adapters.Webchat.session_topic(session_ref),
+      {:webchat_stream_preview, session_ref, "Adapter-native preview", 2}
+    )
+
+    assert render(view) =~ "assistant streaming"
+    assert render(view) =~ "Adapter-native preview"
+
+    Phoenix.PubSub.broadcast(
+      HydraX.PubSub,
+      HydraX.Gateway.Adapters.Webchat.session_topic(session_ref),
+      {:webchat_delivery, session_ref}
+    )
+
+    refute render(view) =~ "Adapter-native preview"
+  end
+
   defp webchat_session_ref(session_id) do
     "webchat:" <>
       (:crypto.hash(:sha256, session_id)

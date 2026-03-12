@@ -112,12 +112,23 @@ defmodule HydraX.Gateway do
       payload = %{
         content: preview,
         external_ref: conversation.external_ref,
+        chunk_count: chunk_count,
         metadata: streaming_reply_context(conversation, previous)
       }
 
       formatted_payload =
         adapter_format_message(adapter_mod, payload, state)
         |> maybe_put_stream_chunk_count(chunk_count)
+
+      stream_dispatch =
+        adapter_stream_delivery(adapter_mod, payload, state)
+
+      stream_metadata =
+        case stream_dispatch do
+          {:ok, metadata} when is_map(metadata) -> stringify_keys(metadata)
+          {:error, reason} -> %{"error" => inspect(reason)}
+          _ -> %{}
+        end
 
       delivery =
         conversation
@@ -130,7 +141,10 @@ defmodule HydraX.Gateway do
         |> Map.put("metadata", %{
           "streaming" => true,
           "provider" => Keyword.get(opts, :provider),
-          "preview_chars" => String.length(preview)
+          "preview_chars" => String.length(preview),
+          "transport" => stream_metadata["transport"],
+          "transport_topic" => stream_metadata["topic"],
+          "transport_error" => stream_metadata["error"]
         })
         |> Map.put_new("streaming_started_at", DateTime.utc_now())
         |> Map.delete("delivered_at")
@@ -842,6 +856,14 @@ defmodule HydraX.Gateway do
 
       true ->
         adapter_mod.send_response(payload, state)
+    end
+  end
+
+  defp adapter_stream_delivery(adapter_mod, payload, state) do
+    if function_exported?(adapter_mod, :deliver_stream, 2) do
+      adapter_mod.deliver_stream(payload, state)
+    else
+      :unsupported
     end
   end
 

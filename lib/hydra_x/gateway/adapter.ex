@@ -16,9 +16,11 @@ defmodule HydraX.Gateway.Adapter do
   @callback sync_status(term()) :: {:ok, map()} | {:error, term()}
   @callback capabilities() :: map()
   @callback format_message(map(), term()) :: map()
+  @callback deliver_stream(map(), term()) :: {:ok, map()} | {:error, term()}
 
   @optional_callbacks normalize_inbound: 1,
                       deliver: 2,
+                      deliver_stream: 2,
                       health: 1,
                       sync_status: 1,
                       capabilities: 0,
