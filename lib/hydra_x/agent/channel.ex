@@ -139,7 +139,9 @@ defmodule HydraX.Agent.Channel do
         coalesce_buffer: pending_turns,
         pending_from: [],
         ownership: nil,
-        release_ownership_on_terminate: true
+        release_ownership_on_terminate: true,
+        handoff_pending: nil,
+        handoff_waiting_for: nil
       }
       |> refresh_conversation_ownership(if(recovered?, do: "recovering", else: "idle"))
       |> schedule_lease_tick()
@@ -198,7 +200,7 @@ defmodule HydraX.Agent.Channel do
   def handle_event(:internal, :process_buffer, :processing, data) do
     case refresh_conversation_ownership(data, "processing") do
       %{ownership: %{"active" => false} = ownership} = refreshed_data ->
-        stop_for_ownership_loss(:processing, refreshed_data, ownership)
+        maybe_defer_ownership_loss(:processing, refreshed_data, ownership)
 
       refreshed_data ->
         process_buffer(refreshed_data)
@@ -210,7 +212,7 @@ defmodule HydraX.Agent.Channel do
 
     case refreshed_data.ownership do
       %{"active" => false} = ownership ->
-        stop_for_ownership_loss(state, refreshed_data, ownership)
+        maybe_defer_ownership_loss(state, refreshed_data, ownership)
 
       _ ->
         update_channel_checkpoint(refreshed_data.conversation.id, %{
@@ -239,6 +241,14 @@ defmodule HydraX.Agent.Channel do
   # Handle streaming error — fall back to error response
   def handle_event(:info, {:stream_error, ref, reason}, :processing, data) do
     handle_stream_error(ref, reason, data)
+  end
+
+  def handle_event(:info, {:tool_results_ready, ref, payload}, :processing, data) do
+    handle_tool_results(ref, payload, data)
+  end
+
+  def handle_event(:info, {:tool_results_error, ref, reason}, :processing, data) do
+    handle_tool_results_error(ref, reason, data)
   end
 
   def handle_event(_type, _event, _state, data), do: {:keep_state, data}
@@ -332,6 +342,9 @@ defmodule HydraX.Agent.Channel do
         # {:chunk, ref, delta} and {:done, ref, response} messages
         {:keep_state, Map.merge(data, stream_data)}
 
+      {:tool_execution, tool_data} ->
+        {:keep_state, Map.merge(data, tool_data)}
+
       {response_content, response_metadata} ->
         complete_response(response_content, response_metadata, data)
 
@@ -341,7 +354,7 @@ defmodule HydraX.Agent.Channel do
   end
 
   defp handle_stream_chunk(ref, delta, data) do
-    if data[:stream_ref] == ref do
+    if data[:stream_ref] == ref and is_nil(data[:handoff_pending]) do
       Phoenix.PubSub.broadcast(
         HydraX.PubSub,
         "conversations:stream",
@@ -371,13 +384,23 @@ defmodule HydraX.Agent.Channel do
         metadata: %{reason: inspect(reason)}
       })
 
-      finalize_streamed_response(
-        %{
-          content: "Streaming failed. Check /health and provider settings.",
-          provider: "stream-error"
-        },
-        data
-      )
+      stream_error_response = %{
+        content: "Streaming failed. Check /health and provider settings.",
+        provider: "stream-error"
+      }
+
+      case data[:handoff_pending] do
+        nil ->
+          finalize_streamed_response(stream_error_response, data)
+
+        ownership ->
+          stop_for_ownership_loss(
+            :processing,
+            clear_handoff_state(data),
+            ownership,
+            %{"handoff" => nil, "updated_at" => DateTime.utc_now()}
+          )
+      end
     else
       {:keep_state, data}
     end
@@ -412,85 +435,16 @@ defmodule HydraX.Agent.Channel do
             "tool_count" => length(tool_calls)
           })
 
-          {tool_results, cache_hits, cache_misses} =
-            execute_tool_calls_with_cache(refreshed_data, tool_calls)
-
-          completed_steps = complete_tool_steps(updated_steps, tool_results)
-
-          tool_attrs = %{
-            "steps" => completed_steps,
-            "current_step_id" => current_step_id_after_tools(completed_steps),
-            "current_step_index" => current_step_index_after_tools(completed_steps),
-            "resumable" => true,
-            "tool_rounds" => round + 1,
-            "active_tool_calls" =>
-              Enum.map(tool_calls, fn call ->
-                %{"id" => call.id, "name" => call.name}
-              end),
-            "tool_cache" =>
-              merge_tool_cache(
-                refreshed_data.conversation.id,
-                tool_results,
-                latest_turn_id(refreshed_data.coalesce_buffer),
-                round + 1
-              ),
-            "recovery_lineage" =>
-              update_recovery_lineage_cache_stats(
-                refreshed_data.conversation.id,
-                cache_hits,
-                cache_misses,
-                tool_results
-              ),
-            "tool_results" => summarize_tool_results(all_tool_results ++ tool_results),
-            "updated_at" => DateTime.utc_now()
-          }
-
-          case ensure_active_ownership(refreshed_data, "tool_results") do
-            {:ok, post_tool_data} ->
-              update_channel_checkpoint(
-                post_tool_data.conversation.id,
-                %{
-                  "status" => "executing_tools",
-                  "ownership" => post_tool_data.ownership
-                }
-                |> Map.merge(tool_attrs)
-              )
-
-              if cache_hits > 0 do
-                append_channel_event(post_tool_data.conversation.id, "tool_cache_hit", %{
-                  "round" => round + 1,
-                  "cache_hits" => cache_hits,
-                  "cache_misses" => cache_misses
-                })
-              end
-
-              Enum.each(tool_results, fn result ->
-                append_channel_event(post_tool_data.conversation.id, "tool_result", %{
-                  "round" => round + 1,
-                  "tool_name" => result.tool_name,
-                  "is_error" => result[:is_error] || false,
-                  "cached" => result[:cached] || false,
-                  "summary" => result[:summary] || summarize_tool_result_payload(result.result),
-                  "safety_classification" => result[:safety_classification] || "standard"
-                })
-              end)
-
-              next_messages =
-                messages
-                |> PromptBuilder.append_assistant_tool_use(response)
-                |> PromptBuilder.append_tool_results(tool_results)
-
-              run_tool_loop(
-                next_messages,
-                tools,
-                post_tool_data,
-                round + 1,
-                all_tool_results ++ tool_results
-              )
-
-            {:error, ownership, lost_data} ->
-              stop_for_ownership_loss(:processing, lost_data, ownership, tool_attrs)
-          end
+          launch_tool_execution(
+            messages,
+            tools,
+            refreshed_data,
+            round,
+            all_tool_results,
+            response,
+            tool_calls,
+            updated_steps
+          )
         else
           {:error, ownership, lost_data} ->
             stop_for_ownership_loss(:processing, lost_data, ownership)
@@ -751,29 +705,256 @@ defmodule HydraX.Agent.Channel do
       streamed: true
     }
 
-    case ensure_active_ownership(data, "stream_finalizing") do
-      {:ok, refreshed_data} ->
-        complete_response(
-          content,
-          metadata,
-          refreshed_data,
-          steps:
-            current_checkpoint_steps(refreshed_data.conversation.id)
-            |> mark_provider_completed(%{
-              "summary" => "Streamed response completed",
-              "output_excerpt" => excerpt_text(content),
-              "provider" => response.provider
-            }),
-          streamed?: true
-        )
+    case data[:handoff_pending] do
+      nil ->
+        case ensure_active_ownership(data, "stream_finalizing") do
+          {:ok, refreshed_data} ->
+            complete_response(
+              content,
+              metadata,
+              refreshed_data,
+              steps:
+                current_checkpoint_steps(refreshed_data.conversation.id)
+                |> mark_provider_completed(%{
+                  "summary" => "Streamed response completed",
+                  "output_excerpt" => excerpt_text(content),
+                  "provider" => response.provider
+                }),
+              streamed?: true
+            )
 
-      {:error, ownership, lost_data} ->
+          {:error, ownership, lost_data} ->
+            stop_for_ownership_loss(
+              :processing,
+              lost_data,
+              ownership,
+              pending_response_attrs(response, round, all_tool_results, streamed: true)
+            )
+        end
+
+      ownership ->
         stop_for_ownership_loss(
           :processing,
-          lost_data,
+          clear_handoff_state(data),
           ownership,
-          pending_response_attrs(response, round, all_tool_results, streamed: true)
+          Map.merge(
+            pending_response_attrs(response, round, all_tool_results, streamed: true),
+            %{"handoff" => nil}
+          )
         )
+    end
+  end
+
+  defp launch_tool_execution(
+         messages,
+         tools,
+         data,
+         round,
+         all_tool_results,
+         response,
+         tool_calls,
+         updated_steps
+       ) do
+    tool_task_ref = make_ref()
+    caller = self()
+
+    Task.Supervisor.start_child(HydraX.TaskSupervisor, fn ->
+      try do
+        {tool_results, cache_hits, cache_misses} = execute_tool_calls_with_cache(data, tool_calls)
+
+        send(caller, {
+          :tool_results_ready,
+          tool_task_ref,
+          %{
+            tool_results: tool_results,
+            cache_hits: cache_hits,
+            cache_misses: cache_misses
+          }
+        })
+      rescue
+        error ->
+          send(
+            caller,
+            {:tool_results_error, tool_task_ref, Exception.format(:error, error, __STACKTRACE__)}
+          )
+      end
+    end)
+
+    active_tool_calls =
+      Enum.map(tool_calls, fn call ->
+        %{"id" => call.id, "name" => call.name}
+      end)
+
+    update_channel_checkpoint(data.conversation.id, %{
+      "status" => "executing_tools",
+      "ownership" => data.ownership,
+      "steps" => updated_steps,
+      "current_step_id" => step_id_for_running(updated_steps),
+      "current_step_index" => step_index_for_running(updated_steps),
+      "resumable" => true,
+      "tool_rounds" => round + 1,
+      "active_tool_calls" => active_tool_calls,
+      "handoff" => nil,
+      "updated_at" => DateTime.utc_now()
+    })
+
+    {:tool_execution,
+     %{
+       tool_task_ref: tool_task_ref,
+       tool_task_round: round,
+       tool_task_active_calls: active_tool_calls,
+       tool_task_messages: messages,
+       tool_task_tools: tools,
+       tool_task_tool_calls: tool_calls,
+       tool_task_response: response,
+       tool_task_all_results: all_tool_results,
+       tool_task_updated_steps: updated_steps
+     }}
+  end
+
+  defp handle_tool_results(ref, payload, data) do
+    if data[:tool_task_ref] == ref do
+      tool_results = payload.tool_results
+      cache_hits = payload.cache_hits
+      cache_misses = payload.cache_misses
+      updated_steps = data[:tool_task_updated_steps] || []
+      round = data[:tool_task_round] || 0
+      all_tool_results = data[:tool_task_all_results] || []
+      response = data[:tool_task_response]
+      messages = data[:tool_task_messages] || []
+      tools = data[:tool_task_tools]
+      tool_calls = data[:tool_task_tool_calls] || []
+
+      completed_steps = complete_tool_steps(updated_steps, tool_results)
+
+      tool_attrs = %{
+        "steps" => completed_steps,
+        "current_step_id" => current_step_id_after_tools(completed_steps),
+        "current_step_index" => current_step_index_after_tools(completed_steps),
+        "resumable" => true,
+        "tool_rounds" => round + 1,
+        "active_tool_calls" =>
+          Enum.map(tool_calls, fn call ->
+            %{"id" => call.id, "name" => call.name}
+          end),
+        "tool_cache" =>
+          merge_tool_cache(
+            data.conversation.id,
+            tool_results,
+            latest_turn_id(data.coalesce_buffer),
+            round + 1
+          ),
+        "recovery_lineage" =>
+          update_recovery_lineage_cache_stats(
+            data.conversation.id,
+            cache_hits,
+            cache_misses,
+            tool_results
+          ),
+        "tool_results" => summarize_tool_results(all_tool_results ++ tool_results),
+        "updated_at" => DateTime.utc_now()
+      }
+
+      cleaned_data = clear_tool_execution_state(data)
+
+      case data[:handoff_pending] do
+        nil ->
+          case ensure_active_ownership(cleaned_data, "tool_results") do
+            {:ok, post_tool_data} ->
+              update_channel_checkpoint(
+                post_tool_data.conversation.id,
+                %{
+                  "status" => "executing_tools",
+                  "ownership" => post_tool_data.ownership,
+                  "handoff" => nil
+                }
+                |> Map.merge(tool_attrs)
+              )
+
+              if cache_hits > 0 do
+                append_channel_event(post_tool_data.conversation.id, "tool_cache_hit", %{
+                  "round" => round + 1,
+                  "cache_hits" => cache_hits,
+                  "cache_misses" => cache_misses
+                })
+              end
+
+              Enum.each(tool_results, fn result ->
+                append_channel_event(post_tool_data.conversation.id, "tool_result", %{
+                  "round" => round + 1,
+                  "tool_name" => result.tool_name,
+                  "is_error" => result[:is_error] || false,
+                  "cached" => result[:cached] || false,
+                  "summary" => result[:summary] || summarize_tool_result_payload(result.result),
+                  "safety_classification" => result[:safety_classification] || "standard"
+                })
+              end)
+
+              next_messages =
+                messages
+                |> PromptBuilder.append_assistant_tool_use(response)
+                |> PromptBuilder.append_tool_results(tool_results)
+
+              case run_tool_loop(
+                     next_messages,
+                     tools,
+                     post_tool_data,
+                     round + 1,
+                     all_tool_results ++ tool_results
+                   ) do
+                {:streaming, stream_data} ->
+                  {:keep_state, Map.merge(post_tool_data, stream_data)}
+
+                {response_content, response_metadata} ->
+                  complete_response(response_content, response_metadata, post_tool_data)
+
+                {:stop, _, _} = stop ->
+                  stop
+              end
+
+            {:error, ownership, lost_data} ->
+              stop_for_ownership_loss(:processing, lost_data, ownership, tool_attrs)
+          end
+
+        ownership ->
+          stop_for_ownership_loss(
+            :processing,
+            clear_handoff_state(cleaned_data),
+            ownership,
+            Map.merge(tool_attrs, %{"handoff" => nil})
+          )
+      end
+    else
+      {:keep_state, data}
+    end
+  end
+
+  defp handle_tool_results_error(ref, reason, data) do
+    if data[:tool_task_ref] == ref do
+      case data[:handoff_pending] do
+        nil ->
+          {error_content, error_metadata} =
+            {"Tool execution failed before results were persisted. Retry the conversation after checking tool safety and runtime state.",
+             %{
+               provider: "tool-error",
+               provider_error: reason,
+               tool_rounds: (data[:tool_task_round] || 0) + 1,
+               tool_results: []
+             }}
+
+          cleaned_data = clear_tool_execution_state(data)
+          complete_response(error_content, error_metadata, cleaned_data)
+
+        ownership ->
+          stop_for_ownership_loss(
+            :processing,
+            clear_handoff_state(clear_tool_execution_state(data)),
+            ownership,
+            %{"handoff" => nil, "updated_at" => DateTime.utc_now()}
+          )
+      end
+    else
+      {:keep_state, data}
     end
   end
 
@@ -832,6 +1013,17 @@ defmodule HydraX.Agent.Channel do
       |> Map.delete(:stream_round)
       |> Map.delete(:stream_tool_results)
       |> Map.delete(:stream_input_tokens)
+      |> Map.delete(:tool_task_ref)
+      |> Map.delete(:tool_task_round)
+      |> Map.delete(:tool_task_active_calls)
+      |> Map.delete(:tool_task_messages)
+      |> Map.delete(:tool_task_tools)
+      |> Map.delete(:tool_task_tool_calls)
+      |> Map.delete(:tool_task_response)
+      |> Map.delete(:tool_task_all_results)
+      |> Map.delete(:tool_task_updated_steps)
+      |> Map.put(:handoff_pending, nil)
+      |> Map.put(:handoff_waiting_for, nil)
 
     {:next_state, :ready,
      %{
@@ -985,6 +1177,54 @@ defmodule HydraX.Agent.Channel do
     end
   end
 
+  defp maybe_defer_ownership_loss(state, data, ownership) do
+    cond do
+      data[:handoff_pending] ->
+        {:keep_state, schedule_lease_tick(data)}
+
+      data[:tool_task_ref] ->
+        defer_ownership_handoff(data, ownership, "tool_results")
+
+      data[:stream_ref] ->
+        defer_ownership_handoff(data, ownership, "stream_response")
+
+      true ->
+        stop_for_ownership_loss(state, data, ownership)
+    end
+  end
+
+  defp defer_ownership_handoff(data, ownership, waiting_for) do
+    append_channel_event(data.conversation.id, "ownership_handoff_pending", %{
+      "summary" => "Ownership changed while in-flight work was still running",
+      "owner" => ownership["owner"],
+      "owner_node" => ownership["owner_node"],
+      "awaiting" => waiting_for
+    })
+
+    if waiting_for == "stream_response" do
+      Phoenix.PubSub.broadcast(
+        HydraX.PubSub,
+        "conversations:stream",
+        {:stream_done, data.conversation.id}
+      )
+    end
+
+    update_channel_checkpoint(data.conversation.id, %{
+      "ownership" => ownership,
+      "resumable" => true,
+      "handoff" => handoff_payload(ownership, waiting_for),
+      "updated_at" => DateTime.utc_now()
+    })
+
+    {:keep_state,
+     schedule_lease_tick(%{
+       data
+       | ownership: ownership,
+         handoff_pending: ownership,
+         handoff_waiting_for: waiting_for
+     })}
+  end
+
   defp stop_for_ownership_loss(state, data, ownership, attrs \\ %{}) do
     summary = deferred_message(ownership)
     status = ownership_loss_status(state, data)
@@ -1005,6 +1245,7 @@ defmodule HydraX.Agent.Channel do
         "status" => status,
         "ownership" => ownership,
         "resumable" => resumable,
+        "handoff" => nil,
         "updated_at" => DateTime.utc_now()
       }
       |> Map.merge(attrs)
@@ -1103,6 +1344,25 @@ defmodule HydraX.Agent.Channel do
     end
   end
 
+  defp clear_tool_execution_state(data) do
+    data
+    |> Map.delete(:tool_task_ref)
+    |> Map.delete(:tool_task_round)
+    |> Map.delete(:tool_task_active_calls)
+    |> Map.delete(:tool_task_messages)
+    |> Map.delete(:tool_task_tools)
+    |> Map.delete(:tool_task_tool_calls)
+    |> Map.delete(:tool_task_response)
+    |> Map.delete(:tool_task_all_results)
+    |> Map.delete(:tool_task_updated_steps)
+  end
+
+  defp clear_handoff_state(data) do
+    data
+    |> Map.put(:handoff_pending, nil)
+    |> Map.put(:handoff_waiting_for, nil)
+  end
+
   defp schedule_lease_tick(data) do
     if Config.repo_multi_writer?() do
       Process.send_after(self(), :lease_tick, lease_tick_ms())
@@ -1168,6 +1428,16 @@ defmodule HydraX.Agent.Channel do
 
   defp deferred_message(ownership) do
     "Conversation ownership is held by #{ownership["owner"] || "another node"}; local execution deferred."
+  end
+
+  defp handoff_payload(ownership, waiting_for) do
+    %{
+      "status" => "pending",
+      "owner" => ownership["owner"],
+      "owner_node" => ownership["owner_node"],
+      "waiting_for" => waiting_for,
+      "requested_at" => DateTime.utc_now()
+    }
   end
 
   defp pending_response_state(conversation_id) do

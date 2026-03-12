@@ -125,6 +125,7 @@ defmodule HydraX.Runtime.Conversations do
       current_step_index: state["current_step_index"],
       resumable: state["resumable"] || false,
       execution_events: state["execution_events"] || [],
+      handoff: state["handoff"],
       recovery_lineage: state["recovery_lineage"] || %{},
       provider: state["provider"],
       tool_rounds: state["tool_rounds"] || 0,

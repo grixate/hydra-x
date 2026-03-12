@@ -655,6 +655,18 @@ defmodule HydraX.RuntimeTest do
                ttl_seconds: 60
              )
 
+    send(channel_pid, :lease_tick)
+
+    wait_for(
+      fn ->
+        handoff = Runtime.conversation_channel_state(conversation.id).handoff || %{}
+        handoff["status"] == "pending" and handoff["waiting_for"] == "tool_results"
+      end,
+      80
+    )
+
+    assert Process.alive?(channel_pid)
+
     assert {:deferred, reason} = Task.await(task, 5_000)
     assert reason =~ "node:remote"
 
@@ -662,6 +674,7 @@ defmodule HydraX.RuntimeTest do
 
     channel_state = Runtime.conversation_channel_state(conversation.id)
     assert channel_state.status == "deferred"
+    assert channel_state.handoff == nil
     assert length(channel_state.tool_cache || []) == 1
     assert Enum.any?(channel_state.tool_results || [], &(&1["tool_name"] == "shell_command"))
     assert File.read!(log_path) == "tool-run\n"
