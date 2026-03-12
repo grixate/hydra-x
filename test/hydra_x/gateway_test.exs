@@ -1,7 +1,7 @@
 defmodule HydraX.GatewayTest do
   use HydraX.DataCase
 
-  alias HydraX.Gateway.Adapters.{Discord, Telegram}
+  alias HydraX.Gateway.Adapters.{Discord, Slack, Telegram}
   alias HydraX.Runtime
 
   test "telegram updates are routed into conversations and answered" do
@@ -1199,6 +1199,209 @@ defmodule HydraX.GatewayTest do
     refreshed = Runtime.get_conversation!(conversation.id)
     assert refreshed.metadata["last_delivery"]["provider_message_id"] == 9001
     assert refreshed.metadata["last_delivery"]["chunk_count"] == 4
+  end
+
+  test "slack streaming previews persist transport metadata and stream message id" do
+    agent = create_agent()
+    previous_stream = Application.get_env(:hydra_x, :slack_deliver_stream)
+
+    Application.put_env(:hydra_x, :slack_deliver_stream, fn payload ->
+      send(self(), {:slack_stream_preview, payload})
+      {:ok, %{provider_message_id: payload[:stream_message_id] || "slack-stream-1"}}
+    end)
+
+    on_exit(fn ->
+      if previous_stream do
+        Application.put_env(:hydra_x, :slack_deliver_stream, previous_stream)
+      else
+        Application.delete_env(:hydra_x, :slack_deliver_stream)
+      end
+    end)
+
+    {:ok, _slack} =
+      Runtime.save_slack_config(%{
+        bot_token: "slack-test-token",
+        signing_secret: "slack-signing-secret",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{
+        channel: "slack",
+        title: "Slack Streaming Delivery",
+        external_ref: "C123"
+      })
+
+    assert {:ok, _conversation} =
+             HydraX.Gateway.mark_streaming_delivery(conversation,
+               preview: "Partial slack stream",
+               chunk_count: 1,
+               provider: "Mock Provider"
+             )
+
+    assert_receive {:slack_stream_preview,
+                    %{channel: "C123", text: "Partial slack stream", stream_message_id: nil}}
+
+    refreshed = Runtime.get_conversation!(conversation.id)
+    assert refreshed.metadata["last_delivery"]["provider_message_id"] == "slack-stream-1"
+
+    assert refreshed.metadata["last_delivery"]["reply_context"]["stream_message_id"] ==
+             "slack-stream-1"
+
+    assert refreshed.metadata["last_delivery"]["metadata"]["transport"] == "slack_chat_update"
+
+    assert {:ok, _conversation} =
+             HydraX.Gateway.mark_streaming_delivery(conversation,
+               preview: "Partial slack stream updated",
+               chunk_count: 3,
+               provider: "Mock Provider"
+             )
+
+    assert_receive {:slack_stream_preview,
+                    %{
+                      channel: "C123",
+                      text: "Partial slack stream updated",
+                      stream_message_id: "slack-stream-1"
+                    }}
+  end
+
+  test "discord streaming previews persist transport metadata and stream message id" do
+    agent = create_agent()
+    previous_stream = Application.get_env(:hydra_x, :discord_deliver_stream)
+
+    Application.put_env(:hydra_x, :discord_deliver_stream, fn payload ->
+      send(self(), {:discord_stream_preview, payload})
+      {:ok, %{provider_message_id: payload[:stream_message_id] || "discord-stream-1"}}
+    end)
+
+    on_exit(fn ->
+      if previous_stream do
+        Application.put_env(:hydra_x, :discord_deliver_stream, previous_stream)
+      else
+        Application.delete_env(:hydra_x, :discord_deliver_stream)
+      end
+    end)
+
+    {:ok, _discord} =
+      Runtime.save_discord_config(%{
+        bot_token: "discord-test-token",
+        application_id: "discord-app",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{
+        channel: "discord",
+        title: "Discord Streaming Delivery",
+        external_ref: "discord-channel"
+      })
+
+    assert {:ok, _conversation} =
+             HydraX.Gateway.mark_streaming_delivery(conversation,
+               preview: "Partial discord stream",
+               chunk_count: 1,
+               provider: "Mock Provider"
+             )
+
+    assert_receive {:discord_stream_preview,
+                    %{
+                      channel_id: "discord-channel",
+                      content: "Partial discord stream",
+                      stream_message_id: nil
+                    }}
+
+    refreshed = Runtime.get_conversation!(conversation.id)
+    assert refreshed.metadata["last_delivery"]["provider_message_id"] == "discord-stream-1"
+
+    assert refreshed.metadata["last_delivery"]["reply_context"]["stream_message_id"] ==
+             "discord-stream-1"
+
+    assert refreshed.metadata["last_delivery"]["metadata"]["transport"] ==
+             "discord_message_patch"
+
+    assert {:ok, _conversation} =
+             HydraX.Gateway.mark_streaming_delivery(conversation,
+               preview: "Partial discord stream updated",
+               chunk_count: 2,
+               provider: "Mock Provider"
+             )
+
+    assert_receive {:discord_stream_preview,
+                    %{
+                      channel_id: "discord-channel",
+                      content: "Partial discord stream updated",
+                      stream_message_id: "discord-stream-1"
+                    }}
+  end
+
+  test "slack adapter reuses stream message id for final delivery updates" do
+    deliver = fn payload ->
+      send(self(), {:slack_delivery, payload})
+      {:ok, %{provider_message_id: payload[:stream_message_id] || "slack-stream-final"}}
+    end
+
+    assert {:ok, state} =
+             Slack.connect(%{
+               "bot_token" => "slack-test-token",
+               "deliver" => deliver
+             })
+
+    assert {:ok, metadata} =
+             Slack.send_response(
+               %{
+                 content: "Final streamed Slack reply",
+                 external_ref: "C123",
+                 metadata: %{
+                   "thread_ts" => "thread-123",
+                   "stream_message_id" => "slack-stream-final"
+                 }
+               },
+               state
+             )
+
+    assert_receive {:slack_delivery,
+                    %{
+                      channel: "C123",
+                      text: "Final streamed Slack reply",
+                      thread_ts: "thread-123",
+                      stream_message_id: "slack-stream-final"
+                    }}
+
+    assert metadata[:provider_message_id] == "slack-stream-final"
+  end
+
+  test "discord adapter reuses stream message id for final delivery updates" do
+    deliver = fn payload ->
+      send(self(), {:discord_delivery, payload})
+      {:ok, %{provider_message_id: payload[:stream_message_id] || "discord-stream-final"}}
+    end
+
+    assert {:ok, state} =
+             Discord.connect(%{
+               "bot_token" => "discord-test-token",
+               "deliver" => deliver
+             })
+
+    assert {:ok, metadata} =
+             Discord.send_response(
+               %{
+                 content: "Final streamed Discord reply",
+                 external_ref: "discord-channel",
+                 metadata: %{"stream_message_id" => "discord-stream-final"}
+               },
+               state
+             )
+
+    assert_receive {:discord_delivery,
+                    %{
+                      channel_id: "discord-channel",
+                      content: "Final streamed Discord reply",
+                      stream_message_id: "discord-stream-final"
+                    }}
+
+    assert metadata[:provider_message_id] == "discord-stream-final"
   end
 
   test "webchat attachment messages preserve attachment metadata and display name" do

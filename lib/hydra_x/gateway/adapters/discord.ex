@@ -18,7 +18,8 @@ defmodule HydraX.Gateway.Adapters.Discord do
        bot_token: token,
        application_id: config["application_id"],
        webhook_secret: config["webhook_secret"],
-       deliver: config["deliver"]
+       deliver: config["deliver"],
+       deliver_stream: config["deliver_stream"]
      }}
   end
 
@@ -63,26 +64,25 @@ defmodule HydraX.Gateway.Adapters.Discord do
   def handle_event(
         %{"d" => %{"channel_id" => channel_id} = payload} = event,
         state
-      )
-      do
+      ) do
     # Gateway MESSAGE_CREATE event
     attachments = extract_attachments(payload)
     content = message_content(payload, attachments)
 
     if is_binary(content) and content != "" do
-    message = %{
-      channel: "discord",
-      external_ref: channel_id,
-      content: content,
-      metadata: %{
-        raw: event,
-        guild_id: get_in(event, ["d", "guild_id"]),
-        user: extract_gateway_user(event),
-        reply_to_message_id: get_in(event, ["d", "id"]),
-        source_message_id: get_in(event, ["d", "id"]),
-        attachments: attachments
+      message = %{
+        channel: "discord",
+        external_ref: channel_id,
+        content: content,
+        metadata: %{
+          raw: event,
+          guild_id: get_in(event, ["d", "guild_id"]),
+          user: extract_gateway_user(event),
+          reply_to_message_id: get_in(event, ["d", "id"]),
+          source_message_id: get_in(event, ["d", "id"]),
+          attachments: attachments
+        }
       }
-    }
 
       {:messages, [message], state}
     else
@@ -131,6 +131,17 @@ defmodule HydraX.Gateway.Adapters.Discord do
   end
 
   @impl true
+  def deliver_stream(%{content: content, external_ref: channel_id} = message, %{
+        bot_token: token,
+        deliver_stream: deliver_stream
+      }) do
+    metadata = Map.get(message, :metadata) || %{}
+    chunk_count = Map.get(message, :chunk_count, 0)
+
+    do_deliver_stream(content, channel_id, token, deliver_stream, metadata, chunk_count)
+  end
+
+  @impl true
   def health(state) do
     %{
       channel: "discord",
@@ -138,7 +149,7 @@ defmodule HydraX.Gateway.Adapters.Discord do
       supports_threads: true,
       supports_rich_formatting: true,
       supports_attachments: true,
-      supports_streaming: false,
+      supports_streaming: true,
       application_id: state[:application_id]
     }
   end
@@ -161,7 +172,8 @@ defmodule HydraX.Gateway.Adapters.Discord do
       threads: true,
       attachments: true,
       rich_formatting: true,
-      streaming: false
+      streaming: true,
+      stream_transport: "discord_message_patch"
     }
   end
 
@@ -180,77 +192,145 @@ defmodule HydraX.Gateway.Adapters.Discord do
 
   # -- Private --
 
-  defp do_send_response(content, channel_id, _token, deliver, metadata) when is_function(deliver, 1) do
-    content
-    |> chunk_message(@discord_message_limit)
-    |> Enum.reduce_while(
-      {:ok, %{channel: "discord", chunk_count: 0, provider_message_ids: []}},
-      fn chunk, {:ok, acc} ->
+  defp do_send_response(content, channel_id, _token, deliver, metadata)
+       when is_function(deliver, 1) do
+    case metadata["stream_message_id"] do
+      nil ->
+        content
+        |> chunk_message(@discord_message_limit)
+        |> Enum.reduce_while(
+          {:ok, %{channel: "discord", chunk_count: 0, provider_message_ids: []}},
+          fn chunk, {:ok, acc} ->
+            payload = %{
+              content: chunk,
+              channel_id: channel_id,
+              reply_to_message_id: metadata["reply_to_message_id"]
+            }
+
+            case deliver.(payload) do
+              :ok ->
+                {:cont, {:ok, %{acc | chunk_count: acc.chunk_count + 1}}}
+
+              {:ok, metadata} when is_map(metadata) ->
+                provider_message_id =
+                  metadata[:provider_message_id] || metadata["provider_message_id"]
+
+                updated =
+                  acc
+                  |> Map.put(:chunk_count, acc.chunk_count + 1)
+                  |> Map.put(
+                    :provider_message_id,
+                    provider_message_id || acc[:provider_message_id]
+                  )
+                  |> Map.update!(:provider_message_ids, fn ids ->
+                    if provider_message_id, do: ids ++ [provider_message_id], else: ids
+                  end)
+
+                {:cont, {:ok, updated}}
+
+              other ->
+                {:halt, other}
+            end
+          end
+        )
+
+      stream_message_id ->
         payload = %{
-          content: chunk,
+          content: truncate_stream_text(content),
           channel_id: channel_id,
-          reply_to_message_id: metadata["reply_to_message_id"]
+          stream_message_id: stream_message_id
         }
 
         case deliver.(payload) do
           :ok ->
-            {:cont, {:ok, %{acc | chunk_count: acc.chunk_count + 1}}}
+            {:ok,
+             %{
+               channel: "discord",
+               chunk_count: 1,
+               provider_message_id: stream_message_id,
+               provider_message_ids: [stream_message_id]
+             }}
 
-          {:ok, metadata} when is_map(metadata) ->
-            provider_message_id = metadata[:provider_message_id] || metadata["provider_message_id"]
+          {:ok, response_metadata} when is_map(response_metadata) ->
+            provider_message_id =
+              response_metadata[:provider_message_id] ||
+                response_metadata["provider_message_id"] ||
+                stream_message_id
 
-            updated =
-              acc
-              |> Map.put(:chunk_count, acc.chunk_count + 1)
-              |> Map.put(:provider_message_id, provider_message_id || acc[:provider_message_id])
-              |> Map.update!(:provider_message_ids, fn ids ->
-                if provider_message_id, do: ids ++ [provider_message_id], else: ids
-              end)
-
-            {:cont, {:ok, updated}}
+            {:ok,
+             %{
+               channel: "discord",
+               chunk_count: 1,
+               provider_message_id: provider_message_id,
+               provider_message_ids: [provider_message_id]
+             }}
 
           other ->
-            {:halt, other}
+            other
         end
-      end
-    )
+    end
   end
 
   defp do_send_response(content, channel_id, token, _deliver, metadata) do
-    chunks = chunk_message(content, @discord_message_limit)
+    case metadata["stream_message_id"] do
+      nil ->
+        chunks = chunk_message(content, @discord_message_limit)
 
-    Enum.reduce_while(
-      chunks,
-      {:ok, %{channel: "discord", chunk_count: 0, provider_message_ids: []}},
-      fn chunk, {:ok, acc} ->
-      body =
-        %{content: chunk}
-        |> maybe_add_message_reference(metadata["reply_to_message_id"])
+        Enum.reduce_while(
+          chunks,
+          {:ok, %{channel: "discord", chunk_count: 0, provider_message_ids: []}},
+          fn chunk, {:ok, acc} ->
+            body =
+              %{content: chunk}
+              |> maybe_add_message_reference(metadata["reply_to_message_id"])
 
-      case Req.post(
-             url: "#{@discord_api}/channels/#{channel_id}/messages",
-             headers: [{"authorization", "Bot #{token}"}],
-             json: body
-           ) do
-        {:ok, %{status: 200, body: %{"id" => message_id}}} ->
-          updated =
-            acc
-            |> Map.put(:chunk_count, acc.chunk_count + 1)
-            |> Map.put(:provider_message_id, message_id || acc[:provider_message_id])
-            |> Map.update!(:provider_message_ids, fn ids ->
-              if message_id, do: ids ++ [message_id], else: ids
-            end)
+            case Req.post(
+                   url: "#{@discord_api}/channels/#{channel_id}/messages",
+                   headers: [{"authorization", "Bot #{token}"}],
+                   json: body
+                 ) do
+              {:ok, %{status: 200, body: %{"id" => message_id}}} ->
+                updated =
+                  acc
+                  |> Map.put(:chunk_count, acc.chunk_count + 1)
+                  |> Map.put(:provider_message_id, message_id || acc[:provider_message_id])
+                  |> Map.update!(:provider_message_ids, fn ids ->
+                    if message_id, do: ids ++ [message_id], else: ids
+                  end)
 
-          {:cont, {:ok, updated}}
+                {:cont, {:ok, updated}}
 
-        {:ok, %{status: status}} ->
-          {:halt, {:error, {:discord_error, status}}}
+              {:ok, %{status: status}} ->
+                {:halt, {:error, {:discord_error, status}}}
 
-        {:error, reason} ->
-          {:halt, {:error, reason}}
-      end
-      end
-    )
+              {:error, reason} ->
+                {:halt, {:error, reason}}
+            end
+          end
+        )
+
+      stream_message_id ->
+        case Req.patch(
+               url: "#{@discord_api}/channels/#{channel_id}/messages/#{stream_message_id}",
+               headers: [{"authorization", "Bot #{token}"}],
+               json: %{content: truncate_stream_text(content)}
+             ) do
+          {:ok, %{status: 200, body: %{"id" => message_id}}} ->
+            {:ok,
+             %{
+               channel: "discord",
+               chunk_count: 1,
+               provider_message_id: message_id || stream_message_id,
+               provider_message_ids: [message_id || stream_message_id]
+             }}
+
+          {:ok, %{status: status}} ->
+            {:error, {:discord_error, status}}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+    end
   end
 
   defp extract_command_content(%{"name" => name, "options" => options})
@@ -326,6 +406,97 @@ defmodule HydraX.Gateway.Adapters.Discord do
       |> Enum.map(&Enum.join/1)
     end
   end
+
+  defp do_deliver_stream(content, channel_id, _token, deliver_stream, metadata, chunk_count)
+       when is_function(deliver_stream, 1) do
+    payload = %{
+      content: truncate_stream_text(content),
+      channel_id: channel_id,
+      reply_to_message_id: metadata["reply_to_message_id"],
+      stream_message_id: metadata["stream_message_id"],
+      chunk_count: chunk_count,
+      stream: true
+    }
+
+    case deliver_stream.(payload) do
+      :ok ->
+        {:ok, %{channel: "discord", streaming: true, transport: "discord_message_patch"}}
+
+      {:ok, response_metadata} when is_map(response_metadata) ->
+        {:ok,
+         %{
+           channel: "discord",
+           streaming: true,
+           transport: "discord_message_patch",
+           provider_message_id:
+             response_metadata[:provider_message_id] || response_metadata["provider_message_id"]
+         }}
+
+      {:error, reason} ->
+        {:error, reason}
+
+      other ->
+        {:error, {:unexpected_stream_response, other}}
+    end
+  end
+
+  defp do_deliver_stream(content, channel_id, token, _deliver_stream, metadata, _chunk_count) do
+    body = %{content: truncate_stream_text(content)}
+
+    case metadata["stream_message_id"] do
+      nil ->
+        request_body = maybe_add_message_reference(body, metadata["reply_to_message_id"])
+
+        case Req.post(
+               url: "#{@discord_api}/channels/#{channel_id}/messages",
+               headers: [{"authorization", "Bot #{token}"}],
+               json: request_body
+             ) do
+          {:ok, %{status: 200, body: %{"id" => message_id}}} ->
+            {:ok,
+             %{
+               channel: "discord",
+               streaming: true,
+               transport: "discord_message_patch",
+               provider_message_id: message_id
+             }}
+
+          {:ok, %{status: status}} ->
+            {:error, {:discord_error, status}}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      stream_message_id ->
+        case Req.patch(
+               url: "#{@discord_api}/channels/#{channel_id}/messages/#{stream_message_id}",
+               headers: [{"authorization", "Bot #{token}"}],
+               json: body
+             ) do
+          {:ok, %{status: 200, body: %{"id" => message_id}}} ->
+            {:ok,
+             %{
+               channel: "discord",
+               streaming: true,
+               transport: "discord_message_patch",
+               provider_message_id: message_id || stream_message_id
+             }}
+
+          {:ok, %{status: status}} ->
+            {:error, {:discord_error, status}}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+    end
+  end
+
+  defp truncate_stream_text(text) when is_binary(text) do
+    String.slice(text, 0, @discord_message_limit)
+  end
+
+  defp truncate_stream_text(_text), do: ""
 
   defp maybe_add_message_reference(body, nil), do: body
   defp maybe_add_message_reference(body, ""), do: body

@@ -499,7 +499,9 @@ defmodule HydraX.Gateway do
       "bot_token" => config && config.bot_token,
       "application_id" => config && config.application_id,
       "webhook_secret" => config && config.webhook_secret,
-      "deliver" => Map.get(opts, :deliver) || Application.get_env(:hydra_x, :discord_deliver)
+      "deliver" => Map.get(opts, :deliver) || Application.get_env(:hydra_x, :discord_deliver),
+      "deliver_stream" =>
+        Map.get(opts, :deliver_stream) || Application.get_env(:hydra_x, :discord_deliver_stream)
     }
   end
 
@@ -507,7 +509,9 @@ defmodule HydraX.Gateway do
     %{
       "bot_token" => config && config.bot_token,
       "signing_secret" => config && config.signing_secret,
-      "deliver" => Map.get(opts, :deliver) || Application.get_env(:hydra_x, :slack_deliver)
+      "deliver" => Map.get(opts, :deliver) || Application.get_env(:hydra_x, :slack_deliver),
+      "deliver_stream" =>
+        Map.get(opts, :deliver_stream) || Application.get_env(:hydra_x, :slack_deliver_stream)
     }
   end
 
