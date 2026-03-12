@@ -16,6 +16,10 @@ defmodule HydraX.Runtime.Conversations do
     Turn
   }
 
+  @resumable_checkpoint_statuses ~w(deferred planned executing_tools streaming interrupted)
+  @stale_resume_statuses ~w(planned executing_tools streaming)
+  @stale_resume_after_seconds 30
+
   def list_conversations(opts \\ []) do
     agent_id = Keyword.get(opts, :agent_id)
     status = Keyword.get(opts, :status)
@@ -109,6 +113,7 @@ defmodule HydraX.Runtime.Conversations do
     checkpoint = get_checkpoint(id, "channel")
     state = (checkpoint && checkpoint.state) || %{}
     conversation = Repo.get(Conversation, id)
+    resume_stage = resumable_checkpoint_stage(state)
 
     ownership =
       state["ownership"] || get_in((conversation && conversation.metadata) || %{}, ["ownership"]) ||
@@ -124,6 +129,8 @@ defmodule HydraX.Runtime.Conversations do
       current_step_id: state["current_step_id"],
       current_step_index: state["current_step_index"],
       resumable: state["resumable"] || false,
+      resume_stage: resume_stage,
+      stale_stream: resume_stage == "streaming" and stale_resume_checkpoint?(state),
       execution_events: state["execution_events"] || [],
       handoff: state["handoff"],
       recovery_lineage: state["recovery_lineage"] || %{},
@@ -818,10 +825,16 @@ defmodule HydraX.Runtime.Conversations do
 
   defp resume_owned_conversation(conversation) do
     agent = conversation.agent || HydraX.Runtime.Agents.get_agent!(conversation.agent_id)
+    state = conversation_channel_state(conversation.id)
 
     with {:ok, _agent_pid} <- HydraX.Agent.ensure_started(agent),
          {:ok, _channel_pid} <- HydraX.Agent.Channel.ensure_started(agent.id, conversation) do
-      %{conversation_id: conversation.id, agent_id: conversation.agent_id, status: "resumed"}
+      %{
+        conversation_id: conversation.id,
+        agent_id: conversation.agent_id,
+        status: "resumed",
+        resume_from: state.resume_stage
+      }
     else
       {:error, {:owned_elsewhere, ownership}} ->
         %{
@@ -837,16 +850,18 @@ defmodule HydraX.Runtime.Conversations do
           conversation_id: conversation.id,
           agent_id: conversation.agent_id,
           status: "error",
-          reason: inspect(reason)
+          reason: inspect(reason),
+          resume_from: state.resume_stage
         }
     end
   end
 
   defp claim_resumable_conversation(%Checkpoint{} = checkpoint, owner) do
     state = checkpoint.state || %{}
+    resume_stage = resumable_checkpoint_stage(state)
 
     cond do
-      state["status"] != "deferred" ->
+      is_nil(resume_stage) ->
         :skip
 
       state["resumable"] != true ->
@@ -855,10 +870,57 @@ defmodule HydraX.Runtime.Conversations do
       not is_nil(state["assistant_turn_id"]) ->
         :skip
 
+      HydraX.Agent.Channel.active?(checkpoint.conversation.id) ->
+        :skip
+
+      resume_stage in @stale_resume_statuses and not stale_resume_checkpoint?(state) ->
+        :skip
+
       true ->
-        claim_conversation_processing_ownership(checkpoint.conversation, state, owner, "deferred")
+        claim_conversation_processing_ownership(
+          checkpoint.conversation,
+          state,
+          owner,
+          resume_stage
+        )
     end
   end
+
+  defp resumable_checkpoint_stage(state) when is_map(state) do
+    status = state["status"]
+
+    if status in @resumable_checkpoint_statuses and is_nil(state["assistant_turn_id"]) do
+      status
+    end
+  end
+
+  defp resumable_checkpoint_stage(_state), do: nil
+
+  defp stale_resume_checkpoint?(state) when is_map(state) do
+    status = state["status"]
+
+    status in @stale_resume_statuses and
+      case normalize_datetime(state["updated_at"]) do
+        nil ->
+          true
+
+        updated_at ->
+          DateTime.diff(DateTime.utc_now(), updated_at, :second) >= @stale_resume_after_seconds
+      end
+  end
+
+  defp stale_resume_checkpoint?(_state), do: false
+
+  defp normalize_datetime(%DateTime{} = value), do: value
+
+  defp normalize_datetime(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} -> datetime
+      _ -> nil
+    end
+  end
+
+  defp normalize_datetime(_value), do: nil
 
   defp claim_delivery_conversation(conversation, owner) do
     delivery = last_delivery(conversation)

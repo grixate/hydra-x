@@ -490,6 +490,44 @@ defmodule HydraXWeb.ConversationsLiveTest do
     assert html =~ "Partial streamed answer with more detail"
   end
 
+  test "conversations page shows stale streaming recovery state", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{
+        channel: "cli",
+        title: "Stale Streaming Recovery UI"
+      })
+
+    {:ok, _user_turn} =
+      Runtime.append_turn(conversation, %{
+        role: "user",
+        kind: "message",
+        content: "Resume this stale stream.",
+        metadata: %{"source" => "test"}
+      })
+
+    {:ok, _checkpoint} =
+      Runtime.upsert_checkpoint(conversation.id, "channel", %{
+        "status" => "streaming",
+        "resumable" => true,
+        "stream_capture" => %{
+          "content" => "Partial streamed answer",
+          "chunk_count" => 2,
+          "provider" => "Mock Provider"
+        },
+        "updated_at" => DateTime.add(DateTime.utc_now(), -120, :second),
+        "execution_events" => []
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/conversations?conversation_id=#{conversation.id}")
+
+    html = render(view)
+    assert html =~ "replay streaming"
+    assert html =~ "Stale streaming checkpoint detected"
+    assert html =~ "Partial streamed answer"
+  end
+
   test "conversations page shows planner skill hints", %{conn: conn} do
     agent = Runtime.ensure_default_agent!()
 

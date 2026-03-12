@@ -95,6 +95,13 @@ defmodule HydraX.Agent.Channel do
     end
   end
 
+  def active?(conversation_id) when is_integer(conversation_id) do
+    case channel_lookup(conversation_id) do
+      {:ok, pid} -> Process.alive?(pid)
+      :not_found -> false
+    end
+  end
+
   # In cluster mode, use :global for cross-node process registration.
   # In single-node mode, use local Registry for performance.
   defp channel_name(conversation_id) do

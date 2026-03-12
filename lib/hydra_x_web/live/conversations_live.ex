@@ -522,6 +522,12 @@ defmodule HydraXWeb.ConversationsLive do
                     resumable
                   </span>
                   <span
+                    :if={@channel_state && @channel_state.resume_stage}
+                    class="rounded-full border border-cyan-400/20 bg-cyan-400/10 px-3 py-1 font-mono uppercase tracking-[0.18em] text-cyan-200"
+                  >
+                    replay {@channel_state.resume_stage}
+                  </span>
+                  <span
                     :if={@channel_state && @channel_state.provider}
                     class="rounded-full border border-white/10 px-3 py-1 font-mono uppercase tracking-[0.18em] text-[var(--hx-mute)]"
                   >
@@ -551,6 +557,12 @@ defmodule HydraXWeb.ConversationsLive do
                   class="mt-2 text-xs text-amber-200"
                 >
                   {channel_handoff_summary(@channel_state)}
+                </p>
+                <p
+                  :if={channel_resume_summary(@channel_state)}
+                  class="mt-2 text-xs text-cyan-200"
+                >
+                  {channel_resume_summary(@channel_state)}
                 </p>
                 <p
                   :if={channel_pending_response_summary(@channel_state)}
@@ -1199,6 +1211,17 @@ defmodule HydraXWeb.ConversationsLive do
   end
 
   defp channel_handoff_summary(_state), do: nil
+
+  defp channel_resume_summary(nil), do: nil
+  defp channel_resume_summary(%{resume_stage: nil}), do: nil
+
+  defp channel_resume_summary(%{resume_stage: "streaming", stale_stream: true}) do
+    "Stale streaming checkpoint detected: owner-side replay can resume this conversation."
+  end
+
+  defp channel_resume_summary(%{resume_stage: stage}) do
+    "Recoverable runtime state: #{stage}"
+  end
 
   defp channel_pending_response_summary(nil), do: nil
 

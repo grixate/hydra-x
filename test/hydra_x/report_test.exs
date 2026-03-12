@@ -422,6 +422,57 @@ defmodule HydraX.ReportTest do
              "\"pending_response\""
   end
 
+  test "export_snapshot includes stale streaming recovery markers" do
+    output_root =
+      Path.join(
+        System.tmp_dir!(),
+        "hydra-x-report-stale-stream-#{System.unique_integer([:positive])}"
+      )
+
+    on_exit(fn -> File.rm_rf(output_root) end)
+
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{
+        channel: "slack",
+        title: "Stale Streaming Report",
+        external_ref: "C777"
+      })
+
+    {:ok, _user_turn} =
+      Runtime.append_turn(conversation, %{
+        role: "user",
+        kind: "message",
+        content: "Recover this stale report stream.",
+        metadata: %{"source" => "test"}
+      })
+
+    {:ok, _checkpoint} =
+      Runtime.upsert_checkpoint(conversation.id, "channel", %{
+        "status" => "streaming",
+        "resumable" => true,
+        "stream_capture" => %{
+          "content" => "Partial streamed report preview",
+          "chunk_count" => 3,
+          "provider" => "mock"
+        },
+        "updated_at" => DateTime.add(DateTime.utc_now(), -120, :second),
+        "execution_events" => []
+      })
+
+    {:ok, export} = Report.export_snapshot(output_root)
+
+    assert File.read!(export.markdown_path) =~ "resume_from=streaming"
+    assert File.read!(export.markdown_path) =~ "stale_stream=yes"
+
+    assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~
+             "\"resume_stage\": \"streaming\""
+
+    assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~
+             "\"stale_stream\": true"
+  end
+
   defp restore_env(key, nil), do: System.delete_env(key)
   defp restore_env(key, value), do: System.put_env(key, value)
 end

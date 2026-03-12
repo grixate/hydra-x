@@ -1150,6 +1150,76 @@ defmodule HydraX.RuntimeTest do
     assert List.last(refreshed.turns).role == "assistant"
   end
 
+  test "runtime resumes stale streaming conversations from checkpoint state" do
+    previous_adapter = Application.get_env(:hydra_x, :repo_adapter)
+    Application.put_env(:hydra_x, :repo_adapter, Ecto.Adapters.Postgres)
+
+    on_exit(fn ->
+      if previous_adapter do
+        Application.put_env(:hydra_x, :repo_adapter, previous_adapter)
+      else
+        Application.delete_env(:hydra_x, :repo_adapter)
+      end
+    end)
+
+    agent = create_agent()
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{channel: "webchat", title: "stale-stream-runtime"})
+
+    {:ok, user_turn} =
+      Runtime.append_turn(conversation, %{
+        role: "user",
+        kind: "message",
+        content: "Recover this stale streamed conversation.",
+        metadata: %{"source" => "test"}
+      })
+
+    {:ok, _checkpoint} =
+      Runtime.upsert_checkpoint(conversation.id, "channel", %{
+        "status" => "streaming",
+        "resumable" => true,
+        "pending_turn_id" => user_turn.id,
+        "ownership" => %{
+          "mode" => "database_lease",
+          "lease_name" => "conversation:#{conversation.id}",
+          "owner" => Runtime.coordination_status().owner,
+          "owner_node" => "nonode@nohost",
+          "stage" => "streaming"
+        },
+        "stream_capture" => %{
+          "content" => "Partial streamed answer before restart.",
+          "chunk_count" => 2,
+          "provider" => "mock"
+        },
+        "updated_at" => DateTime.add(DateTime.utc_now(), -120, :second),
+        "execution_events" => []
+      })
+
+    channel_state = Runtime.conversation_channel_state(conversation.id)
+    assert channel_state.resume_stage == "streaming"
+    assert channel_state.stale_stream
+
+    summary = Runtime.resume_owned_conversations()
+
+    assert summary.resumed_count == 1
+
+    assert [%{conversation_id: conversation_id, status: "resumed", resume_from: "streaming"}] =
+             summary.results
+
+    assert conversation_id == conversation.id
+
+    Process.sleep(100)
+
+    refreshed = Runtime.get_conversation!(conversation.id)
+    assert List.last(refreshed.turns).role == "assistant"
+
+    channel_state = Runtime.conversation_channel_state(conversation.id)
+    assert channel_state.status == "completed"
+    refute channel_state.stale_stream
+    assert Enum.any?(channel_state.execution_events, &(&1["phase"] == "recovered_after_restart"))
+  end
+
   test "scheduler poll resumes owned deferred conversations" do
     previous_adapter = Application.get_env(:hydra_x, :repo_adapter)
     Application.put_env(:hydra_x, :repo_adapter, Ecto.Adapters.Postgres)

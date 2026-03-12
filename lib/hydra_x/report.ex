@@ -548,6 +548,8 @@ defmodule HydraX.Report do
 
         [
           "execution=#{status}",
+          state.resume_stage && "resume_from=#{state.resume_stage}",
+          state.stale_stream && "stale_stream=yes",
           "owner=#{owner}",
           handoff && "handoff=#{handoff}",
           pending_response && "pending_response=#{pending_response}",
@@ -1254,6 +1256,8 @@ defmodule HydraX.Report do
         resumable: channel_state.resumable,
         current_step_id: channel_state.current_step_id,
         current_step_index: channel_state.current_step_index,
+        resume_stage: channel_state.resume_stage,
+        stale_stream: channel_state.stale_stream,
         handoff: channel_state.handoff,
         pending_response: channel_state.pending_response,
         stream_capture: channel_state.stream_capture,
