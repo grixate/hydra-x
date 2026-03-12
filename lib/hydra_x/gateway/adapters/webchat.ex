@@ -165,7 +165,8 @@ defmodule HydraX.Gateway.Adapters.Webchat do
       threads: false,
       attachments: true,
       rich_formatting: false,
-      streaming: true
+      streaming: true,
+      stream_transport: "session_pubsub"
     }
   end
 

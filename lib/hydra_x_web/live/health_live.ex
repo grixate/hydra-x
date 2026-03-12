@@ -485,7 +485,9 @@ defmodule HydraXWeb.HealthLive do
             </div>
             <p class="mt-3 text-sm text-[var(--hx-mute)]">
               {@provider_status.name} · {@provider_status.kind}
-              <span :if={@provider_status.model}> ·                    {@provider_status.model}</span>
+              <span :if={@provider_status.model}>
+                 ·                     {@provider_status.model}
+              </span>
             </p>
             <p class="mt-2 text-xs text-[var(--hx-mute)]">
               source {@provider_status.route_source} · readiness {@provider_status.readiness} · warmup {@provider_status.warmup_status}
@@ -872,9 +874,9 @@ defmodule HydraXWeb.HealthLive do
                 </div>
                 <div class="mt-2 text-xs text-[var(--hx-mute)]">
                   level {event.level}
-                  <span :if={event.expired_by}> · expiry         {event.expired_by}</span>
+                  <span :if={event.expired_by}> · expiry          {event.expired_by}</span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip         {event.ip}</span>
+                  <span :if={event.ip}> · ip          {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -1400,9 +1402,20 @@ defmodule HydraXWeb.HealthLive do
       if(capabilities[:threads], do: "threads", else: "no-threads"),
       if(capabilities[:attachments], do: "attachments", else: "no-attachments"),
       if(capabilities[:rich_formatting], do: "rich", else: "plain"),
-      if(capabilities[:streaming], do: "streaming", else: "non-streaming")
+      if(capabilities[:streaming], do: "streaming", else: "non-streaming"),
+      streaming_transport_label(capabilities)
     ]
+    |> Enum.reject(&is_nil_or_empty/1)
     |> Enum.join(" · ")
+  end
+
+  defp streaming_transport_label(nil), do: nil
+
+  defp streaming_transport_label(capabilities) do
+    case capabilities[:stream_transport] || capabilities["stream_transport"] do
+      nil -> nil
+      value -> "transport #{value}"
+    end
   end
 
   defp channel_policy_summary(%{channel: "webchat", configured: false}), do: nil
@@ -1457,6 +1470,8 @@ defmodule HydraXWeb.HealthLive do
             "formatted_payload" => Map.get(failure, :formatted_payload, %{}),
             "provider_message_ids_count" => failure.provider_message_ids_count,
             "attachment_count" => failure.attachment_count,
+            "transport" => Map.get(failure, :transport),
+            "transport_topic" => Map.get(failure, :transport_topic),
             "reply_context" => failure.reply_context || %{}
           }
 
@@ -1481,11 +1496,32 @@ defmodule HydraXWeb.HealthLive do
       dead_letter_label(delivery["dead_lettered_at"]),
       if(provider_message_ids_count > 0, do: "msg ids #{provider_message_ids_count}"),
       attachment_count_label(delivery["attachment_count"]),
+      delivery_transport_summary(delivery),
       delivery_context_summary(delivery),
       chunk_count_summary(payload, delivery["chunk_count"])
     ]
     |> Enum.reject(&is_nil_or_empty/1)
     |> Enum.join(" · ")
+  end
+
+  defp delivery_transport_summary(delivery) do
+    transport =
+      get_in(delivery, ["metadata", "transport"]) ||
+        delivery["transport"] ||
+        (get_in(delivery, ["metadata", "transport_error"]) && "transport error")
+
+    transport_topic =
+      get_in(delivery, ["metadata", "transport_topic"]) || delivery["transport_topic"]
+
+    [
+      transport && "transport #{transport}",
+      transport_topic && "topic #{transport_topic}"
+    ]
+    |> Enum.reject(&is_nil_or_empty/1)
+    |> case do
+      [] -> nil
+      labels -> Enum.join(labels, " · ")
+    end
   end
 
   defp delivery_context_summary(delivery) do

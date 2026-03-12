@@ -153,6 +153,10 @@ defmodule HydraX.ReportTest do
           "channel" => "slack",
           "status" => "streaming",
           "external_ref" => "C556",
+          "metadata" => %{
+            "transport" => "session_pubsub",
+            "transport_topic" => "stream:preview:C556"
+          },
           "formatted_payload" => %{
             "chunk_count" => 3,
             "text" => "Live report stream preview"

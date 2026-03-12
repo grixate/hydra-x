@@ -1129,6 +1129,7 @@ defmodule HydraX.Runtime.Observability do
   defp channel_delivery_entry(conversation) do
     delivery = last_delivery(conversation)
     payload = delivery_value(delivery, "formatted_payload") || %{}
+    metadata = delivery_value(delivery, "metadata") || %{}
     provider_message_ids = delivery_value(delivery, "provider_message_ids") || []
     reply_context = delivery_value(delivery, "reply_context") || %{}
 
@@ -1148,7 +1149,10 @@ defmodule HydraX.Runtime.Observability do
       formatted_payload: payload,
       provider_message_ids_count: length(provider_message_ids),
       attachment_count: conversation_attachment_count(conversation),
-      reply_context: reply_context
+      reply_context: reply_context,
+      transport: delivery_value(metadata, "transport"),
+      transport_topic: delivery_value(metadata, "transport_topic"),
+      transport_error: delivery_value(metadata, "transport_error")
     }
   end
 

@@ -793,6 +793,9 @@ defmodule HydraXWeb.ConversationsLive do
     provider_message_ids =
       delivery["provider_message_ids"] || delivery[:provider_message_ids] || []
 
+    metadata =
+      delivery["metadata"] || delivery[:metadata] || %{}
+
     []
     |> maybe_add_delivery_label(
       retry_count_label(delivery["retry_count"] || delivery[:retry_count])
@@ -803,6 +806,10 @@ defmodule HydraXWeb.ConversationsLive do
     )
     |> maybe_add_delivery_label(
       dead_letter_label(delivery["dead_lettered_at"] || delivery[:dead_lettered_at])
+    )
+    |> maybe_add_delivery_label(transport_label(metadata["transport"] || metadata[:transport]))
+    |> maybe_add_delivery_label(
+      transport_topic_label(metadata["transport_topic"] || metadata[:transport_topic])
     )
   end
 
@@ -929,6 +936,12 @@ defmodule HydraXWeb.ConversationsLive do
 
   defp retry_count_label(count) when is_integer(count) and count > 0, do: "retry #{count}"
   defp retry_count_label(_count), do: nil
+
+  defp transport_label(value) when is_binary(value) and value != "", do: "transport #{value}"
+  defp transport_label(_value), do: nil
+
+  defp transport_topic_label(value) when is_binary(value) and value != "", do: "topic #{value}"
+  defp transport_topic_label(_value), do: nil
 
   defp message_ids_label(ids) when is_list(ids) and length(ids) > 1, do: "msg ids #{length(ids)}"
   defp message_ids_label(_ids), do: nil

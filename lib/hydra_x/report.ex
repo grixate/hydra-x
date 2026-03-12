@@ -624,6 +624,7 @@ defmodule HydraX.Report do
       |> Map.get("reply_context", Map.get(delivery, :reply_context, %{}))
       |> render_reply_context()
 
+    metadata = Map.get(delivery, "metadata") || Map.get(delivery, :metadata) || %{}
     payload = Map.get(delivery, "formatted_payload") || Map.get(delivery, :formatted_payload)
 
     [
@@ -636,6 +637,7 @@ defmodule HydraX.Report do
       next_retry_at && "next_retry=#{format_datetime(next_retry_at)}",
       dead_lettered_at && "dead_lettered_at=#{format_datetime(dead_lettered_at)}",
       attempt_history != [] && "attempts=#{length(attempt_history)}",
+      render_delivery_transport(metadata),
       context,
       render_chunk_count(payload),
       render_formatted_payload(payload)
@@ -658,6 +660,19 @@ defmodule HydraX.Report do
   end
 
   defp render_reply_context(_context), do: nil
+
+  defp render_delivery_transport(metadata) when is_map(metadata) do
+    transport = metadata["transport"] || metadata[:transport]
+    topic = metadata["transport_topic"] || metadata[:transport_topic]
+
+    cond do
+      is_nil_or_empty(transport) -> nil
+      is_nil_or_empty(topic) -> "transport=#{transport}"
+      true -> "transport=#{transport}@#{topic}"
+    end
+  end
+
+  defp render_delivery_transport(_metadata), do: nil
 
   defp render_formatted_payload(payload) when is_map(payload) do
     payload
@@ -786,6 +801,7 @@ defmodule HydraX.Report do
                   stream.title,
                   stream.status,
                   if(stream.chunk_count, do: "chunks=#{stream.chunk_count}"),
+                  if(stream.transport, do: "transport=#{stream.transport}"),
                   if(preview, do: "preview=#{String.slice(preview, 0, 40)}")
                 ]
                 |> Enum.reject(&is_nil_or_empty/1)

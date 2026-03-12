@@ -234,7 +234,12 @@ defmodule HydraXWeb.ConversationsLiveTest do
           "status" => "streaming",
           "external_ref" => "webchat-session-streaming-ui",
           "chunk_count" => 3,
-          "metadata" => %{"streaming" => true, "provider" => "Mock Provider"},
+          "metadata" => %{
+            "streaming" => true,
+            "provider" => "Mock Provider",
+            "transport" => "session_pubsub",
+            "transport_topic" => "webchat:session:webchat-session-streaming-ui"
+          },
           "formatted_payload" => %{
             "session_id" => "webchat-session-streaming-ui",
             "text" => "Partial streamed delivery preview",
@@ -249,6 +254,8 @@ defmodule HydraXWeb.ConversationsLiveTest do
     assert html =~ "delivery streaming"
     assert html =~ "chunks 3"
     assert html =~ "Partial streamed delivery preview"
+    assert html =~ "transport session_pubsub"
+    assert html =~ "topic webchat:session:webchat-session-streaming-ui"
   end
 
   test "conversations page can start and reply to a control-plane conversation", %{conn: conn} do

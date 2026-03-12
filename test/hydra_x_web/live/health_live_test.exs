@@ -264,6 +264,10 @@ defmodule HydraXWeb.HealthLiveTest do
           "channel" => "telegram",
           "external_ref" => "1000",
           "status" => "streaming",
+          "metadata" => %{
+            "transport" => "session_pubsub",
+            "transport_topic" => "webchat:session:1000"
+          },
           "formatted_payload" => %{
             "chunk_count" => 3,
             "text" => "Streaming partial response"
@@ -282,6 +286,8 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "multipart 1"
     assert html =~ "streaming 1"
     assert html =~ "chunks 3"
+    assert html =~ "transport session_pubsub"
+    assert html =~ "topic webchat:session:1000"
     assert html =~ "msg ids 2"
   end
 
@@ -382,6 +388,7 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "max 180m"
     assert html =~ "idle 30m"
     assert html =~ "attachments 2x256KB"
+    assert html =~ "transport session_pubsub"
   end
 
   test "health page shows MCP server registry health", %{conn: conn} do
