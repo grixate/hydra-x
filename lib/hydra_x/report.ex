@@ -189,6 +189,7 @@ defmodule HydraX.Report do
     - Configured jobs: #{length(snapshot.scheduler.jobs)}
     - Recent runs: #{length(snapshot.scheduler.runs)}
     - Coordination: #{render_scheduler_coordination(snapshot.scheduler.coordination)}
+    - Skip reasons: #{render_skip_reason_counts(snapshot.scheduler.skipped_reason_counts)}
     - Ingress replay: #{render_scheduler_pass(snapshot.scheduler.pending_ingress, "processed_count", "processed")}
     - Ownership replay: #{render_scheduler_pass(snapshot.scheduler.ownership_handoffs, "resumed_count", "resumed")}
     - Deferred delivery replay: #{render_scheduler_pass(snapshot.scheduler.deferred_deliveries, "delivered_count", "delivered")}
@@ -198,6 +199,9 @@ defmodule HydraX.Report do
 
     ### Recent Runs
     #{render_job_runs(snapshot.scheduler.runs)}
+
+    ### Lease-Owned Skips
+    #{render_lease_owned_skips(snapshot.scheduler.lease_owned_skips)}
 
     ## Ingest
     #{render_ingest_runs(snapshot.ingest)}
@@ -242,6 +246,8 @@ defmodule HydraX.Report do
     %{
       jobs: Enum.take(status.jobs, limit),
       runs: Enum.take(status.runs, limit),
+      skipped_reason_counts: status.skipped_reason_counts,
+      lease_owned_skips: status.lease_owned_skips,
       coordination: status.coordination,
       pending_ingress: status.pending_ingress,
       ownership_handoffs: status.ownership_handoffs,
@@ -536,7 +542,50 @@ defmodule HydraX.Report do
 
   defp render_job_runs(runs) do
     Enum.map_join(runs, "\n", fn run ->
-      "- ##{run.id} job=#{run.scheduled_job_id} status=#{run.status} started=#{format_datetime(run.started_at)} delivery=#{render_delivery_status(run)}"
+      metadata = run.metadata || %{}
+      reason = metadata["status_reason"] || metadata[:status_reason]
+      lease_owner = metadata["lease_owner"] || metadata[:lease_owner]
+
+      [
+        "##{run.id}",
+        "job=#{run.scheduled_job_id}",
+        "status=#{run.status}",
+        "started=#{format_datetime(run.started_at)}",
+        "delivery=#{render_delivery_status(run)}",
+        reason && "reason=#{reason}",
+        lease_owner && "lease_owner=#{lease_owner}"
+      ]
+      |> Enum.reject(&is_nil_or_empty/1)
+      |> Enum.join(" ")
+      |> then(&("- " <> &1))
+    end)
+  end
+
+  defp render_skip_reason_counts([]), do: "none"
+
+  defp render_skip_reason_counts(reason_counts) do
+    Enum.map_join(reason_counts, ", ", fn %{reason: reason, count: count} ->
+      "#{humanize_skip_reason(reason)}=#{count}"
+    end)
+  end
+
+  defp render_lease_owned_skips([]), do: "- none"
+
+  defp render_lease_owned_skips(runs) do
+    Enum.map_join(runs, "\n", fn run ->
+      metadata = run.metadata || %{}
+      lease_owner = metadata["lease_owner"] || metadata[:lease_owner] || "unknown"
+      lease_expires_at = metadata["lease_expires_at"] || metadata[:lease_expires_at]
+
+      [
+        "##{run.id}",
+        run.scheduled_job && run.scheduled_job.name,
+        "owner=#{lease_owner}",
+        lease_expires_at && "expires=#{format_datetime(lease_expires_at)}"
+      ]
+      |> Enum.reject(&is_nil_or_empty/1)
+      |> Enum.join(" ")
+      |> then(&("- " <> &1))
     end)
   end
 
@@ -968,6 +1017,12 @@ defmodule HydraX.Report do
   defp pad2(value) when is_integer(value) and value < 10, do: "0#{value}"
   defp pad2(value), do: to_string(value)
 
+  defp humanize_skip_reason("lease_owned_elsewhere"), do: "lease owned elsewhere"
+  defp humanize_skip_reason("circuit_open"), do: "circuit open"
+  defp humanize_skip_reason("outside_active_hours"), do: "outside active hours"
+  defp humanize_skip_reason(reason) when is_binary(reason), do: String.replace(reason, "_", " ")
+  defp humanize_skip_reason(_reason), do: "unknown"
+
   defp is_nil_or_empty(nil), do: true
   defp is_nil_or_empty(""), do: true
   defp is_nil_or_empty(_value), do: false
@@ -996,6 +1051,8 @@ defmodule HydraX.Report do
       scheduler: %{
         jobs: Enum.map(snapshot.scheduler.jobs, &json_job/1),
         runs: Enum.map(snapshot.scheduler.runs, &json_job_run/1),
+        skipped_reason_counts: snapshot.scheduler.skipped_reason_counts,
+        lease_owned_skips: Enum.map(snapshot.scheduler.lease_owned_skips, &json_job_run/1),
         coordination: snapshot.scheduler.coordination,
         pending_ingress: snapshot.scheduler.pending_ingress,
         ownership_handoffs: snapshot.scheduler.ownership_handoffs,

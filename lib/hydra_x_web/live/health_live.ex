@@ -874,9 +874,9 @@ defmodule HydraXWeb.HealthLive do
                 </div>
                 <div class="mt-2 text-xs text-[var(--hx-mute)]">
                   level {event.level}
-                  <span :if={event.expired_by}> · expiry           {event.expired_by}</span>
+                  <span :if={event.expired_by}> · expiry            {event.expired_by}</span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip           {event.ip}</span>
+                  <span :if={event.ip}> · ip            {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -1131,6 +1131,61 @@ defmodule HydraXWeb.HealthLive do
               do: "paused until #{Calendar.strftime(job.paused_until, "%Y-%m-%d %H:%M UTC")}",
               else: "manual reset required"}
           </div>
+        </div>
+        <div class="mt-4 grid gap-3 lg:grid-cols-2">
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Recent skip reasons
+            </div>
+            <div class="mt-3 space-y-2">
+              <p
+                :if={@scheduler_status.skipped_reason_counts == []}
+                class="text-sm text-[var(--hx-mute)]"
+              >
+                No recent skipped runs.
+              </p>
+              <div
+                :for={entry <- @scheduler_status.skipped_reason_counts}
+                class="rounded-xl border border-white/10 bg-black/10 px-3 py-3"
+              >
+                <div class="flex items-center justify-between gap-3">
+                  <div class="text-sm text-[var(--hx-accent)]">
+                    {job_skip_reason_label(entry.reason)}
+                  </div>
+                  <div class="text-xs text-[var(--hx-mute)]">{entry.count} runs</div>
+                </div>
+              </div>
+            </div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Lease-owned skips
+            </div>
+            <div class="mt-3 space-y-2">
+              <p
+                :if={@scheduler_status.lease_owned_skips == []}
+                class="text-sm text-[var(--hx-mute)]"
+              >
+                No recent remote-owned job skips.
+              </p>
+              <div
+                :for={run <- @scheduler_status.lease_owned_skips}
+                class="rounded-xl border border-white/10 bg-black/10 px-3 py-3"
+              >
+                <div class="flex items-center justify-between gap-3">
+                  <div class="text-sm text-[var(--hx-accent)]">
+                    {(run.scheduled_job && run.scheduled_job.name) || "Scheduled job"}
+                  </div>
+                  <div class="text-xs text-[var(--hx-mute)]">{job_run_lease_owner(run)}</div>
+                </div>
+                <div class="mt-2 text-xs text-[var(--hx-mute)]">
+                  {job_skip_reason_label(job_run_status_reason(run))} · {job_run_lease_expiry_label(
+                    run
+                  )}
+                </div>
+              </div>
+            </div>
+          </article>
         </div>
       </section>
 
@@ -1589,6 +1644,39 @@ defmodule HydraXWeb.HealthLive do
   defp scheduler_pass_detail(pass, primary_key, verb) do
     "#{verb} #{scheduler_count_value(pass, primary_key)} · skipped #{scheduler_count_value(pass, "skipped_count")} · errors #{scheduler_count_value(pass, "error_count")} · owner #{scheduler_owner_value(pass) || "unknown"}"
   end
+
+  defp job_run_status_reason(%{metadata: metadata}) when is_map(metadata) do
+    metadata["status_reason"] || metadata[:status_reason]
+  end
+
+  defp job_run_status_reason(_run), do: nil
+
+  defp job_skip_reason_label("lease_owned_elsewhere"), do: "Lease owned elsewhere"
+  defp job_skip_reason_label("circuit_open"), do: "Circuit open"
+  defp job_skip_reason_label("outside_active_hours"), do: "Outside active hours"
+
+  defp job_skip_reason_label(reason) when is_binary(reason) do
+    reason
+    |> String.replace("_", " ")
+    |> String.capitalize()
+  end
+
+  defp job_skip_reason_label(_reason), do: "Unknown"
+
+  defp job_run_lease_owner(%{metadata: metadata}) when is_map(metadata) do
+    metadata["lease_owner"] || metadata[:lease_owner] || "unknown"
+  end
+
+  defp job_run_lease_owner(_run), do: "unknown"
+
+  defp job_run_lease_expiry_label(%{metadata: metadata}) when is_map(metadata) do
+    case metadata["lease_expires_at"] || metadata[:lease_expires_at] do
+      nil -> "expiry unknown"
+      value -> "expires #{format_datetime(value)}"
+    end
+  end
+
+  defp job_run_lease_expiry_label(_run), do: "expiry unknown"
 
   defp scheduler_count_value(pass, key) when is_map(pass) do
     Map.get(pass, key) || Map.get(pass, scheduler_count_key(key)) || 0

@@ -243,6 +243,74 @@ defmodule HydraX.ReportTest do
     assert snapshot.scheduler.deferred_deliveries.delivered_count == 3
   end
 
+  test "snapshot and export include lease-owned scheduler skips" do
+    previous_adapter = Application.get_env(:hydra_x, :repo_adapter)
+    Application.put_env(:hydra_x, :repo_adapter, Ecto.Adapters.Postgres)
+
+    on_exit(fn ->
+      if previous_adapter do
+        Application.put_env(:hydra_x, :repo_adapter, previous_adapter)
+      else
+        Application.delete_env(:hydra_x, :repo_adapter)
+      end
+    end)
+
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, job} =
+      Runtime.save_scheduled_job(%{
+        agent_id: agent.id,
+        name: "Report Remote-Owned Job",
+        kind: "backup",
+        interval_minutes: 60,
+        enabled: true
+      })
+
+    assert {:ok, _lease} =
+             Runtime.claim_lease("scheduled_job:#{job.id}",
+               owner: "node:remote-report",
+               ttl_seconds: 120
+             )
+
+    assert {:ok, _run} = Runtime.run_scheduled_job(job)
+
+    snapshot = Report.snapshot()
+
+    assert %{reason: "lease_owned_elsewhere", count: count} =
+             Enum.find(
+               snapshot.scheduler.skipped_reason_counts,
+               &(&1.reason == "lease_owned_elsewhere")
+             )
+
+    assert count >= 1
+
+    assert Enum.any?(
+             snapshot.scheduler.lease_owned_skips,
+             &(&1.metadata["lease_owner"] == "node:remote-report")
+           )
+
+    output_root =
+      Path.join(
+        System.tmp_dir!(),
+        "hydra-x-report-skip-export-#{System.unique_integer([:positive])}"
+      )
+
+    on_exit(fn -> File.rm_rf(output_root) end)
+
+    assert {:ok, export} = Report.export_snapshot(output_root)
+
+    markdown = File.read!(export.markdown_path)
+    json = File.read!(export.json_path)
+
+    assert markdown =~ "Skip reasons: lease owned elsewhere="
+    assert markdown =~ "Lease-Owned Skips"
+    assert markdown =~ "Report Remote-Owned Job"
+    assert markdown =~ "node:remote-report"
+    assert json =~ "\"skipped_reason_counts\""
+    assert json =~ "\"lease_owned_skips\""
+    assert json =~ "node:remote-report"
+  end
+
   test "export_snapshot writes markdown json and bundle exports" do
     output_root =
       Path.join(System.tmp_dir!(), "hydra-x-report-export-#{System.unique_integer([:positive])}")

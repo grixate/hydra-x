@@ -493,6 +493,46 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "provider offline"
   end
 
+  test "health page shows scheduler skip reasons and lease-owned skips", %{conn: conn} do
+    previous_adapter = Application.get_env(:hydra_x, :repo_adapter)
+    Application.put_env(:hydra_x, :repo_adapter, Ecto.Adapters.Postgres)
+
+    on_exit(fn ->
+      if previous_adapter do
+        Application.put_env(:hydra_x, :repo_adapter, previous_adapter)
+      else
+        Application.delete_env(:hydra_x, :repo_adapter)
+      end
+    end)
+
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, job} =
+      Runtime.save_scheduled_job(%{
+        agent_id: agent.id,
+        name: "Health Remote-Owned Job",
+        kind: "backup",
+        interval_minutes: 60,
+        enabled: true
+      })
+
+    assert {:ok, _lease} =
+             Runtime.claim_lease("scheduled_job:#{job.id}",
+               owner: "node:remote-health",
+               ttl_seconds: 120
+             )
+
+    assert {:ok, _run} = Runtime.run_scheduled_job(job)
+
+    {:ok, _view, html} = live(conn, ~p"/health")
+
+    assert html =~ "Recent skip reasons"
+    assert html =~ "Lease owned elsewhere"
+    assert html =~ "Lease-owned skips"
+    assert html =~ "Health Remote-Owned Job"
+    assert html =~ "node:remote-health"
+  end
+
   test "health page shows default agent provider warmup readiness", %{conn: conn} do
     agent = Runtime.ensure_default_agent!()
 

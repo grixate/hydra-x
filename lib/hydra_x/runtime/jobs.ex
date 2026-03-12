@@ -318,12 +318,15 @@ defmodule HydraX.Runtime.Jobs do
 
   def scheduler_status do
     passes = scheduler_pass_snapshots()
+    skipped_runs = recent_job_runs_by_status("skipped", 10)
 
     %{
       jobs: list_scheduled_jobs(limit: 50),
       runs: recent_job_runs(20),
       open_circuits: open_circuit_jobs(),
-      skipped_runs: recent_job_runs_by_status("skipped", 10),
+      skipped_runs: skipped_runs,
+      skipped_reason_counts: summarize_skip_reasons(skipped_runs),
+      lease_owned_skips: recent_lease_owned_skips(skipped_runs),
       timeout_runs: recent_job_runs_by_status("timeout", 10),
       coordination: HydraX.Runtime.coordination_status(),
       pending_ingress:
@@ -363,6 +366,27 @@ defmodule HydraX.Runtime.Jobs do
       "results" => []
     }
   end
+
+  defp summarize_skip_reasons(runs) do
+    runs
+    |> Enum.map(&job_run_status_reason/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.frequencies()
+    |> Enum.map(fn {reason, count} -> %{reason: reason, count: count} end)
+    |> Enum.sort_by(fn %{reason: reason, count: count} -> {-count, reason} end)
+  end
+
+  defp recent_lease_owned_skips(runs) do
+    runs
+    |> Enum.filter(&(job_run_status_reason(&1) == "lease_owned_elsewhere"))
+    |> Enum.take(5)
+  end
+
+  defp job_run_status_reason(%JobRun{metadata: metadata}) when is_map(metadata) do
+    metadata["status_reason"] || metadata[:status_reason]
+  end
+
+  defp job_run_status_reason(_run), do: nil
 
   defp with_job_execution_lease(%ScheduledJob{} = job, fun) when is_function(fun, 0) do
     if Config.repo_multi_writer?() do
