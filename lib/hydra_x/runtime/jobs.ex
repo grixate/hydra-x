@@ -284,34 +284,36 @@ defmodule HydraX.Runtime.Jobs do
   end
 
   def run_scheduled_job(%ScheduledJob{} = job) do
-    now = DateTime.utc_now()
-    job = refresh_job_for_execution(job, now)
-    started_at = DateTime.utc_now()
+    with_job_execution_lease(job, fn ->
+      now = DateTime.utc_now()
+      job = refresh_job_for_execution(job, now)
+      started_at = DateTime.utc_now()
 
-    {:ok, %{job: job, run: run}} =
-      Ecto.Multi.new()
-      |> Ecto.Multi.update(
-        :job,
-        ScheduledJob.changeset(job, %{
-          last_run_at: started_at,
-          next_run_at: next_run_at(job, started_at)
-        })
-      )
-      |> Ecto.Multi.insert(
-        :run,
-        JobRun.changeset(%JobRun{}, %{
-          scheduled_job_id: job.id,
-          agent_id: job.agent_id,
-          status: "running",
-          started_at: started_at
-        })
-      )
-      |> Repo.transaction()
+      {:ok, %{job: job, run: run}} =
+        Ecto.Multi.new()
+        |> Ecto.Multi.update(
+          :job,
+          ScheduledJob.changeset(job, %{
+            last_run_at: started_at,
+            next_run_at: next_run_at(job, started_at)
+          })
+        )
+        |> Ecto.Multi.insert(
+          :run,
+          JobRun.changeset(%JobRun{}, %{
+            scheduled_job_id: job.id,
+            agent_id: job.agent_id,
+            status: "running",
+            started_at: started_at
+          })
+        )
+        |> Repo.transaction()
 
-    result = finalize_job_run(job, run, started_at)
+      result = finalize_job_run(job, run, started_at)
 
-    Phoenix.PubSub.broadcast(HydraX.PubSub, "jobs", {:job_completed, job.id})
-    result
+      Phoenix.PubSub.broadcast(HydraX.PubSub, "jobs", {:job_completed, job.id})
+      result
+    end)
   end
 
   def scheduler_status do
@@ -360,6 +362,69 @@ defmodule HydraX.Runtime.Jobs do
       "error_count" => 0,
       "results" => []
     }
+  end
+
+  defp with_job_execution_lease(%ScheduledJob{} = job, fun) when is_function(fun, 0) do
+    if Config.repo_multi_writer?() do
+      lease_name = job_execution_lease_name(job.id)
+
+      case HydraX.Runtime.claim_lease(lease_name,
+             ttl_seconds: job_execution_lease_ttl_seconds(job),
+             metadata: %{
+               "type" => "scheduled_job",
+               "job_id" => job.id,
+               "job_name" => job.name,
+               "kind" => job.kind
+             }
+           ) do
+        {:ok, lease} ->
+          try do
+            fun.()
+          after
+            _ = HydraX.Runtime.release_lease(lease_name, owner: lease.owner)
+          end
+
+        {:error, {:taken, lease}} ->
+          record_job_execution_skip(job, lease)
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    else
+      fun.()
+    end
+  end
+
+  defp record_job_execution_skip(%ScheduledJob{} = job, lease) do
+    now = DateTime.utc_now()
+    owner = lease && lease.owner
+    lease_name = job_execution_lease_name(job.id)
+
+    Repo.insert(
+      JobRun.changeset(%JobRun{}, %{
+        scheduled_job_id: job.id,
+        agent_id: job.agent_id,
+        status: "skipped",
+        started_at: now,
+        finished_at: now,
+        output: "Skipped #{job.name}: execution already owned by #{owner || "another node"}.",
+        metadata: %{
+          "status_reason" => "lease_owned_elsewhere",
+          "lease_name" => lease_name,
+          "lease_owner" => owner,
+          "lease_expires_at" => lease && lease.expires_at
+        }
+      })
+    )
+  end
+
+  defp job_execution_lease_name(job_id) when is_integer(job_id), do: "scheduled_job:#{job_id}"
+
+  defp job_execution_lease_ttl_seconds(%ScheduledJob{} = job) do
+    attempts = max(job.retry_limit || 0, 0) + 1
+    timeout_seconds = max(job.timeout_seconds || 120, 1)
+    retry_backoff_seconds = max(job.retry_backoff_seconds || 0, 0)
+    attempts * timeout_seconds + max(attempts - 1, 0) * retry_backoff_seconds + 30
   end
 
   @doc """

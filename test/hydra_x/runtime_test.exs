@@ -3078,6 +3078,42 @@ defmodule HydraX.RuntimeTest do
     assert run.metadata["status_reason"] == "outside_active_hours"
   end
 
+  test "scheduled jobs skip duplicate execution when another node owns the job lease" do
+    previous_adapter = Application.get_env(:hydra_x, :repo_adapter)
+    Application.put_env(:hydra_x, :repo_adapter, Ecto.Adapters.Postgres)
+
+    on_exit(fn ->
+      if previous_adapter do
+        Application.put_env(:hydra_x, :repo_adapter, previous_adapter)
+      else
+        Application.delete_env(:hydra_x, :repo_adapter)
+      end
+    end)
+
+    agent = create_agent()
+
+    {:ok, job} =
+      Runtime.save_scheduled_job(%{
+        agent_id: agent.id,
+        name: "Remote-owned backup",
+        kind: "backup",
+        interval_minutes: 60,
+        enabled: true
+      })
+
+    assert {:ok, _lease} =
+             Runtime.claim_lease("scheduled_job:#{job.id}",
+               owner: "node:remote",
+               ttl_seconds: 120
+             )
+
+    assert {:ok, run} = Runtime.run_scheduled_job(job)
+    assert run.status == "skipped"
+    assert run.metadata["status_reason"] == "lease_owned_elsewhere"
+    assert run.metadata["lease_owner"] == "node:remote"
+    assert run.output =~ "execution already owned by node:remote"
+  end
+
   test "scheduled jobs retry failures and open a circuit when the threshold is hit" do
     agent = create_agent()
 
