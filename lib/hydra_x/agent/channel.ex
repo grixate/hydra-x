@@ -6,6 +6,7 @@ defmodule HydraX.Agent.Channel do
   alias HydraX.Budget
   alias HydraX.Cluster
   alias HydraX.Config
+  alias HydraX.Gateway
   alias HydraX.LLM.Router
   alias HydraX.Repo
   alias HydraX.Runtime
@@ -370,12 +371,15 @@ defmodule HydraX.Agent.Channel do
           {:stream_chunk, data.conversation.id, delta}
         )
 
+        maybe_refresh_streaming_delivery(updated_data)
         maybe_persist_stream_snapshot(updated_data)
       else
         update_channel_checkpoint(
           data.conversation.id,
           %{"stream_capture" => stream_capture_payload(updated_data)}
         )
+
+        maybe_refresh_streaming_delivery(updated_data)
       end
 
       {:keep_state, updated_data}
@@ -657,6 +661,8 @@ defmodule HydraX.Agent.Channel do
                 "estimated_input_tokens" => estimated_input_tokens,
                 "round" => round
               })
+
+              maybe_mark_streaming_delivery(data, "", 0)
 
               # Return streaming state to be merged into gen_statem data
               {:streaming,
@@ -1503,6 +1509,25 @@ defmodule HydraX.Agent.Channel do
         {:conversation_updated, data.conversation.id}
       )
     end
+  end
+
+  defp maybe_refresh_streaming_delivery(data) do
+    chunk_count = data[:stream_chunk_count] || 0
+
+    if stream_snapshot_due?(chunk_count) do
+      maybe_mark_streaming_delivery(data, data[:stream_content] || "", chunk_count)
+    end
+  end
+
+  defp maybe_mark_streaming_delivery(data, preview, chunk_count) do
+    _ =
+      Gateway.mark_streaming_delivery(data.conversation,
+        preview: preview,
+        chunk_count: chunk_count,
+        provider: provider_name(data.agent_id)
+      )
+
+    :ok
   end
 
   defp stream_snapshot_due?(1), do: true

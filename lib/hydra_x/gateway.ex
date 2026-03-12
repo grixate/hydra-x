@@ -99,6 +99,57 @@ defmodule HydraX.Gateway do
     end
   end
 
+  def mark_streaming_delivery(%Conversation{} = conversation, opts \\ []) do
+    conversation = Runtime.get_conversation!(conversation.id)
+
+    with {:ok, adapter_mod, _config, config_map} <- channel_adapter(conversation.channel, []),
+         true <- streaming_delivery_supported?(adapter_mod, conversation),
+         {:ok, state} <- adapter_mod.connect(config_map) do
+      previous = last_delivery(conversation) || %{}
+      preview = Keyword.get(opts, :preview, "") || ""
+      chunk_count = Keyword.get(opts, :chunk_count, 0) || 0
+
+      payload = %{
+        content: preview,
+        external_ref: conversation.external_ref,
+        metadata: streaming_reply_context(conversation, previous)
+      }
+
+      formatted_payload =
+        adapter_format_message(adapter_mod, payload, state)
+        |> maybe_put_stream_chunk_count(chunk_count)
+
+      delivery =
+        conversation
+        |> delivery_payload(streaming_message(conversation, previous),
+          formatted_payload: formatted_payload
+        )
+        |> Map.put("status", "streaming")
+        |> Map.put("attempted_at", DateTime.utc_now())
+        |> Map.put("chunk_count", chunk_count)
+        |> Map.put("metadata", %{
+          "streaming" => true,
+          "provider" => Keyword.get(opts, :provider),
+          "preview_chars" => String.length(preview)
+        })
+        |> Map.put_new("streaming_started_at", DateTime.utc_now())
+        |> Map.delete("delivered_at")
+        |> Map.delete("dead_lettered_at")
+        |> Map.delete("provider_message_id")
+        |> Map.delete("provider_message_ids")
+        |> Map.delete("reason")
+        |> Map.delete("next_retry_at")
+        |> Map.delete("next_retry_in_ms")
+        |> Map.delete("pending_retry_attempt")
+        |> Map.delete("retry_backoff_ms")
+
+      Runtime.update_conversation_metadata(conversation, %{"last_delivery" => delivery})
+    else
+      false -> {:error, :streaming_not_supported}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   def process_deferred_deliveries(opts \\ []) do
     owner = Keyword.get(opts, :owner, Runtime.coordination_status().owner)
     limit = Keyword.get(opts, :limit, 50)
@@ -108,10 +159,19 @@ defmodule HydraX.Gateway do
       |> Enum.map(fn conversation ->
         case retry_conversation_delivery(conversation, Map.new(opts)) do
           {:ok, _updated} ->
-            %{conversation_id: conversation.id, agent_id: conversation.agent_id, status: "delivered"}
+            %{
+              conversation_id: conversation.id,
+              agent_id: conversation.agent_id,
+              status: "delivered"
+            }
 
           {:error, :no_assistant_turn} ->
-            %{conversation_id: conversation.id, agent_id: conversation.agent_id, status: "skipped", reason: "no_assistant_turn"}
+            %{
+              conversation_id: conversation.id,
+              agent_id: conversation.agent_id,
+              status: "skipped",
+              reason: "no_assistant_turn"
+            }
 
           {:error, reason} ->
             %{
@@ -337,24 +397,24 @@ defmodule HydraX.Gateway do
         :route
 
       true ->
-      case Runtime.claim_lease(
-             ingress_lease_name(message.channel, message.external_ref),
-             ttl_seconds: ingress_lease_ttl_seconds(),
-             metadata: %{
-               "type" => "ingress",
-               "channel" => message.channel,
-               "external_ref" => message.external_ref
-             }
-           ) do
-        {:ok, _lease} ->
-          :route
+        case Runtime.claim_lease(
+               ingress_lease_name(message.channel, message.external_ref),
+               ttl_seconds: ingress_lease_ttl_seconds(),
+               metadata: %{
+                 "type" => "ingress",
+                 "channel" => message.channel,
+                 "external_ref" => message.external_ref
+               }
+             ) do
+          {:ok, _lease} ->
+            :route
 
-        {:error, {:taken, lease}} ->
-          {:queued, queue_ingress_message(agent, message, lease)}
+          {:error, {:taken, lease}} ->
+            {:queued, queue_ingress_message(agent, message, lease)}
 
-        {:error, _reason} ->
-          :route
-      end
+          {:error, _reason} ->
+            :route
+        end
     end
   end
 
@@ -635,6 +695,12 @@ defmodule HydraX.Gateway do
     |> maybe_put_existing("first_attempted_at", delivery_value(previous, "first_attempted_at"))
   end
 
+  defp maybe_put_stream_chunk_count(payload, count)
+       when is_map(payload) and is_integer(count) and count > 0,
+       do: Map.put(payload, "chunk_count", count)
+
+  defp maybe_put_stream_chunk_count(payload, _count), do: payload
+
   defp delivery_context(%{metadata: metadata}) when is_map(metadata) do
     metadata
     |> stringify_keys()
@@ -700,6 +766,33 @@ defmodule HydraX.Gateway do
     }
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
     |> Map.new()
+  end
+
+  defp streaming_delivery_supported?(adapter_mod, %Conversation{
+         channel: channel,
+         external_ref: external_ref
+       })
+       when is_binary(channel) and is_binary(external_ref) and external_ref != "" do
+    capabilities =
+      if function_exported?(adapter_mod, :capabilities, 0),
+        do: adapter_mod.capabilities(),
+        else: %{}
+
+    Map.get(capabilities, :streaming) || Map.get(capabilities, "streaming") || false
+  end
+
+  defp streaming_delivery_supported?(_adapter_mod, _conversation), do: false
+
+  defp streaming_message(conversation, previous) do
+    %{
+      channel: conversation.channel,
+      external_ref: conversation.external_ref,
+      metadata: streaming_reply_context(conversation, previous)
+    }
+  end
+
+  defp streaming_reply_context(_conversation, previous) do
+    delivery_value(previous, "reply_context") || %{}
   end
 
   defp maybe_put_existing(map, _key, nil), do: map
@@ -823,22 +916,46 @@ defmodule HydraX.Gateway do
 
   defp channel_adapter("telegram", opts) do
     config = Runtime.enabled_telegram_config()
-    maybe_retry_adapter(Telegram, config, adapter_config(config, Map.new(opts)), :telegram_not_configured)
+
+    maybe_retry_adapter(
+      Telegram,
+      config,
+      adapter_config(config, Map.new(opts)),
+      :telegram_not_configured
+    )
   end
 
   defp channel_adapter("discord", opts) do
     config = Runtime.enabled_discord_config()
-    maybe_retry_adapter(Discord, config, discord_adapter_config(config, Map.new(opts)), :discord_not_configured)
+
+    maybe_retry_adapter(
+      Discord,
+      config,
+      discord_adapter_config(config, Map.new(opts)),
+      :discord_not_configured
+    )
   end
 
   defp channel_adapter("slack", opts) do
     config = Runtime.enabled_slack_config()
-    maybe_retry_adapter(Slack, config, slack_adapter_config(config, Map.new(opts)), :slack_not_configured)
+
+    maybe_retry_adapter(
+      Slack,
+      config,
+      slack_adapter_config(config, Map.new(opts)),
+      :slack_not_configured
+    )
   end
 
   defp channel_adapter("webchat", opts) do
     config = Runtime.enabled_webchat_config()
-    maybe_retry_adapter(Webchat, config, webchat_adapter_config(config, Map.new(opts)), :webchat_not_configured)
+
+    maybe_retry_adapter(
+      Webchat,
+      config,
+      webchat_adapter_config(config, Map.new(opts)),
+      :webchat_not_configured
+    )
   end
 
   defp channel_adapter(channel, _opts), do: {:error, {:unsupported_channel, channel}}

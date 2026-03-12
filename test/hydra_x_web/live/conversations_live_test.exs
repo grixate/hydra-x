@@ -217,6 +217,40 @@ defmodule HydraXWeb.ConversationsLiveTest do
     assert html =~ "&quot;thread_ts&quot;: &quot;123.456&quot;"
   end
 
+  test "conversations page shows streaming delivery diagnostics", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{
+        channel: "webchat",
+        external_ref: "webchat-session-streaming-ui",
+        title: "Streaming Delivery UI"
+      })
+
+    {:ok, _conversation} =
+      Runtime.update_conversation_metadata(conversation, %{
+        "last_delivery" => %{
+          "channel" => "webchat",
+          "status" => "streaming",
+          "external_ref" => "webchat-session-streaming-ui",
+          "chunk_count" => 3,
+          "metadata" => %{"streaming" => true, "provider" => "Mock Provider"},
+          "formatted_payload" => %{
+            "session_id" => "webchat-session-streaming-ui",
+            "text" => "Partial streamed delivery preview",
+            "chunk_count" => 3
+          }
+        }
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/conversations?conversation_id=#{conversation.id}")
+
+    html = render(view)
+    assert html =~ "delivery streaming"
+    assert html =~ "chunks 3"
+    assert html =~ "Partial streamed delivery preview"
+  end
+
   test "conversations page can start and reply to a control-plane conversation", %{conn: conn} do
     agent = Runtime.ensure_default_agent!()
 

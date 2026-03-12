@@ -262,6 +262,7 @@ defmodule HydraX.GatewayTest do
 
     refreshed = Runtime.get_conversation!(conversation.id)
     assert refreshed.metadata["last_delivery"]["status"] == "delivered"
+
     assert refreshed.metadata["last_delivery"]["metadata"]["provider_message_id"] ==
              "deferred-telegram-1"
   end
@@ -271,6 +272,7 @@ defmodule HydraX.GatewayTest do
     previous = Application.get_env(:hydra_x, :telegram_deliver)
 
     Application.put_env(:hydra_x, :repo_adapter, Ecto.Adapters.Postgres)
+
     Application.put_env(:hydra_x, :telegram_deliver, fn payload ->
       send(self(), {:telegram_expired_delivery, payload})
       {:ok, %{provider_message_id: "expired-telegram-1"}}
@@ -354,6 +356,7 @@ defmodule HydraX.GatewayTest do
     summary = HydraX.Gateway.process_deferred_deliveries()
 
     assert summary.delivered_count == 1
+
     assert_receive {:telegram_expired_delivery,
                     %{
                       chat_id: "5252",
@@ -444,6 +447,7 @@ defmodule HydraX.GatewayTest do
     previous = Application.get_env(:hydra_x, :telegram_deliver)
 
     Application.put_env(:hydra_x, :repo_adapter, Ecto.Adapters.Postgres)
+
     Application.put_env(:hydra_x, :telegram_deliver, fn payload ->
       send(self(), {:telegram_expired_ingress_delivery, payload})
       {:ok, %{provider_message_id: "expired-ingress-1"}}
@@ -512,6 +516,7 @@ defmodule HydraX.GatewayTest do
     summary = HydraX.Gateway.process_owned_ingress()
 
     assert summary.processed_count == 1
+
     assert_receive {:telegram_expired_ingress_delivery,
                     %{
                       chat_id: "6262",
@@ -1051,6 +1056,57 @@ defmodule HydraX.GatewayTest do
     assert refreshed.metadata["last_delivery"]["status"] == "delivered"
     assert refreshed.metadata["last_delivery"]["external_ref"] == "webchat-session-42"
     assert refreshed.metadata["last_delivery"]["metadata"]["streaming"] == true
+  end
+
+  test "streaming-capable deliveries update last_delivery while chunks are in flight" do
+    agent = create_agent()
+
+    {:ok, _webchat} =
+      Runtime.save_webchat_config(%{
+        title: "Hydra-X Browser",
+        enabled: true,
+        default_agent_id: agent.id
+      })
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{
+        channel: "webchat",
+        title: "Streaming Delivery",
+        external_ref: "webchat-session-streaming"
+      })
+
+    assert {:ok, _conversation} =
+             HydraX.Gateway.mark_streaming_delivery(conversation,
+               preview: "Partial streamed delivery",
+               chunk_count: 1,
+               provider: "Mock Provider"
+             )
+
+    refreshed = Runtime.get_conversation!(conversation.id)
+    assert refreshed.metadata["last_delivery"]["status"] == "streaming"
+    assert refreshed.metadata["last_delivery"]["external_ref"] == "webchat-session-streaming"
+    assert refreshed.metadata["last_delivery"]["chunk_count"] == 1
+    assert refreshed.metadata["last_delivery"]["metadata"]["streaming"] == true
+    assert refreshed.metadata["last_delivery"]["metadata"]["provider"] == "Mock Provider"
+
+    assert refreshed.metadata["last_delivery"]["formatted_payload"]["text"] ==
+             "Partial streamed delivery"
+
+    assert refreshed.metadata["last_delivery"]["formatted_payload"]["chunk_count"] == 1
+
+    assert {:ok, _conversation} =
+             HydraX.Gateway.mark_streaming_delivery(conversation,
+               preview: "Partial streamed delivery with more detail",
+               chunk_count: 4,
+               provider: "Mock Provider"
+             )
+
+    refreshed = Runtime.get_conversation!(conversation.id)
+    assert refreshed.metadata["last_delivery"]["status"] == "streaming"
+    assert refreshed.metadata["last_delivery"]["chunk_count"] == 4
+
+    assert refreshed.metadata["last_delivery"]["formatted_payload"]["text"] ==
+             "Partial streamed delivery with more detail"
   end
 
   test "webchat attachment messages preserve attachment metadata and display name" do
