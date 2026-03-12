@@ -74,6 +74,48 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "shell cli"
   end
 
+  test "health page shows scheduler routing replay summaries", %{conn: conn} do
+    Runtime.Jobs.reset_scheduler_passes()
+
+    on_exit(fn ->
+      Runtime.Jobs.reset_scheduler_passes()
+    end)
+
+    Runtime.Jobs.record_scheduler_pass(:pending_ingress, %{
+      owner: "node:test",
+      processed_count: 2,
+      skipped_count: 1,
+      error_count: 0,
+      results: []
+    })
+
+    Runtime.Jobs.record_scheduler_pass(:ownership_handoffs, %{
+      owner: "node:test",
+      resumed_count: 3,
+      skipped_count: 1,
+      error_count: 0,
+      results: []
+    })
+
+    Runtime.Jobs.record_scheduler_pass(:deferred_deliveries, %{
+      owner: "node:test",
+      delivered_count: 4,
+      skipped_count: 2,
+      error_count: 1,
+      results: []
+    })
+
+    {:ok, _view, html} = live(conn, ~p"/health")
+
+    assert html =~ "node:test"
+    assert html =~ "Ingress replay"
+    assert html =~ "processed 2"
+    assert html =~ "Ownership replay"
+    assert html =~ "resumed 3"
+    assert html =~ "Deferred delivery replay"
+    assert html =~ "delivered 4"
+  end
+
   test "health page shows the unified effective policy surface", %{conn: conn} do
     {:ok, _view, html} = live(conn, ~p"/health")
 

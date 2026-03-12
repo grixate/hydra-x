@@ -1307,8 +1307,22 @@ defmodule HydraX.RuntimeTest do
     scheduler_pid =
       Process.whereis(HydraX.Scheduler) || start_supervised!({HydraX.Scheduler, %{}})
 
+    if lease = Runtime.get_lease("scheduler:poller") do
+      lease
+      |> Ecto.Changeset.change(expires_at: DateTime.add(DateTime.utc_now(), -60, :second))
+      |> Repo.update!()
+    end
+
     send(scheduler_pid, :poll)
-    Process.sleep(250)
+
+    wait_for(
+      fn ->
+        Runtime.get_conversation!(conversation.id).turns
+        |> List.last()
+        |> then(&(&1 && &1.role == "assistant"))
+      end,
+      80
+    )
 
     refreshed = Runtime.get_conversation!(conversation.id)
     assert List.last(refreshed.turns).role == "assistant"
@@ -1318,9 +1332,19 @@ defmodule HydraX.RuntimeTest do
 
     assert delivered_text =~ "Let the scheduler pick this up."
 
+    wait_for(
+      fn ->
+        Runtime.get_conversation!(conversation.id).metadata["last_delivery"]["status"] ==
+          "delivered"
+      end,
+      80
+    )
+
     channel_state = Runtime.conversation_channel_state(conversation.id)
     assert channel_state.status == "completed"
     assert channel_state.recovery_lineage["turn_scope_id"] == user_turn.id
+
+    refreshed = Runtime.get_conversation!(conversation.id)
     assert refreshed.metadata["last_delivery"]["status"] == "delivered"
   end
 
@@ -1389,12 +1413,21 @@ defmodule HydraX.RuntimeTest do
     scheduler_pid =
       Process.whereis(HydraX.Scheduler) || start_supervised!({HydraX.Scheduler, %{}})
 
+    if lease = Runtime.get_lease("scheduler:poller") do
+      lease
+      |> Ecto.Changeset.change(expires_at: DateTime.add(DateTime.utc_now(), -60, :second))
+      |> Repo.update!()
+    end
+
     send(scheduler_pid, :poll)
 
-    wait_for(fn ->
-      checkpoint = Runtime.get_checkpoint(conversation.id, "ingress")
-      checkpoint && checkpoint.state["message_count"] == 0
-    end)
+    wait_for(
+      fn ->
+        checkpoint = Runtime.get_checkpoint(conversation.id, "ingress")
+        checkpoint && checkpoint.state["message_count"] == 0
+      end,
+      80
+    )
 
     assert_receive {:scheduler_ingress_delivery,
                     %{chat_id: "8181", reply_to_message_id: 828, text: delivered_text}}

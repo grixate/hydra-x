@@ -205,6 +205,44 @@ defmodule HydraX.ReportTest do
            )
   end
 
+  test "snapshot includes scheduler routing summaries" do
+    Runtime.Jobs.reset_scheduler_passes()
+
+    on_exit(fn ->
+      Runtime.Jobs.reset_scheduler_passes()
+    end)
+
+    Runtime.Jobs.record_scheduler_pass(:pending_ingress, %{
+      owner: "node:report",
+      processed_count: 1,
+      skipped_count: 0,
+      error_count: 0,
+      results: []
+    })
+
+    Runtime.Jobs.record_scheduler_pass(:ownership_handoffs, %{
+      owner: "node:report",
+      resumed_count: 2,
+      skipped_count: 1,
+      error_count: 0,
+      results: []
+    })
+
+    Runtime.Jobs.record_scheduler_pass(:deferred_deliveries, %{
+      owner: "node:report",
+      delivered_count: 3,
+      skipped_count: 1,
+      error_count: 1,
+      results: []
+    })
+
+    snapshot = Report.snapshot()
+
+    assert snapshot.scheduler.pending_ingress.processed_count == 1
+    assert snapshot.scheduler.ownership_handoffs.resumed_count == 2
+    assert snapshot.scheduler.deferred_deliveries.delivered_count == 3
+  end
+
   test "export_snapshot writes markdown json and bundle exports" do
     output_root =
       Path.join(System.tmp_dir!(), "hydra-x-report-export-#{System.unique_integer([:positive])}")
@@ -414,9 +452,15 @@ defmodule HydraX.ReportTest do
     assert File.read!(Path.join(export.bundle_dir, "agents.json")) =~ "\"search_docs\""
     assert File.read!(Path.join(export.bundle_dir, "channels.json")) =~ "\"streaming_count\""
     assert File.read!(Path.join(export.bundle_dir, "channels.json")) =~ "\"recent_streaming\""
+    assert File.read!(export.markdown_path) =~ "Ingress replay:"
+    assert File.read!(export.markdown_path) =~ "Ownership replay:"
+    assert File.read!(export.markdown_path) =~ "Deferred delivery replay:"
     assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~ "\"channel_state\""
     assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~ "\"memory_recall\""
     assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~ "\"stream_capture\""
+    assert File.read!(export.json_path) =~ "\"pending_ingress\""
+    assert File.read!(export.json_path) =~ "\"ownership_handoffs\""
+    assert File.read!(export.json_path) =~ "\"deferred_deliveries\""
 
     assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~
              "\"pending_response\""

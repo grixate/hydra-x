@@ -177,13 +177,16 @@ defmodule HydraX.Runtime.Conversations do
       list_owned_resumable_conversations(owner: owner, limit: limit)
       |> Enum.map(&resume_owned_conversation/1)
 
-    %{
+    summary = %{
       owner: owner,
       resumed_count: Enum.count(results, &(&1.status == "resumed")),
       skipped_count: Enum.count(results, &(&1.status == "skipped")),
       error_count: Enum.count(results, &(&1.status == "error")),
       results: results
     }
+
+    _ = HydraX.Runtime.Jobs.record_scheduler_pass(:ownership_handoffs, summary)
+    summary
   end
 
   def list_owned_pending_deliveries(opts \\ []) do

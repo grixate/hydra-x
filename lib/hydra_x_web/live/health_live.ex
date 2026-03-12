@@ -486,7 +486,7 @@ defmodule HydraXWeb.HealthLive do
             <p class="mt-3 text-sm text-[var(--hx-mute)]">
               {@provider_status.name} · {@provider_status.kind}
               <span :if={@provider_status.model}>
-                 ·                     {@provider_status.model}
+                · {@provider_status.model}
               </span>
             </p>
             <p class="mt-2 text-xs text-[var(--hx-mute)]">
@@ -874,9 +874,9 @@ defmodule HydraXWeb.HealthLive do
                 </div>
                 <div class="mt-2 text-xs text-[var(--hx-mute)]">
                   level {event.level}
-                  <span :if={event.expired_by}> · expiry          {event.expired_by}</span>
+                  <span :if={event.expired_by}> · expiry           {event.expired_by}</span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip          {event.ip}</span>
+                  <span :if={event.ip}> · ip           {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -1045,6 +1045,12 @@ defmodule HydraXWeb.HealthLive do
       <section class="glass-panel mt-6 p-6">
         <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">Scheduler</div>
         <h2 class="mt-3 font-display text-4xl">Heartbeat and job execution</h2>
+        <p class="mt-3 text-sm text-[var(--hx-mute)]">
+          coordination {scheduler_coordination_label(@scheduler_status.coordination)} · ingress{" "}
+          {scheduler_pass_label(@scheduler_status.pending_ingress, "processed_count")} · handoffs{" "}
+          {scheduler_pass_label(@scheduler_status.ownership_handoffs, "resumed_count")} · deliveries{" "}
+          {scheduler_pass_label(@scheduler_status.deferred_deliveries, "delivered_count")}
+        </p>
         <div class="mt-6 grid gap-3 lg:grid-cols-5">
           <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
             <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
@@ -1077,6 +1083,40 @@ defmodule HydraXWeb.HealthLive do
               Skipped runs
             </div>
             <div class="mt-3 font-display text-4xl">{length(@scheduler_status.skipped_runs)}</div>
+          </article>
+        </div>
+        <div class="mt-4 grid gap-3 lg:grid-cols-3">
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Ingress replay
+            </div>
+            <p class="mt-3 text-sm text-[var(--hx-mute)]">
+              {scheduler_pass_detail(
+                @scheduler_status.pending_ingress,
+                "processed_count",
+                "processed"
+              )}
+            </p>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Ownership replay
+            </div>
+            <p class="mt-3 text-sm text-[var(--hx-mute)]">
+              {scheduler_pass_detail(@scheduler_status.ownership_handoffs, "resumed_count", "resumed")}
+            </p>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Deferred delivery replay
+            </div>
+            <p class="mt-3 text-sm text-[var(--hx-mute)]">
+              {scheduler_pass_detail(
+                @scheduler_status.deferred_deliveries,
+                "delivered_count",
+                "delivered"
+              )}
+            </p>
           </article>
         </div>
         <div :if={@scheduler_status.open_circuits != []} class="mt-4 space-y-2">
@@ -1523,6 +1563,51 @@ defmodule HydraXWeb.HealthLive do
       labels -> Enum.join(labels, " · ")
     end
   end
+
+  defp scheduler_coordination_label(%{} = coordination) when map_size(coordination) > 0 do
+    [
+      coordination[:mode] || coordination["mode"],
+      coordination[:owner] || coordination["owner"]
+    ]
+    |> Enum.reject(&is_nil_or_empty/1)
+    |> Enum.join(" · ")
+  end
+
+  defp scheduler_coordination_label(_coordination), do: "unknown"
+
+  defp scheduler_pass_label(pass, primary_key) do
+    count = scheduler_count_value(pass, primary_key)
+    owner = scheduler_owner_value(pass)
+
+    if owner in [nil, ""] do
+      Integer.to_string(count)
+    else
+      "#{count} on #{owner}"
+    end
+  end
+
+  defp scheduler_pass_detail(pass, primary_key, verb) do
+    "#{verb} #{scheduler_count_value(pass, primary_key)} · skipped #{scheduler_count_value(pass, "skipped_count")} · errors #{scheduler_count_value(pass, "error_count")} · owner #{scheduler_owner_value(pass) || "unknown"}"
+  end
+
+  defp scheduler_count_value(pass, key) when is_map(pass) do
+    Map.get(pass, key) || Map.get(pass, scheduler_count_key(key)) || 0
+  end
+
+  defp scheduler_count_value(_pass, _key), do: 0
+
+  defp scheduler_owner_value(pass) when is_map(pass) do
+    pass["owner"] || pass[:owner]
+  end
+
+  defp scheduler_owner_value(_pass), do: nil
+
+  defp scheduler_count_key("processed_count"), do: :processed_count
+  defp scheduler_count_key("resumed_count"), do: :resumed_count
+  defp scheduler_count_key("delivered_count"), do: :delivered_count
+  defp scheduler_count_key("skipped_count"), do: :skipped_count
+  defp scheduler_count_key("error_count"), do: :error_count
+  defp scheduler_count_key(other), do: other
 
   defp delivery_context_summary(delivery) do
     reply_context = delivery["reply_context"] || %{}

@@ -315,12 +315,50 @@ defmodule HydraX.Runtime.Jobs do
   end
 
   def scheduler_status do
+    passes = scheduler_pass_snapshots()
+
     %{
       jobs: list_scheduled_jobs(limit: 50),
       runs: recent_job_runs(20),
       open_circuits: open_circuit_jobs(),
       skipped_runs: recent_job_runs_by_status("skipped", 10),
-      timeout_runs: recent_job_runs_by_status("timeout", 10)
+      timeout_runs: recent_job_runs_by_status("timeout", 10),
+      coordination: HydraX.Runtime.coordination_status(),
+      pending_ingress:
+        Map.get(passes, :pending_ingress, scheduler_count_snapshot("processed_count")),
+      ownership_handoffs:
+        Map.get(passes, :ownership_handoffs, scheduler_count_snapshot("resumed_count")),
+      deferred_deliveries:
+        Map.get(passes, :deferred_deliveries, scheduler_count_snapshot("delivered_count"))
+    }
+  end
+
+  def record_scheduler_pass(kind, summary)
+      when kind in [:pending_ingress, :ownership_handoffs, :deferred_deliveries] and
+             is_map(summary) do
+    passes =
+      scheduler_pass_snapshots()
+      |> Map.put(kind, summary)
+
+    :persistent_term.put({__MODULE__, :scheduler_passes}, passes)
+    :ok
+  end
+
+  def reset_scheduler_passes do
+    :persistent_term.erase({__MODULE__, :scheduler_passes})
+    :ok
+  end
+
+  defp scheduler_pass_snapshots,
+    do: :persistent_term.get({__MODULE__, :scheduler_passes}, %{})
+
+  defp scheduler_count_snapshot(primary_key) do
+    %{
+      "owner" => HydraX.Runtime.coordination_status().owner,
+      primary_key => 0,
+      "skipped_count" => 0,
+      "error_count" => 0,
+      "results" => []
     }
   end
 

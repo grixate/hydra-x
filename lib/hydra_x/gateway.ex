@@ -197,13 +197,16 @@ defmodule HydraX.Gateway do
         end
       end)
 
-    %{
+    summary = %{
       owner: owner,
       delivered_count: Enum.count(results, &(&1.status == "delivered")),
       skipped_count: Enum.count(results, &(&1.status == "skipped")),
       error_count: Enum.count(results, &(&1.status == "error")),
       results: results
     }
+
+    _ = HydraX.Runtime.Jobs.record_scheduler_pass(:deferred_deliveries, summary)
+    summary
   end
 
   def process_owned_ingress(opts \\ []) do
@@ -214,13 +217,16 @@ defmodule HydraX.Gateway do
       Runtime.list_owned_pending_ingress_conversations(owner: owner, limit: limit)
       |> Enum.map(&process_ingress_conversation(&1, opts))
 
-    %{
+    summary = %{
       owner: owner,
       processed_count: Enum.count(results, &(&1.status == "processed")),
       skipped_count: Enum.count(results, &(&1.status == "skipped")),
       error_count: Enum.count(results, &(&1.status == "error")),
       results: results
     }
+
+    _ = HydraX.Runtime.Jobs.record_scheduler_pass(:pending_ingress, summary)
+    summary
   end
 
   @max_retries 3

@@ -188,6 +188,10 @@ defmodule HydraX.Report do
     ## Scheduler
     - Configured jobs: #{length(snapshot.scheduler.jobs)}
     - Recent runs: #{length(snapshot.scheduler.runs)}
+    - Coordination: #{render_scheduler_coordination(snapshot.scheduler.coordination)}
+    - Ingress replay: #{render_scheduler_pass(snapshot.scheduler.pending_ingress, "processed_count", "processed")}
+    - Ownership replay: #{render_scheduler_pass(snapshot.scheduler.ownership_handoffs, "resumed_count", "resumed")}
+    - Deferred delivery replay: #{render_scheduler_pass(snapshot.scheduler.deferred_deliveries, "delivered_count", "delivered")}
 
     ### Jobs
     #{render_jobs(snapshot.scheduler.jobs)}
@@ -237,9 +241,48 @@ defmodule HydraX.Report do
 
     %{
       jobs: Enum.take(status.jobs, limit),
-      runs: Enum.take(status.runs, limit)
+      runs: Enum.take(status.runs, limit),
+      coordination: status.coordination,
+      pending_ingress: status.pending_ingress,
+      ownership_handoffs: status.ownership_handoffs,
+      deferred_deliveries: status.deferred_deliveries
     }
   end
+
+  defp render_scheduler_coordination(%{} = coordination) when map_size(coordination) > 0 do
+    [
+      coordination[:mode] || coordination["mode"],
+      coordination[:owner] || coordination["owner"]
+    ]
+    |> Enum.reject(&is_nil_or_empty/1)
+    |> Enum.join(" / ")
+  end
+
+  defp render_scheduler_coordination(_coordination), do: "unknown"
+
+  defp render_scheduler_pass(pass, primary_key, verb) do
+    count = render_scheduler_count(pass, primary_key)
+    skipped = render_scheduler_count(pass, "skipped_count")
+    errors = render_scheduler_count(pass, "error_count")
+    owner = render_scheduler_owner(pass) || "unknown"
+    "#{verb}=#{count}; skipped=#{skipped}; errors=#{errors}; owner=#{owner}"
+  end
+
+  defp render_scheduler_count(pass, key) when is_map(pass) do
+    Map.get(pass, key) || Map.get(pass, scheduler_count_key(key)) || 0
+  end
+
+  defp render_scheduler_count(_pass, _key), do: 0
+
+  defp render_scheduler_owner(pass) when is_map(pass), do: pass["owner"] || pass[:owner]
+  defp render_scheduler_owner(_pass), do: nil
+
+  defp scheduler_count_key("processed_count"), do: :processed_count
+  defp scheduler_count_key("resumed_count"), do: :resumed_count
+  defp scheduler_count_key("delivered_count"), do: :delivered_count
+  defp scheduler_count_key("skipped_count"), do: :skipped_count
+  defp scheduler_count_key("error_count"), do: :error_count
+  defp scheduler_count_key(other), do: other
 
   defp render_health_checks([]), do: "- none"
 
@@ -952,7 +995,11 @@ defmodule HydraX.Report do
       tools: snapshot.tools,
       scheduler: %{
         jobs: Enum.map(snapshot.scheduler.jobs, &json_job/1),
-        runs: Enum.map(snapshot.scheduler.runs, &json_job_run/1)
+        runs: Enum.map(snapshot.scheduler.runs, &json_job_run/1),
+        coordination: snapshot.scheduler.coordination,
+        pending_ingress: snapshot.scheduler.pending_ingress,
+        ownership_handoffs: snapshot.scheduler.ownership_handoffs,
+        deferred_deliveries: snapshot.scheduler.deferred_deliveries
       },
       ingest: Enum.map(snapshot.ingest, &json_ingest_run/1),
       observability: %{
