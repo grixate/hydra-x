@@ -250,6 +250,16 @@ defmodule HydraX.Agent.Channel do
   end
 
   defp process_buffer(data) do
+    case pending_response_state(data.conversation.id) do
+      %{"content" => content, "metadata" => metadata} ->
+        finalize_pending_response(content, metadata, data)
+
+      _ ->
+        process_buffer_turns(data)
+    end
+  end
+
+  defp process_buffer_turns(data) do
     history = Runtime.list_turns(data.conversation.id)
     agent = Runtime.get_agent!(data.agent_id)
     bulletin = HydraX.Agent.Cortex.current_bulletin(data.agent_id)
@@ -323,50 +333,10 @@ defmodule HydraX.Agent.Channel do
         {:keep_state, Map.merge(data, stream_data)}
 
       {response_content, response_metadata} ->
-        {:ok, assistant_turn} =
-          Runtime.append_turn(data.conversation, %{
-            role: "assistant",
-            kind: "message",
-            content: response_content,
-            metadata: response_metadata
-          })
+        complete_response(response_content, response_metadata, data)
 
-        idle_data = refresh_conversation_ownership(data, "idle")
-
-        update_channel_checkpoint(data.conversation.id, %{
-          "status" => "completed",
-          "ownership" => idle_data.ownership,
-          "steps" => current_checkpoint_steps(data.conversation.id),
-          "current_step_id" => nil,
-          "current_step_index" => nil,
-          "resumable" => false,
-          "assistant_turn_id" => assistant_turn.id,
-          "provider" => response_metadata[:provider] || response_metadata["provider"],
-          "tool_rounds" =>
-            response_metadata[:tool_rounds] || response_metadata["tool_rounds"] || 0,
-          "tool_results" =>
-            summarize_tool_results(
-              response_metadata[:tool_results] || response_metadata["tool_results"] || []
-            ),
-          "updated_at" => DateTime.utc_now()
-        })
-
-        Enum.each(data.pending_from, &:gen_statem.reply(&1, assistant_turn.content))
-        Compactor.review(data.agent_id, data.conversation.id)
-
-        Phoenix.PubSub.broadcast(
-          HydraX.PubSub,
-          "conversations",
-          {:conversation_updated, data.conversation.id}
-        )
-
-        {:next_state, :ready,
-         %{
-           idle_data
-           | turns: history ++ [assistant_turn],
-             coalesce_buffer: [],
-             pending_from: []
-         }}
+      {:stop, _, _} = stop ->
+        stop
     end
   end
 
@@ -428,121 +398,147 @@ defmodule HydraX.Agent.Channel do
     case do_llm_call(messages, tools, data) do
       {:ok, %{tool_calls: tool_calls, stop_reason: "tool_use"} = response}
       when is_list(tool_calls) and tool_calls != [] ->
-        # LLM wants to call tools — execute them and loop
-        updated_steps =
-          tool_calls
-          |> Enum.reduce(current_checkpoint_steps(data.conversation.id), fn tool_call, steps ->
-            mark_step_running(steps, "tool", tool_call.name)
-          end)
+        with {:ok, refreshed_data} <- ensure_active_ownership(data, "tool_requested") do
+          updated_steps =
+            tool_calls
+            |> Enum.reduce(current_checkpoint_steps(refreshed_data.conversation.id), fn tool_call,
+                                                                                        steps ->
+              mark_step_running(steps, "tool", tool_call.name)
+            end)
 
-        append_channel_event(data.conversation.id, "provider_tool_request", %{
-          "round" => round + 1,
-          "provider" => response.provider,
-          "tool_count" => length(tool_calls)
-        })
-
-        {tool_results, cache_hits, cache_misses} =
-          execute_tool_calls_with_cache(data, tool_calls)
-
-        update_channel_checkpoint(data.conversation.id, %{
-          "status" => "executing_tools",
-          "ownership" => data.ownership,
-          "steps" => complete_tool_steps(updated_steps, tool_results),
-          "current_step_id" =>
-            current_step_id_after_tools(complete_tool_steps(updated_steps, tool_results)),
-          "current_step_index" =>
-            current_step_index_after_tools(complete_tool_steps(updated_steps, tool_results)),
-          "resumable" => true,
-          "tool_rounds" => round + 1,
-          "active_tool_calls" =>
-            Enum.map(tool_calls, fn call ->
-              %{"id" => call.id, "name" => call.name}
-            end),
-          "tool_cache" =>
-            merge_tool_cache(
-              data.conversation.id,
-              tool_results,
-              latest_turn_id(data.coalesce_buffer),
-              round + 1
-            ),
-          "recovery_lineage" =>
-            update_recovery_lineage_cache_stats(
-              data.conversation.id,
-              cache_hits,
-              cache_misses,
-              tool_results
-            ),
-          "tool_results" => summarize_tool_results(all_tool_results ++ tool_results),
-          "updated_at" => DateTime.utc_now()
-        })
-
-        if cache_hits > 0 do
-          append_channel_event(data.conversation.id, "tool_cache_hit", %{
+          append_channel_event(refreshed_data.conversation.id, "provider_tool_request", %{
             "round" => round + 1,
-            "cache_hits" => cache_hits,
-            "cache_misses" => cache_misses
+            "provider" => response.provider,
+            "tool_count" => length(tool_calls)
           })
+
+          {tool_results, cache_hits, cache_misses} =
+            execute_tool_calls_with_cache(refreshed_data, tool_calls)
+
+          completed_steps = complete_tool_steps(updated_steps, tool_results)
+
+          tool_attrs = %{
+            "steps" => completed_steps,
+            "current_step_id" => current_step_id_after_tools(completed_steps),
+            "current_step_index" => current_step_index_after_tools(completed_steps),
+            "resumable" => true,
+            "tool_rounds" => round + 1,
+            "active_tool_calls" =>
+              Enum.map(tool_calls, fn call ->
+                %{"id" => call.id, "name" => call.name}
+              end),
+            "tool_cache" =>
+              merge_tool_cache(
+                refreshed_data.conversation.id,
+                tool_results,
+                latest_turn_id(refreshed_data.coalesce_buffer),
+                round + 1
+              ),
+            "recovery_lineage" =>
+              update_recovery_lineage_cache_stats(
+                refreshed_data.conversation.id,
+                cache_hits,
+                cache_misses,
+                tool_results
+              ),
+            "tool_results" => summarize_tool_results(all_tool_results ++ tool_results),
+            "updated_at" => DateTime.utc_now()
+          }
+
+          case ensure_active_ownership(refreshed_data, "tool_results") do
+            {:ok, post_tool_data} ->
+              update_channel_checkpoint(
+                post_tool_data.conversation.id,
+                %{
+                  "status" => "executing_tools",
+                  "ownership" => post_tool_data.ownership
+                }
+                |> Map.merge(tool_attrs)
+              )
+
+              if cache_hits > 0 do
+                append_channel_event(post_tool_data.conversation.id, "tool_cache_hit", %{
+                  "round" => round + 1,
+                  "cache_hits" => cache_hits,
+                  "cache_misses" => cache_misses
+                })
+              end
+
+              Enum.each(tool_results, fn result ->
+                append_channel_event(post_tool_data.conversation.id, "tool_result", %{
+                  "round" => round + 1,
+                  "tool_name" => result.tool_name,
+                  "is_error" => result[:is_error] || false,
+                  "cached" => result[:cached] || false,
+                  "summary" => result[:summary] || summarize_tool_result_payload(result.result),
+                  "safety_classification" => result[:safety_classification] || "standard"
+                })
+              end)
+
+              next_messages =
+                messages
+                |> PromptBuilder.append_assistant_tool_use(response)
+                |> PromptBuilder.append_tool_results(tool_results)
+
+              run_tool_loop(
+                next_messages,
+                tools,
+                post_tool_data,
+                round + 1,
+                all_tool_results ++ tool_results
+              )
+
+            {:error, ownership, lost_data} ->
+              stop_for_ownership_loss(:processing, lost_data, ownership, tool_attrs)
+          end
+        else
+          {:error, ownership, lost_data} ->
+            stop_for_ownership_loss(:processing, lost_data, ownership)
         end
 
-        Enum.each(tool_results, fn result ->
-          append_channel_event(data.conversation.id, "tool_result", %{
-            "round" => round + 1,
-            "tool_name" => result.tool_name,
-            "is_error" => result[:is_error] || false,
-            "cached" => result[:cached] || false,
-            "summary" => result[:summary] || summarize_tool_result_payload(result.result),
-            "safety_classification" => result[:safety_classification] || "standard"
-          })
-        end)
-
-        # Build the next messages: append assistant's tool_use, then user's tool_results
-        next_messages =
-          messages
-          |> PromptBuilder.append_assistant_tool_use(response)
-          |> PromptBuilder.append_tool_results(tool_results)
-
-        run_tool_loop(
-          next_messages,
-          tools,
-          data,
-          round + 1,
-          all_tool_results ++ tool_results
-        )
-
       {:ok, response} ->
-        # Final response — no more tool calls
-        steps =
-          current_checkpoint_steps(data.conversation.id)
-          |> mark_provider_running(%{"summary" => "Waiting for final provider response"})
-          |> mark_provider_completed(%{
-            "summary" => "Final response generated",
-            "output_excerpt" => excerpt_text(response.content || ""),
+        with {:ok, refreshed_data} <- ensure_active_ownership(data, "provider_response") do
+          steps =
+            current_checkpoint_steps(refreshed_data.conversation.id)
+            |> mark_provider_running(%{"summary" => "Waiting for final provider response"})
+            |> mark_provider_completed(%{
+              "summary" => "Final response generated",
+              "output_excerpt" => excerpt_text(response.content || ""),
+              "provider" => response.provider,
+              "stop_reason" => response.stop_reason
+            })
+
+          append_channel_event(refreshed_data.conversation.id, "provider_completed", %{
+            "round" => round,
             "provider" => response.provider,
-            "stop_reason" => response.stop_reason
+            "stop_reason" => response.stop_reason,
+            "content_length" => String.length(response.content || "")
           })
 
-        append_channel_event(data.conversation.id, "provider_completed", %{
-          "round" => round,
-          "provider" => response.provider,
-          "stop_reason" => response.stop_reason,
-          "content_length" => String.length(response.content || "")
-        })
+          update_channel_checkpoint(refreshed_data.conversation.id, %{
+            "ownership" => refreshed_data.ownership,
+            "steps" => steps,
+            "current_step_id" => nil,
+            "current_step_index" => nil
+          })
 
-        update_channel_checkpoint(data.conversation.id, %{
-          "ownership" => data.ownership,
-          "steps" => steps,
-          "current_step_id" => nil,
-          "current_step_index" => nil
-        })
+          content = response.content || ""
 
-        content = response.content || ""
-
-        {content,
-         %{
-           provider: response.provider,
-           tool_rounds: round,
-           tool_results: all_tool_results
-         }}
+          {content,
+           %{
+             provider: response.provider,
+             tool_rounds: round,
+             tool_results: all_tool_results
+           }}
+        else
+          {:error, ownership, lost_data} ->
+            stop_for_ownership_loss(
+              :processing,
+              lost_data,
+              ownership,
+              pending_response_attrs(response, round, all_tool_results)
+            )
+        end
 
       {:error_response, content, metadata} ->
         steps =
@@ -755,45 +751,72 @@ defmodule HydraX.Agent.Channel do
       streamed: true
     }
 
+    case ensure_active_ownership(data, "stream_finalizing") do
+      {:ok, refreshed_data} ->
+        complete_response(
+          content,
+          metadata,
+          refreshed_data,
+          steps:
+            current_checkpoint_steps(refreshed_data.conversation.id)
+            |> mark_provider_completed(%{
+              "summary" => "Streamed response completed",
+              "output_excerpt" => excerpt_text(content),
+              "provider" => response.provider
+            }),
+          streamed?: true
+        )
+
+      {:error, ownership, lost_data} ->
+        stop_for_ownership_loss(
+          :processing,
+          lost_data,
+          ownership,
+          pending_response_attrs(response, round, all_tool_results, streamed: true)
+        )
+    end
+  end
+
+  defp complete_response(response_content, response_metadata, data, opts \\ []) do
     {:ok, assistant_turn} =
       Runtime.append_turn(data.conversation, %{
         role: "assistant",
         kind: "message",
-        content: content,
-        metadata: metadata
+        content: response_content,
+        metadata: response_metadata
       })
 
     idle_data = refresh_conversation_ownership(data, "idle")
+    steps = Keyword.get(opts, :steps, current_checkpoint_steps(data.conversation.id))
 
     update_channel_checkpoint(data.conversation.id, %{
       "status" => "completed",
       "ownership" => idle_data.ownership,
-      "steps" =>
-        current_checkpoint_steps(data.conversation.id)
-        |> mark_provider_completed(%{
-          "summary" => "Streamed response completed",
-          "output_excerpt" => excerpt_text(content),
-          "provider" => response.provider
-        }),
+      "steps" => steps,
       "current_step_id" => nil,
       "current_step_index" => nil,
       "resumable" => false,
       "assistant_turn_id" => assistant_turn.id,
-      "provider" => response.provider,
-      "tool_rounds" => round,
-      "tool_results" => summarize_tool_results(all_tool_results),
+      "provider" => response_metadata[:provider] || response_metadata["provider"],
+      "tool_rounds" => response_metadata[:tool_rounds] || response_metadata["tool_rounds"] || 0,
+      "tool_results" =>
+        summarize_tool_results(
+          response_metadata[:tool_results] || response_metadata["tool_results"] || []
+        ),
+      "pending_response" => nil,
       "updated_at" => DateTime.utc_now()
     })
 
     Enum.each(data.pending_from, &:gen_statem.reply(&1, assistant_turn.content))
     Compactor.review(data.agent_id, data.conversation.id)
 
-    # Broadcast stream end to clear streaming UI, then conversation update
-    Phoenix.PubSub.broadcast(
-      HydraX.PubSub,
-      "conversations:stream",
-      {:stream_done, data.conversation.id}
-    )
+    if Keyword.get(opts, :streamed?, false) do
+      Phoenix.PubSub.broadcast(
+        HydraX.PubSub,
+        "conversations:stream",
+        {:stream_done, data.conversation.id}
+      )
+    end
 
     Phoenix.PubSub.broadcast(
       HydraX.PubSub,
@@ -803,7 +826,6 @@ defmodule HydraX.Agent.Channel do
 
     history = Runtime.list_turns(data.conversation.id)
 
-    # Clean up streaming state from data
     cleaned_data =
       idle_data
       |> Map.delete(:stream_ref)
@@ -818,6 +840,15 @@ defmodule HydraX.Agent.Channel do
          coalesce_buffer: [],
          pending_from: []
      }}
+  end
+
+  defp finalize_pending_response(content, metadata, data) do
+    append_channel_event(data.conversation.id, "handoff_response_replayed", %{
+      "summary" => "Completed a provider response captured before ownership handoff",
+      "provider" => metadata["provider"] || metadata[:provider]
+    })
+
+    complete_response(content, metadata, data)
   end
 
   defp stream_enabled?(%{channel: channel}) when channel in @streamable_channels, do: true
@@ -954,7 +985,7 @@ defmodule HydraX.Agent.Channel do
     end
   end
 
-  defp stop_for_ownership_loss(state, data, ownership) do
+  defp stop_for_ownership_loss(state, data, ownership, attrs \\ %{}) do
     summary = deferred_message(ownership)
     status = ownership_loss_status(state, data)
     resumable = status == "deferred"
@@ -968,12 +999,16 @@ defmodule HydraX.Agent.Channel do
       "stage" => ownership["stage"]
     })
 
-    update_channel_checkpoint(data.conversation.id, %{
-      "status" => status,
-      "ownership" => ownership,
-      "resumable" => resumable,
-      "updated_at" => DateTime.utc_now()
-    })
+    update_channel_checkpoint(
+      data.conversation.id,
+      %{
+        "status" => status,
+        "ownership" => ownership,
+        "resumable" => resumable,
+        "updated_at" => DateTime.utc_now()
+      }
+      |> Map.merge(attrs)
+    )
 
     Phoenix.PubSub.broadcast(
       HydraX.PubSub,
@@ -1059,6 +1094,15 @@ defmodule HydraX.Agent.Channel do
     |> Map.put("updated_at", DateTime.utc_now())
   end
 
+  defp ensure_active_ownership(data, stage) do
+    refreshed_data = refresh_conversation_ownership(data, stage)
+
+    case refreshed_data.ownership do
+      %{"active" => false} = ownership -> {:error, ownership, refreshed_data}
+      _ -> {:ok, refreshed_data}
+    end
+  end
+
   defp schedule_lease_tick(data) do
     if Config.repo_multi_writer?() do
       Process.send_after(self(), :lease_tick, lease_tick_ms())
@@ -1124,6 +1168,32 @@ defmodule HydraX.Agent.Channel do
 
   defp deferred_message(ownership) do
     "Conversation ownership is held by #{ownership["owner"] || "another node"}; local execution deferred."
+  end
+
+  defp pending_response_state(conversation_id) do
+    Runtime.conversation_channel_state(conversation_id).pending_response
+  end
+
+  defp pending_response_attrs(response, round, all_tool_results, opts \\ []) do
+    content = response.content || ""
+
+    %{
+      "pending_response" => %{
+        "content" => content,
+        "metadata" => %{
+          "provider" => response.provider,
+          "tool_rounds" => round,
+          "tool_results" => all_tool_results,
+          "streamed" => Keyword.get(opts, :streamed?, false)
+        },
+        "captured_at" => DateTime.utc_now(),
+        "summary" => excerpt_text(content)
+      },
+      "provider" => response.provider,
+      "tool_rounds" => round,
+      "tool_results" => summarize_tool_results(all_tool_results),
+      "updated_at" => DateTime.utc_now()
+    }
   end
 
   defp append_deferred_turn(conversation, content, metadata, ownership) do

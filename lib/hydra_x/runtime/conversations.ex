@@ -129,10 +129,12 @@ defmodule HydraX.Runtime.Conversations do
       provider: state["provider"],
       tool_rounds: state["tool_rounds"] || 0,
       tool_results: state["tool_results"] || [],
+      tool_cache: state["tool_cache"] || [],
       tool_cache_scope_turn_id: state["tool_cache_scope_turn_id"],
       active_tool_calls: state["active_tool_calls"] || [],
       assistant_turn_id: state["assistant_turn_id"],
       pending_turn_id: state["pending_turn_id"],
+      pending_response: state["pending_response"],
       latest_user_turn_id: state["latest_user_turn_id"]
     }
   end
@@ -804,7 +806,7 @@ defmodule HydraX.Runtime.Conversations do
       true ->
         claim_conversation_processing_ownership(
           conversation,
-          get_in((conversation.metadata || %{}), ["ownership"]) || %{},
+          get_in(conversation.metadata || %{}, ["ownership"]) || %{},
           owner,
           "delivering"
         )

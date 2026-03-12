@@ -390,6 +390,316 @@ defmodule HydraX.RuntimeTest do
     refute Enum.any?(Runtime.list_turns(conversation.id), &(&1.role == "assistant"))
   end
 
+  test "final provider responses survive ownership handoff without a second provider call" do
+    previous_adapter = Application.get_env(:hydra_x, :repo_adapter)
+    previous_request_fn = Application.get_env(:hydra_x, :provider_request_fn)
+    Application.put_env(:hydra_x, :repo_adapter, Ecto.Adapters.Postgres)
+
+    counter = :atomics.new(1, [])
+    test_pid = self()
+
+    Application.put_env(:hydra_x, :provider_request_fn, fn _opts ->
+      :atomics.add_get(counter, 1, 1)
+      send(test_pid, :provider_response_requested)
+      Process.sleep(200)
+
+      {:ok,
+       %{
+         status: 200,
+         body: %{
+           "choices" => [
+             %{
+               "message" => %{
+                 "content" => "Captured before ownership handoff.",
+                 "tool_calls" => nil
+               },
+               "finish_reason" => "stop"
+             }
+           ]
+         }
+       }}
+    end)
+
+    on_exit(fn ->
+      if previous_adapter do
+        Application.put_env(:hydra_x, :repo_adapter, previous_adapter)
+      else
+        Application.delete_env(:hydra_x, :repo_adapter)
+      end
+
+      if previous_request_fn do
+        Application.put_env(:hydra_x, :provider_request_fn, previous_request_fn)
+      else
+        Application.delete_env(:hydra_x, :provider_request_fn)
+      end
+    end)
+
+    agent = create_agent()
+
+    {:ok, provider} =
+      Runtime.save_provider_config(%{
+        name: "Handoff Safe Provider",
+        kind: "openai_compatible",
+        base_url: "https://handoff-safe.test",
+        api_key: "secret",
+        model: "gpt-handoff-safe",
+        enabled: false
+      })
+
+    {:ok, _agent} =
+      Runtime.save_agent_provider_routing(agent.id, %{
+        "default_provider_id" => provider.id
+      })
+
+    {:ok, pid} = HydraX.Agent.ensure_started(agent)
+    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{channel: "cli", title: "provider-handoff-cache"})
+
+    {:ok, channel_pid} = HydraX.Agent.Channel.ensure_started(agent.id, conversation)
+    on_exit(fn -> if Process.alive?(channel_pid), do: shutdown_process(channel_pid) end)
+
+    task =
+      Task.async(fn ->
+        Channel.submit(
+          agent,
+          conversation,
+          "Hold the completed provider response for the new owner.",
+          %{source: "test"}
+        )
+      end)
+
+    assert_receive :provider_response_requested, 1_000
+
+    stale_lease = Runtime.get_lease("conversation:#{conversation.id}")
+
+    stale_lease
+    |> Ecto.Changeset.change(expires_at: DateTime.add(DateTime.utc_now(), -60, :second))
+    |> Repo.update!()
+
+    assert {:ok, _lease} =
+             Runtime.claim_lease("conversation:#{conversation.id}",
+               owner: "node:remote",
+               ttl_seconds: 60
+             )
+
+    assert {:deferred, reason} = Task.await(task, 5_000)
+    assert reason =~ "node:remote"
+
+    wait_for(fn -> not Process.alive?(channel_pid) end)
+
+    channel_state = Runtime.conversation_channel_state(conversation.id)
+    assert channel_state.status == "deferred"
+    assert channel_state.pending_response["content"] == "Captured before ownership handoff."
+    assert channel_state.pending_response["metadata"]["provider"] == "Handoff Safe Provider"
+    assert :atomics.get(counter, 1) == 1
+    refute Enum.any?(Runtime.list_turns(conversation.id), &(&1.role == "assistant"))
+
+    remote_lease = Runtime.get_lease("conversation:#{conversation.id}")
+
+    remote_lease
+    |> Ecto.Changeset.change(expires_at: DateTime.add(DateTime.utc_now(), -60, :second))
+    |> Repo.update!()
+
+    assert {:ok, _lease} =
+             Runtime.claim_lease("conversation:#{conversation.id}", ttl_seconds: 60)
+
+    {:ok, resumed_channel_pid} = HydraX.Agent.Channel.ensure_started(agent.id, conversation)
+
+    on_exit(fn ->
+      if Process.alive?(resumed_channel_pid), do: shutdown_process(resumed_channel_pid)
+    end)
+
+    wait_for(fn ->
+      Runtime.list_turns(conversation.id)
+      |> Enum.any?(
+        &(&1.role == "assistant" and &1.content == "Captured before ownership handoff.")
+      )
+    end)
+
+    final_state = Runtime.conversation_channel_state(conversation.id)
+    assert final_state.status == "completed"
+    assert final_state.pending_response == nil
+    assert Enum.any?(final_state.execution_events, &(&1["phase"] == "handoff_response_replayed"))
+    assert :atomics.get(counter, 1) == 1
+  end
+
+  test "tool results are cached across ownership handoff so side effects are not repeated" do
+    previous_adapter = Application.get_env(:hydra_x, :repo_adapter)
+    previous_request_fn = Application.get_env(:hydra_x, :provider_request_fn)
+    Application.put_env(:hydra_x, :repo_adapter, Ecto.Adapters.Postgres)
+
+    counter = :atomics.new(1, [])
+    test_pid = self()
+
+    on_exit(fn ->
+      if previous_adapter do
+        Application.put_env(:hydra_x, :repo_adapter, previous_adapter)
+      else
+        Application.delete_env(:hydra_x, :repo_adapter)
+      end
+
+      if previous_request_fn do
+        Application.put_env(:hydra_x, :provider_request_fn, previous_request_fn)
+      else
+        Application.delete_env(:hydra_x, :provider_request_fn)
+      end
+    end)
+
+    agent = create_agent()
+    marker_path = Path.join(agent.workspace_root, "tool-started.txt")
+    log_path = Path.join(agent.workspace_root, "tool-executions.log")
+
+    command =
+      "sh -c \"echo started > #{marker_path} && echo tool-run >> #{log_path} && sleep 1 && echo done\""
+
+    Application.put_env(:hydra_x, :provider_request_fn, fn _opts ->
+      call_number = :atomics.add_get(counter, 1, 1)
+
+      body =
+        case call_number do
+          number when number in [1, 2] ->
+            send(test_pid, {:tool_round_requested, call_number})
+
+            %{
+              "choices" => [
+                %{
+                  "message" => %{
+                    "content" => nil,
+                    "tool_calls" => [
+                      %{
+                        "id" => "call-shell-1",
+                        "function" => %{
+                          "name" => "shell_command",
+                          "arguments" => Jason.encode!(%{"command" => command})
+                        }
+                      }
+                    ]
+                  },
+                  "finish_reason" => "tool_calls"
+                }
+              ]
+            }
+
+          _ ->
+            %{
+              "choices" => [
+                %{
+                  "message" => %{
+                    "content" => "Recovered via cached tool result.",
+                    "tool_calls" => nil
+                  },
+                  "finish_reason" => "stop"
+                }
+              ]
+            }
+        end
+
+      {:ok, %{status: 200, body: body}}
+    end)
+
+    {:ok, provider} =
+      Runtime.save_provider_config(%{
+        name: "Tool Handoff Provider",
+        kind: "openai_compatible",
+        base_url: "https://tool-handoff.test",
+        api_key: "secret",
+        model: "gpt-tool-handoff",
+        enabled: false
+      })
+
+    {:ok, _agent} =
+      Runtime.save_agent_provider_routing(agent.id, %{
+        "default_provider_id" => provider.id
+      })
+
+    {:ok, _policy} =
+      Runtime.save_agent_tool_policy(agent.id, %{
+        "shell_command_enabled" => true,
+        "shell_command_channels_csv" => "cli",
+        "shell_allowlist_csv" => "sh"
+      })
+
+    {:ok, pid} = HydraX.Agent.ensure_started(agent)
+    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{channel: "cli", title: "tool-handoff-cache"})
+
+    {:ok, channel_pid} = HydraX.Agent.Channel.ensure_started(agent.id, conversation)
+    on_exit(fn -> if Process.alive?(channel_pid), do: shutdown_process(channel_pid) end)
+
+    task =
+      Task.async(fn ->
+        Channel.submit(
+          agent,
+          conversation,
+          "Run the tool, then hand off the conversation safely.",
+          %{source: "test"}
+        )
+      end)
+
+    assert_receive {:tool_round_requested, 1}, 1_000
+    wait_for(fn -> File.exists?(marker_path) end, 80)
+
+    stale_lease = Runtime.get_lease("conversation:#{conversation.id}")
+
+    stale_lease
+    |> Ecto.Changeset.change(expires_at: DateTime.add(DateTime.utc_now(), -60, :second))
+    |> Repo.update!()
+
+    assert {:ok, _lease} =
+             Runtime.claim_lease("conversation:#{conversation.id}",
+               owner: "node:remote",
+               ttl_seconds: 60
+             )
+
+    assert {:deferred, reason} = Task.await(task, 5_000)
+    assert reason =~ "node:remote"
+
+    wait_for(fn -> not Process.alive?(channel_pid) end)
+
+    channel_state = Runtime.conversation_channel_state(conversation.id)
+    assert channel_state.status == "deferred"
+    assert length(channel_state.tool_cache || []) == 1
+    assert Enum.any?(channel_state.tool_results || [], &(&1["tool_name"] == "shell_command"))
+    assert File.read!(log_path) == "tool-run\n"
+
+    remote_lease = Runtime.get_lease("conversation:#{conversation.id}")
+
+    remote_lease
+    |> Ecto.Changeset.change(expires_at: DateTime.add(DateTime.utc_now(), -60, :second))
+    |> Repo.update!()
+
+    assert {:ok, _lease} =
+             Runtime.claim_lease("conversation:#{conversation.id}", ttl_seconds: 60)
+
+    {:ok, resumed_channel_pid} = HydraX.Agent.Channel.ensure_started(agent.id, conversation)
+
+    on_exit(fn ->
+      if Process.alive?(resumed_channel_pid), do: shutdown_process(resumed_channel_pid)
+    end)
+
+    assert_receive {:tool_round_requested, 2}, 1_000
+
+    wait_for(
+      fn ->
+        Runtime.list_turns(conversation.id)
+        |> Enum.any?(
+          &(&1.role == "assistant" and &1.content == "Recovered via cached tool result.")
+        )
+      end,
+      120
+    )
+
+    final_state = Runtime.conversation_channel_state(conversation.id)
+    assert final_state.status == "completed"
+    assert Enum.any?(final_state.execution_events, &(&1["phase"] == "tool_cache_hit"))
+    assert File.read!(log_path) == "tool-run\n"
+    assert :atomics.get(counter, 1) == 3
+  end
+
   test "owned deferred conversations can be resumed through the runtime" do
     previous_adapter = Application.get_env(:hydra_x, :repo_adapter)
     Application.put_env(:hydra_x, :repo_adapter, Ecto.Adapters.Postgres)
@@ -612,8 +922,10 @@ defmodule HydraX.RuntimeTest do
 
     refreshed = Runtime.get_conversation!(conversation.id)
     assert List.last(refreshed.turns).role == "assistant"
+
     assert_receive {:scheduler_deferred_delivery,
                     %{chat_id: "7171", reply_to_message_id: 808, text: delivered_text}}
+
     assert delivered_text =~ "Let the scheduler pick this up."
 
     channel_state = Runtime.conversation_channel_state(conversation.id)
@@ -688,6 +1000,7 @@ defmodule HydraX.RuntimeTest do
       Process.whereis(HydraX.Scheduler) || start_supervised!({HydraX.Scheduler, %{}})
 
     send(scheduler_pid, :poll)
+
     wait_for(fn ->
       checkpoint = Runtime.get_checkpoint(conversation.id, "ingress")
       checkpoint && checkpoint.state["message_count"] == 0
