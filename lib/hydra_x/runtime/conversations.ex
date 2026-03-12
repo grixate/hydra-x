@@ -482,7 +482,22 @@ defmodule HydraX.Runtime.Conversations do
           maybe_transcript_detail("  replay_strategy", step["replay_strategy"]),
           maybe_transcript_detail("  replay_count", step["replay_count"]),
           maybe_transcript_detail("  idempotency_key", step["idempotency_key"]),
+          maybe_transcript_detail("  tool_use_id", step["tool_use_id"]),
+          maybe_transcript_detail("  retry", render_step_retry_state(step["retry_state"])),
+          maybe_transcript_detail(
+            "  attempts",
+            render_step_attempt_history(step["attempt_history"])
+          ),
           maybe_transcript_detail("  cached", if(step["cached"], do: "yes", else: nil)),
+          maybe_transcript_detail("  cache_scope_turn_id", step["cache_scope_turn_id"]),
+          maybe_transcript_detail(
+            "  cache_recorded_at",
+            format_transcript_datetime(step["cache_recorded_at"])
+          ),
+          maybe_transcript_detail(
+            "  replay_provenance",
+            render_step_replay_provenance(step["replay_provenance"])
+          ),
           maybe_transcript_detail("  safety", step["safety_classification"]),
           maybe_transcript_detail(
             "  started",
@@ -539,6 +554,43 @@ defmodule HydraX.Runtime.Conversations do
   end
 
   defp render_stream_capture_line(_capture), do: nil
+
+  defp render_step_retry_state(%{} = retry_state) when map_size(retry_state) > 0 do
+    [
+      retry_state["last_status"],
+      retry_state["attempt_count"] && "attempts #{retry_state["attempt_count"]}",
+      retry_state["retry_count"] && "retries #{retry_state["retry_count"]}",
+      retry_state["result_source"],
+      retry_state["last_error"] && "error #{retry_state["last_error"]}"
+    ]
+    |> Enum.reject(&is_nil_or_empty/1)
+    |> Enum.join(" · ")
+  end
+
+  defp render_step_retry_state(_retry_state), do: nil
+
+  defp render_step_attempt_history(history) when is_list(history) and history != [] do
+    history
+    |> Enum.map(fn attempt ->
+      status = attempt["status"] || "unknown"
+      at = format_transcript_datetime(attempt["at"])
+      "#{status}@#{at}"
+    end)
+    |> Enum.join(" -> ")
+  end
+
+  defp render_step_attempt_history(_history), do: nil
+
+  defp render_step_replay_provenance(%{} = provenance) when map_size(provenance) > 0 do
+    [
+      provenance["result_source"],
+      provenance["replayed"] && "replayed"
+    ]
+    |> Enum.reject(&is_nil_or_empty/1)
+    |> Enum.join(" · ")
+  end
+
+  defp render_step_replay_provenance(_provenance), do: nil
 
   defp render_transcript_pending_response(response) when response in [nil, %{}], do: []
 

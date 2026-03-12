@@ -102,13 +102,22 @@ defmodule HydraX.Agent.Planner do
   defp skill_steps([]), do: []
 
   defp skill_steps(skill_hints) do
+    now = DateTime.utc_now()
+
     [
       step(%{
         "id" => "skill-context",
         "kind" => "skill",
         "label" => "Apply enabled skill guidance",
         "status" => "completed",
+        "lifecycle" => "completed",
         "summary" => "Matched #{length(skill_hints)} skill hints",
+        "attempt_count" => 1,
+        "started_at" => now,
+        "last_started_at" => now,
+        "completed_at" => now,
+        "updated_at" => now,
+        "result_source" => "plan",
         "output_excerpt" =>
           skill_hints
           |> Enum.map(&(&1["name"] || &1["slug"] || "skill"))

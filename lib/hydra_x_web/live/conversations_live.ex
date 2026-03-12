@@ -1120,10 +1120,12 @@ defmodule HydraXWeb.ConversationsLive do
   defp step_detail_labels(step) when is_map(step) do
     []
     |> maybe_add_step_label(step_attempt_label(step["attempt_count"]))
+    |> maybe_add_step_label(step_retry_label(step["retry_state"]))
     |> maybe_add_step_label(if(step["cached"], do: "cached", else: nil))
     |> maybe_add_step_label(step["lifecycle"])
     |> maybe_add_step_label(step["result_source"])
     |> maybe_add_step_label(replay_count_label(step["replay_count"]))
+    |> maybe_add_step_label(step_tool_use_label(step["tool_use_id"]))
     |> maybe_add_step_label(step["safety_classification"])
     |> maybe_add_step_label(step_started_label(step["last_started_at"] || step["started_at"]))
     |> maybe_add_step_label(step_finished_label(step))
@@ -1144,9 +1146,17 @@ defmodule HydraXWeb.ConversationsLive do
   defp step_attempt_label(1), do: "attempt 1"
   defp step_attempt_label(value) when is_integer(value), do: "attempt #{value}"
 
+  defp step_retry_label(%{"retry_count" => value}) when is_integer(value) and value > 0,
+    do: "retry #{value}"
+
+  defp step_retry_label(_retry_state), do: nil
+
   defp replay_count_label(nil), do: nil
   defp replay_count_label(0), do: nil
   defp replay_count_label(value) when is_integer(value), do: "replay #{value}"
+
+  defp step_tool_use_label(nil), do: nil
+  defp step_tool_use_label(value) when is_binary(value), do: "tool use #{value}"
 
   defp step_started_label(nil), do: nil
   defp step_started_label(value), do: "started #{format_event_time(value)}"

@@ -443,7 +443,14 @@ defmodule HydraX.ReportTest do
             "name" => "memory_recall",
             "status" => "completed",
             "summary" => "recalled 2 memories",
-            "output_excerpt" => "2 memories"
+            "output_excerpt" => "2 memories",
+            "tool_use_id" => "tool-recall-1",
+            "retry_state" => %{
+              "attempt_count" => 2,
+              "retry_count" => 1,
+              "last_status" => "cached",
+              "result_source" => "cache"
+            }
           }
         ],
         "execution_events" => [
@@ -526,6 +533,7 @@ defmodule HydraX.ReportTest do
     assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~ "\"channel_state\""
     assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~ "\"memory_recall\""
     assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~ "\"stream_capture\""
+    assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~ "\"retry_state\""
     assert File.read!(export.json_path) =~ "\"pending_ingress\""
     assert File.read!(export.json_path) =~ "\"ownership_handoffs\""
     assert File.read!(export.json_path) =~ "\"deferred_deliveries\""

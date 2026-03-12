@@ -1985,6 +1985,126 @@ defmodule HydraX.RuntimeTest do
            end)
   end
 
+  test "tool steps remain distinct when the provider requests the same tool twice" do
+    previous = Application.get_env(:hydra_x, :provider_request_fn)
+
+    counter = :atomics.new(1, [])
+
+    Application.put_env(:hydra_x, :provider_request_fn, fn _opts ->
+      call_number = :atomics.add_get(counter, 1, 1)
+
+      body =
+        case call_number do
+          1 ->
+            %{
+              "choices" => [
+                %{
+                  "message" => %{
+                    "content" => nil,
+                    "tool_calls" => [
+                      %{
+                        "id" => "call-recall-1",
+                        "function" => %{
+                          "name" => "memory_recall",
+                          "arguments" => Jason.encode!(%{"query" => "release plan"})
+                        }
+                      },
+                      %{
+                        "id" => "call-recall-2",
+                        "function" => %{
+                          "name" => "memory_recall",
+                          "arguments" => Jason.encode!(%{"query" => "release plan"})
+                        }
+                      }
+                    ]
+                  },
+                  "finish_reason" => "tool_calls"
+                }
+              ]
+            }
+
+          _ ->
+            %{
+              "choices" => [
+                %{
+                  "message" => %{
+                    "content" => "Captured both recall calls independently.",
+                    "tool_calls" => nil
+                  },
+                  "finish_reason" => "stop"
+                }
+              ]
+            }
+        end
+
+      {:ok, %{status: 200, body: body}}
+    end)
+
+    on_exit(fn ->
+      if previous do
+        Application.put_env(:hydra_x, :provider_request_fn, previous)
+      else
+        Application.delete_env(:hydra_x, :provider_request_fn)
+      end
+    end)
+
+    agent = create_agent()
+
+    {:ok, provider} =
+      Runtime.save_provider_config(%{
+        name: "Duplicate Tool Provider",
+        kind: "openai_compatible",
+        base_url: "https://duplicate-tool.test",
+        api_key: "secret",
+        model: "gpt-duplicate-tool",
+        enabled: false
+      })
+
+    {:ok, _agent} =
+      Runtime.save_agent_provider_routing(agent.id, %{
+        "default_provider_id" => provider.id
+      })
+
+    {:ok, _pid} = HydraX.Agent.ensure_started(agent)
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{channel: "cli", title: "duplicate-tool-steps"})
+
+    response =
+      HydraX.Agent.Channel.submit(
+        agent,
+        conversation,
+        "Recall the release plan twice so I can compare it.",
+        %{"source" => "test"}
+      )
+
+    assert response == "Captured both recall calls independently."
+
+    channel_state = Runtime.conversation_channel_state(conversation.id)
+
+    recall_steps =
+      Enum.filter(channel_state.steps, fn step ->
+        step["name"] == "memory_recall"
+      end)
+
+    assert length(recall_steps) == 2
+
+    assert Enum.sort(Enum.map(recall_steps, & &1["tool_use_id"])) == [
+             "call-recall-1",
+             "call-recall-2"
+           ]
+
+    assert Enum.any?(recall_steps, &(&1["id"] == "tool-1-memory_recall"))
+    assert Enum.any?(recall_steps, &(&1["id"] == "tool-use-call-recall-2"))
+
+    assert Enum.all?(recall_steps, fn step ->
+             step["status"] == "completed" and step["lifecycle"] == "completed" and
+               step["retry_state"]["attempt_count"] == 1 and
+               step["retry_state"]["last_status"] == "completed" and
+               length(step["attempt_history"] || []) == 2
+           end)
+  end
+
   test "memory tools work directly" do
     agent = create_agent()
 

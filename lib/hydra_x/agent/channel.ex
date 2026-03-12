@@ -452,12 +452,11 @@ defmodule HydraX.Agent.Channel do
       {:ok, %{tool_calls: tool_calls, stop_reason: "tool_use"} = response}
       when is_list(tool_calls) and tool_calls != [] ->
         with {:ok, refreshed_data} <- ensure_active_ownership(data, "tool_requested") do
-          updated_steps =
-            tool_calls
-            |> Enum.reduce(current_checkpoint_steps(refreshed_data.conversation.id), fn tool_call,
-                                                                                        steps ->
-              mark_step_running(steps, "tool", tool_call.name)
-            end)
+          {updated_steps, active_tool_calls} =
+            bind_tool_calls_to_steps(
+              current_checkpoint_steps(refreshed_data.conversation.id),
+              tool_calls
+            )
 
           append_channel_event(refreshed_data.conversation.id, "provider_tool_request", %{
             "round" => round + 1,
@@ -472,7 +471,7 @@ defmodule HydraX.Agent.Channel do
             round,
             all_tool_results,
             response,
-            tool_calls,
+            active_tool_calls,
             updated_steps
           )
         else
@@ -787,11 +786,12 @@ defmodule HydraX.Agent.Channel do
          round,
          all_tool_results,
          response,
-         tool_calls,
+         active_tool_calls,
          updated_steps
        ) do
     tool_task_ref = make_ref()
     caller = self()
+    tool_calls = restore_active_tool_calls(active_tool_calls)
 
     Task.Supervisor.start_child(HydraX.TaskSupervisor, fn ->
       try do
@@ -815,11 +815,6 @@ defmodule HydraX.Agent.Channel do
       end
     end)
 
-    active_tool_calls =
-      Enum.map(tool_calls, fn call ->
-        %{"id" => call.id, "name" => call.name}
-      end)
-
     update_channel_checkpoint(data.conversation.id, %{
       "status" => "executing_tools",
       "ownership" => data.ownership,
@@ -841,7 +836,7 @@ defmodule HydraX.Agent.Channel do
        tool_task_active_calls: active_tool_calls,
        tool_task_messages: messages,
        tool_task_tools: tools,
-       tool_task_tool_calls: tool_calls,
+       tool_task_tool_calls: active_tool_calls,
        tool_task_response: response,
        tool_task_all_results: all_tool_results,
        tool_task_updated_steps: updated_steps
@@ -859,7 +854,7 @@ defmodule HydraX.Agent.Channel do
       response = data[:tool_task_response]
       messages = data[:tool_task_messages] || []
       tools = data[:tool_task_tools]
-      tool_calls = data[:tool_task_tool_calls] || []
+      active_tool_calls = data[:tool_task_tool_calls] || []
 
       completed_steps = complete_tool_steps(updated_steps, tool_results)
 
@@ -869,10 +864,7 @@ defmodule HydraX.Agent.Channel do
         "current_step_index" => current_step_index_after_tools(completed_steps),
         "resumable" => true,
         "tool_rounds" => round + 1,
-        "active_tool_calls" =>
-          Enum.map(tool_calls, fn call ->
-            %{"id" => call.id, "name" => call.name}
-          end),
+        "active_tool_calls" => active_tool_calls,
         "tool_cache" =>
           merge_tool_cache(
             data.conversation.id,
@@ -1776,72 +1768,88 @@ defmodule HydraX.Agent.Channel do
 
   defp normalized_fingerprint_term(term), do: term
 
-  defp mark_step_running(steps, "tool", tool_name) do
-    {updated, found?} =
-      Enum.map_reduce(steps, false, fn step, found? ->
-        cond do
-          found? ->
-            {step, true}
+  defp bind_tool_calls_to_steps(steps, tool_calls) do
+    Enum.reduce(tool_calls, {steps, []}, fn tool_call, {acc_steps, active_calls} ->
+      {updated_steps, step} = bind_tool_call_step(acc_steps, tool_call)
 
-          step["kind"] != "provider" and step["name"] == tool_name and step["status"] != "running" ->
-            {
-              step
-              |> transition_step("running")
-              |> Map.put("summary", "Executing #{tool_name}"),
-              true
-            }
+      active_call =
+        tool_call
+        |> active_tool_call_payload(step["id"])
+        |> Map.put("idempotency_key", step["idempotency_key"])
 
-          true ->
-            {step, found?}
-        end
-      end)
+      {updated_steps, active_calls ++ [active_call]}
+    end)
+  end
 
-    if found? do
-      updated
-    else
-      updated ++
-        [
-          %{
-            "id" => "tool-dynamic-#{tool_name}",
-            "kind" => dynamic_step_kind(tool_name),
-            "name" => tool_name,
-            "label" => dynamic_step_label(tool_name),
-            "reason" => "dynamically requested by provider",
-            "status" => "pending",
-            "executor" => "channel",
-            "owner" => "channel",
-            "attempt_count" => 0,
-            "lifecycle" => "planned",
-            "idempotency_key" => "tool-dynamic-#{tool_name}",
-            "replay_strategy" => "cache_or_replay"
-          }
+  defp bind_tool_call_step(steps, tool_call) do
+    matcher = &tool_step_match?(&1, tool_call)
+
+    case update_first_matching_step(steps, matcher, fn step ->
+           step
+           |> Map.put("tool_use_id", tool_call.id)
+           |> Map.put("summary", "Executing #{tool_call.name}")
+           |> transition_step("running")
+         end) do
+      {updated_steps, true, step} ->
+        {updated_steps, step}
+
+      {updated_steps, false, _step} ->
+        step =
+          dynamic_tool_step(tool_call)
           |> transition_step("running")
-          |> Map.put("summary", "Executing #{tool_name}")
-        ]
+          |> Map.put("summary", "Executing #{tool_call.name}")
+
+        {updated_steps ++ [step], step}
     end
   end
 
   defp complete_tool_steps(steps, tool_results) do
     Enum.reduce(tool_results, steps, fn result, acc ->
-      update_matching_step(acc, "tool", result.tool_name, fn step ->
-        terminal_status = if(result[:is_error] || false, do: "failed", else: "completed")
+      matcher = fn step ->
+        cond do
+          step["tool_use_id"] == result.tool_use_id ->
+            true
 
-        step
-        |> transition_step(terminal_status)
-        |> Map.put("lifecycle", tool_step_lifecycle(result, terminal_status))
-        |> Map.put("summary", result[:summary] || summarize_tool_result_payload(result.result))
-        |> Map.put("output_excerpt", tool_result_excerpt(result.result))
-        |> Map.put("cached", result[:cached] || false)
-        |> Map.put("replayed", result[:replayed] || false)
-        |> Map.put("result_source", result[:result_source] || "fresh")
-        |> Map.put("cache_fingerprint", result[:fingerprint])
-        |> Map.put(
-          "replay_count",
-          (step["replay_count"] || 0) + if(result[:replayed], do: 1, else: 0)
-        )
-        |> Map.put("tool_use_id", result.tool_use_id)
-        |> Map.put("safety_classification", result[:safety_classification] || "standard")
-      end)
+          is_nil(step["tool_use_id"]) and step["kind"] != "provider" and
+              step["name"] == result.tool_name ->
+            true
+
+          true ->
+            false
+        end
+      end
+
+      {updated_steps, found?, _step} =
+        update_first_matching_step(acc, matcher, fn step ->
+          terminal_status = if(result[:is_error] || false, do: "failed", else: "completed")
+
+          step
+          |> transition_step(terminal_status)
+          |> Map.put("lifecycle", tool_step_lifecycle(result, terminal_status))
+          |> Map.put("summary", result[:summary] || summarize_tool_result_payload(result.result))
+          |> Map.put("output_excerpt", tool_result_excerpt(result.result))
+          |> Map.put("cached", result[:cached] || false)
+          |> Map.put("replayed", result[:replayed] || false)
+          |> Map.put("result_source", result[:result_source] || "fresh")
+          |> Map.put("cache_fingerprint", result[:fingerprint])
+          |> Map.put("cache_recorded_at", result[:cache_recorded_at])
+          |> Map.put("cache_scope_turn_id", result[:cache_scope_turn_id])
+          |> Map.put("replay_provenance", result[:replay_provenance] || %{})
+          |> Map.put(
+            "replay_count",
+            (step["replay_count"] || 0) + if(result[:replayed], do: 1, else: 0)
+          )
+          |> Map.put("tool_use_id", result.tool_use_id)
+          |> Map.put("safety_classification", result[:safety_classification] || "standard")
+          |> maybe_put_step_failure_reason(result)
+          |> put_step_retry_state(terminal_status, result)
+        end)
+
+      if found? do
+        updated_steps
+      else
+        updated_steps ++ [completed_dynamic_tool_step(result)]
+      end
     end)
   end
 
@@ -1870,19 +1878,8 @@ defmodule HydraX.Agent.Channel do
   end
 
   defp update_matching_step(steps, "provider", _name, fun) do
-    {updated, found?} =
-      Enum.map_reduce(steps, false, fn step, found? ->
-        cond do
-          found? ->
-            {step, true}
-
-          step["kind"] == "provider" ->
-            {fun.(step), true}
-
-          true ->
-            {step, found?}
-        end
-      end)
+    {updated, found?, _step} =
+      update_first_matching_step(steps, &(&1["kind"] == "provider"), fun)
 
     if found? do
       updated
@@ -1907,13 +1904,14 @@ defmodule HydraX.Agent.Channel do
   end
 
   defp update_matching_step(steps, "tool", name, fun) do
-    Enum.map(steps, fn step ->
-      if step["kind"] != "provider" and step["name"] == name do
-        fun.(step)
-      else
-        step
-      end
-    end)
+    {updated, _found?, _step} =
+      update_first_matching_step(
+        steps,
+        &(&1["kind"] != "provider" and &1["name"] == name),
+        fun
+      )
+
+    updated
   end
 
   defp current_step_id_after_tools(steps), do: step_id_for_status(steps, "pending")
@@ -1943,6 +1941,9 @@ defmodule HydraX.Agent.Channel do
         "replayed" => result[:replayed] || false,
         "result_source" => result[:result_source] || "fresh",
         "fingerprint" => result[:fingerprint],
+        "cache_recorded_at" => result[:cache_recorded_at],
+        "cache_scope_turn_id" => result[:cache_scope_turn_id],
+        "replay_provenance" => result[:replay_provenance] || %{},
         "summary" => result[:summary] || summarize_tool_result_payload(result.result),
         "safety_classification" => result[:safety_classification] || "standard"
       }
@@ -2032,6 +2033,88 @@ defmodule HydraX.Agent.Channel do
   defp dynamic_step_label("workspace_patch"), do: "Patch a workspace file"
   defp dynamic_step_label(tool_name), do: tool_name
 
+  defp dynamic_tool_step(tool_call) do
+    %{
+      "id" => "tool-use-#{tool_call.id}",
+      "kind" => dynamic_step_kind(tool_call.name),
+      "name" => tool_call.name,
+      "label" => dynamic_step_label(tool_call.name),
+      "reason" => "dynamically requested by provider",
+      "status" => "pending",
+      "executor" => "channel",
+      "owner" => "channel",
+      "attempt_count" => 0,
+      "lifecycle" => "planned",
+      "idempotency_key" => "tool-use-#{tool_call.id}",
+      "replay_strategy" => "cache_or_replay",
+      "tool_use_id" => tool_call.id,
+      "retry_state" => default_step_retry_state()
+    }
+  end
+
+  defp completed_dynamic_tool_step(result) do
+    terminal_status = if(result[:is_error] || false, do: "failed", else: "completed")
+
+    dynamic_tool_step(%{id: result.tool_use_id, name: result.tool_name})
+    |> transition_step("running")
+    |> transition_step(terminal_status)
+    |> Map.put("lifecycle", tool_step_lifecycle(result, terminal_status))
+    |> Map.put("summary", result[:summary] || summarize_tool_result_payload(result.result))
+    |> Map.put("output_excerpt", tool_result_excerpt(result.result))
+    |> Map.put("cached", result[:cached] || false)
+    |> Map.put("replayed", result[:replayed] || false)
+    |> Map.put("result_source", result[:result_source] || "fresh")
+    |> Map.put("cache_fingerprint", result[:fingerprint])
+    |> Map.put("cache_recorded_at", result[:cache_recorded_at])
+    |> Map.put("cache_scope_turn_id", result[:cache_scope_turn_id])
+    |> Map.put("replay_provenance", result[:replay_provenance] || %{})
+    |> Map.put("tool_use_id", result.tool_use_id)
+    |> Map.put("safety_classification", result[:safety_classification] || "standard")
+    |> maybe_put_step_failure_reason(result)
+    |> put_step_retry_state(terminal_status, result)
+  end
+
+  defp tool_step_match?(step, tool_call) do
+    cond do
+      step["tool_use_id"] == tool_call.id ->
+        true
+
+      step["kind"] == "provider" ->
+        false
+
+      step["name"] != tool_call.name ->
+        false
+
+      not is_nil(step["tool_use_id"]) ->
+        false
+
+      step["status"] in ["pending", "failed"] ->
+        true
+
+      true ->
+        false
+    end
+  end
+
+  defp active_tool_call_payload(tool_call, step_id) do
+    %{
+      "id" => tool_call.id,
+      "name" => tool_call.name,
+      "step_id" => step_id,
+      "arguments" => tool_call.arguments
+    }
+  end
+
+  defp restore_active_tool_calls(active_tool_calls) do
+    Enum.map(active_tool_calls, fn call ->
+      %{
+        id: call["id"] || call[:id],
+        name: call["name"] || call[:name],
+        arguments: call["arguments"] || call[:arguments] || %{}
+      }
+    end)
+  end
+
   defp tool_result_excerpt(%{content: content}) when is_binary(content), do: excerpt_text(content)
 
   defp tool_result_excerpt(%{"content" => content}) when is_binary(content),
@@ -2087,6 +2170,8 @@ defmodule HydraX.Agent.Channel do
     |> Map.put("updated_at", now)
     |> maybe_mark_step_started(status, now)
     |> maybe_mark_step_finished(status, now)
+    |> append_step_history(status, now)
+    |> put_step_retry_state(status, %{"updated_at" => now})
   end
 
   defp maybe_mark_step_started(step, "running", now) do
@@ -2111,6 +2196,136 @@ defmodule HydraX.Agent.Channel do
   end
 
   defp maybe_mark_step_finished(step, _status, _now), do: step
+
+  defp update_first_matching_step(steps, matcher, fun) when is_function(matcher, 1) do
+    {updated, {found?, matched_step}} =
+      Enum.map_reduce(steps, {false, nil}, fn step, {found?, matched_step} ->
+        cond do
+          found? ->
+            {step, {true, matched_step}}
+
+          matcher.(step) ->
+            updated_step = fun.(step)
+            {updated_step, {true, updated_step}}
+
+          true ->
+            {step, {false, matched_step}}
+        end
+      end)
+
+    {updated, found?, matched_step}
+  end
+
+  defp append_step_history(step, status, now) do
+    history =
+      (step["attempt_history"] || [])
+      |> Kernel.++([
+        %{
+          "status" => status,
+          "at" => now
+        }
+      ])
+      |> Enum.take(-12)
+
+    Map.put(step, "attempt_history", history)
+  end
+
+  defp put_step_retry_state(step, status, result_or_attrs) do
+    now = result_or_attrs[:updated_at] || result_or_attrs["updated_at"] || DateTime.utc_now()
+    current = step["retry_state"] || default_step_retry_state()
+
+    retry_state =
+      current
+      |> Map.put("attempt_count", step["attempt_count"] || 0)
+      |> Map.put("retry_count", max((step["attempt_count"] || 1) - 1, 0))
+      |> Map.put("last_status", retry_state_status(status, step, result_or_attrs))
+      |> Map.put("last_transition_at", now)
+      |> maybe_put_retry_timestamp("last_started_at", status == "running", now)
+      |> maybe_put_retry_timestamp("last_finished_at", status in ["completed", "failed"], now)
+      |> maybe_put_retry_error(result_or_attrs, status)
+      |> maybe_put_retry_result_source(result_or_attrs)
+      |> maybe_put_retry_replay_count(step)
+      |> maybe_put_retry_tool_use_id(step)
+
+    Map.put(step, "retry_state", retry_state)
+  end
+
+  defp default_step_retry_state do
+    %{
+      "attempt_count" => 0,
+      "retry_count" => 0,
+      "last_status" => "planned"
+    }
+  end
+
+  defp retry_state_status("completed", step, result_or_attrs) do
+    tool_step_lifecycle(
+      result_or_attrs,
+      step["lifecycle"] || "completed"
+    )
+  end
+
+  defp retry_state_status(status, _step, _result_or_attrs), do: status
+
+  defp maybe_put_retry_timestamp(state, _key, false, _value), do: state
+  defp maybe_put_retry_timestamp(state, key, true, value), do: Map.put(state, key, value)
+
+  defp maybe_put_retry_error(state, result_or_attrs, "failed") do
+    error =
+      result_or_attrs[:summary] ||
+        result_or_attrs["summary"] ||
+        result_or_attrs[:reason] ||
+        result_or_attrs["reason"] ||
+        get_in(result_or_attrs, [:result, :error]) ||
+        get_in(result_or_attrs, ["result", "error"])
+
+    if is_nil(error) or error == "" do
+      Map.delete(state, "last_error")
+    else
+      Map.put(state, "last_error", error)
+    end
+  end
+
+  defp maybe_put_retry_error(state, _result_or_attrs, _status),
+    do: Map.delete(state, "last_error")
+
+  defp maybe_put_retry_result_source(state, result_or_attrs) do
+    result_source = result_or_attrs[:result_source] || result_or_attrs["result_source"]
+
+    if is_nil(result_source) or result_source == "" do
+      state
+    else
+      Map.put(state, "result_source", result_source)
+    end
+  end
+
+  defp maybe_put_retry_replay_count(state, step) do
+    if is_integer(step["replay_count"]) do
+      Map.put(state, "replay_count", step["replay_count"])
+    else
+      state
+    end
+  end
+
+  defp maybe_put_retry_tool_use_id(state, step) do
+    if is_nil(step["tool_use_id"]) do
+      state
+    else
+      Map.put(state, "tool_use_id", step["tool_use_id"])
+    end
+  end
+
+  defp maybe_put_step_failure_reason(step, result) do
+    if result[:is_error] do
+      Map.put(
+        step,
+        "reason",
+        result[:summary] || summarize_tool_result_payload(result.result)
+      )
+    else
+      step
+    end
+  end
 
   defp current_recovery_lineage(conversation_id) do
     state = (Runtime.get_checkpoint(conversation_id, "channel") || %{state: %{}}).state || %{}

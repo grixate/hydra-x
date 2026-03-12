@@ -170,7 +170,9 @@ defmodule Mix.Tasks.HydraX.Conversations do
             step["lifecycle"] || "",
             step["result_source"] || "",
             if(step["cached"], do: "cached", else: ""),
-            if(step["replay_count"], do: "replay=#{step["replay_count"]}", else: "")
+            if(step["replay_count"], do: "replay=#{step["replay_count"]}", else: ""),
+            if(step["tool_use_id"], do: "tool_use_id=#{step["tool_use_id"]}", else: ""),
+            retry_state_label(step["retry_state"])
           ],
           "\t"
         )
@@ -267,6 +269,22 @@ defmodule Mix.Tasks.HydraX.Conversations do
       )
     end)
   end
+
+  defp retry_state_label(%{} = retry_state) when map_size(retry_state) > 0 do
+    [
+      retry_state["last_status"],
+      retry_state["attempt_count"] && "attempts=#{retry_state["attempt_count"]}",
+      retry_state["retry_count"] && "retries=#{retry_state["retry_count"]}",
+      retry_state["result_source"] && "source=#{retry_state["result_source"]}"
+    ]
+    |> Enum.reject(&(&1 in [nil, "", false]))
+    |> case do
+      [] -> ""
+      values -> "retry_state=" <> Enum.join(values, ",")
+    end
+  end
+
+  defp retry_state_label(_retry_state), do: ""
 
   defp conversation_attachment_count(conversation) do
     if Ecto.assoc_loaded?(conversation.turns) do
