@@ -456,7 +456,11 @@ defmodule HydraXWeb.AgentsLive do
                 <div class="mt-2 text-sm text-[var(--hx-mute)]">
                   Soft {agent.compaction_policy.soft} · Medium {agent.compaction_policy.medium} · Hard {agent.compaction_policy.hard}
                 </div>
-                <% policy_form = to_form(compaction_policy_form(agent), as: :compaction_policy) %>
+                <% policy_form =
+                  to_form(compaction_policy_form(agent),
+                    as: :compaction_policy,
+                    id: "compaction-policy-#{agent.id}"
+                  ) %>
                 <.form
                   for={policy_form}
                   phx-submit="save_compaction_policy"
@@ -485,7 +489,11 @@ defmodule HydraXWeb.AgentsLive do
                     agent.provider_route.fallbacks
                   )}
                 </div>
-                <% routing_form = to_form(provider_routing_form(agent), as: :provider_routing) %>
+                <% routing_form =
+                  to_form(provider_routing_form(agent),
+                    as: :provider_routing,
+                    id: "provider-routing-#{agent.id}"
+                  ) %>
                 <.form
                   for={routing_form}
                   phx-submit="save_provider_routing"
@@ -603,7 +611,11 @@ defmodule HydraXWeb.AgentsLive do
                   search via {channel_summary(agent.effective_tool_policy.web_search_channels)} ·
                   shell via {channel_summary(agent.effective_tool_policy.shell_command_channels)}
                 </div>
-                <% tool_policy_form = to_form(agent_tool_policy_form(agent), as: :agent_tool_policy) %>
+                <% tool_policy_form =
+                  to_form(agent_tool_policy_form(agent),
+                    as: :agent_tool_policy,
+                    id: "agent-tool-policy-#{agent.id}"
+                  ) %>
                 <.form
                   for={tool_policy_form}
                   phx-submit="save_agent_tool_policy"
@@ -712,7 +724,10 @@ defmodule HydraXWeb.AgentsLive do
                     ingest roots {channel_summary(agent.effective_control_policy.ingest_roots)}
                   </div>
                   <% control_policy_form =
-                    to_form(agent_control_policy_form(agent), as: :agent_control_policy) %>
+                    to_form(agent_control_policy_form(agent),
+                      as: :agent_control_policy,
+                      id: "agent-control-policy-#{agent.id}"
+                    ) %>
                   <.form
                     for={control_policy_form}
                     phx-submit="save_agent_control_policy"

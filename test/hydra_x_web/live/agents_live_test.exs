@@ -143,7 +143,7 @@ defmodule HydraXWeb.AgentsLiveTest do
     {:ok, view, _html} = live(conn, ~p"/agents")
 
     view
-    |> form(~s(form[phx-submit="save_compaction_policy"]), %{
+    |> form("#compaction-policy-#{agent.id}", %{
       "compaction_policy" => %{
         "agent_id" => to_string(agent.id),
         "soft" => "5",
@@ -172,7 +172,7 @@ defmodule HydraXWeb.AgentsLiveTest do
     {:ok, view, _html} = live(conn, ~p"/agents")
 
     view
-    |> form(~s(form[phx-submit="save_agent_tool_policy"]), %{
+    |> form("#agent-tool-policy-#{agent.id}", %{
       "agent_tool_policy" => %{
         "agent_id" => to_string(agent.id),
         "workspace_list_enabled" => "true",
@@ -230,7 +230,7 @@ defmodule HydraXWeb.AgentsLiveTest do
     {:ok, view, _html} = live(conn, ~p"/agents")
 
     view
-    |> form(~s(form[phx-submit="save_agent_control_policy"]), %{
+    |> form("#agent-control-policy-#{agent.id}", %{
       "agent_control_policy" => %{
         "agent_id" => to_string(agent.id),
         "require_recent_auth_for_sensitive_actions" => "true",
@@ -342,7 +342,7 @@ defmodule HydraXWeb.AgentsLiveTest do
     {:ok, view, _html} = live(conn, ~p"/agents")
 
     view
-    |> form(~s(form[phx-submit="save_provider_routing"]), %{
+    |> form("#provider-routing-#{agent.id}", %{
       "provider_routing" => %{
         "agent_id" => to_string(agent.id),
         "default_provider_id" => to_string(provider.id),

@@ -219,7 +219,7 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "telegram"
   end
 
-  test "health page shows retryable Telegram failures", %{conn: conn} do
+  test "health page shows Telegram delivery diagnostics", %{conn: conn} do
     agent = Runtime.ensure_default_agent!()
 
     {:ok, _telegram} =
@@ -251,13 +251,37 @@ defmodule HydraXWeb.HealthLiveTest do
         }
       })
 
+    {:ok, streaming_conversation} =
+      Runtime.start_conversation(agent, %{
+        channel: "telegram",
+        title: "Streaming Reply",
+        external_ref: "1000"
+      })
+
+    {:ok, _updated} =
+      Runtime.update_conversation_metadata(streaming_conversation, %{
+        "last_delivery" => %{
+          "channel" => "telegram",
+          "external_ref" => "1000",
+          "status" => "streaming",
+          "formatted_payload" => %{
+            "chunk_count" => 3,
+            "text" => "Streaming partial response"
+          }
+        }
+      })
+
     {:ok, _view, html} = live(conn, ~p"/health")
 
     assert html =~ "Retryable failed deliveries: 1"
     assert html =~ "Recent Telegram delivery failures"
+    assert html =~ "Active Telegram streams"
     assert html =~ "Delayed reply"
+    assert html =~ "Streaming Reply"
     assert html =~ "dead letter 1"
     assert html =~ "multipart 1"
+    assert html =~ "streaming 1"
+    assert html =~ "chunks 3"
     assert html =~ "msg ids 2"
   end
 
@@ -298,6 +322,26 @@ defmodule HydraXWeb.HealthLiveTest do
         }
       })
 
+    {:ok, streaming_slack} =
+      Runtime.start_conversation(agent, %{
+        channel: "slack",
+        title: "Slack Stream",
+        external_ref: "C778"
+      })
+
+    {:ok, _conversation} =
+      Runtime.update_conversation_metadata(streaming_slack, %{
+        "last_delivery" => %{
+          "channel" => "slack",
+          "external_ref" => "C778",
+          "status" => "streaming",
+          "formatted_payload" => %{
+            "chunk_count" => 4,
+            "text" => "Streaming thread preview"
+          }
+        }
+      })
+
     {:ok, _view, html} = live(conn, ~p"/health")
 
     assert html =~ "Additional channel readiness"
@@ -307,6 +351,9 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "capabilities:"
     assert html =~ "thread timeout"
     assert html =~ "thread 123.456"
+    assert html =~ "streaming 1"
+    assert html =~ "Active streams"
+    assert html =~ "Slack Stream"
   end
 
   test "health page shows Webchat readiness", %{conn: conn} do

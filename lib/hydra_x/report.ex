@@ -168,9 +168,12 @@ defmodule HydraX.Report do
     - Last checked at: #{format_datetime(snapshot.telegram.last_checked_at)}
     - Pending updates: #{snapshot.telegram.pending_update_count}
     - Retryable failed deliveries: #{snapshot.telegram.retryable_count}
+    - Active streaming deliveries: #{snapshot.telegram.streaming_count || 0}
     - Last error: #{snapshot.telegram.last_error || "none"}
     - Recent failed conversations:
     #{render_telegram_failures(snapshot.telegram.recent_failures)}
+    - Active streaming conversations:
+    #{render_telegram_failures(snapshot.telegram.recent_streaming || [])}
 
     ## Channel Failure Summary
     #{render_channel_failures(snapshot.channels)}
@@ -752,7 +755,7 @@ defmodule HydraX.Report do
     |> Map.values()
     |> Enum.map_join("\n", fn status ->
       base =
-        "- #{status.channel}: configured=#{yes_no(status.configured)} enabled=#{yes_no(status.enabled)} retryable=#{status.retryable_count || 0} dead_letter=#{status.dead_letter_count || 0} multipart=#{status.multipart_failure_count || 0} attachments=#{status.attachment_failure_count || 0}"
+        "- #{status.channel}: configured=#{yes_no(status.configured)} enabled=#{yes_no(status.enabled)} retryable=#{status.retryable_count || 0} dead_letter=#{status.dead_letter_count || 0} multipart=#{status.multipart_failure_count || 0} attachments=#{status.attachment_failure_count || 0} streaming=#{status.streaming_count || 0}"
 
       failures =
         case status.recent_failures do
@@ -766,7 +769,31 @@ defmodule HydraX.Report do
               end)
         end
 
-      base <> failures
+      streaming =
+        case Map.get(status, :recent_streaming, []) do
+          [] ->
+            " recent_streaming=none"
+
+          values ->
+            " recent_streaming=" <>
+              Enum.map_join(values, " | ", fn stream ->
+                payload = stream.formatted_payload || %{}
+
+                preview =
+                  payload["text"] || payload[:text] || payload["content"] || payload[:content]
+
+                [
+                  stream.title,
+                  stream.status,
+                  if(stream.chunk_count, do: "chunks=#{stream.chunk_count}"),
+                  if(preview, do: "preview=#{String.slice(preview, 0, 40)}")
+                ]
+                |> Enum.reject(&is_nil_or_empty/1)
+                |> Enum.join(":")
+              end)
+        end
+
+      base <> failures <> streaming
     end)
   end
 

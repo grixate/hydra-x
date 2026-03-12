@@ -140,6 +140,26 @@ defmodule HydraX.ReportTest do
         }
       })
 
+    {:ok, streaming_conversation} =
+      Runtime.start_conversation(agent, %{
+        channel: "slack",
+        title: "Streaming Export Conversation",
+        external_ref: "C556"
+      })
+
+    {:ok, _conversation} =
+      Runtime.update_conversation_metadata(streaming_conversation, %{
+        "last_delivery" => %{
+          "channel" => "slack",
+          "status" => "streaming",
+          "external_ref" => "C556",
+          "formatted_payload" => %{
+            "chunk_count" => 3,
+            "text" => "Live report stream preview"
+          }
+        }
+      })
+
     snapshot = Report.snapshot()
 
     assert snapshot.default_agent.id == agent.id
@@ -360,6 +380,7 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "Secret Posture"
     assert File.read!(export.markdown_path) =~ "Operator Auth"
     assert File.read!(export.markdown_path) =~ "Channel Failure Summary"
+    assert File.read!(export.markdown_path) =~ "Active streaming deliveries"
     assert File.read!(export.markdown_path) =~ "Cluster Posture"
     assert File.read!(export.markdown_path) =~ "Coordination"
     assert File.read!(export.markdown_path) =~ "Coordination mode: local_single_node"
@@ -387,6 +408,8 @@ defmodule HydraX.ReportTest do
 
     assert File.read!(Path.join(export.bundle_dir, "agents.json")) =~ "\"mcp_action_count\""
     assert File.read!(Path.join(export.bundle_dir, "agents.json")) =~ "\"search_docs\""
+    assert File.read!(Path.join(export.bundle_dir, "channels.json")) =~ "\"streaming_count\""
+    assert File.read!(Path.join(export.bundle_dir, "channels.json")) =~ "\"recent_streaming\""
     assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~ "\"channel_state\""
     assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~ "\"memory_recall\""
     assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~ "\"stream_capture\""

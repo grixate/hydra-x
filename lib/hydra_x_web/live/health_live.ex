@@ -407,7 +407,8 @@ defmodule HydraXWeb.HealthLive do
             <p class="mt-2 text-xs text-[var(--hx-mute)]">
               dead letter {@telegram_status.dead_letter_count || 0} · multipart {@telegram_status.multipart_failure_count ||
                 0} ·
-              attachment failures {@telegram_status.attachment_failure_count || 0}
+              attachment failures {@telegram_status.attachment_failure_count || 0} · streaming {@telegram_status.streaming_count ||
+                0}
             </p>
             <p :if={@telegram_status.last_error} class="mt-2 text-xs text-amber-200">
               Last Telegram error: {@telegram_status.last_error}
@@ -442,6 +443,35 @@ defmodule HydraXWeb.HealthLive do
               </div>
             </div>
           </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4 lg:col-span-2">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Active Telegram streams
+            </div>
+            <div class="mt-3 space-y-2">
+              <p
+                :if={@telegram_status.recent_streaming == []}
+                class="text-sm text-[var(--hx-mute)]"
+              >
+                No active Telegram streams.
+              </p>
+              <div
+                :for={stream <- @telegram_status.recent_streaming}
+                class="rounded-xl border border-white/10 bg-black/10 px-3 py-3"
+              >
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                  <div class="text-sm text-[var(--hx-accent)]">
+                    ##{stream.id} {stream.title}
+                  </div>
+                  <div class="text-xs text-[var(--hx-mute)]">
+                    {format_datetime(stream.updated_at)}
+                  </div>
+                </div>
+                <div class="mt-2 text-xs text-[var(--hx-mute)]">
+                  {failure_delivery_summary(stream)}
+                </div>
+              </div>
+            </div>
+          </article>
         </div>
       </section>
 
@@ -455,7 +485,7 @@ defmodule HydraXWeb.HealthLive do
             </div>
             <p class="mt-3 text-sm text-[var(--hx-mute)]">
               {@provider_status.name} · {@provider_status.kind}
-              <span :if={@provider_status.model}> ·                  {@provider_status.model}</span>
+              <span :if={@provider_status.model}> ·                    {@provider_status.model}</span>
             </p>
             <p class="mt-2 text-xs text-[var(--hx-mute)]">
               source {@provider_status.route_source} · readiness {@provider_status.readiness} · warmup {@provider_status.warmup_status}
@@ -644,7 +674,8 @@ defmodule HydraXWeb.HealthLive do
             <p class="mt-2 text-xs text-[var(--hx-mute)]">
               retryable {status.retryable_count || 0} · dead letter {status.dead_letter_count || 0} ·
               multipart {status.multipart_failure_count || 0} ·
-              attachment failures {status.attachment_failure_count || 0}
+              attachment failures {status.attachment_failure_count || 0} · streaming {status.streaming_count ||
+                0}
             </p>
             <div class="mt-3 space-y-2">
               <p
@@ -665,6 +696,29 @@ defmodule HydraXWeb.HealthLive do
                 </div>
                 <div class="mt-2 text-xs text-[var(--hx-mute)]">
                   {failure_delivery_summary(failure)}
+                </div>
+              </div>
+              <div :if={status.recent_streaming != []} class="pt-1">
+                <div class="text-[0.7rem] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                  Active streams
+                </div>
+                <div class="mt-2 space-y-2">
+                  <div
+                    :for={stream <- status.recent_streaming}
+                    class="rounded-xl border border-white/10 bg-black/10 px-3 py-3"
+                  >
+                    <div class="flex items-center justify-between gap-3">
+                      <div class="text-sm text-[var(--hx-accent)]">
+                        ##{stream.id} {stream.title}
+                      </div>
+                      <div class="text-xs text-[var(--hx-mute)]">
+                        {format_datetime(stream.updated_at)}
+                      </div>
+                    </div>
+                    <div class="mt-2 text-xs text-[var(--hx-mute)]">
+                      {failure_delivery_summary(stream)}
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -818,9 +872,9 @@ defmodule HydraXWeb.HealthLive do
                 </div>
                 <div class="mt-2 text-xs text-[var(--hx-mute)]">
                   level {event.level}
-                  <span :if={event.expired_by}> · expiry       {event.expired_by}</span>
+                  <span :if={event.expired_by}> · expiry         {event.expired_by}</span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip       {event.ip}</span>
+                  <span :if={event.ip}> · ip         {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -1392,7 +1446,7 @@ defmodule HydraXWeb.HealthLive do
   defp failure_delivery_summary(conversation) do
     delivery =
       case conversation do
-        %{status: status} = failure when status in ["failed", "dead_letter"] ->
+        %{status: status} = failure when is_binary(status) ->
           %{
             "status" => failure.status,
             "reason" => failure.reason,
@@ -1400,6 +1454,7 @@ defmodule HydraXWeb.HealthLive do
             "next_retry_at" => failure.next_retry_at,
             "dead_lettered_at" => failure.dead_lettered_at,
             "chunk_count" => failure.chunk_count,
+            "formatted_payload" => Map.get(failure, :formatted_payload, %{}),
             "provider_message_ids_count" => failure.provider_message_ids_count,
             "attachment_count" => failure.attachment_count,
             "reply_context" => failure.reply_context || %{}

@@ -241,9 +241,11 @@ defmodule HydraX.Runtime.Observability do
           default_agent_name: nil,
           retryable_count: diagnostics.retryable_count,
           dead_letter_count: diagnostics.dead_letter_count,
+          streaming_count: diagnostics.streaming_count,
           multipart_failure_count: diagnostics.multipart_failure_count,
           attachment_failure_count: diagnostics.attachment_failure_count,
           recent_failures: diagnostics.recent_failures,
+          recent_streaming: diagnostics.recent_streaming,
           gateway_events: diagnostics.gateway_events
         }
 
@@ -261,9 +263,11 @@ defmodule HydraX.Runtime.Observability do
           default_agent_name: config.default_agent && config.default_agent.name,
           retryable_count: diagnostics.retryable_count,
           dead_letter_count: diagnostics.dead_letter_count,
+          streaming_count: diagnostics.streaming_count,
           multipart_failure_count: diagnostics.multipart_failure_count,
           attachment_failure_count: diagnostics.attachment_failure_count,
           recent_failures: diagnostics.recent_failures,
+          recent_streaming: diagnostics.recent_streaming,
           gateway_events: diagnostics.gateway_events
         }
     end
@@ -283,9 +287,11 @@ defmodule HydraX.Runtime.Observability do
           default_agent_name: nil,
           retryable_count: diagnostics.retryable_count,
           dead_letter_count: diagnostics.dead_letter_count,
+          streaming_count: diagnostics.streaming_count,
           multipart_failure_count: diagnostics.multipart_failure_count,
           attachment_failure_count: diagnostics.attachment_failure_count,
           recent_failures: diagnostics.recent_failures,
+          recent_streaming: diagnostics.recent_streaming,
           gateway_events: recent_gateway_events("discord")
         }
 
@@ -298,9 +304,11 @@ defmodule HydraX.Runtime.Observability do
           default_agent_name: config.default_agent && config.default_agent.name,
           retryable_count: diagnostics.retryable_count,
           dead_letter_count: diagnostics.dead_letter_count,
+          streaming_count: diagnostics.streaming_count,
           multipart_failure_count: diagnostics.multipart_failure_count,
           attachment_failure_count: diagnostics.attachment_failure_count,
           recent_failures: diagnostics.recent_failures,
+          recent_streaming: diagnostics.recent_streaming,
           gateway_events: recent_gateway_events("discord")
         }
     end
@@ -320,9 +328,11 @@ defmodule HydraX.Runtime.Observability do
           default_agent_name: nil,
           retryable_count: diagnostics.retryable_count,
           dead_letter_count: diagnostics.dead_letter_count,
+          streaming_count: diagnostics.streaming_count,
           multipart_failure_count: diagnostics.multipart_failure_count,
           attachment_failure_count: diagnostics.attachment_failure_count,
           recent_failures: diagnostics.recent_failures,
+          recent_streaming: diagnostics.recent_streaming,
           gateway_events: recent_gateway_events("slack")
         }
 
@@ -335,9 +345,11 @@ defmodule HydraX.Runtime.Observability do
           default_agent_name: config.default_agent && config.default_agent.name,
           retryable_count: diagnostics.retryable_count,
           dead_letter_count: diagnostics.dead_letter_count,
+          streaming_count: diagnostics.streaming_count,
           multipart_failure_count: diagnostics.multipart_failure_count,
           attachment_failure_count: diagnostics.attachment_failure_count,
           recent_failures: diagnostics.recent_failures,
+          recent_streaming: diagnostics.recent_streaming,
           gateway_events: recent_gateway_events("slack")
         }
     end
@@ -357,9 +369,11 @@ defmodule HydraX.Runtime.Observability do
           default_agent_name: nil,
           retryable_count: diagnostics.retryable_count,
           dead_letter_count: diagnostics.dead_letter_count,
+          streaming_count: diagnostics.streaming_count,
           multipart_failure_count: diagnostics.multipart_failure_count,
           attachment_failure_count: diagnostics.attachment_failure_count,
           recent_failures: diagnostics.recent_failures,
+          recent_streaming: diagnostics.recent_streaming,
           gateway_events: recent_gateway_events("webchat")
         }
 
@@ -378,9 +392,11 @@ defmodule HydraX.Runtime.Observability do
           max_attachment_size_kb: config.max_attachment_size_kb,
           retryable_count: diagnostics.retryable_count,
           dead_letter_count: diagnostics.dead_letter_count,
+          streaming_count: diagnostics.streaming_count,
           multipart_failure_count: diagnostics.multipart_failure_count,
           attachment_failure_count: diagnostics.attachment_failure_count,
           recent_failures: diagnostics.recent_failures,
+          recent_streaming: diagnostics.recent_streaming,
           gateway_events: recent_gateway_events("webchat")
         }
     end
@@ -1073,30 +1089,44 @@ defmodule HydraX.Runtime.Observability do
     %{
       retryable_count: diagnostics.retryable_count,
       dead_letter_count: diagnostics.dead_letter_count,
+      streaming_count: diagnostics.streaming_count,
       multipart_failure_count: diagnostics.multipart_failure_count,
       attachment_failure_count: diagnostics.attachment_failure_count,
       recent_failures: diagnostics.recent_failures,
+      recent_streaming: diagnostics.recent_streaming,
       gateway_events: gateway_events
     }
   end
 
   defp channel_delivery_diagnostics(channel) do
+    conversations = HydraX.Runtime.Conversations.list_conversations(channel: channel, limit: 50)
+
+    failed_conversations = Enum.filter(conversations, &failed_channel_delivery?/1)
+    streaming_conversations = Enum.filter(conversations, &streaming_channel_delivery?/1)
+
     failures =
-      HydraX.Runtime.Conversations.list_conversations(channel: channel, limit: 50)
-      |> Enum.filter(&failed_channel_delivery?/1)
+      failed_conversations
       |> Enum.take(5)
-      |> Enum.map(&channel_failure_entry/1)
+      |> Enum.map(&channel_delivery_entry/1)
+
+    streaming =
+      streaming_conversations
+      |> Enum.take(5)
+      |> Enum.map(&channel_delivery_entry/1)
 
     %{
-      retryable_count: Enum.count(failures, &(&1.status in ["failed", "dead_letter"])),
-      dead_letter_count: Enum.count(failures, &(&1.status == "dead_letter")),
-      multipart_failure_count: Enum.count(failures, &((&1.chunk_count || 0) > 1)),
-      attachment_failure_count: Enum.count(failures, &((&1.attachment_count || 0) > 0)),
-      recent_failures: failures
+      retryable_count: length(failed_conversations),
+      dead_letter_count: Enum.count(failed_conversations, &dead_letter_channel_delivery?/1),
+      streaming_count: length(streaming_conversations),
+      multipart_failure_count: Enum.count(failed_conversations, &(delivery_chunk_count(&1) > 1)),
+      attachment_failure_count:
+        Enum.count(failed_conversations, &(conversation_attachment_count(&1) > 0)),
+      recent_failures: failures,
+      recent_streaming: streaming
     }
   end
 
-  defp channel_failure_entry(conversation) do
+  defp channel_delivery_entry(conversation) do
     delivery = last_delivery(conversation)
     payload = delivery_value(delivery, "formatted_payload") || %{}
     provider_message_ids = delivery_value(delivery, "provider_message_ids") || []
@@ -1115,6 +1145,7 @@ defmodule HydraX.Runtime.Observability do
       dead_lettered_at: delivery_value(delivery, "dead_lettered_at"),
       chunk_count:
         delivery_value(delivery, "chunk_count") || delivery_value(payload, "chunk_count"),
+      formatted_payload: payload,
       provider_message_ids_count: length(provider_message_ids),
       attachment_count: conversation_attachment_count(conversation),
       reply_context: reply_context
@@ -1138,6 +1169,29 @@ defmodule HydraX.Runtime.Observability do
       %{status: "dead_letter"} -> true
       _ -> false
     end
+  end
+
+  defp dead_letter_channel_delivery?(conversation) do
+    case last_delivery(conversation) do
+      %{"status" => "dead_letter"} -> true
+      %{status: "dead_letter"} -> true
+      _ -> false
+    end
+  end
+
+  defp streaming_channel_delivery?(conversation) do
+    case last_delivery(conversation) do
+      %{"status" => "streaming"} -> true
+      %{status: "streaming"} -> true
+      _ -> false
+    end
+  end
+
+  defp delivery_chunk_count(conversation) do
+    delivery = last_delivery(conversation)
+    payload = delivery_value(delivery, "formatted_payload") || %{}
+
+    delivery_value(delivery, "chunk_count") || delivery_value(payload, "chunk_count") || 0
   end
 
   defp conversation_attachment_count(conversation) do
