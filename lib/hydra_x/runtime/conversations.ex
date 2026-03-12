@@ -136,6 +136,7 @@ defmodule HydraX.Runtime.Conversations do
       assistant_turn_id: state["assistant_turn_id"],
       pending_turn_id: state["pending_turn_id"],
       pending_response: state["pending_response"],
+      stream_capture: state["stream_capture"],
       latest_user_turn_id: state["latest_user_turn_id"]
     }
   end

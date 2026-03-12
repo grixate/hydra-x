@@ -888,6 +888,138 @@ defmodule HydraX.RuntimeTest do
     assert Enum.any?(final_state.execution_events, &(&1["phase"] == "handoff_restart"))
   end
 
+  test "restarted channels clear partial stream capture after unfinished stream handoff" do
+    previous_adapter = Application.get_env(:hydra_x, :repo_adapter)
+    previous_request_fn = Application.get_env(:hydra_x, :provider_request_fn)
+    Application.put_env(:hydra_x, :repo_adapter, Ecto.Adapters.Postgres)
+
+    on_exit(fn ->
+      if previous_adapter do
+        Application.put_env(:hydra_x, :repo_adapter, previous_adapter)
+      else
+        Application.delete_env(:hydra_x, :repo_adapter)
+      end
+
+      if previous_request_fn do
+        Application.put_env(:hydra_x, :provider_request_fn, previous_request_fn)
+      else
+        Application.delete_env(:hydra_x, :provider_request_fn)
+      end
+    end)
+
+    agent = create_agent()
+
+    Application.put_env(:hydra_x, :provider_request_fn, fn _opts ->
+      {:ok,
+       %{
+         status: 200,
+         body: %{
+           "choices" => [
+             %{
+               "message" => %{
+                 "content" => "Recovered after restarting the interrupted stream.",
+                 "tool_calls" => nil
+               },
+               "finish_reason" => "stop"
+             }
+           ]
+         }
+       }}
+    end)
+
+    {:ok, provider} =
+      Runtime.save_provider_config(%{
+        name: "Restartable Stream Provider",
+        kind: "openai_compatible",
+        base_url: "https://restartable-stream.test",
+        api_key: "secret",
+        model: "gpt-restartable-stream",
+        enabled: false
+      })
+
+    {:ok, _agent} =
+      Runtime.save_agent_provider_routing(agent.id, %{
+        "default_provider_id" => provider.id
+      })
+
+    {:ok, pid} = HydraX.Agent.ensure_started(agent)
+    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{channel: "cli", title: "restart-after-stream-handoff"})
+
+    {:ok, user_turn} =
+      Runtime.append_turn(conversation, %{
+        role: "user",
+        kind: "message",
+        content: "Finish the interrupted stream after restarting.",
+        metadata: %{"source" => "test"}
+      })
+
+    current_owner = Runtime.coordination_status().owner
+
+    assert {:ok, _lease} =
+             Runtime.claim_lease("conversation:#{conversation.id}", ttl_seconds: 60)
+
+    {:ok, _checkpoint} =
+      Runtime.upsert_checkpoint(conversation.id, "channel", %{
+        "status" => "deferred",
+        "resumable" => true,
+        "pending_turn_id" => user_turn.id,
+        "handoff" => %{
+          "status" => "pending",
+          "waiting_for" => "stream_response",
+          "owner" => current_owner,
+          "owner_node" => "nonode@nohost"
+        },
+        "stream_capture" => %{
+          "content" => "Partial streamed reply",
+          "chunk_count" => 2,
+          "provider" => "Restartable Stream Provider"
+        },
+        "ownership" => %{
+          "mode" => "database_lease",
+          "lease_name" => "conversation:#{conversation.id}",
+          "owner" => current_owner,
+          "owner_node" => "nonode@nohost",
+          "stage" => "deferred"
+        },
+        "execution_events" => []
+      })
+
+    initial_state = Runtime.conversation_channel_state(conversation.id)
+    assert initial_state.stream_capture["content"] == "Partial streamed reply"
+    assert initial_state.handoff["waiting_for"] == "stream_response"
+
+    {:ok, channel_pid} = HydraX.Agent.Channel.ensure_started(agent.id, conversation)
+
+    on_exit(fn ->
+      if Process.alive?(channel_pid), do: shutdown_process(channel_pid)
+    end)
+
+    wait_for(
+      fn ->
+        Runtime.list_turns(conversation.id)
+        |> Enum.any?(
+          &(&1.role == "assistant" and
+              &1.content == "Recovered after restarting the interrupted stream.")
+        )
+      end,
+      120
+    )
+
+    final_state = Runtime.conversation_channel_state(conversation.id)
+    assert final_state.status == "completed"
+    assert final_state.handoff == nil
+    assert final_state.stream_capture == nil
+
+    assert Enum.any?(final_state.execution_events, fn event ->
+             event["phase"] == "handoff_restart" and
+               event["details"]["waiting_for"] == "stream_response" and
+               event["details"]["captured_chars"] > 0
+           end)
+  end
+
   test "owned deferred conversations can be resumed through the runtime" do
     previous_adapter = Application.get_env(:hydra_x, :repo_adapter)
     Application.put_env(:hydra_x, :repo_adapter, Ecto.Adapters.Postgres)

@@ -357,15 +357,29 @@ defmodule HydraX.Agent.Channel do
   end
 
   defp handle_stream_chunk(ref, delta, data) do
-    if data[:stream_ref] == ref and is_nil(data[:handoff_pending]) do
-      Phoenix.PubSub.broadcast(
-        HydraX.PubSub,
-        "conversations:stream",
-        {:stream_chunk, data.conversation.id, delta}
-      )
-    end
+    if data[:stream_ref] == ref do
+      updated_data =
+        data
+        |> Map.update(:stream_content, delta, &(&1 <> delta))
+        |> Map.update(:stream_chunk_count, 1, &(&1 + 1))
 
-    {:keep_state, data}
+      if is_nil(updated_data[:handoff_pending]) do
+        Phoenix.PubSub.broadcast(
+          HydraX.PubSub,
+          "conversations:stream",
+          {:stream_chunk, data.conversation.id, delta}
+        )
+      else
+        update_channel_checkpoint(
+          data.conversation.id,
+          %{"stream_capture" => stream_capture_payload(updated_data)}
+        )
+      end
+
+      {:keep_state, updated_data}
+    else
+      {:keep_state, data}
+    end
   end
 
   defp handle_stream_done(ref, response, data) do
@@ -632,6 +646,7 @@ defmodule HydraX.Agent.Channel do
                 "current_step_id" => step_id_for_running(steps),
                 "current_step_index" => step_index_for_running(steps),
                 "resumable" => true,
+                "stream_capture" => nil,
                 "updated_at" => DateTime.utc_now()
               })
 
@@ -647,7 +662,9 @@ defmodule HydraX.Agent.Channel do
                  stream_ref: ref,
                  stream_round: round,
                  stream_tool_results: all_tool_results,
-                 stream_input_tokens: estimated_input_tokens
+                 stream_input_tokens: estimated_input_tokens,
+                 stream_content: "",
+                 stream_chunk_count: 0
                }}
 
             {:error, _reason} ->
@@ -798,6 +815,7 @@ defmodule HydraX.Agent.Channel do
       "tool_rounds" => round + 1,
       "active_tool_calls" => active_tool_calls,
       "handoff" => nil,
+      "stream_capture" => nil,
       "updated_at" => DateTime.utc_now()
     })
 
@@ -977,6 +995,7 @@ defmodule HydraX.Agent.Channel do
       "status" => "completed",
       "ownership" => idle_data.ownership,
       "handoff" => nil,
+      "stream_capture" => nil,
       "steps" => steps,
       "current_step_id" => nil,
       "current_step_index" => nil,
@@ -1218,6 +1237,7 @@ defmodule HydraX.Agent.Channel do
       "ownership" => ownership,
       "resumable" => true,
       "handoff" => handoff_payload(ownership, waiting_for),
+      "stream_capture" => deferred_stream_capture(data, waiting_for),
       "updated_at" => DateTime.utc_now()
     })
 
@@ -1456,8 +1476,29 @@ defmodule HydraX.Agent.Channel do
     if is_map(handoff) and handoff["status"] == "pending" and is_nil(state.pending_response) do
       append_channel_event(conversation_id, "handoff_restart", %{
         "summary" => "Restarted execution after an unfinished ownership handoff",
-        "waiting_for" => handoff["waiting_for"]
+        "waiting_for" => handoff["waiting_for"],
+        "captured_chars" => String.length(get_in(state.stream_capture || %{}, ["content"]) || ""),
+        "captured_chunks" => get_in(state.stream_capture || %{}, ["chunk_count"])
       })
+    end
+  end
+
+  defp deferred_stream_capture(data, "stream_response"), do: stream_capture_payload(data)
+  defp deferred_stream_capture(_data, _waiting_for), do: nil
+
+  defp stream_capture_payload(data) do
+    content = data[:stream_content] || ""
+    chunk_count = data[:stream_chunk_count] || 0
+
+    if content == "" and chunk_count == 0 do
+      nil
+    else
+      %{
+        "content" => content,
+        "chunk_count" => chunk_count,
+        "provider" => provider_name(data.agent_id),
+        "captured_at" => DateTime.utc_now()
+      }
     end
   end
 
