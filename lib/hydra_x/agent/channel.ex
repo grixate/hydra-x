@@ -369,6 +369,8 @@ defmodule HydraX.Agent.Channel do
           "conversations:stream",
           {:stream_chunk, data.conversation.id, delta}
         )
+
+        maybe_persist_stream_snapshot(updated_data)
       else
         update_channel_checkpoint(
           data.conversation.id,
@@ -1485,6 +1487,27 @@ defmodule HydraX.Agent.Channel do
 
   defp deferred_stream_capture(data, "stream_response"), do: stream_capture_payload(data)
   defp deferred_stream_capture(_data, _waiting_for), do: nil
+
+  defp maybe_persist_stream_snapshot(data) do
+    chunk_count = data[:stream_chunk_count] || 0
+
+    if Config.repo_multi_writer?() and stream_snapshot_due?(chunk_count) do
+      update_channel_checkpoint(data.conversation.id, %{
+        "stream_capture" => stream_capture_payload(data),
+        "updated_at" => DateTime.utc_now()
+      })
+
+      Phoenix.PubSub.broadcast(
+        HydraX.PubSub,
+        "conversations",
+        {:conversation_updated, data.conversation.id}
+      )
+    end
+  end
+
+  defp stream_snapshot_due?(1), do: true
+  defp stream_snapshot_due?(count) when is_integer(count) and count > 1, do: rem(count, 4) == 0
+  defp stream_snapshot_due?(_count), do: false
 
   defp stream_capture_payload(data) do
     content = data[:stream_content] || ""

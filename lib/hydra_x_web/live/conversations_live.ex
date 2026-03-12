@@ -16,6 +16,7 @@ defmodule HydraXWeb.ConversationsLive do
     {conversations, has_next} = list_conversations_paginated(filters, 1)
     selected = conversations |> List.first() |> maybe_load()
     agents = Runtime.list_agents()
+    channel_state = selected && Runtime.conversation_channel_state(selected.id)
 
     {:ok,
      socket
@@ -30,11 +31,11 @@ defmodule HydraXWeb.ConversationsLive do
      |> assign(:conversations, conversations)
      |> assign(:selected, selected)
      |> assign(:compaction, selected && Runtime.conversation_compaction(selected.id))
-     |> assign(:channel_state, selected && Runtime.conversation_channel_state(selected.id))
+     |> assign(:channel_state, channel_state)
      |> assign(:new_form, to_form(default_new_conversation(agents), as: :conversation))
      |> assign(:reply_form, to_form(%{"message" => ""}, as: :reply))
      |> assign(:rename_form, rename_form(selected))
-     |> assign(:streaming_content, nil)}
+     |> assign(:streaming_content, channel_streaming_preview(channel_state))}
   end
 
   @impl true
@@ -45,11 +46,14 @@ defmodule HydraXWeb.ConversationsLive do
         id -> Runtime.get_conversation!(id)
       end
 
+    channel_state = selected && Runtime.conversation_channel_state(selected.id)
+
     {:noreply,
      socket
      |> assign(:selected, selected)
      |> assign(:compaction, selected && Runtime.conversation_compaction(selected.id))
-     |> assign(:channel_state, selected && Runtime.conversation_channel_state(selected.id))}
+     |> assign(:channel_state, channel_state)
+     |> assign(:streaming_content, channel_streaming_preview(channel_state))}
   end
 
   @impl true
@@ -285,13 +289,15 @@ defmodule HydraXWeb.ConversationsLive do
         Runtime.get_conversation!(socket.assigns.selected.id)
       end
 
+    channel_state = selected && Runtime.conversation_channel_state(selected.id)
+
     {:noreply,
      socket
      |> assign(:conversations, conversations)
      |> assign(:selected, selected)
      |> assign(:compaction, selected && Runtime.conversation_compaction(selected.id))
-     |> assign(:channel_state, selected && Runtime.conversation_channel_state(selected.id))
-     |> assign(:streaming_content, nil)
+     |> assign(:channel_state, channel_state)
+     |> assign(:streaming_content, channel_streaming_preview(channel_state))
      |> assign(:stats, stats())}
   end
 
@@ -1152,6 +1158,21 @@ defmodule HydraXWeb.ConversationsLive do
   end
 
   defp channel_ownership_summary(_state), do: nil
+
+  defp channel_streaming_preview(nil), do: nil
+
+  defp channel_streaming_preview(%{status: "streaming", stream_capture: %{"content" => content}})
+       when is_binary(content) and content != "",
+       do: content
+
+  defp channel_streaming_preview(%{
+         handoff: %{"waiting_for" => "stream_response"},
+         stream_capture: %{"content" => content}
+       })
+       when is_binary(content) and content != "",
+       do: content
+
+  defp channel_streaming_preview(_state), do: nil
 
   defp channel_handoff_summary(nil), do: nil
 

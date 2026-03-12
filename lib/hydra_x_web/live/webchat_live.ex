@@ -18,6 +18,7 @@ defmodule HydraXWeb.WebchatLive do
     session_ref = webchat_session_ref(session)
     session_state = webchat_session_state(session, config)
     conversation = webchat_conversation(config, session_ref)
+    channel_state = conversation && Runtime.conversation_channel_state(conversation.id)
 
     socket =
       socket
@@ -26,7 +27,7 @@ defmodule HydraXWeb.WebchatLive do
       |> assign(:session_ref, session_ref)
       |> assign(:session_state, session_state)
       |> assign(:conversation, conversation)
-      |> assign(:streaming_content, nil)
+      |> assign(:streaming_content, channel_streaming_preview(channel_state))
       |> assign(:message_form, to_form(%{"message" => ""}, as: :message))
       |> assign(
         :identity_form,
@@ -88,7 +89,13 @@ defmodule HydraXWeb.WebchatLive do
   def handle_info({:conversation_updated, conversation_id}, socket) do
     case socket.assigns.conversation do
       %{id: ^conversation_id} ->
-        {:noreply, assign(socket, :conversation, Runtime.get_conversation!(conversation_id))}
+        conversation = Runtime.get_conversation!(conversation_id)
+        channel_state = Runtime.conversation_channel_state(conversation_id)
+
+        {:noreply,
+         socket
+         |> assign(:conversation, conversation)
+         |> assign(:streaming_content, channel_streaming_preview(channel_state))}
 
       _ ->
         {:noreply, socket}
@@ -364,6 +371,21 @@ defmodule HydraXWeb.WebchatLive do
 
   defp conversation_state(%{status: status}, _streaming_content, _session_state),
     do: "conversation #{status}"
+
+  defp channel_streaming_preview(nil), do: nil
+
+  defp channel_streaming_preview(%{status: "streaming", stream_capture: %{"content" => content}})
+       when is_binary(content) and content != "",
+       do: content
+
+  defp channel_streaming_preview(%{
+         handoff: %{"waiting_for" => "stream_response"},
+         stream_capture: %{"content" => content}
+       })
+       when is_binary(content) and content != "",
+       do: content
+
+  defp channel_streaming_preview(_state), do: nil
 
   defp conversation_turn_count(nil), do: 0
   defp conversation_turn_count(conversation), do: length(conversation.turns || [])

@@ -406,6 +406,49 @@ defmodule HydraXWeb.ConversationsLiveTest do
     assert html =~ "resumed after stream_response"
   end
 
+  test "conversations page rebuilds streaming content from checkpoint snapshots", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{
+        channel: "cli",
+        title: "Streaming Snapshot UI"
+      })
+
+    {:ok, _checkpoint} =
+      Runtime.upsert_checkpoint(conversation.id, "channel", %{
+        "status" => "streaming",
+        "stream_capture" => %{
+          "content" => "Partial streamed answer",
+          "chunk_count" => 1,
+          "provider" => "Mock Provider"
+        },
+        "execution_events" => []
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/conversations?conversation_id=#{conversation.id}")
+
+    html = render(view)
+    assert html =~ "streaming"
+    assert html =~ "Partial streamed answer"
+
+    {:ok, _checkpoint} =
+      Runtime.upsert_checkpoint(conversation.id, "channel", %{
+        "status" => "streaming",
+        "stream_capture" => %{
+          "content" => "Partial streamed answer with more detail",
+          "chunk_count" => 2,
+          "provider" => "Mock Provider"
+        },
+        "execution_events" => []
+      })
+
+    send(view.pid, {:conversation_updated, conversation.id})
+
+    html = render(view)
+    assert html =~ "Partial streamed answer with more detail"
+  end
+
   test "conversations page shows planner skill hints", %{conn: conn} do
     agent = Runtime.ensure_default_agent!()
 

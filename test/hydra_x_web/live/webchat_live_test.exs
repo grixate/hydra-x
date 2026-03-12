@@ -132,4 +132,72 @@ defmodule HydraXWeb.WebchatLiveTest do
     assert html =~ "Attachment Visitor"
     assert html =~ "notes.txt"
   end
+
+  test "webchat rebuilds streaming content from checkpoint snapshots", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+    {:ok, _pid} = HydraX.Agent.ensure_started(agent)
+    now = System.system_time(:second)
+
+    conn =
+      init_test_session(conn,
+        webchat_session_id: "streaming-session",
+        webchat_session_created_at: now,
+        webchat_session_last_active_at: now
+      )
+
+    {:ok, _webchat} =
+      Runtime.save_webchat_config(%{
+        title: "Hydra-X Browser",
+        enabled: true,
+        allow_anonymous_messages: true,
+        default_agent_id: agent.id
+      })
+
+    session_ref = webchat_session_ref("streaming-session")
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{
+        channel: "webchat",
+        title: "Streaming Webchat",
+        external_ref: session_ref
+      })
+
+    {:ok, _checkpoint} =
+      Runtime.upsert_checkpoint(conversation.id, "channel", %{
+        "status" => "streaming",
+        "stream_capture" => %{
+          "content" => "Partial streamed webchat reply",
+          "chunk_count" => 1,
+          "provider" => "Mock Provider"
+        },
+        "execution_events" => []
+      })
+
+    {:ok, view, html} = live(conn, ~p"/webchat")
+
+    assert html =~ "assistant streaming"
+    assert html =~ "Partial streamed webchat reply"
+
+    {:ok, _checkpoint} =
+      Runtime.upsert_checkpoint(conversation.id, "channel", %{
+        "status" => "streaming",
+        "stream_capture" => %{
+          "content" => "Partial streamed webchat reply with more detail",
+          "chunk_count" => 2,
+          "provider" => "Mock Provider"
+        },
+        "execution_events" => []
+      })
+
+    send(view.pid, {:conversation_updated, conversation.id})
+
+    assert render(view) =~ "Partial streamed webchat reply with more detail"
+  end
+
+  defp webchat_session_ref(session_id) do
+    "webchat:" <>
+      (:crypto.hash(:sha256, session_id)
+       |> Base.encode16(case: :lower)
+       |> String.slice(0, 20))
+  end
 end
