@@ -112,12 +112,22 @@ defmodule HydraX.Memory do
     list_memories(Keyword.merge(opts, agent_id: agent_id, limit: limit))
     |> Enum.with_index(1)
     |> Enum.map(fn {entry, index} ->
+      score_breakdown = %{
+        "recent_list" => round_score(1.0 - index * 0.01),
+        "importance" => round_score(importance_boost(entry))
+      }
+
       %{
         entry: entry,
-        score: round_score(1.0 - index * 0.01 + importance_boost(entry)),
+        score:
+          score_breakdown
+          |> Map.values()
+          |> Enum.sum()
+          |> round_score(),
         vector_score: nil,
         lexical_rank: nil,
         semantic_rank: nil,
+        score_breakdown: score_breakdown,
         reasons: ["recent memory list", importance_reason(entry)]
       }
     end)
@@ -159,14 +169,16 @@ defmodule HydraX.Memory do
 
       vector_score = vector_similarity(entry, query_context)
 
+      score_breakdown =
+        search_score_breakdown(entry, lexical_rank, semantic_rank, query_context, query)
+
       %{
         entry: entry,
-        score:
-          hybrid_score(entry, lexical_rank, semantic_rank, query_context, query)
-          |> round_score(),
+        score: score_breakdown |> Map.values() |> Enum.sum() |> round_score(),
         vector_score: round_score(vector_score),
         lexical_rank: lexical_rank,
         semantic_rank: semantic_rank,
+        score_breakdown: score_breakdown,
         reasons: hybrid_reasons(entry, lexical_rank, semantic_rank, query_context, query)
       }
     end)
@@ -710,16 +722,18 @@ defmodule HydraX.Memory do
     end
   end
 
-  defp hybrid_score(entry, lexical_rank, semantic_rank, query_context, query) do
-    reciprocal_rank(lexical_rank) +
-      reciprocal_rank(semantic_rank) +
-      importance_boost(entry) +
-      recency_boost(entry) +
-      vector_similarity(entry, query_context) * 0.18 +
-      provenance_boost(entry, query) +
-      type_intent_boost(entry, query) +
-      channel_context_boost(entry, query_context.channels) +
-      exact_phrase_boost(entry, query)
+  defp search_score_breakdown(entry, lexical_rank, semantic_rank, query_context, query) do
+    %{
+      "lexical" => round_score(reciprocal_rank(lexical_rank)),
+      "semantic" => round_score(reciprocal_rank(semantic_rank)),
+      "importance" => round_score(importance_boost(entry)),
+      "recency" => round_score(recency_boost(entry)),
+      "embedding" => round_score(vector_similarity(entry, query_context) * 0.18),
+      "provenance" => round_score(provenance_boost(entry, query)),
+      "type_intent" => round_score(type_intent_boost(entry, query)),
+      "channel" => round_score(channel_context_boost(entry, query_context.channels)),
+      "phrase" => round_score(exact_phrase_boost(entry, query))
+    }
   end
 
   defp bulletin_score(entry) do

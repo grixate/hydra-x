@@ -228,6 +228,7 @@ defmodule Mix.Tasks.HydraX.Memory do
             ),
             get_in(memory.metadata || %{}, ["embedding_backend"]) || "-",
             Enum.join(ranked.reasons || [], ", "),
+            render_score_breakdown(ranked[:score_breakdown] || %{}),
             get_in(memory.metadata || %{}, ["source_file"]) || "-",
             memory.content
           ],
@@ -241,5 +242,20 @@ defmodule Mix.Tasks.HydraX.Memory do
 
   defp resolve_agent(slug) do
     HydraX.Runtime.get_agent_by_slug(slug) || raise "unknown agent #{slug}"
+  end
+
+  defp render_score_breakdown(score_breakdown) when map_size(score_breakdown) == 0, do: "-"
+
+  defp render_score_breakdown(score_breakdown) do
+    score_breakdown
+    |> Enum.reject(fn {_key, value} -> value in [nil, 0.0] end)
+    |> Enum.map(fn {key, value} ->
+      "#{key}=#{:erlang.float_to_binary(value, decimals: 4)}"
+    end)
+    |> Enum.join(", ")
+    |> case do
+      "" -> "-"
+      rendered -> rendered
+    end
   end
 end

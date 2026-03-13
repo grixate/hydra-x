@@ -687,6 +687,12 @@ defmodule HydraXWeb.MemoryLive do
                   >
                     embedding {embedding_backend(memory)}
                   </span>
+                  <span
+                    :for={label <- score_breakdown_labels(ranked)}
+                    class="rounded-full border border-white/10 px-3 py-1 font-mono uppercase tracking-[0.18em] text-[var(--hx-mute)]"
+                  >
+                    {label}
+                  </span>
                 </div>
               </button>
               <div class="mt-4">
@@ -1265,6 +1271,16 @@ defmodule HydraXWeb.MemoryLive do
   defp map_rankings(ranked) do
     Map.new(ranked, fn item -> {item.entry.id, item} end)
   end
+
+  defp score_breakdown_labels(%{score_breakdown: breakdown}) when is_map(breakdown) do
+    breakdown
+    |> Enum.reject(fn {_key, value} -> value in [nil, 0.0] end)
+    |> Enum.sort_by(fn {_key, value} -> -value end)
+    |> Enum.take(3)
+    |> Enum.map(fn {key, value} -> "#{key} #{Float.round(value, 3)}" end)
+  end
+
+  defp score_breakdown_labels(_ranked), do: []
 
   defp memory_ranking(rankings, memory), do: Map.get(rankings || %{}, memory.id)
 end

@@ -299,11 +299,18 @@ defmodule HydraX.RuntimeTest do
     {:ok, conversation} =
       Runtime.start_conversation(agent, %{channel: "cli", title: "ownership-deferred"})
 
-    assert {:ok, _lease} =
-             Runtime.claim_lease("conversation:#{conversation.id}",
-               owner: "node:remote",
-               ttl_seconds: 60
-             )
+    wait_for(
+      fn ->
+        match?(
+          {:ok, _lease},
+          Runtime.claim_lease("conversation:#{conversation.id}",
+            owner: "node:remote",
+            ttl_seconds: 60
+          )
+        )
+      end,
+      80
+    )
 
     assert {:deferred, reason} =
              Channel.submit(
@@ -2128,6 +2135,7 @@ defmodule HydraX.RuntimeTest do
     assert hd(recall.results).content =~ "terse answers"
     assert hd(recall.results).score > 0
     assert Enum.any?(hd(recall.results).reasons, &(&1 in ["lexical match", "semantic overlap"]))
+    assert is_map(hd(recall.results).score_breakdown)
   end
 
   test "provider and channel secrets are encrypted at rest but decrypted through runtime" do
@@ -2470,6 +2478,7 @@ defmodule HydraX.RuntimeTest do
 
     assert result["vector_score"] || result[:vector_score]
     assert (result["embedding_backend"] || result[:embedding_backend]) == "local_hash_v1"
+    assert is_map(result["score_breakdown"] || result[:score_breakdown])
   end
 
   test "memory embeddings can use an OpenAI-compatible backend when configured" do

@@ -117,6 +117,7 @@ defmodule HydraX.MemoryTaskTest do
     assert output =~ "Hydra-X retains filtered facts."
     assert output =~ "lexical match"
     assert output =~ "source provenance"
+    assert output =~ "lexical="
     assert output =~ "\tops.md\t"
     refute output =~ "Ignore this goal."
   end
