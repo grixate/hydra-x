@@ -241,12 +241,30 @@ defmodule HydraXWeb.HealthLiveTest do
 
     assert {:ok, _result} = Memory.conflict_memory!(source.id, target.id)
 
+    {:ok, _ranked} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Observation",
+        content: "Health should surface the top ranked active memories with provenance.",
+        importance: 0.9,
+        metadata: %{
+          "source_file" => "ops/health.md",
+          "source_section" => "memory-triage",
+          "source_channel" => "slack"
+        },
+        last_seen_at: DateTime.utc_now()
+      })
+
     {:ok, _view, html} = live(conn, ~p"/health")
 
     assert html =~ "Conflict review queue"
     assert html =~ "Embedding backend"
     assert html =~ "Fallback writes"
+    assert html =~ "Top ranked active memories"
     assert html =~ "Conflicted"
+    assert html =~ "Health should surface the top ranked active memories with provenance."
+    assert html =~ "ops/health.md"
+    assert html =~ "importance"
     assert html =~ ">2<"
   end
 

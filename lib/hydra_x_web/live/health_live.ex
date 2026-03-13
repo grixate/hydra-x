@@ -278,6 +278,54 @@ defmodule HydraXWeb.HealthLive do
             </p>
           </article>
         </div>
+
+        <div class="mt-6">
+          <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+            Top ranked active memories
+          </div>
+          <div class="mt-3 grid gap-3 lg:grid-cols-2">
+            <article
+              :if={@memory_status.ranked_memories == []}
+              class="rounded-2xl border border-dashed border-white/10 px-4 py-8 text-center text-[var(--hx-mute)] lg:col-span-2"
+            >
+              No active ranked memories are available yet.
+            </article>
+
+            <article
+              :for={ranked <- Enum.take(@memory_status.ranked_memories, 4)}
+              class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4"
+            >
+              <div class="flex flex-wrap items-center justify-between gap-3">
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="rounded-full border border-white/10 px-3 py-1 font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-accent)]">
+                    {ranked.entry.type}
+                  </span>
+                  <span class="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 font-mono text-xs uppercase tracking-[0.18em] text-emerald-300">
+                    score {Float.round(ranked.score, 2)}
+                  </span>
+                </div>
+                <span class="text-xs text-[var(--hx-mute)]">
+                  importance {Float.round(ranked.entry.importance, 2)}
+                </span>
+              </div>
+              <p class="mt-3 text-sm leading-6">{ranked.entry.content}</p>
+              <div class="mt-3 flex flex-wrap gap-2 text-[11px] text-[var(--hx-mute)]">
+                <span
+                  :if={source = ranked_memory_source(ranked)}
+                  class="rounded-full border border-white/10 px-3 py-1"
+                >
+                  {source}
+                </span>
+                <span
+                  :for={label <- ranked_memory_breakdown_labels(ranked)}
+                  class="rounded-full border border-white/10 px-3 py-1"
+                >
+                  {label}
+                </span>
+              </div>
+            </article>
+          </div>
+        </div>
       </section>
 
       <section class="glass-panel mt-6 p-6">
@@ -874,9 +922,9 @@ defmodule HydraXWeb.HealthLive do
                 </div>
                 <div class="mt-2 text-xs text-[var(--hx-mute)]">
                   level {event.level}
-                  <span :if={event.expired_by}> · expiry            {event.expired_by}</span>
+                  <span :if={event.expired_by}> · expiry             {event.expired_by}</span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip            {event.ip}</span>
+                  <span :if={event.ip}> · ip             {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -1737,6 +1785,30 @@ defmodule HydraXWeb.HealthLive do
     do: "attachments #{count}"
 
   defp attachment_count_label(_count), do: nil
+
+  defp ranked_memory_source(%{entry: %{metadata: metadata}}) when is_map(metadata) do
+    [
+      metadata["source_file"] && "file #{metadata["source_file"]}",
+      metadata["source_section"] && "section #{metadata["source_section"]}",
+      metadata["source_channel"] && "channel #{metadata["source_channel"]}"
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> case do
+      [] -> nil
+      labels -> Enum.join(labels, " · ")
+    end
+  end
+
+  defp ranked_memory_source(_ranked), do: nil
+
+  defp ranked_memory_breakdown_labels(%{score_breakdown: breakdown}) when is_map(breakdown) do
+    breakdown
+    |> Enum.sort_by(fn {_key, value} -> -value end)
+    |> Enum.take(3)
+    |> Enum.map(fn {key, value} -> "#{key} #{value}" end)
+  end
+
+  defp ranked_memory_breakdown_labels(_ranked), do: []
 
   defp is_nil_or_empty(nil), do: true
   defp is_nil_or_empty(""), do: true

@@ -4,7 +4,6 @@ defmodule HydraX.Report do
   """
 
   alias HydraX.Config
-  alias HydraX.Memory
   alias HydraX.Runtime
 
   def snapshot(opts \\ []) do
@@ -50,7 +49,7 @@ defmodule HydraX.Report do
       safety: Runtime.safety_status(limit: filters.safety_limit),
       incidents: incident_snapshot(filters.incident_limit),
       audit: audit_snapshot(filters.audit_limit),
-      memory: memory_snapshot(agent),
+      memory: Runtime.memory_triage_status(agent),
       budget: Runtime.budget_status(agent),
       default_agent: %{
         id: agent.id,
@@ -1090,12 +1089,6 @@ defmodule HydraX.Report do
 
   defp default_output_root do
     Path.join(Config.install_root(), "reports")
-  end
-
-  defp memory_snapshot(agent) do
-    agent
-    |> Runtime.memory_triage_status()
-    |> Map.put(:ranked_memories, Memory.search_ranked(agent.id, "", 5, status: "active"))
   end
 
   defp json_snapshot(snapshot) do

@@ -1057,7 +1057,8 @@ defmodule HydraX.Runtime.Observability do
       agent_name: nil,
       counts: %{},
       recent_conflicts: [],
-      embedding: HydraX.Memory.embedding_status()
+      embedding: HydraX.Memory.embedding_status(),
+      ranked_memories: []
     }
   end
 
@@ -1067,7 +1068,8 @@ defmodule HydraX.Runtime.Observability do
       agent_name: agent.name,
       counts: Memory.status_counts(agent_id: agent.id),
       recent_conflicts: Memory.list_memories(agent_id: agent.id, status: "conflicted", limit: 8),
-      embedding: Memory.embedding_status(agent.id)
+      embedding: Memory.embedding_status(agent.id),
+      ranked_memories: Memory.search_ranked(agent.id, "", 5, status: "active")
     }
   end
 
