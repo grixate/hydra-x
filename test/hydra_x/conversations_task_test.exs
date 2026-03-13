@@ -335,6 +335,27 @@ defmodule HydraX.ConversationsTaskTest do
             "cache_scope_turn_id" => 88,
             "cache_recorded_at" => "2026-03-11T10:41:00Z",
             "replay_provenance" => %{"result_source" => "fresh", "replayed" => false}
+          },
+          %{
+            "id" => "provider-final",
+            "kind" => "provider",
+            "name" => "response_generation",
+            "status" => "completed",
+            "summary" => "completed captured response",
+            "owner" => "channel",
+            "lifecycle" => "replayed",
+            "result_source" => "handoff_replay",
+            "replay_count" => 1,
+            "retry_state" => %{
+              "attempt_count" => 2,
+              "retry_count" => 1,
+              "last_status" => "completed",
+              "result_source" => "handoff_replay"
+            },
+            "attempt_history" => [
+              %{"status" => "running", "at" => "2026-03-11T10:42:00Z"},
+              %{"status" => "completed", "at" => "2026-03-11T10:43:00Z"}
+            ]
           }
         ],
         "execution_events" => [
@@ -400,14 +421,22 @@ defmodule HydraX.ConversationsTaskTest do
     assert transcript =~ "### Steps"
     assert transcript =~ "skill skill_inspect"
     assert transcript =~ "inspected 1 skills"
+    assert transcript =~ "provider response_generation"
+    assert transcript =~ "completed captured response"
     assert transcript =~ "tool_use_id: tool-skill-1"
     assert transcript =~ "retry: cached · attempts 2 · retries 1 · cache"
+    assert transcript =~ "retry: completed · attempts 2 · retries 1 · handoff_replay"
 
     assert transcript =~
              "attempts: running@2026-03-11 10:40:00 UTC -> completed@2026-03-11 10:41:00 UTC"
 
+    assert transcript =~
+             "attempts: running@2026-03-11 10:42:00 UTC -> completed@2026-03-11 10:43:00 UTC"
+
     assert transcript =~ "result_source: cache"
     assert transcript =~ "lifecycle: cached"
+    assert transcript =~ "result_source: handoff_replay"
+    assert transcript =~ "lifecycle: replayed"
     assert transcript =~ "cache_scope_turn_id: 88"
     assert transcript =~ "cache_recorded_at: 2026-03-11 10:41:00 UTC"
     assert transcript =~ "replay_provenance: fresh"
@@ -485,6 +514,21 @@ defmodule HydraX.ConversationsTaskTest do
               "last_status" => "cached",
               "result_source" => "cache"
             }
+          },
+          %{
+            "id" => "provider-final",
+            "kind" => "provider",
+            "name" => "response_generation",
+            "status" => "completed",
+            "summary" => "completed captured response",
+            "lifecycle" => "replayed",
+            "result_source" => "handoff_replay",
+            "retry_state" => %{
+              "attempt_count" => 2,
+              "retry_count" => 1,
+              "last_status" => "completed",
+              "result_source" => "handoff_replay"
+            }
           }
         ],
         "execution_events" => [
@@ -526,6 +570,11 @@ defmodule HydraX.ConversationsTaskTest do
     assert output =~ "step\tintegration\tmcp_probe\tcompleted\tprobed 1 MCP bindings"
     assert output =~ "tool_use_id=tool-mcp-1"
     assert output =~ "retry_state=cached,attempts=2,retries=1,source=cache"
+
+    assert output =~
+             "step\tprovider\tresponse_generation\tcompleted\tcompleted captured response\treplayed\thandoff_replay"
+
+    assert output =~ "retry_state=completed,attempts=2,retries=1,source=handoff_replay"
     assert output =~ "event\ttool_result\tprobed 1 MCP bindings\t1"
     assert output =~ "event\ttool_cache_hit\tcache replay\t1\tcache_hits=1"
 

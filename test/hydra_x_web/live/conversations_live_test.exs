@@ -583,7 +583,8 @@ defmodule HydraXWeb.ConversationsLiveTest do
     assert html =~ "Matched 1 skill hints"
   end
 
-  test "conversations page shows step summaries, excerpts, and cached badges", %{conn: conn} do
+  test "conversations page shows normalized lifecycle details for tool, provider, and skill steps",
+       %{conn: conn} do
     agent = Runtime.ensure_default_agent!()
 
     {:ok, conversation} =
@@ -614,6 +615,41 @@ defmodule HydraXWeb.ConversationsLiveTest do
             "replay_count" => 1,
             "safety_classification" => "memory_read",
             "updated_at" => DateTime.utc_now()
+          },
+          %{
+            "id" => "provider-final",
+            "kind" => "provider",
+            "name" => "response_generation",
+            "status" => "completed",
+            "summary" => "completed captured response",
+            "lifecycle" => "replayed",
+            "result_source" => "handoff_replay",
+            "retry_state" => %{
+              "attempt_count" => 2,
+              "retry_count" => 1,
+              "last_status" => "completed",
+              "result_source" => "handoff_replay"
+            },
+            "attempt_history" => [
+              %{"status" => "running", "at" => "2026-03-11T10:40:00Z"},
+              %{"status" => "completed", "at" => "2026-03-11T10:41:00Z"}
+            ]
+          },
+          %{
+            "id" => "skill-context",
+            "kind" => "skill",
+            "label" => "Apply enabled skill guidance",
+            "status" => "completed",
+            "summary" => "Matched 1 skill hints",
+            "result_source" => "skill_context",
+            "retry_state" => %{
+              "attempt_count" => 1,
+              "last_status" => "completed",
+              "result_source" => "skill_context"
+            },
+            "attempt_history" => [
+              %{"status" => "completed", "at" => "2026-03-11T10:39:00Z"}
+            ]
           }
         ],
         "execution_events" => []
@@ -631,6 +667,15 @@ defmodule HydraXWeb.ConversationsLiveTest do
     assert html =~ "memory_read"
     assert html =~ "started"
     assert html =~ "finished"
+    assert html =~ "response_generation"
+    assert html =~ "completed captured response"
+    assert html =~ "Retry state: completed"
+    assert html =~ "source handoff_replay"
+    assert html =~ "Attempts: running 10:40:00 -&gt; completed 10:41:00"
+    assert html =~ "Apply enabled skill guidance"
+    assert html =~ "Matched 1 skill hints"
+    assert html =~ "source skill_context"
+    assert html =~ "Attempts: completed 10:39:00"
   end
 
   test "conversations page shows typed integration steps", %{conn: conn} do

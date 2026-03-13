@@ -633,12 +633,7 @@ defmodule HydraX.Report do
         steps =
           state.steps
           |> Enum.take(3)
-          |> Enum.map(fn step ->
-            kind = step["kind"] || "step"
-            name = step["name"] || step["label"] || step["id"]
-            summary = step["summary"] || step["reason"] || step["label"] || "pending"
-            "#{kind}:#{name}:#{step["status"] || "pending"}:#{summary}"
-          end)
+          |> Enum.map(&render_conversation_step_summary/1)
           |> Enum.join(" | ")
 
         owner = render_conversation_owner(state.ownership)
@@ -693,6 +688,61 @@ defmodule HydraX.Report do
   end
 
   defp render_conversation_stream_capture(_capture), do: nil
+
+  defp render_conversation_step_summary(step) do
+    kind = step["kind"] || "step"
+    name = step["name"] || step["label"] || step["id"]
+    summary = step["summary"] || step["reason"] || step["label"] || "pending"
+
+    extras =
+      [
+        step["lifecycle"] && "lifecycle=#{step["lifecycle"]}",
+        step["result_source"] && "source=#{step["result_source"]}",
+        step["replay_count"] && step["replay_count"] > 0 && "replay=#{step["replay_count"]}",
+        render_conversation_step_retry(step["retry_state"]),
+        render_conversation_step_attempts(step["attempt_history"])
+      ]
+      |> Enum.reject(&is_nil_or_empty/1)
+
+    details =
+      case extras do
+        [] -> ""
+        _ -> " [" <> Enum.join(extras, ", ") <> "]"
+      end
+
+    "#{kind}:#{name}:#{step["status"] || "pending"}:#{summary}#{details}"
+  end
+
+  defp render_conversation_step_retry(%{} = retry_state) when map_size(retry_state) > 0 do
+    [
+      retry_state["last_status"],
+      retry_state["attempt_count"] && "attempts=#{retry_state["attempt_count"]}",
+      retry_state["retry_count"] && "retries=#{retry_state["retry_count"]}",
+      retry_state["result_source"] && "source=#{retry_state["result_source"]}",
+      retry_state["last_error"] && "error=#{retry_state["last_error"]}"
+    ]
+    |> Enum.reject(&is_nil_or_empty/1)
+    |> case do
+      [] -> nil
+      values -> "retry=" <> Enum.join(values, "/")
+    end
+  end
+
+  defp render_conversation_step_retry(_retry_state), do: nil
+
+  defp render_conversation_step_attempts(history) when is_list(history) and history != [] do
+    "attempt_history=" <>
+      Enum.map_join(history, "->", fn attempt ->
+        status = attempt["status"] || attempt[:status] || "unknown"
+
+        case attempt["at"] || attempt[:at] do
+          nil -> status
+          at -> "#{status}@#{format_datetime(at)}"
+        end
+      end)
+  end
+
+  defp render_conversation_step_attempts(_history), do: nil
 
   defp render_conversation_delivery(%{metadata: %{"last_delivery" => delivery}}),
     do: " · delivery=#{render_delivery_summary(delivery)}"

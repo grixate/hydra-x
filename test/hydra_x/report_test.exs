@@ -487,6 +487,39 @@ defmodule HydraX.ReportTest do
               "last_status" => "cached",
               "result_source" => "cache"
             }
+          },
+          %{
+            "id" => "provider-final",
+            "kind" => "provider",
+            "name" => "response_generation",
+            "status" => "completed",
+            "summary" => "completed captured response",
+            "lifecycle" => "replayed",
+            "result_source" => "handoff_replay",
+            "replay_count" => 1,
+            "retry_state" => %{
+              "attempt_count" => 2,
+              "retry_count" => 1,
+              "last_status" => "completed",
+              "result_source" => "handoff_replay"
+            },
+            "attempt_history" => [
+              %{"status" => "running", "at" => "2026-03-11T10:40:00Z"},
+              %{"status" => "completed", "at" => "2026-03-11T10:41:00Z"}
+            ]
+          },
+          %{
+            "id" => "skill-context",
+            "kind" => "skill",
+            "label" => "Apply enabled skill guidance",
+            "status" => "completed",
+            "summary" => "Matched 1 skill hints",
+            "result_source" => "skill_context",
+            "retry_state" => %{
+              "attempt_count" => 1,
+              "last_status" => "completed",
+              "result_source" => "skill_context"
+            }
           }
         ],
         "execution_events" => [
@@ -555,6 +588,12 @@ defmodule HydraX.ReportTest do
 
     assert File.read!(export.markdown_path) =~
              "memory:memory_recall:completed:recalled 2 memories"
+
+    assert File.read!(export.markdown_path) =~
+             "provider:response_generation:completed:completed captured response [lifecycle=replayed, source=handoff_replay, replay=1, retry=completed/attempts=2/retries=1/source=handoff_replay, attempt_history=running@2026-03-11 10:40:00 UTC->completed@2026-03-11 10:41:00 UTC]"
+
+    assert File.read!(export.markdown_path) =~
+             "skill:Apply enabled skill guidance:completed:Matched 1 skill hints [source=skill_context, retry=completed/attempts=1/source=skill_context]"
 
     assert File.read!(export.json_path) =~ "\"generated_at\""
     assert File.read!(export.json_path) =~ "\"last_delivery\""

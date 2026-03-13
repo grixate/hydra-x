@@ -621,6 +621,18 @@ defmodule HydraXWeb.ConversationsLive do
                     <p :if={step["output_excerpt"]} class="mt-2 text-sm text-[var(--hx-mute)]">
                       {step["output_excerpt"]}
                     </p>
+                    <p
+                      :if={step_retry_summary(step)}
+                      class="mt-2 text-xs leading-6 text-[var(--hx-mute)]"
+                    >
+                      {step_retry_summary(step)}
+                    </p>
+                    <p
+                      :if={step_attempt_history_summary(step)}
+                      class="mt-2 text-xs leading-6 text-[var(--hx-mute)]"
+                    >
+                      {step_attempt_history_summary(step)}
+                    </p>
                     <div
                       :if={step_detail_labels(step) != []}
                       class="mt-3 flex flex-wrap gap-2 text-xs"
@@ -1150,6 +1162,52 @@ defmodule HydraXWeb.ConversationsLive do
     do: "retry #{value}"
 
   defp step_retry_label(_retry_state), do: nil
+
+  defp step_retry_summary(%{"retry_state" => retry_state}) when is_map(retry_state) do
+    values =
+      [
+        retry_state["last_status"],
+        retry_state["attempt_count"] && "attempts #{retry_state["attempt_count"]}",
+        retry_state["retry_count"] && "retries #{retry_state["retry_count"]}",
+        retry_state["result_source"] && "source #{retry_state["result_source"]}",
+        retry_state["last_error"] && "error #{retry_state["last_error"]}"
+      ]
+      |> Enum.reject(&(&1 in [nil, "", false]))
+
+    case values do
+      [] -> nil
+      _ -> "Retry state: " <> Enum.join(values, " · ")
+    end
+  end
+
+  defp step_retry_summary(_step), do: nil
+
+  defp step_attempt_history_summary(%{"attempt_history" => history})
+       when is_list(history) and history != [] do
+    attempts =
+      history
+      |> Enum.map(&format_step_attempt/1)
+      |> Enum.reject(&is_nil_or_empty/1)
+
+    case attempts do
+      [] -> nil
+      _ -> "Attempts: " <> Enum.join(attempts, " -> ")
+    end
+  end
+
+  defp step_attempt_history_summary(_step), do: nil
+
+  defp format_step_attempt(%{} = attempt) do
+    status = attempt["status"] || "unknown"
+    at = attempt["at"] || attempt[:at]
+    error = attempt["error"] || attempt[:error]
+
+    [status, at && format_event_time(at), error && "error #{error}"]
+    |> Enum.reject(&is_nil_or_empty/1)
+    |> Enum.join(" ")
+  end
+
+  defp format_step_attempt(_attempt), do: nil
 
   defp replay_count_label(nil), do: nil
   defp replay_count_label(0), do: nil
