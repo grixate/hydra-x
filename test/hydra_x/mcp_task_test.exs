@@ -7,12 +7,19 @@ defmodule HydraX.MCPTaskTest do
 
   setup do
     previous = Application.get_env(:hydra_x, :mcp_http_request_fn)
+    previous_stdio_runner = Application.get_env(:hydra_x, :mcp_stdio_runner)
 
     on_exit(fn ->
       if previous do
         Application.put_env(:hydra_x, :mcp_http_request_fn, previous)
       else
         Application.delete_env(:hydra_x, :mcp_http_request_fn)
+      end
+
+      if previous_stdio_runner do
+        Application.put_env(:hydra_x, :mcp_stdio_runner, previous_stdio_runner)
+      else
+        Application.delete_env(:hydra_x, :mcp_stdio_runner)
       end
     end)
 
@@ -139,6 +146,105 @@ defmodule HydraX.MCPTaskTest do
     assert output =~ "agent=#{agent.slug}"
     assert output =~ "count=1"
     assert output =~ "Docs HTTP MCP"
+    assert output =~ "search_docs, get_status [live]"
+  end
+
+  test "mcp task can invoke an enabled stdio binding" do
+    agent = create_agent()
+
+    Application.put_env(:hydra_x, :mcp_stdio_runner, fn command, args, opts ->
+      assert command == "fake-mcp"
+      assert args == ["--mode", "json"]
+
+      assert %{"action" => "search_docs", "op" => "invoke", "params" => %{"query" => "hydra"}} =
+               Jason.decode!(opts[:input])
+
+      {:ok,
+       %{
+         output: Jason.encode!(%{"text" => "Search complete", "result" => %{"hits" => 1}}),
+         status: 0
+       }}
+    end)
+
+    assert {:ok, _server} =
+             Runtime.save_mcp_server(%{
+               name: "Docs STDIO MCP",
+               transport: "stdio",
+               command: "fake-mcp",
+               args_csv: "--mode,json",
+               enabled: true
+             })
+
+    assert {:ok, _bindings} = Runtime.refresh_agent_mcp_servers(agent.id)
+
+    Mix.Task.reenable("hydra_x.mcp")
+
+    output =
+      capture_io(fn ->
+        Mix.Tasks.HydraX.Mcp.run([
+          "invoke",
+          agent.slug,
+          "search_docs",
+          "--server",
+          "Docs",
+          "--param",
+          "query=hydra"
+        ])
+      end)
+
+    assert output =~ "agent=#{agent.slug}"
+    assert output =~ "action=search_docs"
+    assert output =~ "count=1"
+    assert output =~ "Docs STDIO MCP"
+    assert output =~ "ok"
+    assert output =~ "STDIO 0 fake-mcp"
+  end
+
+  test "mcp task can list actions for an enabled stdio binding" do
+    agent = create_agent()
+
+    Application.put_env(:hydra_x, :mcp_stdio_runner, fn command, _args, opts ->
+      assert command == "fake-mcp"
+      assert %{"op" => "actions"} = Jason.decode!(opts[:input])
+
+      {:ok,
+       %{
+         output:
+           Jason.encode!(%{
+             "actions" => [
+               %{"name" => "search_docs", "description" => "Search docs"},
+               %{"name" => "get_status", "description" => "Get status"}
+             ]
+           }),
+         status: 0
+       }}
+    end)
+
+    assert {:ok, _server} =
+             Runtime.save_mcp_server(%{
+               name: "Docs STDIO MCP",
+               transport: "stdio",
+               command: "fake-mcp",
+               enabled: true
+             })
+
+    assert {:ok, _bindings} = Runtime.refresh_agent_mcp_servers(agent.id)
+
+    Mix.Task.reenable("hydra_x.mcp")
+
+    output =
+      capture_io(fn ->
+        Mix.Tasks.HydraX.Mcp.run([
+          "actions",
+          agent.slug,
+          "--server",
+          "Docs"
+        ])
+      end)
+
+    assert output =~ "agent=#{agent.slug}"
+    assert output =~ "count=1"
+    assert output =~ "Docs STDIO MCP"
     assert output =~ "search_docs, get_status [live]"
   end
 

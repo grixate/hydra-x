@@ -465,8 +465,23 @@ defmodule HydraX.Runtime.MCPServers do
     {:error, {:disabled, "#{config.name} is disabled"}}
   end
 
-  defp invoke_server(%MCPServerConfig{transport: "stdio"}, _action, _params, _opts) do
-    {:error, :stdio_invoke_not_supported}
+  defp invoke_server(%MCPServerConfig{transport: "stdio"} = config, action, params, opts) do
+    action_descriptor = find_cached_action_descriptor(config, action)
+
+    with {:ok, %{output: output, status: status}} <-
+           run_stdio_request(
+             config,
+             %{
+               "op" => "invoke",
+               "action" => action,
+               "params" => params || %{}
+             },
+             opts
+           ),
+         {:ok, body} <- decode_stdio_payload(output),
+         true <- status == 0 or {:error, {:stdio_exit_status, status, output}} do
+      {:ok, normalize_stdio_invoke_result(config, action, status, body, action_descriptor)}
+    end
   end
 
   defp invoke_server(%MCPServerConfig{transport: "http"} = config, action, params, opts) do
@@ -511,8 +526,26 @@ defmodule HydraX.Runtime.MCPServers do
     {:error, {:disabled, "#{config.name} is disabled"}}
   end
 
-  defp list_server_actions(%MCPServerConfig{transport: "stdio"}, _opts) do
-    {:error, :stdio_action_catalog_not_supported}
+  defp list_server_actions(%MCPServerConfig{transport: "stdio"} = config, opts) do
+    cond do
+      Keyword.get(opts, :refresh, false) ->
+        with {:ok, %{output: output, status: status}} <-
+               run_stdio_request(config, %{"op" => "actions"}, opts),
+             {:ok, catalog_body} <- decode_stdio_action_catalog(output),
+             true <- status == 0 or {:error, {:stdio_exit_status, status, output}} do
+          catalog =
+            normalize_action_catalog(catalog_body, build_action_catalog_url(config), "live")
+
+          maybe_cache_server_actions(config, catalog)
+          {:ok, catalog}
+        end
+
+      cached = cached_action_catalog(config) ->
+        {:ok, cached}
+
+      true ->
+        {:ok, empty_action_catalog(config)}
+    end
   end
 
   defp list_server_actions(%MCPServerConfig{transport: "http"} = config, opts) do
@@ -576,12 +609,9 @@ defmodule HydraX.Runtime.MCPServers do
 
   defp format_probe_error({:disabled, message}), do: message
   defp format_probe_error(:command_not_found), do: "command not found"
-  defp format_probe_error(:stdio_invoke_not_supported), do: "stdio invoke not supported"
-
-  defp format_probe_error(:stdio_action_catalog_not_supported),
-    do: "stdio action catalog not supported"
-
   defp format_probe_error({:http_status, status}), do: "unexpected HTTP #{status}"
+  defp format_probe_error({:stdio_exit_status, status, _output}), do: "stdio exit #{status}"
+  defp format_probe_error({:stdio_invalid_json, reason}), do: "stdio invalid json: #{reason}"
   defp format_probe_error(reason), do: inspect(reason)
 
   defp normalize_filter(nil), do: nil
@@ -744,6 +774,23 @@ defmodule HydraX.Runtime.MCPServers do
     }
   end
 
+  defp normalize_stdio_invoke_result(config, action, status, body, action_descriptor) do
+    normalized_body = normalize_invoke_body(body)
+
+    %{
+      transport: "stdio_mcp_v1",
+      ok: true,
+      command: config.command,
+      cwd: config.cwd,
+      action: action,
+      status: status,
+      data: extract_invoke_data(normalized_body),
+      text: extract_invoke_text(normalized_body),
+      body: normalized_body,
+      action_descriptor: action_descriptor
+    }
+  end
+
   defp extract_invoke_data(%{"data" => data}), do: data
   defp extract_invoke_data(%{data: data}), do: data
   defp extract_invoke_data(%{"result" => data}), do: data
@@ -756,19 +803,105 @@ defmodule HydraX.Runtime.MCPServers do
   defp extract_invoke_text(_body), do: nil
 
   defp build_action_catalog_url(%MCPServerConfig{} = config) do
-    path =
-      get_in(config.metadata || %{}, ["actions_path"])
-      |> Helpers.blank_to_nil()
-      |> Kernel.||("/actions")
+    case config.transport do
+      "stdio" ->
+        "stdio://" <> (config.command || config.name || "unknown")
 
-    config.url
-    |> URI.parse()
-    |> URI.merge(path)
-    |> URI.to_string()
+      _ ->
+        path =
+          get_in(config.metadata || %{}, ["actions_path"])
+          |> Helpers.blank_to_nil()
+          |> Kernel.||("/actions")
+
+        config.url
+        |> URI.parse()
+        |> URI.merge(path)
+        |> URI.to_string()
+    end
   end
 
   defp build_action_catalog_url(%{url: url}) when is_binary(url), do: url
   defp build_action_catalog_url(_config), do: nil
+
+  defp run_stdio_request(%MCPServerConfig{} = config, payload, opts) do
+    runner =
+      Keyword.get(opts, :runner) || Application.get_env(:hydra_x, :mcp_stdio_runner) ||
+        (&System.cmd/3)
+
+    request =
+      payload
+      |> Jason.encode!()
+
+    args =
+      config.args_csv
+      |> Helpers.blank_to_nil()
+      |> case do
+        nil -> []
+        csv -> csv |> String.split(",", trim: true) |> Enum.map(&String.trim/1)
+      end
+
+    case runner.(config.command, args, cd: config.cwd, input: request, stderr_to_stdout: true) do
+      {output, status} when is_binary(output) and is_integer(status) ->
+        {:ok, %{output: output, status: status}}
+
+      {:ok, %{output: output, status: status}}
+      when is_binary(output) and is_integer(status) ->
+        {:ok, %{output: output, status: status}}
+
+      {:ok, %{stdout: output, status: status}}
+      when is_binary(output) and is_integer(status) ->
+        {:ok, %{output: output, status: status}}
+
+      {:error, reason} ->
+        {:error, reason}
+
+      other ->
+        {:error, {:stdio_invalid_result, other}}
+    end
+  end
+
+  defp decode_stdio_payload(output) when is_binary(output) do
+    output
+    |> String.trim()
+    |> case do
+      "" ->
+        {:ok, %{}}
+
+      trimmed ->
+        case Jason.decode(trimmed) do
+          {:ok, body} -> {:ok, body}
+          {:error, reason} -> {:error, {:stdio_invalid_json, Exception.message(reason)}}
+        end
+    end
+  end
+
+  defp decode_stdio_payload(body) when is_map(body) or is_list(body), do: {:ok, body}
+  defp decode_stdio_payload(body), do: {:ok, body}
+
+  defp decode_stdio_action_catalog(output) do
+    case decode_stdio_payload(output) do
+      {:ok, body} when is_binary(body) ->
+        actions =
+          body
+          |> String.split("\n", trim: true)
+          |> Enum.map(&String.trim/1)
+          |> Enum.reject(&(&1 == ""))
+
+        {:ok, actions}
+
+      {:error, {:stdio_invalid_json, _reason}} when is_binary(output) ->
+        actions =
+          output
+          |> String.split("\n", trim: true)
+          |> Enum.map(&String.trim/1)
+          |> Enum.reject(&(&1 == ""))
+
+        {:ok, actions}
+
+      other ->
+        other
+    end
+  end
 
   defp decrypt_config(nil), do: nil
 

@@ -282,6 +282,10 @@ defmodule Mix.Tasks.HydraX.Mcp do
     "HTTP #{status} #{url}"
   end
 
+  defp format_invoke_result(%{status: status, command: command}) when is_binary(command) do
+    "STDIO #{status} #{command}"
+  end
+
   defp format_invoke_result(result) when is_map(result) do
     inspect(result, limit: 5, printable_limit: 120)
   end

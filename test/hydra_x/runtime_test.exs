@@ -496,6 +496,17 @@ defmodule HydraX.RuntimeTest do
 
     wait_for(fn -> not Process.alive?(channel_pid) end)
 
+    wait_for(
+      fn ->
+        channel_state = Runtime.conversation_channel_state(conversation.id)
+
+        channel_state.status == "deferred" and
+          get_in(channel_state.pending_response || %{}, ["content"]) ==
+            "Captured before ownership handoff."
+      end,
+      240
+    )
+
     channel_state = Runtime.conversation_channel_state(conversation.id)
     assert channel_state.status == "deferred"
     assert channel_state.pending_response["content"] == "Captured before ownership handoff."
@@ -1660,6 +1671,135 @@ defmodule HydraX.RuntimeTest do
              result.result.results
   end
 
+  test "worker can invoke enabled stdio MCP bindings" do
+    agent = create_agent()
+    previous = Application.get_env(:hydra_x, :mcp_stdio_runner)
+
+    Application.put_env(:hydra_x, :mcp_stdio_runner, fn command, args, opts ->
+      assert command == "fake-mcp"
+      assert args == ["--mode", "json"]
+
+      assert %{"action" => "search_docs", "op" => "invoke", "params" => %{"query" => "hydra"}} =
+               Jason.decode!(opts[:input])
+
+      {:ok,
+       %{
+         output: Jason.encode!(%{"text" => "Search complete", "result" => %{"hits" => 1}}),
+         status: 0
+       }}
+    end)
+
+    on_exit(fn ->
+      if previous do
+        Application.put_env(:hydra_x, :mcp_stdio_runner, previous)
+      else
+        Application.delete_env(:hydra_x, :mcp_stdio_runner)
+      end
+    end)
+
+    {:ok, _mcp} =
+      Runtime.save_mcp_server(%{
+        name: "Docs STDIO MCP",
+        transport: "stdio",
+        command: "fake-mcp",
+        args_csv: "--mode,json",
+        enabled: true
+      })
+
+    assert {:ok, _bindings} = Runtime.refresh_agent_mcp_servers(agent.id)
+    {:ok, pid} = HydraX.Agent.ensure_started(agent)
+    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{channel: "cli", title: "mcp-invoke-stdio"})
+
+    [result] =
+      Worker.execute_tool_calls(agent.id, conversation, [
+        %{
+          id: "mcp-invoke-stdio-1",
+          name: "mcp_invoke",
+          arguments: %{
+            "server" => "Docs",
+            "action" => "search_docs",
+            "params" => %{"query" => "hydra"}
+          }
+        }
+      ])
+
+    refute result.is_error
+    assert result.summary == "invoked search_docs on 1 MCP bindings"
+
+    assert [
+             %{
+               name: "Docs STDIO MCP",
+               status: "ok",
+               result: %{status: 0, transport: "stdio_mcp_v1", data: %{"hits" => 1}}
+             }
+           ] = result.result.results
+  end
+
+  test "worker can list actions on enabled stdio bindings" do
+    agent = create_agent()
+    previous = Application.get_env(:hydra_x, :mcp_stdio_runner)
+
+    Application.put_env(:hydra_x, :mcp_stdio_runner, fn command, _args, opts ->
+      assert command == "fake-mcp"
+      assert %{"op" => "actions"} = Jason.decode!(opts[:input])
+
+      {:ok,
+       %{
+         output:
+           Jason.encode!(%{
+             "actions" => [
+               %{"name" => "search_docs", "description" => "Search docs"},
+               %{"name" => "get_status", "description" => "Get status"}
+             ]
+           }),
+         status: 0
+       }}
+    end)
+
+    on_exit(fn ->
+      if previous do
+        Application.put_env(:hydra_x, :mcp_stdio_runner, previous)
+      else
+        Application.delete_env(:hydra_x, :mcp_stdio_runner)
+      end
+    end)
+
+    {:ok, _mcp} =
+      Runtime.save_mcp_server(%{
+        name: "Docs STDIO MCP",
+        transport: "stdio",
+        command: "fake-mcp",
+        enabled: true
+      })
+
+    assert {:ok, _bindings} = Runtime.refresh_agent_mcp_servers(agent.id)
+    {:ok, pid} = HydraX.Agent.ensure_started(agent)
+    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{channel: "cli", title: "mcp-actions-stdio"})
+
+    [result] =
+      Worker.execute_tool_calls(agent.id, conversation, [
+        %{id: "mcp-actions-stdio-1", name: "mcp_catalog", arguments: %{"server" => "Docs"}}
+      ])
+
+    refute result.is_error
+    assert result.summary == "listed actions for 1 MCP bindings"
+
+    assert [
+             %{
+               name: "Docs STDIO MCP",
+               status: "ok",
+               actions: ["search_docs", "get_status"],
+               catalog_source: "live"
+             }
+           ] = result.result.results
+  end
+
   test "cached MCP action catalogs can be reused without live requests" do
     agent = create_agent()
     previous = Application.get_env(:hydra_x, :mcp_http_request_fn)
@@ -1708,40 +1848,6 @@ defmodule HydraX.RuntimeTest do
 
     assert [%{"name" => "search_docs"}, %{"name" => "get_status"}] =
              result.action_catalog["actions"]
-  end
-
-  test "worker reports unsupported stdio MCP invoke attempts" do
-    agent = create_agent()
-
-    {:ok, _mcp} =
-      Runtime.save_mcp_server(%{
-        name: "Docs MCP",
-        transport: "stdio",
-        command: "cat",
-        enabled: true
-      })
-
-    assert {:ok, _bindings} = Runtime.refresh_agent_mcp_servers(agent.id)
-    {:ok, pid} = HydraX.Agent.ensure_started(agent)
-    on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
-
-    {:ok, conversation} =
-      Runtime.start_conversation(agent, %{channel: "cli", title: "mcp-invoke-stdio"})
-
-    [result] =
-      Worker.execute_tool_calls(agent.id, conversation, [
-        %{
-          id: "mcp-invoke-stdio-1",
-          name: "mcp_invoke",
-          arguments: %{"action" => "search_docs"}
-        }
-      ])
-
-    refute result.is_error
-    assert result.summary == "invoked search_docs on 1 MCP bindings"
-
-    assert [%{name: "Docs MCP", status: "warn", detail: "stdio invoke not supported"}] =
-             result.result.results
   end
 
   test "channel resumes interrupted pending user turns after restart" do
