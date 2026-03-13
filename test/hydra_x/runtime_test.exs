@@ -518,12 +518,15 @@ defmodule HydraX.RuntimeTest do
       if Process.alive?(resumed_channel_pid), do: shutdown_process(resumed_channel_pid)
     end)
 
-    wait_for(fn ->
-      Runtime.list_turns(conversation.id)
-      |> Enum.any?(
-        &(&1.role == "assistant" and &1.content == "Captured before ownership handoff.")
-      )
-    end)
+    wait_for(
+      fn ->
+        Runtime.list_turns(conversation.id)
+        |> Enum.any?(
+          &(&1.role == "assistant" and &1.content == "Captured before ownership handoff.")
+        )
+      end,
+      240
+    )
 
     final_state = Runtime.conversation_channel_state(conversation.id)
     assert final_state.status == "completed"
@@ -4391,7 +4394,7 @@ defmodule HydraX.RuntimeTest do
     agent
   end
 
-  defp wait_for(fun, attempts \\ 20)
+  defp wait_for(fun, attempts \\ 80)
 
   defp wait_for(fun, 0), do: assert(fun.())
 

@@ -4,6 +4,7 @@ defmodule HydraX.Report do
   """
 
   alias HydraX.Config
+  alias HydraX.Memory
   alias HydraX.Runtime
 
   def snapshot(opts \\ []) do
@@ -49,7 +50,7 @@ defmodule HydraX.Report do
       safety: Runtime.safety_status(limit: filters.safety_limit),
       incidents: incident_snapshot(filters.incident_limit),
       audit: audit_snapshot(filters.audit_limit),
-      memory: Runtime.memory_triage_status(agent),
+      memory: memory_snapshot(agent),
       budget: Runtime.budget_status(agent),
       default_agent: %{
         id: agent.id,
@@ -509,12 +510,20 @@ defmodule HydraX.Report do
     |> String.trim()
   end
 
-  defp render_memory_triage(%{counts: counts, recent_conflicts: recent_conflicts}) do
+  defp render_memory_triage(%{
+         counts: counts,
+         embedding: embedding,
+         recent_conflicts: recent_conflicts,
+         ranked_memories: ranked_memories
+       }) do
     """
     - Active: #{Map.get(counts, "active", 0)}
     - Conflicted: #{Map.get(counts, "conflicted", 0)}
     - Superseded: #{Map.get(counts, "superseded", 0)}
     - Merged: #{Map.get(counts, "merged", 0)}
+    - Embeddings: active=#{embedding.active_backend || "none"} model=#{embedding.active_model || "none"} embedded=#{embedding.embedded_count} missing=#{embedding.unembedded_count} stale=#{embedding.stale_count} fallback=#{embedding.fallback_count} degraded=#{yes_no(embedding.degraded?)}
+    - Top ranked active memories:
+    #{render_ranked_memories(ranked_memories)}
     - Recent conflicted entries:
     #{render_conflicted_memories(recent_conflicts)}
     """
@@ -923,6 +932,52 @@ defmodule HydraX.Report do
     end)
   end
 
+  defp render_ranked_memories([]), do: "- none"
+
+  defp render_ranked_memories(ranked_memories) do
+    Enum.map_join(ranked_memories, "\n", fn ranked ->
+      memory = ranked.entry
+      metadata = memory.metadata || %{}
+
+      [
+        memory.type,
+        "score=#{ranked.score}",
+        "importance=#{memory.importance}",
+        "reasons=#{Enum.join(ranked.reasons || [], ", ")}",
+        render_ranked_source(metadata),
+        render_score_breakdown(ranked.score_breakdown || %{}),
+        truncate_text(memory.content, 120)
+      ]
+      |> Enum.reject(&is_nil_or_empty/1)
+      |> Enum.join(" | ")
+      |> then(&("- " <> &1))
+    end)
+  end
+
+  defp render_ranked_source(metadata) do
+    [
+      metadata["source_file"] && "file=#{metadata["source_file"]}",
+      metadata["source_section"] && "section=#{metadata["source_section"]}",
+      metadata["source_channel"] && "channel=#{metadata["source_channel"]}"
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> case do
+      [] -> nil
+      parts -> Enum.join(parts, " ")
+    end
+  end
+
+  defp render_score_breakdown(score_breakdown) when map_size(score_breakdown) == 0, do: nil
+
+  defp render_score_breakdown(score_breakdown) do
+    breakdown =
+      score_breakdown
+      |> Enum.sort_by(fn {_key, value} -> -value end)
+      |> Enum.map_join(", ", fn {key, value} -> "#{key}=#{value}" end)
+
+    "breakdown=#{breakdown}"
+  end
+
   defp render_alarms([]), do: "none"
   defp render_alarms(alarms), do: Enum.join(alarms, ", ")
 
@@ -993,6 +1048,12 @@ defmodule HydraX.Report do
     end
   end
 
+  defp truncate_text(value, limit) when is_binary(value) and byte_size(value) > limit do
+    String.slice(value, 0, limit - 3) <> "..."
+  end
+
+  defp truncate_text(value, _limit), do: value
+
   defp yes_no(true), do: "yes"
   defp yes_no(_), do: "no"
 
@@ -1029,6 +1090,12 @@ defmodule HydraX.Report do
 
   defp default_output_root do
     Path.join(Config.install_root(), "reports")
+  end
+
+  defp memory_snapshot(agent) do
+    agent
+    |> Runtime.memory_triage_status()
+    |> Map.put(:ranked_memories, Memory.search_ranked(agent.id, "", 5, status: "active"))
   end
 
   defp json_snapshot(snapshot) do
@@ -1083,6 +1150,8 @@ defmodule HydraX.Report do
         agent_id: snapshot.memory.agent_id,
         agent_name: snapshot.memory.agent_name,
         counts: snapshot.memory.counts,
+        embedding: snapshot.memory.embedding,
+        ranked_memories: Enum.map(snapshot.memory.ranked_memories, &json_ranked_memory/1),
         recent_conflicts: Enum.map(snapshot.memory.recent_conflicts, &json_memory/1)
       },
       budget: json_budget(snapshot.budget),
@@ -1212,6 +1281,11 @@ defmodule HydraX.Report do
     File.write!(
       Path.join(bundle_dir, "skills.json"),
       Jason.encode_to_iodata!(Enum.map(snapshot.skills, &json_skill/1), pretty: true)
+    )
+
+    File.write!(
+      Path.join(bundle_dir, "memory.json"),
+      Jason.encode_to_iodata!(json_memory_snapshot(snapshot.memory), pretty: true)
     )
 
     File.write!(
@@ -1388,6 +1462,40 @@ defmodule HydraX.Report do
       last_seen_at: memory.last_seen_at,
       inserted_at: memory.inserted_at,
       updated_at: memory.updated_at
+    }
+  end
+
+  defp json_ranked_memory(ranked) do
+    memory = ranked.entry
+    metadata = memory.metadata || %{}
+
+    %{
+      memory: json_memory(memory),
+      score: ranked.score,
+      vector_score: ranked[:vector_score],
+      lexical_rank: ranked[:lexical_rank],
+      semantic_rank: ranked[:semantic_rank],
+      reasons: ranked[:reasons] || [],
+      score_breakdown: ranked[:score_breakdown] || %{},
+      provenance: %{
+        source_file: metadata["source_file"],
+        source_section: metadata["source_section"],
+        source_channel: metadata["source_channel"],
+        embedding_backend: metadata["embedding_backend"],
+        embedding_model: metadata["embedding_model"],
+        embedding_fallback_from: metadata["embedding_fallback_from"]
+      }
+    }
+  end
+
+  defp json_memory_snapshot(memory_snapshot) do
+    %{
+      agent_id: memory_snapshot.agent_id,
+      agent_name: memory_snapshot.agent_name,
+      counts: memory_snapshot.counts,
+      embedding: memory_snapshot.embedding,
+      ranked_memories: Enum.map(memory_snapshot.ranked_memories, &json_ranked_memory/1),
+      recent_conflicts: Enum.map(memory_snapshot.recent_conflicts, &json_memory/1)
     }
   end
 

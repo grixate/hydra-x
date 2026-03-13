@@ -1,10 +1,11 @@
 defmodule HydraX.ReportTest do
   use HydraX.DataCase
 
+  alias HydraX.Memory
   alias HydraX.Report
-  alias HydraX.Telemetry
-  alias HydraX.Safety
   alias HydraX.Runtime
+  alias HydraX.Safety
+  alias HydraX.Telemetry
 
   setup do
     install_root =
@@ -69,6 +70,20 @@ defmodule HydraX.ReportTest do
         category: "operator",
         level: "info",
         message: "Generated an audit-ready report"
+      })
+
+    {:ok, _memory} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Decision",
+        content: "Prioritize operator-ready report exports for memory ranking visibility.",
+        importance: 0.92,
+        metadata: %{
+          "source_file" => "ops/reporting.md",
+          "source_section" => "memory-ranking",
+          "source_channel" => "webchat"
+        },
+        last_seen_at: DateTime.utc_now()
       })
 
     assert {:ok, _mcp} =
@@ -198,6 +213,13 @@ defmodule HydraX.ReportTest do
     assert snapshot.secrets.total_records >= 0
     assert Enum.any?(snapshot.observability.telemetry.recent_events, &(&1.namespace == "tool"))
     assert Enum.any?(snapshot.audit, &(&1.category == "operator"))
+    assert snapshot.memory.embedding.total_count >= 1
+
+    assert Enum.any?(
+             snapshot.memory.ranked_memories,
+             &(&1.entry.content =~ "Prioritize operator-ready report exports" and
+                 is_map(&1.score_breakdown))
+           )
 
     assert Enum.any?(
              snapshot.conversations,
@@ -348,6 +370,20 @@ defmodule HydraX.ReportTest do
 
     assert {:ok, _skills} = Runtime.refresh_agent_skills(agent.id)
 
+    {:ok, _memory} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Goal",
+        content: "Keep report exports aligned with ranked memory provenance.",
+        importance: 0.95,
+        metadata: %{
+          "source_file" => "ops/reporting.md",
+          "source_section" => "exports",
+          "source_channel" => "slack"
+        },
+        last_seen_at: DateTime.utc_now()
+      })
+
     assert {:ok, _server} =
              Runtime.save_mcp_server(%{
                name: "Docs MCP",
@@ -476,6 +512,7 @@ defmodule HydraX.ReportTest do
     assert File.exists?(Path.join(export.bundle_dir, "secrets.json"))
     assert File.exists?(Path.join(export.bundle_dir, "agent_mcp.json"))
     assert File.exists?(Path.join(export.bundle_dir, "skills.json"))
+    assert File.exists?(Path.join(export.bundle_dir, "memory.json"))
     assert File.exists?(Path.join(export.bundle_dir, "conversations.json"))
     assert File.exists?(Path.join(export.bundle_dir, "incidents.json"))
     assert File.exists?(Path.join(export.bundle_dir, "audit.json"))
@@ -498,6 +535,9 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "Operator Auth"
     assert File.read!(export.markdown_path) =~ "Channel Failure Summary"
     assert File.read!(export.markdown_path) =~ "Active streaming deliveries"
+    assert File.read!(export.markdown_path) =~ "Top ranked active memories"
+    assert File.read!(export.markdown_path) =~ "ops/reporting.md"
+    assert File.read!(export.markdown_path) =~ "breakdown="
     assert File.read!(export.markdown_path) =~ "Cluster Posture"
     assert File.read!(export.markdown_path) =~ "Coordination"
     assert File.read!(export.markdown_path) =~ "Coordination mode: local_single_node"
@@ -518,6 +558,9 @@ defmodule HydraX.ReportTest do
 
     assert File.read!(export.json_path) =~ "\"generated_at\""
     assert File.read!(export.json_path) =~ "\"last_delivery\""
+    assert File.read!(export.json_path) =~ "\"ranked_memories\""
+    assert File.read!(export.json_path) =~ "\"score_breakdown\""
+    assert File.read!(export.json_path) =~ "\"source_section\""
     assert File.read!(export.json_path) =~ "\"skills\""
 
     assert File.read!(Path.join(export.bundle_dir, "agents.json")) =~
@@ -527,6 +570,9 @@ defmodule HydraX.ReportTest do
     assert File.read!(Path.join(export.bundle_dir, "agents.json")) =~ "\"search_docs\""
     assert File.read!(Path.join(export.bundle_dir, "channels.json")) =~ "\"streaming_count\""
     assert File.read!(Path.join(export.bundle_dir, "channels.json")) =~ "\"recent_streaming\""
+    assert File.read!(Path.join(export.bundle_dir, "memory.json")) =~ "\"ranked_memories\""
+    assert File.read!(Path.join(export.bundle_dir, "memory.json")) =~ "\"score_breakdown\""
+    assert File.read!(Path.join(export.bundle_dir, "memory.json")) =~ "\"ops/reporting.md\""
     assert File.read!(export.markdown_path) =~ "Ingress replay:"
     assert File.read!(export.markdown_path) =~ "Ownership replay:"
     assert File.read!(export.markdown_path) =~ "Deferred delivery replay:"
