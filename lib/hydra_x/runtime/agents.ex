@@ -279,7 +279,10 @@ defmodule HydraX.Runtime.Agents do
   # -- Private helpers --
 
   defp render_agent_bulletin(agent_id) do
-    active = Memory.list_memories(agent_id: agent_id, limit: 50, status: "active")
+    active =
+      agent_id
+      |> Memory.bulletin_ranked(24)
+      |> Enum.map(& &1.entry)
 
     conflict_count =
       Memory.list_memories(agent_id: agent_id, limit: 50, status: "conflicted") |> length()
@@ -322,17 +325,15 @@ defmodule HydraX.Runtime.Agents do
   end
 
   defp prioritize_bulletin_memories(active) do
-    ranked = Enum.sort_by(active, &bulletin_priority/1, :desc)
-
     goals =
-      ranked
+      active
       |> Enum.filter(&(&1.type in ["Goal", "Todo"]))
       |> Enum.take(4)
 
     goal_ids = MapSet.new(goals, & &1.id)
 
     decisions =
-      ranked
+      active
       |> Enum.reject(&MapSet.member?(goal_ids, &1.id))
       |> Enum.filter(&(&1.type in ["Decision", "Preference", "Identity"]))
       |> Enum.take(3)
@@ -340,7 +341,7 @@ defmodule HydraX.Runtime.Agents do
     taken_ids = MapSet.union(goal_ids, MapSet.new(decisions, & &1.id))
 
     channels =
-      ranked
+      active
       |> Enum.reject(&MapSet.member?(taken_ids, &1.id))
       |> Enum.filter(&(bulletin_channel(&1) && &1.type in ["Event", "Observation", "Fact"]))
       |> Enum.uniq_by(&bulletin_channel/1)
@@ -349,27 +350,11 @@ defmodule HydraX.Runtime.Agents do
     taken_ids = MapSet.union(taken_ids, MapSet.new(channels, & &1.id))
 
     context =
-      ranked
+      active
       |> Enum.reject(&MapSet.member?(taken_ids, &1.id))
       |> Enum.take(4)
 
     %{goals: goals, decisions: decisions, channels: channels, context: context}
-  end
-
-  defp bulletin_priority(memory) do
-    type_weight =
-      case memory.type do
-        "Goal" -> 2.4
-        "Todo" -> 2.2
-        "Decision" -> 2.0
-        "Preference" -> 1.8
-        "Identity" -> 1.5
-        "Event" -> 1.35
-        "Observation" -> 1.25
-        _ -> 1.0
-      end
-
-    type_weight + recency_score(memory) + channel_bulletin_boost(memory)
   end
 
   defp bulletin_line(memory) do
@@ -388,24 +373,9 @@ defmodule HydraX.Runtime.Agents do
     sections ++ ["## #{title}\n" <> Enum.join(lines, "\n")]
   end
 
-  defp recency_score(memory) do
-    seen = memory.last_seen_at || memory.updated_at || memory.inserted_at
-    importance = memory.importance || 0.5
-
-    # Decay: memories seen within the last day score highest
-    seconds_ago = DateTime.diff(DateTime.utc_now(), seen, :second)
-    decay = 1.0 / (1.0 + seconds_ago / 86_400)
-
-    importance * 0.6 + decay * 0.4
-  end
-
-  defp channel_bulletin_boost(memory) do
-    if bulletin_channel(memory), do: 0.12, else: 0.0
-  end
-
   defp bulletin_channel(memory) do
     get_in(memory.metadata || %{}, ["source_channel"]) ||
-      (memory.conversation && memory.conversation.channel)
+      if(Ecto.assoc_loaded?(memory.conversation), do: memory.conversation.channel, else: nil)
   end
 
   defp normalize_agent_attrs(attrs) do

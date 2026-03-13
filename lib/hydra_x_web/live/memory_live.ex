@@ -30,6 +30,7 @@ defmodule HydraXWeb.MemoryLive do
      |> assign(:memory_types, memory_types())
      |> assign(:memory_statuses, memory_statuses())
      |> assign(:edge_kinds, edge_kinds())
+     |> assign(:embedding_status, current_embedding_status(filters))
      |> assign(:ingest_agent, current_ingest_agent(filters))
      |> assign(:ingested_files, load_ingested_files(filters))
      |> assign(:ingest_runs, load_ingest_runs(filters))
@@ -61,6 +62,7 @@ defmodule HydraXWeb.MemoryLive do
      |> assign(:filter_form, to_form(filters, as: :filters))
      |> assign(:memories, memories)
      |> assign(:memory_rankings, memory_rankings)
+     |> assign(:embedding_status, current_embedding_status(filters))
      |> assign(:ingest_agent, current_ingest_agent(filters))
      |> assign(:ingested_files, load_ingested_files(filters))
      |> assign(:ingest_runs, load_ingest_runs(filters))
@@ -90,6 +92,7 @@ defmodule HydraXWeb.MemoryLive do
      |> assign(:filter_form, to_form(filters, as: :filters))
      |> assign(:memories, memories)
      |> assign(:memory_rankings, memory_rankings)
+     |> assign(:embedding_status, current_embedding_status(filters))
      |> assign(:ingest_agent, current_ingest_agent(filters))
      |> assign(:ingested_files, load_ingested_files(filters))
      |> assign(:ingest_runs, load_ingest_runs(filters))
@@ -396,6 +399,7 @@ defmodule HydraXWeb.MemoryLive do
      socket
      |> assign(:memories, memories)
      |> assign(:memory_rankings, memory_rankings)
+     |> assign(:embedding_status, current_embedding_status(socket.assigns.filters))
      |> assign(:ingested_files, load_ingested_files(socket.assigns.filters))
      |> assign(:ingest_runs, load_ingest_runs(socket.assigns.filters))
      |> assign(:selected, selected)
@@ -431,6 +435,59 @@ defmodule HydraXWeb.MemoryLive do
                 Sync markdown view
               </button>
             </div>
+          </div>
+
+          <div class="mt-6 rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                  Embedding posture
+                </div>
+                <div class="mt-2 text-sm text-[var(--hx-mute)]">
+                  backend {@embedding_status.active_backend} · model {@embedding_status.active_model}
+                </div>
+              </div>
+              <div class="text-right text-xs text-[var(--hx-mute)]">
+                configured {@embedding_status.configured_backend}
+              </div>
+            </div>
+            <div class="mt-4 grid gap-3 md:grid-cols-4">
+              <div class="rounded-xl border border-white/10 bg-black/10 px-3 py-3">
+                <div class="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                  Embedded
+                </div>
+                <div class="mt-2 font-display text-2xl text-white">
+                  {@embedding_status.embedded_count}
+                </div>
+              </div>
+              <div class="rounded-xl border border-white/10 bg-black/10 px-3 py-3">
+                <div class="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                  Missing
+                </div>
+                <div class="mt-2 font-display text-2xl text-white">
+                  {@embedding_status.unembedded_count}
+                </div>
+              </div>
+              <div class="rounded-xl border border-white/10 bg-black/10 px-3 py-3">
+                <div class="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                  Stale
+                </div>
+                <div class="mt-2 font-display text-2xl text-white">
+                  {@embedding_status.stale_count}
+                </div>
+              </div>
+              <div class="rounded-xl border border-white/10 bg-black/10 px-3 py-3">
+                <div class="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                  Fallback writes
+                </div>
+                <div class="mt-2 font-display text-2xl text-white">
+                  {@embedding_status.fallback_count}
+                </div>
+              </div>
+            </div>
+            <p :if={@embedding_status.degraded?} class="mt-3 text-xs text-amber-200">
+              The configured embedding backend is degraded; new writes are falling back to the active local backend.
+            </p>
           </div>
 
           <div class="mt-6 rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
@@ -932,6 +989,10 @@ defmodule HydraXWeb.MemoryLive do
       nil -> []
       agent -> Runtime.list_ingested_files(agent.id)
     end
+  end
+
+  defp current_embedding_status(filters) do
+    Memory.embedding_status(parse_integer(filters["agent_id"]))
   end
 
   defp load_ingest_runs(filters) do

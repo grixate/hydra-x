@@ -179,6 +179,35 @@ defmodule HydraX.Memory do
 
   def search_ranked(agent_id, query, limit), do: search_ranked(agent_id, query, limit, [])
 
+  def bulletin_ranked(agent_id, limit \\ 12, opts \\ []) do
+    search_opts =
+      opts
+      |> search_opts()
+      |> then(fn search_opts ->
+        if is_nil(search_opts.status),
+          do: Map.put(search_opts, :status, "active"),
+          else: search_opts
+      end)
+
+    Entry
+    |> maybe_filter_agent(agent_id)
+    |> maybe_filter_type(search_opts.type)
+    |> maybe_filter_status(search_opts.status)
+    |> maybe_filter_min_importance(search_opts.min_importance)
+    |> order_by([entry], desc: entry.importance, desc: entry.updated_at)
+    |> limit(^max(limit * 4, 48))
+    |> Repo.all()
+    |> Enum.map(fn entry ->
+      %{
+        entry: entry,
+        score: bulletin_score(entry) |> round_score(),
+        reasons: bulletin_reasons(entry)
+      }
+    end)
+    |> Enum.sort_by(&{-&1.score, -&1.entry.importance})
+    |> Enum.take(limit)
+  end
+
   def create_memory(attrs) do
     result =
       %Entry{}
@@ -693,6 +722,16 @@ defmodule HydraX.Memory do
       exact_phrase_boost(entry, query)
   end
 
+  defp bulletin_score(entry) do
+    importance_boost(entry) +
+      recency_boost(entry) +
+      bulletin_type_boost(entry) +
+      bulletin_channel_boost(entry) +
+      if(ingest_backed?(entry), do: 0.04, else: 0.0) +
+      if(recently_reinforced?(entry), do: 0.03, else: 0.0) +
+      if(entry.status == "conflicted", do: 0.02, else: 0.0)
+  end
+
   defp reciprocal_rank(nil), do: 0.0
   defp reciprocal_rank(rank), do: 1.0 / (60 + rank)
 
@@ -753,6 +792,13 @@ defmodule HydraX.Memory do
   defp type_reason(%{type: "Decision"}), do: "decision match"
   defp type_reason(%{type: "Preference"}), do: "preference match"
   defp type_reason(_entry), do: "typed memory match"
+
+  defp bulletin_type_reason(%{type: "Goal"}), do: "goal memory"
+  defp bulletin_type_reason(%{type: "Todo"}), do: "todo memory"
+  defp bulletin_type_reason(%{type: "Decision"}), do: "decision memory"
+  defp bulletin_type_reason(%{type: "Preference"}), do: "preference memory"
+  defp bulletin_type_reason(%{type: "Identity"}), do: "identity memory"
+  defp bulletin_type_reason(_entry), do: "relevant memory"
 
   defp maybe_add_reason(reasons, true, reason), do: reasons ++ [reason]
   defp maybe_add_reason(reasons, false, _reason), do: reasons
@@ -1038,6 +1084,28 @@ defmodule HydraX.Memory do
 
   defp channel_context_boost(entry, channels) do
     if memory_channel(entry) in channels, do: 0.06, else: 0.0
+  end
+
+  defp bulletin_reasons(entry) do
+    []
+    |> maybe_add_reason(true, bulletin_type_reason(entry))
+    |> maybe_add_reason(entry.importance >= 0.7, importance_reason(entry))
+    |> maybe_add_reason(ingest_backed?(entry), "ingest provenance")
+    |> maybe_add_reason(recently_reinforced?(entry), "recently reinforced")
+    |> maybe_add_reason(not is_nil(memory_channel(entry)), "channel context")
+  end
+
+  defp bulletin_type_boost(%{type: "Goal"}), do: 0.15
+  defp bulletin_type_boost(%{type: "Todo"}), do: 0.13
+  defp bulletin_type_boost(%{type: "Decision"}), do: 0.11
+  defp bulletin_type_boost(%{type: "Preference"}), do: 0.09
+  defp bulletin_type_boost(%{type: "Identity"}), do: 0.07
+  defp bulletin_type_boost(%{type: "Event"}), do: 0.04
+  defp bulletin_type_boost(%{type: "Observation"}), do: 0.03
+  defp bulletin_type_boost(_entry), do: 0.0
+
+  defp bulletin_channel_boost(entry) do
+    if memory_channel(entry), do: 0.04, else: 0.0
   end
 
   defp channel_semantic_boost(_entry, []), do: 0.0

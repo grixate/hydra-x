@@ -4080,6 +4080,42 @@ defmodule HydraX.RuntimeTest do
     assert File.exists?(soul_path)
   end
 
+  test "bulletin ranking reuses provenance and recency signals" do
+    agent = create_agent()
+
+    {:ok, _older_goal} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Goal",
+        content: "Keep the general rollout documented.",
+        importance: 0.7,
+        last_seen_at: DateTime.add(DateTime.utc_now(), -30, :day)
+      })
+
+    {:ok, _ranked_goal} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Goal",
+        content: "Ship the Webchat bulletin refresh from ingest-backed memory.",
+        importance: 0.9,
+        metadata: %{
+          "source" => "ingest",
+          "source_file" => "ops/webchat.md",
+          "source_channel" => "webchat"
+        },
+        last_seen_at: DateTime.utc_now()
+      })
+
+    [top | _rest] = Memory.bulletin_ranked(agent.id, 5)
+
+    assert top.entry.content =~ "Ship the Webchat bulletin refresh"
+    assert "goal memory" in top.reasons
+    assert "high importance" in top.reasons
+    assert "ingest provenance" in top.reasons
+    assert "recently reinforced" in top.reasons
+    assert "channel context" in top.reasons
+  end
+
   test "agent bulletins can be rebuilt from typed memory" do
     agent = create_agent()
 

@@ -177,6 +177,25 @@ defmodule HydraXWeb.MemoryLiveTest do
     assert html =~ "ingest provenance"
   end
 
+  test "memory page shows embedding posture for the current filter scope", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, _memory} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Fact",
+        content: "Embedding posture should be visible on the memory page.",
+        importance: 0.7,
+        last_seen_at: DateTime.utc_now()
+      })
+
+    {:ok, _view, html} = live(conn, ~p"/memory")
+
+    assert html =~ "Embedding posture"
+    assert html =~ "backend local_hash_v1"
+    assert html =~ "Fallback writes"
+  end
+
   test "memory page can delete a memory and its link", %{conn: conn} do
     agent = Runtime.ensure_default_agent!()
 
