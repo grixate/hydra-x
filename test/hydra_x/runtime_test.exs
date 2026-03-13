@@ -75,6 +75,14 @@ defmodule HydraX.RuntimeTest do
 
     assert Enum.any?(channel_state.execution_events, &(&1["phase"] == "provider_requested"))
     assert Enum.any?(channel_state.execution_events, &(&1["phase"] == "provider_completed"))
+
+    assert Enum.any?(channel_state.execution_events, fn event ->
+             event["phase"] == "provider_completed" and
+               event["details"]["kind"] == "provider" and
+               event["details"]["name"] == "response_generation" and
+               event["details"]["lifecycle"] == "completed" and
+               event["details"]["result_source"] == "fresh"
+           end)
   end
 
   test "planner captures enabled skill hints from workspace metadata" do
@@ -564,6 +572,15 @@ defmodule HydraX.RuntimeTest do
     assert Enum.any?(final_state.execution_events, &(&1["phase"] == "handoff_response_replayed"))
     assert :atomics.get(counter, 1) == 1
 
+    assert Enum.any?(final_state.execution_events, fn event ->
+             event["phase"] == "handoff_response_replayed" and
+               event["details"]["kind"] == "provider" and
+               event["details"]["name"] == "response_generation" and
+               event["details"]["lifecycle"] == "replayed" and
+               event["details"]["result_source"] == "handoff_replay" and
+               event["details"]["replayed"] == true
+           end)
+
     assert Enum.any?(final_state.steps, fn step ->
              step["kind"] == "provider" and step["lifecycle"] == "replayed" and
                step["result_source"] == "handoff_replay" and step["replayed"] and
@@ -762,6 +779,15 @@ defmodule HydraX.RuntimeTest do
     final_state = Runtime.conversation_channel_state(conversation.id)
     assert final_state.status == "completed"
     assert Enum.any?(final_state.execution_events, &(&1["phase"] == "tool_cache_hit"))
+
+    assert Enum.any?(final_state.execution_events, fn event ->
+             event["phase"] == "tool_cache_hit" and
+               event["details"]["kind"] == "tool" and
+               event["details"]["name"] == "cache_reuse" and
+               event["details"]["lifecycle"] == "cached" and
+               event["details"]["result_source"] == "cache"
+           end)
+
     assert File.read!(log_path) == "tool-run\n"
     assert :atomics.get(counter, 1) == 3
   end

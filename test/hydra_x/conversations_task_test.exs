@@ -362,12 +362,27 @@ defmodule HydraX.ConversationsTaskTest do
           %{
             "phase" => "tool_result",
             "at" => DateTime.utc_now(),
-            "details" => %{"summary" => "inspected 1 skills"}
+            "details" => %{
+              "summary" => "inspected 1 skills",
+              "kind" => "tool",
+              "name" => "skill_inspect",
+              "lifecycle" => "cached",
+              "result_source" => "cache",
+              "tool_use_id" => "tool-skill-1",
+              "cached" => true
+            }
           },
           %{
             "phase" => "tool_cache_hit",
             "at" => DateTime.utc_now(),
-            "details" => %{"summary" => "cache replay", "cache_hits" => 1}
+            "details" => %{
+              "summary" => "cache replay",
+              "kind" => "tool",
+              "name" => "cache_reuse",
+              "lifecycle" => "cached",
+              "result_source" => "cache",
+              "cache_hits" => 1
+            }
           }
         ]
       })
@@ -442,6 +457,12 @@ defmodule HydraX.ConversationsTaskTest do
     assert transcript =~ "replay_provenance: fresh"
     assert transcript =~ "recovery: turn 88; recoveries 1; cache hits 1; cache misses 0"
     assert transcript =~ "### Recent execution events"
+    assert transcript =~ "kind: tool"
+    assert transcript =~ "name: skill_inspect"
+    assert transcript =~ "lifecycle: cached"
+    assert transcript =~ "result_source: cache"
+    assert transcript =~ "tool_use_id: tool-skill-1"
+    assert transcript =~ "cached: yes"
 
     Mix.Task.reenable("hydra_x.conversations")
 
@@ -534,11 +555,39 @@ defmodule HydraX.ConversationsTaskTest do
         "execution_events" => [
           %{
             "phase" => "tool_result",
-            "details" => %{"summary" => "probed 1 MCP bindings", "round" => 1}
+            "details" => %{
+              "summary" => "probed 1 MCP bindings",
+              "round" => 1,
+              "kind" => "tool",
+              "name" => "mcp_probe",
+              "lifecycle" => "cached",
+              "result_source" => "cache",
+              "tool_use_id" => "tool-mcp-1",
+              "cached" => true
+            }
           },
           %{
             "phase" => "tool_cache_hit",
-            "details" => %{"summary" => "cache replay", "round" => 1, "cache_hits" => 1}
+            "details" => %{
+              "summary" => "cache replay",
+              "round" => 1,
+              "kind" => "tool",
+              "name" => "cache_reuse",
+              "lifecycle" => "cached",
+              "result_source" => "cache",
+              "cache_hits" => 1
+            }
+          },
+          %{
+            "phase" => "handoff_response_replayed",
+            "details" => %{
+              "summary" => "Completed a provider response captured before ownership handoff",
+              "kind" => "provider",
+              "name" => "response_generation",
+              "lifecycle" => "replayed",
+              "result_source" => "handoff_replay",
+              "replayed" => true
+            }
           },
           %{
             "phase" => "handoff_restart",
@@ -575,8 +624,19 @@ defmodule HydraX.ConversationsTaskTest do
              "step\tprovider\tresponse_generation\tcompleted\tcompleted captured response\treplayed\thandoff_replay"
 
     assert output =~ "retry_state=completed,attempts=2,retries=1,source=handoff_replay"
-    assert output =~ "event\ttool_result\tprobed 1 MCP bindings\t1"
-    assert output =~ "event\ttool_cache_hit\tcache replay\t1\tcache_hits=1"
+
+    assert output =~
+             "event\ttool_result\tprobed 1 MCP bindings\t1\tkind=tool\tname=mcp_probe\tlifecycle=cached\tresult_source=cache\ttool_use_id=tool-mcp-1\tcached"
+
+    assert output =~
+             "event\ttool_cache_hit\tcache replay\t1\tkind=tool\tname=cache_reuse\tlifecycle=cached\tresult_source=cache"
+
+    assert output =~ "cache_hits=1"
+
+    assert output =~
+             "event\thandoff_response_replayed\tCompleted a provider response captured before ownership handoff\t\tkind=provider\tname=response_generation\tlifecycle=replayed\tresult_source=handoff_replay"
+
+    assert output =~ "\treplayed\t"
 
     assert output =~
              "event\thandoff_restart\tRestarted execution after an unfinished ownership handoff"

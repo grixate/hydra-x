@@ -695,6 +695,17 @@ defmodule HydraXWeb.ConversationsLive do
                     <p class="mt-2 text-sm text-[var(--hx-mute)]">
                       {channel_event_summary(event)}
                     </p>
+                    <div
+                      :if={event_detail_labels(event) != []}
+                      class="mt-3 flex flex-wrap gap-2 text-xs"
+                    >
+                      <span
+                        :for={label <- event_detail_labels(event)}
+                        class="rounded-full border border-white/10 px-2 py-1 font-mono uppercase tracking-[0.18em] text-[var(--hx-mute)]"
+                      >
+                        {label}
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1123,11 +1134,25 @@ defmodule HydraXWeb.ConversationsLive do
         details["summary"] || "Recovered pending execution after restart"
 
       _ ->
-        inspect(details)
+        details["summary"] || inspect(details)
     end
   end
 
   defp channel_event_summary(_event), do: "Execution event recorded"
+
+  defp event_detail_labels(%{"details" => details}) when is_map(details) do
+    []
+    |> maybe_add_step_label(details["kind"])
+    |> maybe_add_step_label(details["name"])
+    |> maybe_add_step_label(details["lifecycle"])
+    |> maybe_add_step_label(details["result_source"])
+    |> maybe_add_step_label(if(details["cached"], do: "cached", else: nil))
+    |> maybe_add_step_label(if(details["replayed"], do: "replayed", else: nil))
+    |> maybe_add_step_label(step_tool_use_label(details["tool_use_id"]))
+    |> maybe_add_step_label(details["round"] && "round #{details["round"]}")
+  end
+
+  defp event_detail_labels(_event), do: []
 
   defp step_detail_labels(step) when is_map(step) do
     []

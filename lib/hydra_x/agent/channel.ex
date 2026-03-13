@@ -495,7 +495,8 @@ defmodule HydraX.Agent.Channel do
             "round" => round,
             "provider" => response.provider,
             "stop_reason" => response.stop_reason,
-            "content_length" => String.length(response.content || "")
+            "content_length" => String.length(response.content || ""),
+            "summary" => "Final response generated"
           })
 
           update_channel_checkpoint(refreshed_data.conversation.id, %{
@@ -913,6 +914,9 @@ defmodule HydraX.Agent.Channel do
                   "tool_name" => result.tool_name,
                   "is_error" => result[:is_error] || false,
                   "cached" => result[:cached] || false,
+                  "replayed" => result[:replayed] || false,
+                  "result_source" => result[:result_source] || "fresh",
+                  "tool_use_id" => result[:tool_use_id],
                   "summary" => result[:summary] || summarize_tool_result_payload(result.result),
                   "safety_classification" => result[:safety_classification] || "standard"
                 })
@@ -1067,7 +1071,8 @@ defmodule HydraX.Agent.Channel do
   defp finalize_pending_response(content, metadata, data) do
     append_channel_event(data.conversation.id, "handoff_response_replayed", %{
       "summary" => "Completed a provider response captured before ownership handoff",
-      "provider" => metadata["provider"] || metadata[:provider]
+      "provider" => metadata["provider"] || metadata[:provider],
+      "output_excerpt" => excerpt_text(content)
     })
 
     steps =
@@ -1173,7 +1178,13 @@ defmodule HydraX.Agent.Channel do
   defp append_channel_event(conversation_id, phase, details) when is_map(details) do
     existing = Runtime.get_checkpoint(conversation_id, "channel")
     state = (existing && existing.state) || %{}
-    events = append_execution_event(Map.get(state, "execution_events", []), phase, details)
+
+    events =
+      append_execution_event(
+        Map.get(state, "execution_events", []),
+        phase,
+        normalize_execution_event_details(phase, details)
+      )
 
     Runtime.upsert_checkpoint(
       conversation_id,
@@ -1600,6 +1611,125 @@ defmodule HydraX.Agent.Channel do
     |> Kernel.++([execution_event(phase, details)])
     |> Enum.take(-15)
   end
+
+  defp normalize_execution_event_details("provider_requested", details) do
+    details
+    |> put_event_identity("provider", "provider_request")
+    |> Map.put_new("lifecycle", "requested")
+    |> Map.put_new("result_source", "fresh")
+  end
+
+  defp normalize_execution_event_details("provider_tool_request", details) do
+    details
+    |> put_event_identity("provider", "tool_selection")
+    |> Map.put_new("lifecycle", "tool_request")
+    |> Map.put_new("result_source", "fresh")
+  end
+
+  defp normalize_execution_event_details("provider_succeeded", details) do
+    details
+    |> put_event_identity("provider", "provider_response")
+    |> Map.put_new("lifecycle", "completed")
+    |> Map.put_new("result_source", "fresh")
+  end
+
+  defp normalize_execution_event_details("provider_completed", details) do
+    details
+    |> put_event_identity("provider", "response_generation")
+    |> Map.put_new("lifecycle", "completed")
+    |> Map.put_new("result_source", "fresh")
+  end
+
+  defp normalize_execution_event_details("provider_failed", details) do
+    details
+    |> put_event_identity("provider", "response_generation")
+    |> Map.put_new("lifecycle", "failed")
+    |> Map.put_new("result_source", "fresh")
+  end
+
+  defp normalize_execution_event_details("stream_started", details) do
+    details
+    |> put_event_identity("provider", "streaming_response")
+    |> Map.put_new("lifecycle", "running")
+    |> Map.put_new("result_source", "fresh")
+  end
+
+  defp normalize_execution_event_details("stream_completed", details) do
+    details
+    |> put_event_identity("provider", "streaming_response")
+    |> Map.put_new("lifecycle", "completed")
+    |> Map.put_new("result_source", "fresh")
+  end
+
+  defp normalize_execution_event_details("tool_cache_hit", details) do
+    details
+    |> put_event_identity("tool", "cache_reuse")
+    |> Map.put_new("lifecycle", "cached")
+    |> Map.put_new("result_source", "cache")
+    |> Map.put_new("cached", true)
+  end
+
+  defp normalize_execution_event_details("tool_result", details) do
+    details
+    |> put_event_identity("tool", details["tool_name"] || details[:tool_name] || "tool")
+    |> Map.put_new(
+      "lifecycle",
+      tool_event_lifecycle(
+        details["is_error"] || details[:is_error] || false,
+        details["cached"] || details[:cached] || false,
+        details["replayed"] || details[:replayed] || false
+      )
+    )
+    |> Map.put_new(
+      "result_source",
+      details["result_source"] ||
+        details[:result_source] ||
+        tool_event_result_source(
+          details["cached"] || details[:cached] || false,
+          details["replayed"] || details[:replayed] || false
+        )
+    )
+  end
+
+  defp normalize_execution_event_details("handoff_response_replayed", details) do
+    details
+    |> put_event_identity("provider", "response_generation")
+    |> Map.put_new("lifecycle", "replayed")
+    |> Map.put_new("result_source", "handoff_replay")
+    |> Map.put_new("replayed", true)
+  end
+
+  defp normalize_execution_event_details("recovered_after_restart", details) do
+    details
+    |> put_event_identity("recovery", "restart_recovery")
+    |> Map.put_new("lifecycle", "replayed")
+    |> Map.put_new("result_source", "restart_recovery")
+  end
+
+  defp normalize_execution_event_details("handoff_restart", details) do
+    details
+    |> put_event_identity("recovery", "handoff_restart")
+    |> Map.put_new("lifecycle", "replayed")
+    |> Map.put_new("result_source", "handoff_restart")
+  end
+
+  defp normalize_execution_event_details(_phase, details), do: details
+
+  defp put_event_identity(details, kind, name) do
+    details
+    |> Map.put_new("kind", kind)
+    |> Map.put_new("name", name)
+  end
+
+  defp tool_event_lifecycle(true, _cached, true), do: "replayed_failed"
+  defp tool_event_lifecycle(true, _cached, _replayed), do: "failed"
+  defp tool_event_lifecycle(false, true, _replayed), do: "cached"
+  defp tool_event_lifecycle(false, _cached, true), do: "replayed"
+  defp tool_event_lifecycle(false, _cached, _replayed), do: "completed"
+
+  defp tool_event_result_source(true, _replayed), do: "cache"
+  defp tool_event_result_source(false, true), do: "replayed"
+  defp tool_event_result_source(false, false), do: "fresh"
 
   defp execution_event(phase, details) do
     %{

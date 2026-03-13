@@ -711,6 +711,64 @@ defmodule HydraXWeb.ConversationsLiveTest do
     assert html =~ "probe enabled MCP integrations"
   end
 
+  test "conversations page shows normalized execution event details", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{
+        channel: "control_plane",
+        title: "Event Detail UI"
+      })
+
+    {:ok, _checkpoint} =
+      Runtime.upsert_checkpoint(conversation.id, "channel", %{
+        "status" => "completed",
+        "execution_events" => [
+          %{
+            "phase" => "tool_result",
+            "at" => DateTime.utc_now(),
+            "details" => %{
+              "summary" => "recalled 2 memories",
+              "kind" => "tool",
+              "name" => "memory_recall",
+              "lifecycle" => "cached",
+              "result_source" => "cache",
+              "tool_use_id" => "tool-memory-1",
+              "cached" => true,
+              "round" => 1
+            }
+          },
+          %{
+            "phase" => "handoff_response_replayed",
+            "at" => DateTime.utc_now(),
+            "details" => %{
+              "summary" => "Completed a provider response captured before ownership handoff",
+              "kind" => "provider",
+              "name" => "response_generation",
+              "lifecycle" => "replayed",
+              "result_source" => "handoff_replay",
+              "replayed" => true
+            }
+          }
+        ]
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/conversations?conversation_id=#{conversation.id}")
+
+    html = render(view)
+    assert html =~ "Execution events"
+    assert html =~ "recalled 2 memories"
+    assert html =~ "memory_recall"
+    assert html =~ "cached"
+    assert html =~ "cache"
+    assert html =~ "tool use tool-memory-1"
+    assert html =~ "round 1"
+    assert html =~ "Completed a provider response captured before ownership handoff"
+    assert html =~ "response_generation"
+    assert html =~ "handoff_replay"
+    assert html =~ "replayed"
+  end
+
   test "conversations page can rename and archive a conversation", %{conn: conn} do
     agent = Runtime.ensure_default_agent!()
 
