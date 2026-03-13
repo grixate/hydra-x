@@ -67,7 +67,10 @@ defmodule HydraX.RuntimeTest do
              step["kind"] == "provider" and not is_nil(step["summary"]) and
                step["attempt_count"] == 1 and not is_nil(step["started_at"]) and
                not is_nil(step["completed_at"]) and step["owner"] == "channel" and
-               step["lifecycle"] == "completed"
+               step["lifecycle"] == "completed" and step["result_source"] == "fresh" and
+               step["retry_state"]["attempt_count"] == 1 and
+               step["retry_state"]["last_status"] == "completed" and
+               length(step["attempt_history"] || []) == 2
            end)
 
     assert Enum.any?(channel_state.execution_events, &(&1["phase"] == "provider_requested"))
@@ -108,6 +111,10 @@ defmodule HydraX.RuntimeTest do
     assert skill_step["kind"] == "skill"
     assert skill_step["status"] == "completed"
     assert skill_step["summary"] =~ "Matched 1 skill hints"
+    assert skill_step["result_source"] == "plan"
+    assert skill_step["retry_state"]["attempt_count"] == 1
+    assert skill_step["retry_state"]["last_status"] == "completed"
+    assert length(skill_step["attempt_history"] || []) == 2
   end
 
   test "planner emits typed integration and memory steps" do
@@ -376,11 +383,18 @@ defmodule HydraX.RuntimeTest do
     |> Ecto.Changeset.change(expires_at: DateTime.add(DateTime.utc_now(), -60, :second))
     |> Repo.update!()
 
-    assert {:ok, _lease} =
-             Runtime.claim_lease("conversation:#{conversation.id}",
-               owner: "node:remote",
-               ttl_seconds: 60
-             )
+    wait_for(
+      fn ->
+        match?(
+          {:ok, _lease},
+          Runtime.claim_lease("conversation:#{conversation.id}",
+            owner: "node:remote",
+            ttl_seconds: 60
+          )
+        )
+      end,
+      240
+    )
 
     send(channel_pid, :lease_tick)
 
@@ -388,6 +402,11 @@ defmodule HydraX.RuntimeTest do
     assert reason =~ "node:remote"
 
     wait_for(fn -> not Process.alive?(channel_pid) end)
+
+    wait_for(
+      fn -> Runtime.conversation_channel_state(conversation.id).status == "deferred" end,
+      240
+    )
 
     channel_state = Runtime.conversation_channel_state(conversation.id)
     assert channel_state.status == "deferred"
@@ -544,6 +563,14 @@ defmodule HydraX.RuntimeTest do
     assert final_state.pending_response == nil
     assert Enum.any?(final_state.execution_events, &(&1["phase"] == "handoff_response_replayed"))
     assert :atomics.get(counter, 1) == 1
+
+    assert Enum.any?(final_state.steps, fn step ->
+             step["kind"] == "provider" and step["lifecycle"] == "replayed" and
+               step["result_source"] == "handoff_replay" and step["replayed"] and
+               step["replay_count"] == 1 and
+               step["retry_state"]["last_status"] == "replayed" and
+               step["retry_state"]["result_source"] == "handoff_replay"
+           end)
   end
 
   test "tool results are cached across ownership handoff so side effects are not repeated" do
@@ -692,6 +719,11 @@ defmodule HydraX.RuntimeTest do
     assert reason =~ "node:remote"
 
     wait_for(fn -> not Process.alive?(channel_pid) end)
+
+    wait_for(
+      fn -> Runtime.conversation_channel_state(conversation.id).status == "deferred" end,
+      240
+    )
 
     channel_state = Runtime.conversation_channel_state(conversation.id)
     assert channel_state.status == "deferred"
@@ -1907,6 +1939,11 @@ defmodule HydraX.RuntimeTest do
     assert Enum.all?(channel_state.steps, &(&1["status"] == "completed"))
     assert channel_state.recovery_lineage["recovery_count"] == 1
     assert channel_state.recovery_lineage["turn_scope_id"] == user_turn.id
+
+    assert Enum.any?(channel_state.steps, fn step ->
+             step["kind"] == "provider" and step["retry_state"]["attempt_count"] == 1 and
+               step["retry_state"]["last_status"] == "completed"
+           end)
   end
 
   test "channel recovery reuses cached tool results instead of repeating side effects" do

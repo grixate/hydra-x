@@ -105,24 +105,20 @@ defmodule HydraX.Agent.Planner do
     now = DateTime.utc_now()
 
     [
-      step(%{
-        "id" => "skill-context",
-        "kind" => "skill",
-        "label" => "Apply enabled skill guidance",
-        "status" => "completed",
-        "lifecycle" => "completed",
-        "summary" => "Matched #{length(skill_hints)} skill hints",
-        "attempt_count" => 1,
-        "started_at" => now,
-        "last_started_at" => now,
-        "completed_at" => now,
-        "updated_at" => now,
-        "result_source" => "plan",
-        "output_excerpt" =>
-          skill_hints
-          |> Enum.map(&(&1["name"] || &1["slug"] || "skill"))
-          |> Enum.join(", ")
-      })
+      completed_plan_step(
+        %{
+          "id" => "skill-context",
+          "kind" => "skill",
+          "label" => "Apply enabled skill guidance",
+          "summary" => "Matched #{length(skill_hints)} skill hints",
+          "output_excerpt" =>
+            skill_hints
+            |> Enum.map(&(&1["name"] || &1["slug"] || "skill"))
+            |> Enum.join(", ")
+        },
+        now,
+        result_source: "plan"
+      )
     ]
   end
 
@@ -132,11 +128,56 @@ defmodule HydraX.Agent.Planner do
 
     attrs
     |> Map.put_new("attempt_count", 0)
+    |> Map.put_new("attempt_history", [])
+    |> Map.put_new("retry_state", default_step_retry_state())
     |> Map.put_new("executor", "channel")
     |> Map.put_new("owner", "channel")
     |> Map.put_new("lifecycle", "planned")
     |> Map.put_new("idempotency_key", to_string(step_id || System.unique_integer([:positive])))
     |> Map.put_new("replay_strategy", replay_strategy(kind))
+  end
+
+  defp completed_plan_step(attrs, now, opts) do
+    step(attrs)
+    |> Map.put("status", "completed")
+    |> Map.put("lifecycle", Keyword.get(opts, :lifecycle, "completed"))
+    |> Map.put("attempt_count", 1)
+    |> Map.put("started_at", now)
+    |> Map.put("last_started_at", now)
+    |> Map.put("completed_at", now)
+    |> Map.put("updated_at", now)
+    |> Map.put("result_source", Keyword.get(opts, :result_source, "fresh"))
+    |> Map.put("replay_count", Keyword.get(opts, :replay_count, 0))
+    |> Map.put("cached", Keyword.get(opts, :cached, false))
+    |> Map.put("replayed", Keyword.get(opts, :replayed, false))
+    |> Map.put(
+      "attempt_history",
+      [
+        %{"status" => "running", "at" => now},
+        %{"status" => "completed", "at" => now}
+      ]
+    )
+    |> Map.put(
+      "retry_state",
+      %{
+        "attempt_count" => 1,
+        "retry_count" => 0,
+        "last_status" => Keyword.get(opts, :lifecycle, "completed"),
+        "last_transition_at" => now,
+        "last_started_at" => now,
+        "last_finished_at" => now,
+        "result_source" => Keyword.get(opts, :result_source, "fresh"),
+        "replay_count" => Keyword.get(opts, :replay_count, 0)
+      }
+    )
+  end
+
+  defp default_step_retry_state do
+    %{
+      "attempt_count" => 0,
+      "retry_count" => 0,
+      "last_status" => "planned"
+    }
   end
 
   defp replay_strategy("provider"), do: "replay"

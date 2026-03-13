@@ -1070,7 +1070,17 @@ defmodule HydraX.Agent.Channel do
       "provider" => metadata["provider"] || metadata[:provider]
     })
 
-    complete_response(content, metadata, data)
+    steps =
+      current_checkpoint_steps(data.conversation.id)
+      |> mark_provider_completed(%{
+        "summary" => "Replayed provider response after ownership handoff",
+        "output_excerpt" => excerpt_text(content),
+        "provider" => metadata["provider"] || metadata[:provider],
+        "result_source" => "handoff_replay",
+        "replayed" => true
+      })
+
+    complete_response(content, metadata, data, steps: steps)
   end
 
   defp stream_enabled?(%{channel: channel}) when channel in @streamable_channels, do: true
@@ -1858,6 +1868,7 @@ defmodule HydraX.Agent.Channel do
       step
       |> transition_step("running")
       |> merge_step_attrs(attrs)
+      |> put_step_retry_state("running", attrs)
     end)
   end
 
@@ -1866,6 +1877,7 @@ defmodule HydraX.Agent.Channel do
       step
       |> transition_step("completed")
       |> merge_step_attrs(attrs)
+      |> finalize_provider_step("completed", attrs)
     end)
   end
 
@@ -1874,6 +1886,7 @@ defmodule HydraX.Agent.Channel do
       step
       |> transition_step("failed")
       |> merge_step_attrs(attrs)
+      |> finalize_provider_step("failed", attrs)
     end)
   end
 
@@ -1894,9 +1907,11 @@ defmodule HydraX.Agent.Channel do
             "executor" => "channel",
             "owner" => "channel",
             "attempt_count" => 0,
+            "attempt_history" => [],
             "lifecycle" => "planned",
             "idempotency_key" => "provider-final",
-            "replay_strategy" => "replay"
+            "replay_strategy" => "replay",
+            "retry_state" => default_step_retry_state()
           }
           |> fun.()
         ]
@@ -2314,6 +2329,39 @@ defmodule HydraX.Agent.Channel do
       Map.put(state, "tool_use_id", step["tool_use_id"])
     end
   end
+
+  defp finalize_provider_step(step, terminal_status, attrs) do
+    replayed? = attrs[:replayed] || attrs["replayed"] || false
+    cached? = attrs[:cached] || attrs["cached"] || false
+
+    step
+    |> Map.put("cached", cached?)
+    |> Map.put("replayed", replayed?)
+    |> Map.put("result_source", attrs[:result_source] || attrs["result_source"] || "fresh")
+    |> Map.put("replay_count", (step["replay_count"] || 0) + if(replayed?, do: 1, else: 0))
+    |> Map.put("lifecycle", provider_step_lifecycle(terminal_status, cached?, replayed?))
+    |> maybe_put_provider_failure_reason(attrs, terminal_status)
+    |> put_step_retry_state(terminal_status, attrs)
+  end
+
+  defp provider_step_lifecycle("completed", true, _replayed), do: "cached"
+  defp provider_step_lifecycle("completed", _cached, true), do: "replayed"
+  defp provider_step_lifecycle("completed", _cached, _replayed), do: "completed"
+  defp provider_step_lifecycle("failed", _cached, true), do: "replayed_failed"
+  defp provider_step_lifecycle("failed", _cached, _replayed), do: "failed"
+  defp provider_step_lifecycle(status, _cached, _replayed), do: status
+
+  defp maybe_put_provider_failure_reason(step, attrs, "failed") do
+    reason = attrs[:reason] || attrs["reason"] || attrs[:summary] || attrs["summary"]
+
+    if is_nil(reason) or reason == "" do
+      step
+    else
+      Map.put(step, "reason", reason)
+    end
+  end
+
+  defp maybe_put_provider_failure_reason(step, _attrs, _status), do: step
 
   defp maybe_put_step_failure_reason(step, result) do
     if result[:is_error] do
