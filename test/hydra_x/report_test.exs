@@ -168,9 +168,12 @@ defmodule HydraX.ReportTest do
           "channel" => "slack",
           "status" => "streaming",
           "external_ref" => "C556",
+          "provider_message_id" => "slack-stream-1",
           "metadata" => %{
-            "transport" => "session_pubsub",
-            "transport_topic" => "stream:preview:C556"
+            "transport" => "slack_chat_update"
+          },
+          "reply_context" => %{
+            "stream_message_id" => "slack-stream-1"
           },
           "formatted_payload" => %{
             "chunk_count" => 3,
@@ -531,6 +534,33 @@ defmodule HydraX.ReportTest do
         ]
       })
 
+    {:ok, streaming_conversation} =
+      Runtime.start_conversation(agent, %{
+        channel: "slack",
+        title: "Streaming Report Summary",
+        external_ref: "C556"
+      })
+
+    {:ok, _conversation} =
+      Runtime.update_conversation_metadata(streaming_conversation, %{
+        "last_delivery" => %{
+          "channel" => "slack",
+          "status" => "streaming",
+          "external_ref" => "C556",
+          "provider_message_id" => "slack-stream-1",
+          "metadata" => %{
+            "transport" => "slack_chat_update"
+          },
+          "reply_context" => %{
+            "stream_message_id" => "slack-stream-1"
+          },
+          "formatted_payload" => %{
+            "chunk_count" => 3,
+            "text" => "Live report stream preview"
+          }
+        }
+      })
+
     {:ok, export} = Report.export_snapshot(output_root)
 
     assert File.exists?(export.markdown_path)
@@ -568,6 +598,9 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "Operator Auth"
     assert File.read!(export.markdown_path) =~ "Channel Failure Summary"
     assert File.read!(export.markdown_path) =~ "Active streaming deliveries"
+    assert File.read!(export.markdown_path) =~ "updates Slack thread"
+    assert File.read!(export.markdown_path) =~ "stream_msg=slack-stream-1"
+    assert File.read!(export.markdown_path) =~ "preview=Live report stream preview"
     assert File.read!(export.markdown_path) =~ "Top ranked active memories"
     assert File.read!(export.markdown_path) =~ "ops/reporting.md"
     assert File.read!(export.markdown_path) =~ "breakdown="

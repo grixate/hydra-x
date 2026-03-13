@@ -1149,9 +1149,11 @@ defmodule HydraX.Runtime.Observability do
       chunk_count:
         delivery_value(delivery, "chunk_count") || delivery_value(payload, "chunk_count"),
       formatted_payload: payload,
+      provider_message_id: delivery_value(delivery, "provider_message_id"),
       provider_message_ids_count: length(provider_message_ids),
       attachment_count: conversation_attachment_count(conversation),
       reply_context: reply_context,
+      stream_message_id: delivery_value(reply_context, "stream_message_id"),
       transport: delivery_value(metadata, "transport"),
       transport_topic: delivery_value(metadata, "transport_topic"),
       transport_error: delivery_value(metadata, "transport_error")

@@ -324,9 +324,12 @@ defmodule HydraXWeb.HealthLiveTest do
           "channel" => "telegram",
           "external_ref" => "1000",
           "status" => "streaming",
+          "provider_message_id" => 9001,
           "metadata" => %{
-            "transport" => "session_pubsub",
-            "transport_topic" => "webchat:session:1000"
+            "transport" => "telegram_message_edit"
+          },
+          "reply_context" => %{
+            "stream_message_id" => 9001
           },
           "formatted_payload" => %{
             "chunk_count" => 3,
@@ -346,8 +349,11 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "multipart 1"
     assert html =~ "streaming 1"
     assert html =~ "chunks 3"
-    assert html =~ "transport session_pubsub"
-    assert html =~ "topic webchat:session:1000"
+    assert html =~ "transport telegram_message_edit"
+    assert html =~ "edits Telegram message"
+    assert html =~ "msg 9001"
+    assert html =~ "stream msg 9001"
+    assert html =~ "preview Streaming partial response"
     assert html =~ "msg ids 2"
   end
 
@@ -401,6 +407,9 @@ defmodule HydraXWeb.HealthLiveTest do
           "channel" => "slack",
           "external_ref" => "C778",
           "status" => "streaming",
+          "provider_message_id" => "slack-stream-1",
+          "reply_context" => %{"stream_message_id" => "slack-stream-1"},
+          "metadata" => %{"transport" => "slack_chat_update"},
           "formatted_payload" => %{
             "chunk_count" => 4,
             "text" => "Streaming thread preview"
@@ -415,11 +424,16 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "slack"
     assert html =~ "discord-app"
     assert html =~ "capabilities:"
+    assert html =~ "patches Discord message"
+    assert html =~ "updates Slack thread"
     assert html =~ "thread timeout"
     assert html =~ "thread 123.456"
     assert html =~ "streaming 1"
     assert html =~ "Active streams"
     assert html =~ "Slack Stream"
+    assert html =~ "msg slack-stream-1"
+    assert html =~ "stream msg slack-stream-1"
+    assert html =~ "preview Streaming thread preview"
   end
 
   test "health page shows Webchat readiness", %{conn: conn} do
@@ -449,6 +463,7 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "idle 30m"
     assert html =~ "attachments 2x256KB"
     assert html =~ "transport session_pubsub"
+    assert html =~ "publishes Webchat session previews"
   end
 
   test "health page shows MCP server registry health", %{conn: conn} do

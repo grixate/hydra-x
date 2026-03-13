@@ -922,9 +922,9 @@ defmodule HydraXWeb.HealthLive do
                 </div>
                 <div class="mt-2 text-xs text-[var(--hx-mute)]">
                   level {event.level}
-                  <span :if={event.expired_by}> · expiry             {event.expired_by}</span>
+                  <span :if={event.expired_by}> · expiry              {event.expired_by}</span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip             {event.ip}</span>
+                  <span :if={event.ip}> · ip              {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -1557,7 +1557,7 @@ defmodule HydraXWeb.HealthLive do
   defp streaming_transport_label(capabilities) do
     case capabilities[:stream_transport] || capabilities["stream_transport"] do
       nil -> nil
-      value -> "transport #{value}"
+      value -> "transport #{value} · #{transport_semantics_label(value)}"
     end
   end
 
@@ -1611,6 +1611,7 @@ defmodule HydraXWeb.HealthLive do
             "dead_lettered_at" => failure.dead_lettered_at,
             "chunk_count" => failure.chunk_count,
             "formatted_payload" => Map.get(failure, :formatted_payload, %{}),
+            "provider_message_id" => Map.get(failure, :provider_message_id),
             "provider_message_ids_count" => failure.provider_message_ids_count,
             "attachment_count" => failure.attachment_count,
             "transport" => Map.get(failure, :transport),
@@ -1637,11 +1638,14 @@ defmodule HydraXWeb.HealthLive do
       delivery["reason"],
       next_retry_label(delivery["next_retry_at"]),
       dead_letter_label(delivery["dead_lettered_at"]),
+      provider_message_label(delivery["provider_message_id"]),
+      stream_message_label(get_in(delivery, ["reply_context", "stream_message_id"])),
       if(provider_message_ids_count > 0, do: "msg ids #{provider_message_ids_count}"),
       attachment_count_label(delivery["attachment_count"]),
       delivery_transport_summary(delivery),
       delivery_context_summary(delivery),
-      chunk_count_summary(payload, delivery["chunk_count"])
+      chunk_count_summary(payload, delivery["chunk_count"]),
+      delivery_preview_summary(payload)
     ]
     |> Enum.reject(&is_nil_or_empty/1)
     |> Enum.join(" · ")
@@ -1658,6 +1662,7 @@ defmodule HydraXWeb.HealthLive do
 
     [
       transport && "transport #{transport}",
+      transport && transport_semantics_label(transport),
       transport_topic && "topic #{transport_topic}"
     ]
     |> Enum.reject(&is_nil_or_empty/1)
@@ -1677,6 +1682,28 @@ defmodule HydraXWeb.HealthLive do
   end
 
   defp scheduler_coordination_label(_coordination), do: "unknown"
+
+  defp provider_message_label(nil), do: nil
+  defp provider_message_label(value), do: "msg #{value}"
+
+  defp stream_message_label(nil), do: nil
+  defp stream_message_label(value), do: "stream msg #{value}"
+
+  defp delivery_preview_summary(payload) when is_map(payload) do
+    case payload["text"] || payload[:text] || payload["content"] || payload[:content] do
+      value when is_binary(value) and value != "" -> "preview #{String.slice(value, 0, 48)}"
+      _ -> nil
+    end
+  end
+
+  defp delivery_preview_summary(_payload), do: nil
+
+  defp transport_semantics_label("telegram_message_edit"), do: "edits Telegram message"
+  defp transport_semantics_label("slack_chat_update"), do: "updates Slack thread"
+  defp transport_semantics_label("discord_message_patch"), do: "patches Discord message"
+  defp transport_semantics_label("session_pubsub"), do: "publishes Webchat session previews"
+  defp transport_semantics_label("transport error"), do: "stream transport error"
+  defp transport_semantics_label(_value), do: nil
 
   defp scheduler_pass_label(pass, primary_key) do
     count = scheduler_count_value(pass, primary_key)

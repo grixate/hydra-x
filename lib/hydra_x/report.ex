@@ -771,6 +771,10 @@ defmodule HydraX.Report do
     provider_message_ids =
       Map.get(delivery, "provider_message_ids") || Map.get(delivery, :provider_message_ids) || []
 
+    stream_message_id =
+      get_in(delivery, ["reply_context", "stream_message_id"]) ||
+        get_in(delivery, [:reply_context, :stream_message_id])
+
     context =
       delivery
       |> Map.get("reply_context", Map.get(delivery, :reply_context, %{}))
@@ -785,6 +789,7 @@ defmodule HydraX.Report do
       retry_count > 0 && "retry=#{retry_count}",
       reason && "reason=#{reason}",
       provider_message_id && "msg=#{provider_message_id}",
+      stream_message_id && "stream_msg=#{stream_message_id}",
       provider_message_ids != [] && "msg_ids=#{length(provider_message_ids)}",
       next_retry_at && "next_retry=#{format_datetime(next_retry_at)}",
       dead_lettered_at && "dead_lettered_at=#{format_datetime(dead_lettered_at)}",
@@ -792,7 +797,8 @@ defmodule HydraX.Report do
       render_delivery_transport(metadata),
       context,
       render_chunk_count(payload),
-      render_formatted_payload(payload)
+      render_formatted_payload(payload),
+      render_delivery_preview(payload)
     ]
     |> Enum.reject(&is_nil_or_empty/1)
     |> Enum.join(", ")
@@ -818,13 +824,31 @@ defmodule HydraX.Report do
     topic = metadata["transport_topic"] || metadata[:transport_topic]
 
     cond do
-      is_nil_or_empty(transport) -> nil
-      is_nil_or_empty(topic) -> "transport=#{transport}"
-      true -> "transport=#{transport}@#{topic}"
+      is_nil_or_empty(transport) ->
+        nil
+
+      is_nil_or_empty(topic) ->
+        ["transport=#{transport}", transport_semantics_label(transport)]
+        |> Enum.reject(&is_nil_or_empty/1)
+        |> Enum.join(", ")
+
+      true ->
+        ["transport=#{transport}@#{topic}", transport_semantics_label(transport)]
+        |> Enum.reject(&is_nil_or_empty/1)
+        |> Enum.join(", ")
     end
   end
 
   defp render_delivery_transport(_metadata), do: nil
+
+  defp render_delivery_preview(payload) when is_map(payload) do
+    case payload["text"] || payload[:text] || payload["content"] || payload[:content] do
+      value when is_binary(value) and value != "" -> "preview=#{String.slice(value, 0, 48)}"
+      _ -> nil
+    end
+  end
+
+  defp render_delivery_preview(_payload), do: nil
 
   defp render_formatted_payload(payload) when is_map(payload) do
     payload
@@ -953,7 +977,10 @@ defmodule HydraX.Report do
                   stream.title,
                   stream.status,
                   if(stream.chunk_count, do: "chunks=#{stream.chunk_count}"),
+                  if(stream.provider_message_id, do: "msg=#{stream.provider_message_id}"),
+                  if(stream.stream_message_id, do: "stream_msg=#{stream.stream_message_id}"),
                   if(stream.transport, do: "transport=#{stream.transport}"),
+                  if(stream.transport, do: transport_semantics_label(stream.transport)),
                   if(preview, do: "preview=#{String.slice(preview, 0, 40)}")
                 ]
                 |> Enum.reject(&is_nil_or_empty/1)
@@ -964,6 +991,13 @@ defmodule HydraX.Report do
       base <> failures <> streaming
     end)
   end
+
+  defp transport_semantics_label("telegram_message_edit"), do: "edits Telegram message"
+  defp transport_semantics_label("slack_chat_update"), do: "updates Slack thread"
+  defp transport_semantics_label("discord_message_patch"), do: "patches Discord message"
+  defp transport_semantics_label("session_pubsub"), do: "publishes Webchat session previews"
+  defp transport_semantics_label("transport error"), do: "stream transport error"
+  defp transport_semantics_label(_value), do: nil
 
   defp render_safety_events([]), do: "- none"
 
