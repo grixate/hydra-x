@@ -210,10 +210,13 @@ defmodule HydraX.Memory do
     |> limit(^max(limit * 4, 48))
     |> Repo.all()
     |> Enum.map(fn entry ->
+      score_breakdown = bulletin_score_breakdown(entry)
+
       %{
         entry: entry,
-        score: bulletin_score(entry) |> round_score(),
-        reasons: bulletin_reasons(entry)
+        score: score_breakdown |> Map.values() |> Enum.sum() |> round_score(),
+        reasons: bulletin_reasons(entry),
+        score_breakdown: score_breakdown
       }
     end)
     |> Enum.sort_by(&{-&1.score, -&1.entry.importance})
@@ -736,14 +739,16 @@ defmodule HydraX.Memory do
     }
   end
 
-  defp bulletin_score(entry) do
-    importance_boost(entry) +
-      recency_boost(entry) +
-      bulletin_type_boost(entry) +
-      bulletin_channel_boost(entry) +
-      if(ingest_backed?(entry), do: 0.04, else: 0.0) +
-      if(recently_reinforced?(entry), do: 0.03, else: 0.0) +
-      if(entry.status == "conflicted", do: 0.02, else: 0.0)
+  defp bulletin_score_breakdown(entry) do
+    %{
+      "importance" => round_score(importance_boost(entry)),
+      "recency" => round_score(recency_boost(entry)),
+      "type_intent" => round_score(bulletin_type_boost(entry)),
+      "channel" => round_score(bulletin_channel_boost(entry)),
+      "provenance" => round_score(if(ingest_backed?(entry), do: 0.04, else: 0.0)),
+      "reinforcement" => round_score(if(recently_reinforced?(entry), do: 0.03, else: 0.0)),
+      "status" => round_score(if(entry.status == "conflicted", do: 0.02, else: 0.0))
+    }
   end
 
   defp reciprocal_rank(nil), do: 0.0

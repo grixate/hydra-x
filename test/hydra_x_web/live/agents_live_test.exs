@@ -116,7 +116,12 @@ defmodule HydraXWeb.AgentsLiveTest do
       HydraX.Memory.create_memory(%{
         agent_id: agent.id,
         type: "Fact",
-        content: "Operators can inspect the current bulletin."
+        content: "Operators can inspect the current bulletin.",
+        importance: 0.9,
+        metadata: %{
+          "source_file" => "ops/agents.md",
+          "source_channel" => "webchat"
+        }
       })
 
     {:ok, view, _html} = live(conn, ~p"/agents")
@@ -128,6 +133,9 @@ defmodule HydraXWeb.AgentsLiveTest do
     html = render(view)
     assert html =~ "Agent bulletin refreshed"
     assert html =~ "Operators can inspect the current bulletin."
+    assert html =~ "Top bulletin memories"
+    assert html =~ "channel webchat"
+    assert html =~ "file ops/agents.md"
   end
 
   test "agents page can update a compaction policy", %{conn: conn} do

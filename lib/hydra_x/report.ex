@@ -143,6 +143,7 @@ defmodule HydraX.Report do
     - Bulletin memory count: #{snapshot.default_agent.bulletin.memory_count}
 
     #{render_bulletin(snapshot.default_agent.bulletin.content)}
+    #{render_bulletin_top_memories(snapshot.default_agent.bulletin.top_memories || [])}
 
     ## MCP Integrations
     #{render_mcp_servers(snapshot.mcp)}
@@ -332,6 +333,33 @@ defmodule HydraX.Report do
     ### Bulletin
     #{content}
     """
+  end
+
+  defp render_bulletin_top_memories([]), do: nil
+
+  defp render_bulletin_top_memories(memories) do
+    """
+    ### Top Bulletin Memories
+    #{render_bulletin_memory_lines(memories)}
+    """
+  end
+
+  defp render_bulletin_memory_lines(memories) do
+    Enum.map_join(memories, "\n", fn memory ->
+      [
+        memory[:type],
+        "score=#{memory[:score]}",
+        memory[:source_file] && "file=#{memory[:source_file]}",
+        memory[:source_section] && "section=#{memory[:source_section]}",
+        memory[:source_channel] && "channel=#{memory[:source_channel]}",
+        (memory[:reasons] || []) != [] && "reasons=#{Enum.join(memory[:reasons], ", ")}",
+        render_score_breakdown(memory[:score_breakdown] || %{}),
+        truncate_text(memory[:content], 120)
+      ]
+      |> Enum.reject(&is_nil_or_empty/1)
+      |> Enum.join(" | ")
+      |> then(&("- " <> &1))
+    end)
   end
 
   defp render_cluster(cluster) do
@@ -1241,7 +1269,8 @@ defmodule HydraX.Report do
         bulletin: %{
           content: snapshot.default_agent.bulletin.content,
           updated_at: snapshot.default_agent.bulletin.updated_at,
-          memory_count: snapshot.default_agent.bulletin.memory_count
+          memory_count: snapshot.default_agent.bulletin.memory_count,
+          top_memories: snapshot.default_agent.bulletin.top_memories || []
         }
       },
       agents: Enum.map(snapshot.agents, &json_agent_snapshot/1),
@@ -1608,7 +1637,8 @@ defmodule HydraX.Report do
       bulletin: %{
         content: agent.bulletin.content,
         updated_at: agent.bulletin.updated_at,
-        memory_count: agent.bulletin.memory_count
+        memory_count: agent.bulletin.memory_count,
+        top_memories: agent.bulletin.top_memories || []
       },
       compaction_policy: agent.compaction_policy,
       provider_route: agent.provider_route,

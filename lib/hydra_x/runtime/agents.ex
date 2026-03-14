@@ -123,10 +123,16 @@ defmodule HydraX.Runtime.Agents do
     agent = get_agent!(id)
     bulletin = get_in(agent.runtime_state, ["bulletin"])
 
+    top_memories =
+      agent.runtime_state
+      |> get_in(["bulletin_top_memories"])
+      |> normalize_bulletin_memory_snapshots()
+
     %{
       agent: agent,
       content: bulletin,
       updated_at: get_in(agent.runtime_state, ["bulletin_updated_at"]),
+      top_memories: top_memories,
       memory_count:
         Memory.list_memories(agent_id: agent.id, limit: 6, status: "active") |> length()
     }
@@ -172,29 +178,30 @@ defmodule HydraX.Runtime.Agents do
 
   def refresh_agent_bulletin!(id) when is_integer(id) do
     agent = get_agent!(id)
-    bulletin = render_agent_bulletin(agent.id)
+    bulletin = build_agent_bulletin(agent.id)
     updated_at = DateTime.utc_now()
 
     {:ok, updated_agent} =
       update_agent_runtime_state(agent, %{
-        "bulletin" => bulletin,
-        "bulletin_updated_at" => updated_at
+        "bulletin" => bulletin.content,
+        "bulletin_updated_at" => updated_at,
+        "bulletin_top_memories" => bulletin.top_memories
       })
 
     Helpers.audit_operator_action(
       "Refreshed bulletin for #{updated_agent.slug}",
       agent: updated_agent,
       metadata: %{
-        "memory_count" => Memory.list_memories(agent_id: agent.id, limit: 6) |> length()
+        "memory_count" => bulletin.memory_count
       }
     )
 
     %{
       agent: updated_agent,
-      content: bulletin,
+      content: bulletin.content,
       updated_at: updated_at,
-      memory_count:
-        Memory.list_memories(agent_id: agent.id, limit: 6, status: "active") |> length()
+      top_memories: bulletin.top_memories,
+      memory_count: bulletin.memory_count
     }
   end
 
@@ -278,14 +285,15 @@ defmodule HydraX.Runtime.Agents do
 
   # -- Private helpers --
 
-  defp render_agent_bulletin(agent_id) do
-    active =
-      agent_id
-      |> Memory.bulletin_ranked(24)
-      |> Enum.map(& &1.entry)
+  defp build_agent_bulletin(agent_id) do
+    ranked = Memory.bulletin_ranked(agent_id, 24)
+    active = Enum.map(ranked, & &1.entry)
 
     conflict_count =
       Memory.list_memories(agent_id: agent_id, limit: 50, status: "conflicted") |> length()
+
+    memory_count =
+      Memory.list_memories(agent_id: agent_id, limit: 6, status: "active") |> length()
 
     prioritized =
       prioritize_bulletin_memories(active)
@@ -318,10 +326,60 @@ defmodule HydraX.Runtime.Agents do
         Enum.map(prioritized.context, &bulletin_line/1)
       )
 
-    case sections do
-      [] -> "No active memory yet."
-      _ -> Enum.join(sections, "\n\n")
-    end
+    %{
+      content:
+        case sections do
+          [] -> "No active memory yet."
+          _ -> Enum.join(sections, "\n\n")
+        end,
+      top_memories: Enum.map(Enum.take(ranked, 5), &bulletin_memory_snapshot/1),
+      memory_count: memory_count
+    }
+  end
+
+  defp bulletin_memory_snapshot(ranked) do
+    memory = ranked.entry
+    metadata = memory.metadata || %{}
+
+    %{
+      id: memory.id,
+      type: memory.type,
+      status: memory.status,
+      content: memory.content,
+      importance: memory.importance,
+      score: ranked.score,
+      reasons: ranked.reasons || [],
+      score_breakdown: ranked[:score_breakdown] || %{},
+      source_file: metadata["source_file"],
+      source_section: metadata["source_section"],
+      source_channel: metadata["source_channel"]
+    }
+  end
+
+  defp normalize_bulletin_memory_snapshots(nil), do: []
+
+  defp normalize_bulletin_memory_snapshots(memories) when is_list(memories) do
+    Enum.map(memories, &normalize_bulletin_memory_snapshot/1)
+  end
+
+  defp normalize_bulletin_memory_snapshot(memory) when is_map(memory) do
+    %{
+      id: bulletin_memory_value(memory, :id),
+      type: bulletin_memory_value(memory, :type),
+      status: bulletin_memory_value(memory, :status),
+      content: bulletin_memory_value(memory, :content),
+      importance: bulletin_memory_value(memory, :importance),
+      score: bulletin_memory_value(memory, :score),
+      reasons: bulletin_memory_value(memory, :reasons) || [],
+      score_breakdown: bulletin_memory_value(memory, :score_breakdown) || %{},
+      source_file: bulletin_memory_value(memory, :source_file),
+      source_section: bulletin_memory_value(memory, :source_section),
+      source_channel: bulletin_memory_value(memory, :source_channel)
+    }
+  end
+
+  defp bulletin_memory_value(memory, key) do
+    Map.get(memory, key) || Map.get(memory, Atom.to_string(key))
   end
 
   defp prioritize_bulletin_memories(active) do

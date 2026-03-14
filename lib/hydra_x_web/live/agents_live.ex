@@ -448,6 +448,35 @@ defmodule HydraXWeb.AgentsLive do
                 <div class="mt-2 text-xs text-[var(--hx-mute)]">
                   {agent.bulletin.memory_count} memory items in bulletin scope
                 </div>
+                <div :if={agent.bulletin.top_memories != []} class="mt-3 space-y-2">
+                  <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                    Top bulletin memories
+                  </div>
+                  <div
+                    :for={memory <- Enum.take(agent.bulletin.top_memories, 3)}
+                    class="rounded-xl border border-white/10 bg-black/10 px-3 py-3"
+                  >
+                    <div class="flex flex-wrap items-center justify-between gap-3">
+                      <div class="text-sm text-[var(--hx-accent)]">
+                        {bulletin_memory_value(memory, :type)}
+                      </div>
+                      <div class="text-xs text-[var(--hx-mute)]">
+                        score {Float.round(bulletin_memory_value(memory, :score) || 0.0, 2)}
+                      </div>
+                    </div>
+                    <p class="mt-2 text-sm text-[var(--hx-mute)]">
+                      {bulletin_memory_value(memory, :content)}
+                    </p>
+                    <div class="mt-2 flex flex-wrap gap-2 text-[11px] text-[var(--hx-mute)]">
+                      <span
+                        :for={label <- bulletin_memory_labels(memory)}
+                        class="rounded-full border border-white/10 px-3 py-1"
+                      >
+                        {label}
+                      </span>
+                    </div>
+                  </div>
+                </div>
               </div>
               <div class="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-3">
                 <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
@@ -1111,6 +1140,33 @@ defmodule HydraXWeb.AgentsLive do
 
   defp channel_summary([]), do: "none"
   defp channel_summary(channels), do: Enum.join(channels, ", ")
+
+  defp bulletin_memory_labels(memory) do
+    source =
+      [
+        bulletin_memory_value(memory, :source_file) &&
+          "file #{bulletin_memory_value(memory, :source_file)}",
+        bulletin_memory_value(memory, :source_channel) &&
+          "channel #{bulletin_memory_value(memory, :source_channel)}"
+      ]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join(" · ")
+
+    top_breakdown =
+      (bulletin_memory_value(memory, :score_breakdown) || %{})
+      |> Enum.sort_by(fn {_key, value} -> -value end)
+      |> Enum.take(2)
+      |> Enum.map(fn {key, value} -> "#{key} #{Float.round(value, 2)}" end)
+
+    (bulletin_memory_value(memory, :reasons) || [])
+    |> Enum.take(2)
+    |> Kernel.++(if(source == "", do: [], else: [source]))
+    |> Kernel.++(top_breakdown)
+  end
+
+  defp bulletin_memory_value(memory, key) do
+    Map.get(memory, key) || Map.get(memory, Atom.to_string(key))
+  end
 
   defp effective_tool_summary(policy) do
     policy.tools

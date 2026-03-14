@@ -86,6 +86,8 @@ defmodule HydraX.ReportTest do
         last_seen_at: DateTime.utc_now()
       })
 
+    Runtime.refresh_agent_bulletin!(agent.id)
+
     assert {:ok, _mcp} =
              Runtime.save_mcp_server(%{
                name: "Docs MCP",
@@ -217,6 +219,14 @@ defmodule HydraX.ReportTest do
     assert Enum.any?(snapshot.observability.telemetry.recent_events, &(&1.namespace == "tool"))
     assert Enum.any?(snapshot.audit, &(&1.category == "operator"))
     assert snapshot.memory.embedding.total_count >= 1
+    assert snapshot.default_agent.bulletin.content =~ "Prioritize operator-ready report exports"
+    assert snapshot.default_agent.bulletin.top_memories != []
+
+    assert Enum.any?(
+             snapshot.default_agent.bulletin.top_memories,
+             &(&1.content =~ "Prioritize operator-ready report exports" and
+                 is_map(&1.score_breakdown) and &1.source_file == "ops/reporting.md")
+           )
 
     assert Enum.any?(
              snapshot.memory.ranked_memories,
@@ -386,6 +396,8 @@ defmodule HydraX.ReportTest do
         },
         last_seen_at: DateTime.utc_now()
       })
+
+    Runtime.refresh_agent_bulletin!(agent.id)
 
     assert {:ok, _server} =
              Runtime.save_mcp_server(%{
@@ -601,6 +613,12 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "updates Slack thread"
     assert File.read!(export.markdown_path) =~ "stream_msg=slack-stream-1"
     assert File.read!(export.markdown_path) =~ "preview=Live report stream preview"
+    assert File.read!(export.markdown_path) =~ "Top Bulletin Memories"
+
+    assert File.read!(export.markdown_path) =~
+             "Keep report exports aligned with ranked memory provenance."
+
+    assert File.read!(export.markdown_path) =~ "channel=slack"
     assert File.read!(export.markdown_path) =~ "Top ranked active memories"
     assert File.read!(export.markdown_path) =~ "ops/reporting.md"
     assert File.read!(export.markdown_path) =~ "breakdown="
@@ -634,12 +652,15 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.json_path) =~ "\"score_breakdown\""
     assert File.read!(export.json_path) =~ "\"source_section\""
     assert File.read!(export.json_path) =~ "\"skills\""
+    assert File.read!(export.json_path) =~ "\"top_memories\""
 
     assert File.read!(Path.join(export.bundle_dir, "agents.json")) =~
              "\"skill_requirement_count\""
 
     assert File.read!(Path.join(export.bundle_dir, "agents.json")) =~ "\"mcp_action_count\""
     assert File.read!(Path.join(export.bundle_dir, "agents.json")) =~ "\"search_docs\""
+    assert File.read!(Path.join(export.bundle_dir, "agents.json")) =~ "\"top_memories\""
+    assert File.read!(Path.join(export.bundle_dir, "agents.json")) =~ "\"ops/reporting.md\""
     assert File.read!(Path.join(export.bundle_dir, "channels.json")) =~ "\"streaming_count\""
     assert File.read!(Path.join(export.bundle_dir, "channels.json")) =~ "\"recent_streaming\""
     assert File.read!(Path.join(export.bundle_dir, "memory.json")) =~ "\"ranked_memories\""

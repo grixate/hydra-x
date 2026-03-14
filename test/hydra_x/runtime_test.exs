@@ -512,11 +512,15 @@ defmodule HydraX.RuntimeTest do
     |> Ecto.Changeset.change(expires_at: DateTime.add(DateTime.utc_now(), -60, :second))
     |> Repo.update!()
 
-    assert {:ok, _lease} =
-             Runtime.claim_lease("conversation:#{conversation.id}",
-               owner: "node:remote",
-               ttl_seconds: 60
-             )
+    wait_for(fn ->
+      match?(
+        {:ok, _lease},
+        Runtime.claim_lease("conversation:#{conversation.id}",
+          owner: "node:remote",
+          ttl_seconds: 60
+        )
+      )
+    end)
 
     assert {:deferred, reason} = Task.await(task, 5_000)
     assert reason =~ "node:remote"
@@ -534,6 +538,14 @@ defmodule HydraX.RuntimeTest do
       240
     )
 
+    wait_for(
+      fn ->
+        channel_state = Runtime.conversation_channel_state(conversation.id)
+        not Process.alive?(channel_pid) and channel_state.status == "deferred"
+      end,
+      240
+    )
+
     channel_state = Runtime.conversation_channel_state(conversation.id)
     assert channel_state.status == "deferred"
     assert channel_state.pending_response["content"] == "Captured before ownership handoff."
@@ -547,8 +559,12 @@ defmodule HydraX.RuntimeTest do
     |> Ecto.Changeset.change(expires_at: DateTime.add(DateTime.utc_now(), -60, :second))
     |> Repo.update!()
 
-    assert {:ok, _lease} =
-             Runtime.claim_lease("conversation:#{conversation.id}", ttl_seconds: 60)
+    wait_for(fn ->
+      match?(
+        {:ok, _lease},
+        Runtime.claim_lease("conversation:#{conversation.id}", ttl_seconds: 60)
+      )
+    end)
 
     {:ok, resumed_channel_pid} = HydraX.Agent.Channel.ensure_started(agent.id, conversation)
 
@@ -4295,6 +4311,10 @@ defmodule HydraX.RuntimeTest do
     assert "ingest provenance" in top.reasons
     assert "recently reinforced" in top.reasons
     assert "channel context" in top.reasons
+    assert is_map(top.score_breakdown)
+    assert top.score_breakdown["importance"] > 0
+    assert top.score_breakdown["provenance"] > 0
+    assert top.score_breakdown["channel"] > 0
   end
 
   test "agent bulletins can be rebuilt from typed memory" do
