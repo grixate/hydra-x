@@ -1,6 +1,7 @@
 defmodule HydraX.ConversationsTaskTest do
   use HydraX.DataCase
 
+  alias HydraX.Memory
   alias HydraX.Runtime
 
   test "conversation task retries a failed Telegram delivery" do
@@ -685,6 +686,18 @@ defmodule HydraX.ConversationsTaskTest do
     agent = create_agent()
     Runtime.save_compaction_policy!(agent.id, %{"soft" => 4, "medium" => 8, "hard" => 12})
 
+    {:ok, _memory} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Decision",
+        content: "Show supporting memories in compaction CLI output.",
+        importance: 0.9,
+        metadata: %{
+          "source_file" => "ops/cli.md",
+          "source_channel" => "cli"
+        }
+      })
+
     {:ok, conversation} =
       Runtime.start_conversation(agent, %{
         channel: "control_plane",
@@ -710,6 +723,8 @@ defmodule HydraX.ConversationsTaskTest do
     assert compact_output =~ "soft=4"
     assert compact_output =~ "medium=8"
     assert compact_output =~ "hard=12"
+    assert compact_output =~ "summary_source="
+    assert compact_output =~ "supporting_memories="
 
     Mix.Task.reenable("hydra_x.conversations")
 

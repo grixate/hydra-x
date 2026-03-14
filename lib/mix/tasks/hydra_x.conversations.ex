@@ -231,6 +231,8 @@ defmodule Mix.Tasks.HydraX.Conversations do
     Mix.shell().info("soft=#{compaction.thresholds.soft}")
     Mix.shell().info("medium=#{compaction.thresholds.medium}")
     Mix.shell().info("hard=#{compaction.thresholds.hard}")
+    Mix.shell().info("summary_source=#{compaction.summary_source || "n/a"}")
+    Mix.shell().info("supporting_memories=#{length(compaction.supporting_memories || [])}")
     Mix.shell().info(compaction.summary || "No summary checkpoint yet")
   end
 

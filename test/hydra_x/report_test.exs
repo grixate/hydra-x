@@ -546,6 +546,26 @@ defmodule HydraX.ReportTest do
         ]
       })
 
+    {:ok, _compactor_checkpoint} =
+      Runtime.upsert_checkpoint(conversation.id, "compactor", %{
+        "level" => "hard",
+        "summary" =>
+          "Compacted the report export conversation around the operator's reporting goal.",
+        "summary_source" => "provider",
+        "supporting_memories" => [
+          %{
+            "id" => 999,
+            "type" => "Goal",
+            "content" => "Keep report exports aligned with ranked memory provenance.",
+            "score" => 1.23,
+            "reasons" => ["semantic overlap", "high importance"],
+            "score_breakdown" => %{"semantic" => 0.82, "importance" => 0.41},
+            "source_file" => "ops/reporting.md",
+            "source_channel" => "slack"
+          }
+        ]
+      })
+
     {:ok, streaming_conversation} =
       Runtime.start_conversation(agent, %{
         channel: "slack",
@@ -631,6 +651,9 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "thread_ts=777.888"
     assert File.read!(export.markdown_path) =~ "execution=completed"
     assert File.read!(export.markdown_path) =~ "handoff=pending/stream_response/node:remote"
+    assert File.read!(export.markdown_path) =~ "compaction=hard"
+    assert File.read!(export.markdown_path) =~ "compaction_source=provider"
+    assert File.read!(export.markdown_path) =~ "compaction_memories=1"
 
     assert File.read!(export.markdown_path) =~
              "pending_response=mock:Captured provider reply waiting for replay."
@@ -670,6 +693,14 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "Ownership replay:"
     assert File.read!(export.markdown_path) =~ "Deferred delivery replay:"
     assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~ "\"channel_state\""
+    assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~ "\"compaction\""
+
+    assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~
+             "\"summary_source\": \"provider\""
+
+    assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~
+             "\"supporting_memories\""
+
     assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~ "\"memory_recall\""
     assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~ "\"stream_capture\""
     assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~ "\"retry_state\""

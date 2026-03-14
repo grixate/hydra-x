@@ -506,6 +506,42 @@ defmodule HydraXWeb.ConversationsLive do
                 <div :if={@compaction} class="mt-2 text-xs text-[var(--hx-mute)]">
                   Policy thresholds: {compaction_thresholds_label(@compaction.thresholds)}
                 </div>
+                <div
+                  :if={@compaction && @compaction.summary_source}
+                  class="mt-2 text-xs text-[var(--hx-mute)]"
+                >
+                  Summary source: {@compaction.summary_source}
+                </div>
+                <div
+                  :if={@compaction && @compaction.supporting_memories != []}
+                  class="mt-3 space-y-2"
+                >
+                  <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                    Supporting memories
+                  </div>
+                  <div
+                    :for={memory <- @compaction.supporting_memories}
+                    class="rounded-xl border border-white/10 bg-black/10 px-3 py-3"
+                  >
+                    <div class="flex flex-wrap items-center justify-between gap-3">
+                      <div class="text-sm text-[var(--hx-accent)]">
+                        {memory.type}
+                      </div>
+                      <div class="text-xs text-[var(--hx-mute)]">
+                        score {Float.round(memory.score || 0.0, 2)}
+                      </div>
+                    </div>
+                    <p class="mt-2 text-sm text-[var(--hx-mute)]">{memory.content}</p>
+                    <div class="mt-2 flex flex-wrap gap-2 text-[11px] text-[var(--hx-mute)]">
+                      <span
+                        :for={label <- compaction_memory_labels(memory)}
+                        class="rounded-full border border-white/10 px-3 py-1"
+                      >
+                        {label}
+                      </span>
+                    </div>
+                  </div>
+                </div>
               </div>
               <div class="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
                 <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
@@ -1420,6 +1456,28 @@ defmodule HydraXWeb.ConversationsLive do
 
   defp compaction_thresholds_label(%{soft: soft, medium: medium, hard: hard}) do
     "soft #{soft} or 80% · medium #{medium} or 90% · hard #{hard} or 95%"
+  end
+
+  defp compaction_memory_labels(memory) do
+    source =
+      [
+        memory.source_file && "file #{memory.source_file}",
+        memory.source_channel && "channel #{memory.source_channel}"
+      ]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join(" · ")
+
+    top_breakdown =
+      memory.score_breakdown
+      |> Enum.reject(fn {_key, value} -> value in [nil, 0.0] end)
+      |> Enum.sort_by(fn {_key, value} -> -value end)
+      |> Enum.take(2)
+      |> Enum.map(fn {key, value} -> "#{key} #{Float.round(value, 2)}" end)
+
+    (memory.reasons || [])
+    |> Enum.take(2)
+    |> Kernel.++(if(source == "", do: [], else: [source]))
+    |> Kernel.++(top_breakdown)
   end
 
   defp format_reason(reason) when is_binary(reason), do: reason

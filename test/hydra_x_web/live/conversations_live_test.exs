@@ -1,6 +1,7 @@
 defmodule HydraXWeb.ConversationsLiveTest do
   use HydraXWeb.ConnCase
 
+  alias HydraX.Memory
   alias HydraX.Runtime
 
   setup do
@@ -838,6 +839,19 @@ defmodule HydraXWeb.ConversationsLiveTest do
     agent = Runtime.ensure_default_agent!()
     Runtime.save_compaction_policy!(agent.id, %{"soft" => 4, "medium" => 8, "hard" => 12})
 
+    {:ok, _memory} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Decision",
+        content:
+          "Conversation turns should preserve the strongest supporting memories when compacting.",
+        importance: 0.92,
+        metadata: %{
+          "source_file" => "ops/conversations.md",
+          "source_channel" => "slack"
+        }
+      })
+
     {:ok, conversation} =
       Runtime.start_conversation(agent, %{
         channel: "control_plane",
@@ -864,6 +878,9 @@ defmodule HydraXWeb.ConversationsLiveTest do
     assert html =~ "12 turns"
     assert html =~ "tokens"
     assert html =~ "Policy thresholds: soft 4 or 80%"
+    assert html =~ "Supporting memories"
+    assert html =~ "Conversation turns should preserve the strongest supporting memories"
+    assert html =~ "channel slack"
 
     view
     |> element(~s(button[phx-click="reset_compaction"][phx-value-id="#{conversation.id}"]))

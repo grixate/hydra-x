@@ -4,6 +4,7 @@ defmodule HydraX.Agent.Compactor do
 
   alias HydraX.Budget
   alias HydraX.LLM.Router
+  alias HydraX.Memory
   alias HydraX.Runtime
 
   def start_link(opts) do
@@ -66,11 +67,13 @@ defmodule HydraX.Agent.Compactor do
     if level do
       # Summarize all turns except the most recent 3 (those stay in full context)
       older_turns = Enum.take(turns, max(length(turns) - 3, 0))
-      summary = summarize_turns(older_turns, state)
+      compaction = summarize_turns(older_turns, state)
 
       Runtime.upsert_checkpoint(state.conversation_id, "compactor", %{
         "level" => level,
-        "summary" => summary,
+        "summary" => compaction.summary,
+        "summary_source" => compaction.summary_source,
+        "supporting_memories" => compaction.supporting_memories,
         "updated_at" => DateTime.utc_now(),
         "estimated_tokens" => token_usage.estimated_tokens,
         "conversation_limit_tokens" => token_usage.conversation_limit_tokens,
@@ -81,12 +84,16 @@ defmodule HydraX.Agent.Compactor do
     state
   end
 
-  defp summarize_turns([], _state), do: nil
+  defp summarize_turns([], _state) do
+    %{summary: nil, summary_source: nil, supporting_memories: []}
+  end
 
   defp summarize_turns(turns, state) do
     transcript =
       turns
       |> Enum.map_join("\n", fn turn -> "#{turn.role}: #{turn.content}" end)
+
+    supporting_memories = supporting_memories(state.agent_id, transcript)
 
     messages = [
       %{
@@ -115,18 +122,62 @@ defmodule HydraX.Agent.Compactor do
               metadata: %{provider: response.provider, purpose: "compaction"}
             )
 
-            response.content || fallback_summary(transcript)
+            %{
+              summary: response.content || fallback_summary(transcript),
+              summary_source: "provider",
+              supporting_memories: supporting_memories
+            }
 
           {:error, _reason} ->
-            fallback_summary(transcript)
+            %{
+              summary: fallback_summary(transcript),
+              summary_source: "fallback",
+              supporting_memories: supporting_memories
+            }
         end
 
       {:error, _} ->
-        fallback_summary(transcript)
+        %{
+          summary: fallback_summary(transcript),
+          summary_source: "fallback",
+          supporting_memories: supporting_memories
+        }
     end
   end
 
   defp fallback_summary(transcript), do: String.slice(transcript, 0, 800)
+
+  defp supporting_memories(agent_id, transcript) do
+    agent_id
+    |> Memory.search_ranked(compaction_memory_query(transcript), 4, status: "active")
+    |> Enum.map(&supporting_memory_snapshot/1)
+  end
+
+  defp compaction_memory_query(transcript) do
+    transcript
+    |> String.replace(~r/\s+/, " ")
+    |> String.trim()
+    |> String.slice(0, 1_200)
+  end
+
+  defp supporting_memory_snapshot(ranked) do
+    memory = ranked.entry
+    metadata = memory.metadata || %{}
+
+    %{
+      id: memory.id,
+      type: memory.type,
+      status: memory.status,
+      content: memory.content,
+      importance: memory.importance,
+      score: ranked.score,
+      reasons: ranked.reasons || [],
+      score_breakdown: ranked.score_breakdown || %{},
+      source_file: metadata["source_file"],
+      source_section: metadata["source_section"],
+      source_channel: metadata["source_channel"]
+    }
+  end
 
   defp level_for(count, thresholds, ratio) when count >= thresholds.hard or ratio >= 0.95,
     do: "hard"

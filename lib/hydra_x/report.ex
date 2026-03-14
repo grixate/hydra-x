@@ -652,10 +652,11 @@ defmodule HydraX.Report do
 
   defp render_conversation_execution(conversation) do
     state = Runtime.conversation_channel_state(conversation.id)
+    compaction = Runtime.conversation_compaction(conversation.id)
 
     case state.status do
       nil ->
-        ""
+        render_conversation_compaction(compaction)
 
       status ->
         steps =
@@ -677,12 +678,52 @@ defmodule HydraX.Report do
           handoff && "handoff=#{handoff}",
           pending_response && "pending_response=#{pending_response}",
           stream_capture && "stream_capture=#{stream_capture}",
-          "steps=#{if(steps == "", do: "none", else: steps)}"
+          "steps=#{if(steps == "", do: "none", else: steps)}",
+          render_conversation_compaction_detail(compaction)
         ]
         |> Enum.reject(&is_nil_or_empty/1)
         |> Enum.join("; ")
         |> then(&(" · " <> &1))
     end
+  end
+
+  defp render_conversation_compaction(%{summary: nil, supporting_memories: []}), do: ""
+
+  defp render_conversation_compaction(compaction) do
+    detail = render_conversation_compaction_detail(compaction)
+    if detail == nil, do: "", else: " · #{detail}"
+  end
+
+  defp render_conversation_compaction_detail(compaction) do
+    memories = compaction.supporting_memories || []
+
+    [
+      compaction.level && "compaction=#{compaction.level}",
+      compaction.summary_source && "compaction_source=#{compaction.summary_source}",
+      memories != [] && "compaction_memories=#{length(memories)}",
+      memories != [] && "compaction_top=#{render_compaction_memory_summary(hd(memories))}"
+    ]
+    |> Enum.reject(&is_nil_or_empty/1)
+    |> case do
+      [] -> nil
+      parts -> Enum.join(parts, "; ")
+    end
+  end
+
+  defp render_compaction_memory_summary(memory) do
+    [
+      memory.type,
+      "score=#{memory.score}",
+      render_ranked_source(%{
+        "source_file" => memory.source_file,
+        "source_section" => memory.source_section,
+        "source_channel" => memory.source_channel
+      }),
+      render_score_breakdown(memory.score_breakdown || %{}),
+      truncate_text(memory.content, 80)
+    ]
+    |> Enum.reject(&is_nil_or_empty/1)
+    |> Enum.join(" | ")
   end
 
   defp render_conversation_owner(%{} = ownership) when map_size(ownership) > 0 do
@@ -1520,6 +1561,7 @@ defmodule HydraX.Report do
     metadata = conversation.metadata || %{}
     delivery = metadata["last_delivery"] || metadata[:last_delivery]
     channel_state = Runtime.conversation_channel_state(conversation.id)
+    compaction = Runtime.conversation_compaction(conversation.id)
     attachment_count = conversation_attachment_count(conversation)
 
     %{
@@ -1548,6 +1590,13 @@ defmodule HydraX.Report do
         steps: channel_state.steps,
         execution_events: Enum.take(channel_state.execution_events, -10),
         tool_results: channel_state.tool_results
+      },
+      compaction: %{
+        level: compaction.level,
+        summary: compaction.summary,
+        summary_source: compaction.summary_source,
+        supporting_memories: compaction.supporting_memories,
+        updated_at: compaction.updated_at
       },
       last_message_at: conversation.last_message_at,
       inserted_at: conversation.inserted_at,

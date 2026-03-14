@@ -4431,6 +4431,18 @@ defmodule HydraX.RuntimeTest do
     policy =
       Runtime.save_compaction_policy!(agent.id, %{"soft" => 4, "medium" => 8, "hard" => 12})
 
+    {:ok, _memory} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Decision",
+        content: "Prefer concise compaction summaries that preserve commitments.",
+        importance: 0.95,
+        metadata: %{
+          "source_file" => "ops/compaction.md",
+          "source_channel" => "webchat"
+        }
+      })
+
     {:ok, conversation} =
       Runtime.start_conversation(agent, %{channel: "control_plane", title: "Compaction Thread"})
 
@@ -4448,8 +4460,16 @@ defmodule HydraX.RuntimeTest do
     assert compaction.turn_count == 12
     assert compaction.level == "hard"
     assert compaction.summary =~ "Turn"
+    assert compaction.summary_source in ["provider", "fallback"]
     assert compaction.thresholds == policy
     assert compaction.estimated_tokens > 0
+    assert compaction.supporting_memories != []
+
+    assert Enum.any?(
+             compaction.supporting_memories,
+             &(&1.content =~ "Prefer concise compaction summaries" and
+                 is_map(&1.score_breakdown) and &1.source_file == "ops/compaction.md")
+           )
 
     assert compaction.conversation_limit_tokens ==
              Budget.ensure_policy!(agent.id).conversation_limit
@@ -4459,6 +4479,7 @@ defmodule HydraX.RuntimeTest do
     reset = Runtime.reset_conversation_compaction!(conversation.id)
     assert reset.level == nil
     assert reset.summary == nil
+    assert reset.supporting_memories == []
     assert reset.thresholds == policy
     assert reset.estimated_tokens > 0
     assert reset.token_ratio > 0.0

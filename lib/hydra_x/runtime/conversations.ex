@@ -93,12 +93,15 @@ defmodule HydraX.Runtime.Conversations do
     turns = list_turns(conversation.id)
     thresholds = HydraX.Runtime.Agents.compaction_policy(conversation.agent_id)
     token_usage = token_usage(conversation.agent_id, turns)
+    supporting_memories = normalize_ranked_memory_snapshots(state["supporting_memories"])
 
     %{
       conversation: conversation,
       turn_count: length(turns),
       level: state["level"],
       summary: state["summary"],
+      summary_source: state["summary_source"],
+      supporting_memories: supporting_memories,
       updated_at: state["updated_at"],
       checkpoint_id: checkpoint && checkpoint.id,
       thresholds: thresholds,
@@ -388,6 +391,7 @@ defmodule HydraX.Runtime.Conversations do
 
   defp render_transcript(conversation) do
     channel_state = conversation_channel_state(conversation.id)
+    compaction = conversation_compaction(conversation.id)
     delivery = last_delivery(conversation)
     attachment_count = transcript_attachment_count(conversation.turns)
 
@@ -404,6 +408,7 @@ defmodule HydraX.Runtime.Conversations do
     ]
 
     delivery_section = render_transcript_delivery(delivery)
+    compaction_section = render_transcript_compaction(compaction)
 
     execution =
       case channel_state.status do
@@ -458,7 +463,7 @@ defmodule HydraX.Runtime.Conversations do
           ]
       end)
 
-    [header, delivery_section, execution | turns]
+    [header, compaction_section, delivery_section, execution | turns]
     |> List.flatten()
     |> Enum.join("\n")
   end
@@ -750,6 +755,107 @@ defmodule HydraX.Runtime.Conversations do
       "```",
       ""
     ]
+  end
+
+  defp render_transcript_compaction(%{summary: nil, supporting_memories: []}), do: []
+
+  defp render_transcript_compaction(compaction) do
+    [
+      "## Compaction",
+      "",
+      maybe_transcript_detail("- level", compaction.level || "idle"),
+      maybe_transcript_detail("- summary_source", compaction.summary_source),
+      maybe_transcript_detail("- updated_at", format_transcript_datetime(compaction.updated_at)),
+      maybe_transcript_detail("- summary", compaction.summary),
+      maybe_transcript_detail(
+        "- supporting_memories",
+        if(compaction.supporting_memories == [],
+          do: nil,
+          else: length(compaction.supporting_memories)
+        )
+      ),
+      ""
+    ] ++ render_transcript_supporting_memories(compaction.supporting_memories)
+  end
+
+  defp render_transcript_supporting_memories([]), do: []
+
+  defp render_transcript_supporting_memories(memories) do
+    [
+      "### Supporting memories",
+      ""
+    ] ++
+      Enum.flat_map(memories, fn memory ->
+        [
+          "- ##{ranked_memory_value(memory, :id)} #{ranked_memory_value(memory, :type)}",
+          maybe_transcript_detail("  score", ranked_memory_value(memory, :score)),
+          maybe_transcript_detail(
+            "  reasons",
+            Enum.join(ranked_memory_value(memory, :reasons) || [], ", ")
+          ),
+          maybe_transcript_detail(
+            "  breakdown",
+            render_score_breakdown(ranked_memory_value(memory, :score_breakdown) || %{})
+          ),
+          maybe_transcript_detail(
+            "  source",
+            render_ranked_source(%{
+              "source_file" => ranked_memory_value(memory, :source_file),
+              "source_section" => ranked_memory_value(memory, :source_section),
+              "source_channel" => ranked_memory_value(memory, :source_channel)
+            })
+          ),
+          maybe_transcript_detail("  content", ranked_memory_value(memory, :content)),
+          ""
+        ]
+      end)
+  end
+
+  defp render_score_breakdown(score_breakdown) when map_size(score_breakdown) == 0, do: nil
+
+  defp render_score_breakdown(score_breakdown) do
+    score_breakdown
+    |> Enum.sort_by(fn {_key, value} -> -value end)
+    |> Enum.map_join(", ", fn {key, value} -> "#{key}=#{value}" end)
+  end
+
+  defp render_ranked_source(metadata) do
+    [
+      metadata["source_file"] && "file=#{metadata["source_file"]}",
+      metadata["source_section"] && "section=#{metadata["source_section"]}",
+      metadata["source_channel"] && "channel=#{metadata["source_channel"]}"
+    ]
+    |> Enum.reject(&is_nil_or_empty/1)
+    |> case do
+      [] -> nil
+      parts -> Enum.join(parts, " ")
+    end
+  end
+
+  defp normalize_ranked_memory_snapshots(nil), do: []
+
+  defp normalize_ranked_memory_snapshots(memories) when is_list(memories) do
+    Enum.map(memories, &normalize_ranked_memory_snapshot/1)
+  end
+
+  defp normalize_ranked_memory_snapshot(memory) when is_map(memory) do
+    %{
+      id: ranked_memory_value(memory, :id),
+      type: ranked_memory_value(memory, :type),
+      status: ranked_memory_value(memory, :status),
+      content: ranked_memory_value(memory, :content),
+      importance: ranked_memory_value(memory, :importance),
+      score: ranked_memory_value(memory, :score),
+      reasons: ranked_memory_value(memory, :reasons) || [],
+      score_breakdown: ranked_memory_value(memory, :score_breakdown) || %{},
+      source_file: ranked_memory_value(memory, :source_file),
+      source_section: ranked_memory_value(memory, :source_section),
+      source_channel: ranked_memory_value(memory, :source_channel)
+    }
+  end
+
+  defp ranked_memory_value(memory, key) do
+    Map.get(memory, key) || Map.get(memory, Atom.to_string(key))
   end
 
   defp render_turn_attachments(turn) do
