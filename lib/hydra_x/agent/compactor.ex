@@ -94,17 +94,12 @@ defmodule HydraX.Agent.Compactor do
       |> Enum.map_join("\n", fn turn -> "#{turn.role}: #{turn.content}" end)
 
     supporting_memories = supporting_memories(state.agent_id, transcript)
+    prompt = compaction_prompt(transcript, supporting_memories)
 
     messages = [
       %{
         role: "user",
-        content: """
-        Summarize the following conversation concisely. Preserve key facts, decisions, \
-        user preferences, and any commitments made. Omit small talk and redundant exchanges. \
-        Keep the summary under 600 words.
-
-        #{transcript}
-        """
+        content: prompt
       }
     ]
 
@@ -112,7 +107,11 @@ defmodule HydraX.Agent.Compactor do
 
     case Budget.preflight(state.agent_id, state.conversation_id, estimated_tokens) do
       {:ok, _} ->
-        case Router.complete(%{messages: messages}) do
+        case Router.complete(%{
+               messages: messages,
+               agent_id: state.agent_id,
+               process_type: "compactor"
+             }) do
           {:ok, response} ->
             output_tokens = Budget.estimate_tokens(response.content || "")
 
@@ -160,6 +159,70 @@ defmodule HydraX.Agent.Compactor do
     |> String.slice(0, 1_200)
   end
 
+  defp compaction_prompt(transcript, supporting_memories) do
+    """
+    Summarize the following conversation concisely. Preserve key facts, decisions, \
+    user preferences, and any commitments made. Omit small talk and redundant exchanges. \
+    Keep the summary under 600 words.
+
+    Use the supporting memories as grounding when they reinforce decisions, preferences, \
+    or durable context from the transcript. Do not invent facts that are absent from both \
+    the transcript and the supporting memories.
+
+    #{render_supporting_memories_prompt(supporting_memories)}
+
+    Conversation transcript:
+    #{transcript}
+    """
+    |> String.trim()
+  end
+
+  defp render_supporting_memories_prompt([]), do: "Supporting memories:\n- none"
+
+  defp render_supporting_memories_prompt(memories) do
+    supporting_lines =
+      Enum.map_join(memories, "\n", fn memory ->
+        [
+          "#{memory.type} score=#{memory.score}",
+          Enum.join(memory.reasons || [], ", "),
+          render_supporting_memory_source(memory),
+          render_score_breakdown(memory.score_breakdown || %{}),
+          String.slice(memory.content || "", 0, 160)
+        ]
+        |> Enum.reject(&is_nil_or_empty/1)
+        |> Enum.join(" | ")
+        |> then(&("- " <> &1))
+      end)
+
+    "Supporting memories:\n" <> supporting_lines
+  end
+
+  defp render_supporting_memory_source(memory) do
+    [
+      memory.source_file && "file=#{memory.source_file}",
+      memory.source_section && "section=#{memory.source_section}",
+      memory.source_channel && "channel=#{memory.source_channel}"
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> case do
+      [] -> nil
+      values -> Enum.join(values, " ")
+    end
+  end
+
+  defp render_score_breakdown(score_breakdown) when map_size(score_breakdown) == 0, do: nil
+
+  defp render_score_breakdown(score_breakdown) do
+    score_breakdown
+    |> Enum.reject(fn {_key, value} -> value in [nil, 0.0] end)
+    |> Enum.sort_by(fn {_key, value} -> -value end)
+    |> Enum.map_join(", ", fn {key, value} -> "#{key}=#{value}" end)
+    |> case do
+      "" -> nil
+      value -> "breakdown=#{value}"
+    end
+  end
+
   defp supporting_memory_snapshot(ranked) do
     memory = ranked.entry
     metadata = memory.metadata || %{}
@@ -205,4 +268,8 @@ defmodule HydraX.Agent.Compactor do
       ratio: Float.round(estimated_tokens / limit, 4)
     }
   end
+
+  defp is_nil_or_empty(nil), do: true
+  defp is_nil_or_empty(""), do: true
+  defp is_nil_or_empty(_value), do: false
 end

@@ -4485,6 +4485,95 @@ defmodule HydraX.RuntimeTest do
     assert reset.token_ratio > 0.0
   end
 
+  test "conversation compaction prompt includes ranked supporting memories" do
+    previous_request_fn = Application.get_env(:hydra_x, :provider_request_fn)
+    test_pid = self()
+
+    Application.put_env(:hydra_x, :provider_request_fn, fn opts ->
+      send(test_pid, {:compaction_prompt, opts[:json][:messages], opts[:json][:model]})
+
+      {:ok,
+       %{
+         status: 200,
+         body: %{
+           "choices" => [
+             %{
+               "message" => %{
+                 "content" => "Compacted with supporting memory context.",
+                 "tool_calls" => nil
+               },
+               "finish_reason" => "stop"
+             }
+           ]
+         }
+       }}
+    end)
+
+    on_exit(fn ->
+      if previous_request_fn do
+        Application.put_env(:hydra_x, :provider_request_fn, previous_request_fn)
+      else
+        Application.delete_env(:hydra_x, :provider_request_fn)
+      end
+    end)
+
+    agent = create_agent()
+    Runtime.save_compaction_policy!(agent.id, %{"soft" => 4, "medium" => 8, "hard" => 12})
+
+    {:ok, _memory} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Decision",
+        content: "Preserve deployment commitments and keep the summary concise.",
+        importance: 0.96,
+        metadata: %{
+          "source_file" => "ops/deploy.md",
+          "source_channel" => "slack"
+        }
+      })
+
+    {:ok, provider} =
+      Runtime.save_provider_config(%{
+        name: "Compaction Prompt Provider",
+        kind: "openai_compatible",
+        base_url: "https://compaction-prompt.test",
+        api_key: "secret",
+        model: "gpt-compaction-prompt",
+        enabled: false
+      })
+
+    {:ok, _agent} =
+      Runtime.save_agent_provider_routing(agent.id, %{
+        "default_provider_id" => provider.id,
+        "compactor_provider_id" => provider.id
+      })
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{channel: "control_plane", title: "Compaction Prompt"})
+
+    Enum.each(1..12, fn index ->
+      {:ok, _turn} =
+        Runtime.append_turn(conversation, %{
+          role: if(rem(index, 2) == 0, do: "assistant", else: "user"),
+          content: "Turn #{index} covering deployment commitments and summary constraints",
+          metadata: %{}
+        })
+    end)
+
+    compaction = Runtime.review_conversation_compaction!(conversation.id)
+
+    assert_receive {:compaction_prompt, messages, "gpt-compaction-prompt"}, 1_000
+
+    prompt = List.first(messages)[:content]
+
+    assert prompt =~ "Supporting memories:"
+    assert prompt =~ "Preserve deployment commitments and keep the summary concise."
+    assert prompt =~ "breakdown="
+    assert prompt =~ "Conversation transcript:"
+    assert compaction.summary == "Compacted with supporting memory context."
+    assert compaction.summary_source == "provider"
+  end
+
   test "compaction policy must remain ordered" do
     agent = create_agent()
 
