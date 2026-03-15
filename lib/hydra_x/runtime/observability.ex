@@ -56,6 +56,7 @@ defmodule HydraX.Runtime.Observability do
     operator = operator_status()
     cluster = cluster_status()
     coordination = coordination_status()
+    autonomy = autonomy_status()
 
     checks = [
       %{name: "database", status: :ok, detail: database_health_detail(system.persistence)},
@@ -161,6 +162,16 @@ defmodule HydraX.Runtime.Observability do
             true ->
               "no recent safety events"
           end
+      },
+      %{
+        name: "autonomy",
+        status:
+          if(
+            autonomy.autonomy_agent_count > 0 and Map.get(autonomy.counts, "failed", 0) == 0,
+            do: :ok,
+            else: :warn
+          ),
+        detail: autonomy_detail(autonomy)
       },
       %{
         name: "tools",
@@ -549,6 +560,10 @@ defmodule HydraX.Runtime.Observability do
     }
   end
 
+  def autonomy_status do
+    HydraX.Runtime.WorkItems.autonomy_status()
+  end
+
   def control_policy_status do
     policy = effective_policy_status().control_policy
 
@@ -630,6 +645,7 @@ defmodule HydraX.Runtime.Observability do
         total_jobs: length(HydraX.Runtime.Jobs.list_scheduled_jobs(limit: 100)),
         recent_runs: HydraX.Runtime.Jobs.recent_job_runs(10)
       },
+      autonomy: autonomy_status(),
       cluster: cluster_status(),
       coordination: coordination_status(),
       system: system_status(),
@@ -684,6 +700,7 @@ defmodule HydraX.Runtime.Observability do
     operator = operator_status()
     cluster = cluster_status()
     coordination = coordination_status()
+    autonomy = autonomy_status()
 
     items = [
       %{
@@ -901,6 +918,19 @@ defmodule HydraX.Runtime.Observability do
             0 -> "no conflicted memories pending"
             count -> "#{count} conflicted memories need review"
           end
+      },
+      %{
+        id: "autonomy_roles",
+        label: "Autonomy roles configured",
+        required: false,
+        status: if(autonomy.autonomy_agent_count > 0, do: :ok, else: :warn),
+        detail:
+          if(
+            autonomy.autonomy_agent_count > 0,
+            do:
+              "#{autonomy.autonomy_agent_count} autonomy-capable agents across #{map_size(autonomy.active_roles)} roles",
+            else: "create at least one planner or researcher before enabling autonomous work"
+          )
       },
       %{
         id: "tool_policy",
@@ -1309,6 +1339,13 @@ defmodule HydraX.Runtime.Observability do
       _ ->
         "coordination remains local-only until PostgreSQL-backed ownership is enabled"
     end
+  end
+
+  defp autonomy_detail(autonomy) do
+    completed = Map.get(autonomy.counts, "completed", 0)
+    running = Map.get(autonomy.counts, "running", 0) + Map.get(autonomy.counts, "claimed", 0)
+
+    "agents #{autonomy.autonomy_agent_count}; running #{running}; completed #{completed}; overdue #{autonomy.overdue_count}; pending review #{autonomy.pending_review_count}"
   end
 
   defp format_persistence_target(nil), do: ""

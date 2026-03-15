@@ -1032,6 +1032,32 @@ defmodule HydraX.Runtime.Jobs do
     end
   end
 
+  defp execute_scheduled_job(%ScheduledJob{kind: "autonomy"} = job) do
+    with {:ok, agent} <- fetch_job_agent(job),
+         {:ok, summary} <- HydraX.Runtime.run_autonomy_cycle(agent.id, job_id: job.id) do
+      output =
+        case summary.status do
+          "idle" ->
+            "Autonomy cycle idle for #{agent.slug}"
+
+          "skipped" ->
+            "Autonomy cycle skipped for #{agent.slug}: #{summary.reason}"
+
+          _ ->
+            "Autonomy cycle processed #{summary.processed_count} work item(s) for #{agent.slug}"
+        end
+
+      {:ok, output,
+       %{
+         "status" => summary.status,
+         "processed_count" => summary.processed_count,
+         "work_item_id" => summary[:work_item] && summary.work_item.id,
+         "artifact_count" => length(summary[:artifacts] || []),
+         "action" => summary[:action]
+       }}
+    end
+  end
+
   defp run_job_prompt(agent, job, prompt) do
     with {:ok, _pid} <- HydraX.Agent.ensure_started(agent),
          {:ok, conversation} <-

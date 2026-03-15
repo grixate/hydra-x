@@ -10,7 +10,7 @@ defmodule HydraX.Runtime.Agents do
   alias HydraX.Repo
   alias HydraX.Workspace
 
-  alias HydraX.Runtime.{AgentProfile, Helpers}
+  alias HydraX.Runtime.{AgentProfile, Autonomy, Helpers}
 
   @default_agent_slug "hydra-primary"
 
@@ -260,6 +260,10 @@ defmodule HydraX.Runtime.Agents do
     start_agent_runtime!(agent.id)
   end
 
+  def capability_profile(%AgentProfile{} = agent) do
+    Autonomy.ensure_capability_profile(agent.role, agent.capability_profile || %{})
+  end
+
   def reconcile_agents! do
     ensure_default_agent!()
 
@@ -438,17 +442,26 @@ defmodule HydraX.Runtime.Agents do
 
   defp normalize_agent_attrs(attrs) do
     normalized = Helpers.normalize_string_keys(attrs)
+    role = Autonomy.normalize_role(normalized["role"])
 
-    cond do
-      Map.has_key?(normalized, "workspace_root") ->
-        normalized
+    capability_profile =
+      Autonomy.ensure_capability_profile(role, normalized["capability_profile"] || %{})
 
-      is_binary(normalized["slug"]) and normalized["slug"] != "" ->
-        Map.put(normalized, "workspace_root", Config.default_workspace(normalized["slug"]))
+    normalized =
+      cond do
+        Map.has_key?(normalized, "workspace_root") ->
+          normalized
 
-      true ->
-        normalized
-    end
+        is_binary(normalized["slug"]) and normalized["slug"] != "" ->
+          Map.put(normalized, "workspace_root", Config.default_workspace(normalized["slug"]))
+
+        true ->
+          normalized
+      end
+
+    normalized
+    |> Map.put("role", role)
+    |> Map.put("capability_profile", capability_profile)
   end
 
   defp normalize_compaction_policy(attrs) do

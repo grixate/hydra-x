@@ -116,6 +116,30 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "delivered 4"
   end
 
+  test "health page shows autonomy posture", %{conn: conn} do
+    agent =
+      Runtime.ensure_default_agent!()
+      |> then(fn current -> Runtime.get_agent!(current.id) end)
+
+    {:ok, agent} = Runtime.save_agent(agent, %{"role" => "planner"})
+
+    {:ok, _work_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Prepare autonomous research rollout.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "planner",
+        "status" => "planned"
+      })
+
+    {:ok, _view, html} = live(conn, ~p"/health")
+
+    assert html =~ "Work graph posture"
+    assert html =~ "Role coverage"
+    assert html =~ "Recent work items"
+    assert html =~ "Prepare autonomous research rollout."
+  end
+
   test "health page shows the unified effective policy surface", %{conn: conn} do
     {:ok, _view, html} = live(conn, ~p"/health")
 

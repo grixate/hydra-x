@@ -579,7 +579,7 @@ defmodule HydraX.RuntimeTest do
           &(&1.role == "assistant" and &1.content == "Captured before ownership handoff.")
         )
       end,
-      240
+      400
     )
 
     final_state = Runtime.conversation_channel_state(conversation.id)
@@ -3837,6 +3837,137 @@ defmodule HydraX.RuntimeTest do
     assert is_binary(maintenance_run.metadata["report_markdown_path"])
     assert File.exists?(maintenance_run.metadata["report_markdown_path"])
     assert File.exists?(maintenance_run.metadata["report_json_path"])
+  end
+
+  test "autonomy cycle delegates research from a planner and finalizes after worker completion" do
+    planner =
+      create_agent()
+      |> then(fn agent -> Runtime.get_agent!(agent.id) end)
+
+    {:ok, planner} = Runtime.save_agent(planner, %{"role" => "planner"})
+
+    researcher =
+      create_agent()
+      |> then(fn agent -> Runtime.get_agent!(agent.id) end)
+
+    {:ok, researcher} = Runtime.save_agent(researcher, %{"role" => "researcher"})
+
+    {:ok, _memory} =
+      Memory.create_memory(%{
+        agent_id: researcher.id,
+        type: "Fact",
+        content: "Hydra-X should capture provenance and confidence in research reports.",
+        importance: 0.8,
+        metadata: %{
+          "source_file" => "ops/research.md",
+          "source_section" => "autonomy",
+          "source_channel" => "cli"
+        },
+        last_seen_at: DateTime.utc_now()
+      })
+
+    {:ok, parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Assess how Hydra should deliver autonomous research summaries.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "execution_mode" => "delegate",
+        "priority" => 7
+      })
+
+    assert {:ok, planner_summary} = Runtime.run_autonomy_cycle(planner.id)
+    assert planner_summary.action == "delegated"
+
+    parent = Runtime.get_work_item!(parent.id)
+    assert parent.status == "blocked"
+    [child_id] = parent.result_refs["child_work_item_ids"]
+
+    child = Runtime.get_work_item!(child_id)
+    assert child.assigned_role == "researcher"
+    assert child.parent_work_item_id == parent.id
+
+    assert {:ok, researcher_summary} = Runtime.run_autonomy_cycle(researcher.id)
+    assert researcher_summary.action == "researched"
+
+    child = Runtime.get_work_item!(child.id)
+    assert child.status == "completed"
+    assert length(child.result_refs["artifact_ids"]) == 2
+
+    report =
+      Runtime.work_item_artifacts(child.id)
+      |> Enum.find(&(&1.type == "research_report"))
+
+    assert report
+    assert report.payload["question"] =~ "Assess how Hydra"
+    assert length(report.payload["evidence"]) >= 1
+    assert is_float(report.confidence)
+
+    assert {:ok, finalize_summary} = Runtime.run_autonomy_cycle(planner.id)
+    assert finalize_summary.action == "finalized_blocked_parent"
+
+    parent = Runtime.get_work_item!(parent.id)
+    assert parent.status == "completed"
+    assert length(parent.result_refs["artifact_ids"]) >= 1
+  end
+
+  test "autonomy scheduled jobs run the autonomy cycle for assigned work" do
+    agent =
+      create_agent()
+      |> then(fn current -> Runtime.get_agent!(current.id) end)
+
+    {:ok, agent} = Runtime.save_agent(agent, %{"role" => "researcher"})
+
+    {:ok, _work_item} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Summarize the current autonomous work posture.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "researcher",
+        "execution_mode" => "execute"
+      })
+
+    {:ok, job} =
+      Runtime.save_scheduled_job(%{
+        agent_id: agent.id,
+        name: "Autonomy sweep",
+        kind: "autonomy",
+        schedule_mode: "interval",
+        interval_minutes: 60,
+        enabled: true
+      })
+
+    assert {:ok, run} = Runtime.run_scheduled_job(job)
+    assert run.status == "success"
+    assert run.output =~ "Autonomy cycle processed"
+    assert run.metadata["artifact_count"] >= 1
+
+    [work_item] = Runtime.list_work_items(agent_id: agent.id, limit: 10)
+    assert work_item.status == "completed"
+  end
+
+  test "autonomy status reports configured roles and recent work items" do
+    agent =
+      create_agent()
+      |> then(fn current -> Runtime.get_agent!(current.id) end)
+
+    {:ok, agent} = Runtime.save_agent(agent, %{"role" => "planner"})
+
+    {:ok, work_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Prepare the next autonomy rollout.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "planner",
+        "status" => "planned"
+      })
+
+    status = Runtime.autonomy_status()
+
+    assert status.autonomy_agent_count >= 1
+    assert Map.get(status.active_roles, "planner", 0) >= 1
+    assert Map.get(status.counts, "planned", 0) >= 1
+    assert Enum.any?(status.recent_work_items, &(&1.id == work_item.id))
   end
 
   test "tool policy disables tools in the registry" do

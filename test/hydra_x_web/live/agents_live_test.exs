@@ -34,6 +34,7 @@ defmodule HydraXWeb.AgentsLiveTest do
       "agent_profile" => %{
         "name" => "Ops Agent Updated",
         "slug" => "ops-agent",
+        "role" => "planner",
         "workspace_root" => agent.workspace_root,
         "description" => "after edit",
         "is_default" => "true"
@@ -44,8 +45,37 @@ defmodule HydraXWeb.AgentsLiveTest do
     html = render(view)
     assert html =~ "Agent updated"
     assert html =~ "Ops Agent Updated"
+    assert html =~ "planner"
     assert html =~ "default"
     assert Runtime.get_default_agent().slug == "ops-agent"
+  end
+
+  test "agents page shows role capability and recent work items", %{conn: conn} do
+    {:ok, agent} =
+      Runtime.save_agent(%{
+        name: "Research Agent",
+        slug: "research-agent",
+        role: "researcher",
+        workspace_root: Path.join(System.tmp_dir!(), "hydra-x-research-agent"),
+        description: "research",
+        is_default: false
+      })
+
+    {:ok, _work_item} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Map the current operator-facing autonomy work.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "researcher",
+        "status" => "planned"
+      })
+
+    {:ok, _view, html} = live(conn, ~p"/agents")
+
+    assert html =~ "Capability contract"
+    assert html =~ "researcher"
+    assert html =~ "Recent work items"
+    assert html =~ "Map the current operator-facing autonomy work."
   end
 
   test "agents page can repair a workspace scaffold", %{conn: conn} do

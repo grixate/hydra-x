@@ -28,7 +28,7 @@ defmodule HydraX.Runtime.EffectivePolicy do
       channels_field: :shell_command_channels
     }
   }
-  @background_processes ~w(scheduler compactor cortex)
+  @background_processes ~w(scheduler compactor cortex autonomy)
 
   def effective_policy(agent_id \\ nil, opts \\ []) do
     tool_policy = Providers.effective_tool_policy(agent_id)

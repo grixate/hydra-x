@@ -35,6 +35,7 @@ defmodule HydraX.Runtime do
   defdelegate stop_agent_runtime!(id), to: HydraX.Runtime.Agents
   defdelegate restart_agent_runtime!(id), to: HydraX.Runtime.Agents
   defdelegate reconcile_agents!(), to: HydraX.Runtime.Agents
+  defdelegate capability_profile(agent), to: HydraX.Runtime.Agents
 
   # ── Providers ───────────────────────────────────────────────────────────
 
@@ -171,6 +172,26 @@ defmodule HydraX.Runtime do
 
   defdelegate update_conversation_metadata(conversation, attrs), to: HydraX.Runtime.Conversations
 
+  # ── Work items ───────────────────────────────────────────────────────────
+
+  defdelegate list_work_items(), to: HydraX.Runtime.WorkItems
+  defdelegate list_work_items(opts), to: HydraX.Runtime.WorkItems
+  defdelegate get_work_item!(id), to: HydraX.Runtime.WorkItems
+  defdelegate change_work_item(), to: HydraX.Runtime.WorkItems
+  defdelegate change_work_item(work_item), to: HydraX.Runtime.WorkItems
+  defdelegate change_work_item(work_item, attrs), to: HydraX.Runtime.WorkItems
+  defdelegate save_work_item(attrs), to: HydraX.Runtime.WorkItems
+  defdelegate save_work_item(work_item, attrs), to: HydraX.Runtime.WorkItems
+  defdelegate list_artifacts(), to: HydraX.Runtime.WorkItems
+  defdelegate list_artifacts(opts), to: HydraX.Runtime.WorkItems
+  defdelegate work_item_artifacts(work_item_id), to: HydraX.Runtime.WorkItems
+  defdelegate create_artifact(attrs), to: HydraX.Runtime.WorkItems
+  defdelegate claim_work_item(work_item), to: HydraX.Runtime.WorkItems
+  defdelegate claim_work_item(work_item, opts), to: HydraX.Runtime.WorkItems
+  defdelegate cancel_work_item!(id), to: HydraX.Runtime.WorkItems
+  defdelegate run_autonomy_cycle(agent_id), to: HydraX.Runtime.WorkItems
+  defdelegate run_autonomy_cycle(agent_id, opts), to: HydraX.Runtime.WorkItems
+
   # ── Coordination ────────────────────────────────────────────────────────
 
   defdelegate claim_lease(name), to: HydraX.Runtime.Coordination
@@ -304,6 +325,7 @@ defmodule HydraX.Runtime do
   defdelegate control_policy_status(), to: HydraX.Runtime.Observability
   defdelegate secret_storage_status(), to: HydraX.Runtime.Observability
   defdelegate observability_status(), to: HydraX.Runtime.Observability
+  defdelegate autonomy_status(), to: HydraX.Runtime.Observability
   defdelegate system_status(), to: HydraX.Runtime.Observability
   defdelegate readiness_report(), to: HydraX.Runtime.Observability
   defdelegate readiness_report(opts), to: HydraX.Runtime.Observability

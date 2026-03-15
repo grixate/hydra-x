@@ -34,6 +34,7 @@ defmodule HydraXWeb.HealthLive do
      |> assign(:operator_status, Runtime.operator_status())
      |> assign(:provider_status, Runtime.provider_status())
      |> assign(:tool_status, Runtime.tool_status())
+     |> assign(:autonomy_status, Runtime.autonomy_status())
      |> assign(
        :effective_policy,
        Runtime.effective_policy(default_agent && default_agent.id, process_type: "channel")
@@ -922,9 +923,9 @@ defmodule HydraXWeb.HealthLive do
                 </div>
                 <div class="mt-2 text-xs text-[var(--hx-mute)]">
                   level {event.level}
-                  <span :if={event.expired_by}> · expiry              {event.expired_by}</span>
+                  <span :if={event.expired_by}> · expiry               {event.expired_by}</span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip              {event.ip}</span>
+                  <span :if={event.ip}> · ip               {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -1086,6 +1087,107 @@ defmodule HydraXWeb.HealthLive do
               search {channel_summary(@tool_status.web_search_channels)} ·
               shell {channel_summary(@tool_status.shell_command_channels)}
             </p>
+          </article>
+        </div>
+      </section>
+
+      <section class="glass-panel mt-6 p-6">
+        <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">Autonomy</div>
+        <h2 class="mt-3 font-display text-4xl">Work graph posture</h2>
+        <p class="mt-3 text-sm text-[var(--hx-mute)]">
+          autonomy-capable agents {@autonomy_status.autonomy_agent_count} · overdue{" "}
+          {@autonomy_status.overdue_count} · pending review {@autonomy_status.pending_review_count}
+        </p>
+        <div class="mt-6 grid gap-3 lg:grid-cols-5">
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Planned
+            </div>
+            <div class="mt-3 font-display text-4xl">
+              {Map.get(@autonomy_status.counts, "planned", 0)}
+            </div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Running
+            </div>
+            <div class="mt-3 font-display text-4xl">
+              {Map.get(@autonomy_status.counts, "running", 0) +
+                Map.get(@autonomy_status.counts, "claimed", 0)}
+            </div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Blocked
+            </div>
+            <div class="mt-3 font-display text-4xl">
+              {Map.get(@autonomy_status.counts, "blocked", 0)}
+            </div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Completed
+            </div>
+            <div class="mt-3 font-display text-4xl">
+              {Map.get(@autonomy_status.counts, "completed", 0)}
+            </div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Failed
+            </div>
+            <div class="mt-3 font-display text-4xl">
+              {Map.get(@autonomy_status.counts, "failed", 0)}
+            </div>
+          </article>
+        </div>
+        <div class="mt-4 grid gap-3 lg:grid-cols-2">
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Role coverage
+            </div>
+            <div class="mt-3 space-y-2">
+              <p :if={@autonomy_status.active_roles == %{}} class="text-sm text-[var(--hx-mute)]">
+                No autonomy roles configured yet.
+              </p>
+              <div
+                :for={{role, count} <- @autonomy_status.active_roles}
+                class="rounded-xl border border-white/10 bg-black/10 px-3 py-3"
+              >
+                <div class="flex items-center justify-between gap-3">
+                  <div class="text-sm text-[var(--hx-accent)]">{role}</div>
+                  <div class="text-xs text-[var(--hx-mute)]">{count} agents</div>
+                </div>
+              </div>
+            </div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Recent work items
+            </div>
+            <div class="mt-3 space-y-2">
+              <p
+                :if={@autonomy_status.recent_work_items == []}
+                class="text-sm text-[var(--hx-mute)]"
+              >
+                No autonomy work items recorded yet.
+              </p>
+              <div
+                :for={item <- @autonomy_status.recent_work_items}
+                class="rounded-xl border border-white/10 bg-black/10 px-3 py-3"
+              >
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                  <div class="text-sm text-[var(--hx-accent)]">
+                    {item.kind} · {item.assigned_role}
+                  </div>
+                  <div class="text-xs text-[var(--hx-mute)]">{item.status}</div>
+                </div>
+                <p class="mt-2 text-sm text-[var(--hx-mute)]">{item.goal}</p>
+                <p class="mt-2 text-xs text-[var(--hx-mute)]">
+                  {autonomy_artifact_summary(item)}
+                </p>
+              </div>
+            </div>
           </article>
         </div>
       </section>
@@ -1836,6 +1938,16 @@ defmodule HydraXWeb.HealthLive do
   end
 
   defp ranked_memory_breakdown_labels(_ranked), do: []
+
+  defp autonomy_artifact_summary(item) do
+    artifact_count =
+      item.result_refs
+      |> Map.get("artifact_ids", [])
+      |> List.wrap()
+      |> length()
+
+    "priority #{item.priority} · artifacts #{artifact_count}"
+  end
 
   defp is_nil_or_empty(nil), do: true
   defp is_nil_or_empty(""), do: true

@@ -226,7 +226,8 @@ defmodule HydraXWeb.JobsLive do
                   {"Prompt", "prompt"},
                   {"Backup", "backup"},
                   {"Ingest", "ingest"},
-                  {"Maintenance", "maintenance"}
+                  {"Maintenance", "maintenance"},
+                  {"Autonomy", "autonomy"}
                 ]}
               />
               <.input
@@ -358,7 +359,8 @@ defmodule HydraXWeb.JobsLive do
                 {"Prompt", "prompt"},
                 {"Backup", "backup"},
                 {"Ingest", "ingest"},
-                {"Maintenance", "maintenance"}
+                {"Maintenance", "maintenance"},
+                {"Autonomy", "autonomy"}
               ]}
             />
             <.input
@@ -498,7 +500,8 @@ defmodule HydraXWeb.JobsLive do
                   {"Prompt", "prompt"},
                   {"Backup", "backup"},
                   {"Ingest", "ingest"},
-                  {"Maintenance", "maintenance"}
+                  {"Maintenance", "maintenance"},
+                  {"Autonomy", "autonomy"}
                 ]}
               />
               <.input

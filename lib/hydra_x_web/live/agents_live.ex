@@ -342,6 +342,17 @@ defmodule HydraXWeb.AgentsLive do
                   <div class="mt-1 font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
                     {agent.slug}
                   </div>
+                  <div class="mt-2 flex flex-wrap items-center gap-2">
+                    <span class="rounded-full border border-fuchsia-400/20 bg-fuchsia-400/10 px-3 py-1 font-mono text-xs uppercase tracking-[0.18em] text-fuchsia-200">
+                      {agent.role}
+                    </span>
+                    <span class="rounded-full border border-white/10 px-3 py-1 font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                      {agent.capability_summary.max_autonomy_level}
+                    </span>
+                    <span class="rounded-full border border-white/10 px-3 py-1 font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                      {length(agent.recent_work_items)} work items
+                    </span>
+                  </div>
                   <p class="mt-3 max-w-xl text-sm text-[var(--hx-mute)]">{agent.description}</p>
                 </div>
                 <div class="flex items-center gap-2">
@@ -428,6 +439,51 @@ defmodule HydraXWeb.AgentsLive do
               </div>
               <div :if={agent.runtime.last_warm_error} class="mt-1 text-xs text-amber-200/80">
                 {agent.runtime.last_warm_error}
+              </div>
+              <div class="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-3">
+                <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                  Capability contract
+                </div>
+                <div class="mt-2 text-sm text-[var(--hx-mute)]">
+                  tools {list_summary(agent.capability_summary.tools)} · artifacts {list_summary(
+                    agent.capability_summary.artifact_types
+                  )}
+                </div>
+                <div class="mt-2 text-xs text-[var(--hx-mute)]">
+                  delivery {list_summary(agent.capability_summary.delivery_modes)} · side effects {list_summary(
+                    agent.capability_summary.side_effect_classes
+                  )}
+                </div>
+              </div>
+              <div class="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-3">
+                <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                  Recent work items
+                </div>
+                <div class="mt-3 space-y-2">
+                  <p
+                    :if={agent.recent_work_items == []}
+                    class="text-sm text-[var(--hx-mute)]"
+                  >
+                    No autonomy work has been assigned to this agent yet.
+                  </p>
+                  <div
+                    :for={item <- agent.recent_work_items}
+                    class="rounded-xl border border-white/10 bg-black/10 px-3 py-3"
+                  >
+                    <div class="flex flex-wrap items-center justify-between gap-3">
+                      <div class="text-sm text-[var(--hx-accent)]">
+                        {item.kind} · {item.status}
+                      </div>
+                      <div class="text-xs text-[var(--hx-mute)]">
+                        {item.execution_mode} · {item.approval_stage}
+                      </div>
+                    </div>
+                    <p class="mt-2 text-sm text-[var(--hx-mute)]">{item.goal}</p>
+                    <div class="mt-2 text-xs text-[var(--hx-mute)]">
+                      priority {item.priority} · {work_item_artifact_summary(item)}
+                    </div>
+                  </div>
+                </div>
               </div>
               <div class="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-3">
                 <div class="flex items-center justify-between gap-3">
@@ -968,6 +1024,12 @@ defmodule HydraXWeb.AgentsLive do
           <.form for={@form} phx-submit="save" class="mt-6 space-y-2">
             <.input field={@form[:name]} label="Name" />
             <.input field={@form[:slug]} label="Slug" />
+            <.input
+              field={@form[:role]}
+              type="select"
+              label="Role"
+              options={role_options()}
+            />
             <.input field={@form[:workspace_root]} label="Workspace root" />
             <.input field={@form[:description]} type="textarea" label="Description" />
             <.input field={@form[:is_default]} type="checkbox" label="Default agent" />
@@ -993,6 +1055,7 @@ defmodule HydraXWeb.AgentsLive do
     %{
       agents: Runtime.list_agents() |> length(),
       providers: Runtime.list_provider_configs() |> length(),
+      work_items: Runtime.list_work_items(limit: 500) |> length(),
       turns:
         Runtime.list_conversations(limit: 200)
         |> Enum.flat_map(&Runtime.list_turns(&1.id))
@@ -1008,10 +1071,19 @@ defmodule HydraXWeb.AgentsLive do
     |> Enum.map(fn agent ->
       agent
       |> Map.put(:runtime, Runtime.agent_runtime_status(agent))
+      |> Map.put(:capability_profile, Runtime.capability_profile(agent))
+      |> Map.put(
+        :capability_summary,
+        Runtime.capability_profile(agent) |> Runtime.Autonomy.capability_summary()
+      )
       |> Map.put(:provider_route, Runtime.effective_provider_route(agent.id, "channel"))
       |> Map.put(:effective_policy, Runtime.effective_policy(agent.id, process_type: "channel"))
       |> Map.put(:bulletin, Runtime.agent_bulletin(agent.id))
       |> Map.put(:compaction_policy, Runtime.compaction_policy(agent.id))
+      |> Map.put(
+        :recent_work_items,
+        Runtime.list_work_items(agent_id: agent.id, limit: 4, preload: false)
+      )
       |> Map.put(:tool_policy_override, Runtime.get_agent_tool_policy(agent.id))
       |> Map.put(:effective_tool_policy, Runtime.effective_tool_policy(agent.id))
       |> Map.put(:control_policy_override, Runtime.get_agent_control_policy(agent.id))
@@ -1041,6 +1113,25 @@ defmodule HydraXWeb.AgentsLive do
       "cortex_provider_id" => get_in(profile, ["process_overrides", "cortex"]),
       "compactor_provider_id" => get_in(profile, ["process_overrides", "compactor"])
     }
+  end
+
+  defp role_options do
+    Runtime.Autonomy.role_options()
+  end
+
+  defp list_summary(values) do
+    case Enum.reject(List.wrap(values), &(&1 in [nil, ""])) do
+      [] -> "none"
+      entries -> Enum.join(entries, ", ")
+    end
+  end
+
+  defp work_item_artifact_summary(item) do
+    item.result_refs
+    |> Map.get("artifact_ids", [])
+    |> List.wrap()
+    |> length()
+    |> then(&"artifacts #{&1}")
   end
 
   defp skill_tags(skill) do
