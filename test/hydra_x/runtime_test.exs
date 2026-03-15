@@ -3970,6 +3970,96 @@ defmodule HydraX.RuntimeTest do
     assert Enum.any?(status.recent_work_items, &(&1.id == work_item.id))
   end
 
+  test "engineering work items create proposal, change set, review, and approval records" do
+    builder =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, builder} = Runtime.save_agent(builder, %{"role" => "builder"})
+
+    reviewer =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, reviewer} = Runtime.save_agent(reviewer, %{"role" => "reviewer"})
+
+    File.write!(Path.join(builder.workspace_root, "README.md"), "# Hydra-X\n")
+    File.mkdir_p!(Path.join(builder.workspace_root, "lib"))
+
+    File.write!(
+      Path.join(builder.workspace_root, "lib/runtime_notes.ex"),
+      "defmodule RuntimeNotes do\nend\n"
+    )
+
+    {:ok, parent} =
+      Runtime.save_work_item(%{
+        "kind" => "engineering",
+        "goal" => "Improve the runtime approval pipeline for autonomous work.",
+        "assigned_agent_id" => builder.id,
+        "assigned_role" => "builder",
+        "execution_mode" => "execute",
+        "priority" => 9,
+        "review_required" => true
+      })
+
+    assert {:ok, builder_summary} = Runtime.run_autonomy_cycle(builder.id)
+    assert builder_summary.action == "engineering_review_requested"
+
+    parent = Runtime.get_work_item!(parent.id)
+    assert parent.status == "blocked"
+    assert parent.approval_stage == "patch_ready"
+
+    parent_artifacts = Runtime.work_item_artifacts(parent.id)
+    assert Enum.any?(parent_artifacts, &(&1.type == "proposal"))
+    assert Enum.any?(parent_artifacts, &(&1.type == "code_change_set"))
+
+    [review_item_id] = parent.result_refs["child_work_item_ids"]
+    review_item = Runtime.get_work_item!(review_item_id)
+    assert review_item.kind == "review"
+    assert review_item.assigned_role == "reviewer"
+
+    assert {:ok, reviewer_summary} = Runtime.run_autonomy_cycle(reviewer.id)
+    assert reviewer_summary.action == "review_completed"
+
+    approvals = Runtime.approval_records_for_subject("work_item", parent.id)
+    assert Enum.any?(approvals, &(&1.decision == "approved"))
+
+    assert {:ok, finalize_summary} = Runtime.run_autonomy_cycle(builder.id)
+    assert finalize_summary.action == "finalized_blocked_parent"
+
+    parent = Runtime.get_work_item!(parent.id)
+    assert parent.status == "completed"
+    assert parent.approval_stage == "validated"
+    assert length(parent.result_refs["approval_record_ids"]) >= 1
+  end
+
+  test "operator approval records can promote a work item" do
+    agent = create_agent()
+
+    {:ok, work_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Promote the reviewed work item.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "operator",
+        "status" => "completed",
+        "approval_stage" => "validated"
+      })
+
+    {updated, record} =
+      Runtime.approve_work_item!(work_item.id, %{
+        "requested_action" => "merge_ready",
+        "rationale" => "Operator approved promotion to merge-ready state."
+      })
+
+    assert updated.approval_stage == "operator_approved"
+    assert record.decision == "approved"
+    assert record.requested_action == "merge_ready"
+
+    approvals = Runtime.approval_records_for_subject("work_item", work_item.id)
+    assert Enum.any?(approvals, &(&1.id == record.id))
+  end
+
   test "tool policy disables tools in the registry" do
     {:ok, _policy} =
       Runtime.save_tool_policy(%{

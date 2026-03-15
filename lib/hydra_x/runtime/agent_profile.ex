@@ -22,6 +22,7 @@ defmodule HydraX.Runtime.AgentProfile do
     has_many :memories, HydraX.Memory.Entry, foreign_key: :agent_id
     has_many :assigned_work_items, HydraX.Runtime.WorkItem, foreign_key: :assigned_agent_id
     has_many :delegated_work_items, HydraX.Runtime.WorkItem, foreign_key: :delegated_by_agent_id
+    has_many :approval_records, HydraX.Runtime.ApprovalRecord, foreign_key: :reviewer_agent_id
 
     timestamps(type: :utc_datetime_usec)
   end

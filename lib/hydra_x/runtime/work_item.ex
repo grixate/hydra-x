@@ -33,6 +33,7 @@ defmodule HydraX.Runtime.WorkItem do
     belongs_to :parent_work_item, __MODULE__
 
     has_many :artifacts, HydraX.Runtime.Artifact
+    has_many :approval_records, HydraX.Runtime.ApprovalRecord
     has_many :child_work_items, __MODULE__, foreign_key: :parent_work_item_id
 
     timestamps(type: :utc_datetime_usec)

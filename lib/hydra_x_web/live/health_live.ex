@@ -923,9 +923,9 @@ defmodule HydraXWeb.HealthLive do
                 </div>
                 <div class="mt-2 text-xs text-[var(--hx-mute)]">
                   level {event.level}
-                  <span :if={event.expired_by}> · expiry               {event.expired_by}</span>
+                  <span :if={event.expired_by}> · expiry                {event.expired_by}</span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip               {event.ip}</span>
+                  <span :if={event.ip}> · ip                {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -1138,6 +1138,51 @@ defmodule HydraXWeb.HealthLive do
             </div>
             <div class="mt-3 font-display text-4xl">
               {Map.get(@autonomy_status.counts, "failed", 0)}
+            </div>
+          </article>
+        </div>
+        <div class="mt-4 grid gap-3 lg:grid-cols-4">
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Approved
+            </div>
+            <div class="mt-3 font-display text-4xl">
+              {Map.get(@autonomy_status.approval_decisions, "approved", 0)}
+            </div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Rejected
+            </div>
+            <div class="mt-3 font-display text-4xl">
+              {Map.get(@autonomy_status.approval_decisions, "rejected", 0)}
+            </div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4 lg:col-span-2">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Recent approvals
+            </div>
+            <div class="mt-3 space-y-2">
+              <p
+                :if={@autonomy_status.recent_approvals == []}
+                class="text-sm text-[var(--hx-mute)]"
+              >
+                No approval records have been captured yet.
+              </p>
+              <div
+                :for={record <- @autonomy_status.recent_approvals}
+                class="rounded-xl border border-white/10 bg-black/10 px-3 py-3"
+              >
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                  <div class="text-sm text-[var(--hx-accent)]">
+                    {record.requested_action}
+                  </div>
+                  <div class="text-xs text-[var(--hx-mute)]">{record.decision}</div>
+                </div>
+                <p class="mt-2 text-sm text-[var(--hx-mute)]">
+                  {record.rationale || "No rationale recorded."}
+                </p>
+              </div>
             </div>
           </article>
         </div>

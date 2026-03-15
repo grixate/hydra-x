@@ -123,7 +123,7 @@ defmodule HydraXWeb.HealthLiveTest do
 
     {:ok, agent} = Runtime.save_agent(agent, %{"role" => "planner"})
 
-    {:ok, _work_item} =
+    {:ok, work_item} =
       Runtime.save_work_item(%{
         "kind" => "task",
         "goal" => "Prepare autonomous research rollout.",
@@ -132,11 +132,19 @@ defmodule HydraXWeb.HealthLiveTest do
         "status" => "planned"
       })
 
+    {_updated, _record} =
+      Runtime.approve_work_item!(work_item.id, %{
+        "requested_action" => "promote_work_item",
+        "rationale" => "Operator confirmed the rollout."
+      })
+
     {:ok, _view, html} = live(conn, ~p"/health")
 
     assert html =~ "Work graph posture"
     assert html =~ "Role coverage"
     assert html =~ "Recent work items"
+    assert html =~ "Recent approvals"
+    assert html =~ "Operator confirmed the rollout."
     assert html =~ "Prepare autonomous research rollout."
   end
 

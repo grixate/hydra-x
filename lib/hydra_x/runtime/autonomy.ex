@@ -142,6 +142,10 @@ defmodule HydraX.Runtime.Autonomy do
     }
   end
 
+  def side_effect_allowed?(profile, class) when is_map(profile) and is_binary(class) do
+    class in List.wrap(profile["side_effect_classes"])
+  end
+
   def normalize_role(role) when role in @roles, do: role
   def normalize_role(role) when is_binary(role) and role in @roles, do: role
   def normalize_role(_role), do: default_role()

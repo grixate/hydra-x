@@ -186,6 +186,12 @@ defmodule HydraX.Runtime do
   defdelegate list_artifacts(opts), to: HydraX.Runtime.WorkItems
   defdelegate work_item_artifacts(work_item_id), to: HydraX.Runtime.WorkItems
   defdelegate create_artifact(attrs), to: HydraX.Runtime.WorkItems
+  defdelegate list_approval_records(), to: HydraX.Runtime.WorkItems
+  defdelegate list_approval_records(opts), to: HydraX.Runtime.WorkItems
+  defdelegate approval_records_for_subject(subject_type, subject_id), to: HydraX.Runtime.WorkItems
+  defdelegate create_approval_record(attrs), to: HydraX.Runtime.WorkItems
+  defdelegate approve_work_item!(id), to: HydraX.Runtime.WorkItems
+  defdelegate approve_work_item!(id, attrs), to: HydraX.Runtime.WorkItems
   defdelegate claim_work_item(work_item), to: HydraX.Runtime.WorkItems
   defdelegate claim_work_item(work_item, opts), to: HydraX.Runtime.WorkItems
   defdelegate cancel_work_item!(id), to: HydraX.Runtime.WorkItems
