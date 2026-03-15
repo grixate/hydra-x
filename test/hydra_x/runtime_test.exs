@@ -342,6 +342,14 @@ defmodule HydraX.RuntimeTest do
     assert turn.content == "Hold this for the owning node."
     assert turn.metadata["deferred_to_owner"] == "node:remote"
 
+    wait_for(
+      fn ->
+        channel_state = Runtime.conversation_channel_state(conversation.id)
+        channel_state.status == "deferred"
+      end,
+      240
+    )
+
     channel_state = Runtime.conversation_channel_state(conversation.id)
     assert channel_state.status == "deferred"
     assert channel_state.resumable

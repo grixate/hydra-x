@@ -50,7 +50,7 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert Runtime.get_default_agent().slug == "ops-agent"
   end
 
-  test "agents page shows role capability and recent work items", %{conn: conn} do
+  test "agents page shows role capability, queue posture, and recent work items", %{conn: conn} do
     {:ok, agent} =
       Runtime.save_agent(%{
         name: "Research Agent",
@@ -70,12 +70,45 @@ defmodule HydraXWeb.AgentsLiveTest do
         "status" => "planned"
       })
 
+    {:ok, extension_item} =
+      Runtime.save_work_item(%{
+        "kind" => "extension",
+        "goal" => "Package the operator-facing extension rollout.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "researcher",
+        "status" => "completed",
+        "approval_stage" => "operator_approved",
+        "result_refs" => %{
+          "last_requested_action" => "enable_extension",
+          "extension_enablement_status" => "approved_not_enabled"
+        }
+      })
+
+    {:ok, _artifact} =
+      Runtime.create_artifact(%{
+        "work_item_id" => extension_item.id,
+        "type" => "patch_bundle",
+        "title" => "Extension bundle",
+        "summary" => "Packaged autonomy extension"
+      })
+
+    {_updated, _record} =
+      Runtime.approve_work_item!(extension_item.id, %{
+        "requested_action" => "promote_work_item",
+        "rationale" => "Recorded for agent review history."
+      })
+
     {:ok, _view, html} = live(conn, ~p"/agents")
 
     assert html =~ "Capability contract"
     assert html =~ "researcher"
     assert html =~ "Recent work items"
+    assert html =~ "Awaiting operator"
+    assert html =~ "Extensions gated"
     assert html =~ "Map the current operator-facing autonomy work."
+    assert html =~ "action promote_work_item"
+    assert html =~ "approved_not_enabled"
+    assert html =~ "patch_bundle"
   end
 
   test "agents page can repair a workspace scaffold", %{conn: conn} do

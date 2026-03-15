@@ -459,6 +459,32 @@ defmodule HydraXWeb.AgentsLive do
                 <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
                   Recent work items
                 </div>
+                <div class="mt-2 grid gap-3 md:grid-cols-4">
+                  <article class="rounded-xl border border-white/10 bg-black/10 px-3 py-3">
+                    <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                      Pending review
+                    </div>
+                    <div class="mt-2 font-display text-2xl">{agent.work_queue.pending_review}</div>
+                  </article>
+                  <article class="rounded-xl border border-white/10 bg-black/10 px-3 py-3">
+                    <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                      Awaiting operator
+                    </div>
+                    <div class="mt-2 font-display text-2xl">{agent.work_queue.awaiting_operator}</div>
+                  </article>
+                  <article class="rounded-xl border border-white/10 bg-black/10 px-3 py-3">
+                    <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                      Extensions gated
+                    </div>
+                    <div class="mt-2 font-display text-2xl">{agent.work_queue.extensions_gated}</div>
+                  </article>
+                  <article class="rounded-xl border border-white/10 bg-black/10 px-3 py-3">
+                    <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                      Blocked/failed
+                    </div>
+                    <div class="mt-2 font-display text-2xl">{agent.work_queue.blocked_or_failed}</div>
+                  </article>
+                </div>
                 <div class="mt-3 space-y-2">
                   <p
                     :if={agent.recent_work_items == []}
@@ -481,6 +507,31 @@ defmodule HydraXWeb.AgentsLive do
                     <p class="mt-2 text-sm text-[var(--hx-mute)]">{item.goal}</p>
                     <div class="mt-2 text-xs text-[var(--hx-mute)]">
                       priority {item.priority} · {work_item_artifact_summary(item)}
+                    </div>
+                    <div class="mt-2 flex flex-wrap gap-2 text-[11px] text-[var(--hx-mute)]">
+                      <span class="rounded-full border border-white/10 px-3 py-1">
+                        latest approval {work_item_latest_approval(item)}
+                      </span>
+                      <span
+                        :if={work_item_last_action(item)}
+                        class="rounded-full border border-white/10 px-3 py-1"
+                      >
+                        action {work_item_last_action(item)}
+                      </span>
+                      <span
+                        :if={work_item_enablement_status(item)}
+                        class="rounded-full border border-amber-400/20 bg-amber-400/10 px-3 py-1 text-amber-200"
+                      >
+                        {work_item_enablement_status(item)}
+                      </span>
+                    </div>
+                    <div :if={work_item_artifact_types(item) != []} class="mt-2 flex flex-wrap gap-2">
+                      <span
+                        :for={type <- work_item_artifact_types(item)}
+                        class="rounded-full border border-white/10 px-3 py-1 text-[11px] text-[var(--hx-mute)]"
+                      >
+                        {type}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -1082,8 +1133,9 @@ defmodule HydraXWeb.AgentsLive do
       |> Map.put(:compaction_policy, Runtime.compaction_policy(agent.id))
       |> Map.put(
         :recent_work_items,
-        Runtime.list_work_items(agent_id: agent.id, limit: 4, preload: false)
+        Runtime.list_work_items(agent_id: agent.id, limit: 4)
       )
+      |> Map.put(:work_queue, work_queue_summary(agent.id))
       |> Map.put(:tool_policy_override, Runtime.get_agent_tool_policy(agent.id))
       |> Map.put(:effective_tool_policy, Runtime.effective_tool_policy(agent.id))
       |> Map.put(:control_policy_override, Runtime.get_agent_control_policy(agent.id))
@@ -1100,6 +1152,48 @@ defmodule HydraXWeb.AgentsLive do
       "medium" => agent.compaction_policy.medium,
       "hard" => agent.compaction_policy.hard
     }
+  end
+
+  defp work_queue_summary(agent_id) do
+    items = Runtime.list_work_items(agent_id: agent_id, limit: 100, preload: false)
+
+    %{
+      pending_review: Enum.count(items, &(&1.status == "blocked" and &1.review_required)),
+      awaiting_operator:
+        Enum.count(items, &(&1.status == "completed" and &1.approval_stage == "validated")),
+      extensions_gated:
+        Enum.count(
+          items,
+          &(&1.kind == "extension" and &1.status == "completed" and
+              &1.approval_stage in ["validated", "operator_approved"])
+        ),
+      blocked_or_failed: Enum.count(items, &(&1.status in ["blocked", "failed"]))
+    }
+  end
+
+  defp work_item_latest_approval(work_item) do
+    work_item.approval_records
+    |> Enum.sort_by(& &1.inserted_at, {:desc, DateTime})
+    |> List.first()
+    |> case do
+      nil -> "pending"
+      record -> record.decision
+    end
+  end
+
+  defp work_item_last_action(work_item) do
+    get_in(work_item.result_refs || %{}, ["last_requested_action"])
+  end
+
+  defp work_item_enablement_status(work_item) do
+    get_in(work_item.result_refs || %{}, ["extension_enablement_status"])
+  end
+
+  defp work_item_artifact_types(work_item) do
+    work_item.artifacts
+    |> Enum.map(& &1.type)
+    |> Enum.uniq()
+    |> Enum.sort()
   end
 
   defp provider_routing_form(agent) do
