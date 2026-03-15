@@ -192,6 +192,8 @@ defmodule HydraX.Runtime do
   defdelegate create_approval_record(attrs), to: HydraX.Runtime.WorkItems
   defdelegate approve_work_item!(id), to: HydraX.Runtime.WorkItems
   defdelegate approve_work_item!(id, attrs), to: HydraX.Runtime.WorkItems
+  defdelegate reject_work_item!(id), to: HydraX.Runtime.WorkItems
+  defdelegate reject_work_item!(id, attrs), to: HydraX.Runtime.WorkItems
   defdelegate claim_work_item(work_item), to: HydraX.Runtime.WorkItems
   defdelegate claim_work_item(work_item, opts), to: HydraX.Runtime.WorkItems
   defdelegate cancel_work_item!(id), to: HydraX.Runtime.WorkItems

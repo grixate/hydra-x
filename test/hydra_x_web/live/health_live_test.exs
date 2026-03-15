@@ -132,6 +132,16 @@ defmodule HydraXWeb.HealthLiveTest do
         "status" => "planned"
       })
 
+    {:ok, extension_item} =
+      Runtime.save_work_item(%{
+        "kind" => "extension",
+        "goal" => "Package the new autonomy extension.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "planner",
+        "status" => "completed",
+        "approval_stage" => "validated"
+      })
+
     {_updated, _record} =
       Runtime.approve_work_item!(work_item.id, %{
         "requested_action" => "promote_work_item",
@@ -144,8 +154,11 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "Role coverage"
     assert html =~ "Recent work items"
     assert html =~ "Recent approvals"
+    assert html =~ "Awaiting operator"
+    assert html =~ "Extensions gated"
     assert html =~ "Operator confirmed the rollout."
     assert html =~ "Prepare autonomous research rollout."
+    assert html =~ extension_item.goal
   end
 
   test "health page shows the unified effective policy surface", %{conn: conn} do

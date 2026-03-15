@@ -88,7 +88,7 @@ defmodule HydraX.Runtime.Autonomy do
           ],
           "artifact_types" => ["code_change_set", "proposal", "patch_bundle"],
           "memory_scope" => ["global_agent_memory", "role_memory", "work_item_scratch_memory"],
-          "side_effect_classes" => ["read_only", "repo_write"],
+          "side_effect_classes" => ["read_only", "repo_write", "plugin_install"],
           "delivery_modes" => ["report", "control_plane"],
           "max_autonomy_level" => "execute_with_promotion"
         })

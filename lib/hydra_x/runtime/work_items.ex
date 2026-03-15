@@ -158,12 +158,18 @@ defmodule HydraX.Runtime.WorkItems do
   def approve_work_item!(id, attrs \\ %{}) when is_integer(id) do
     work_item = get_work_item!(id)
     attrs = Helpers.normalize_string_keys(attrs)
+    requested_action = attrs["requested_action"] || "promote_work_item"
+
+    unless approval_action_allowed?(work_item, requested_action) do
+      raise ArgumentError,
+            "approval action #{requested_action} is not allowed for work item ##{work_item.id} at stage #{work_item.approval_stage}"
+    end
 
     {:ok, record} =
       create_approval_record(%{
         "subject_type" => "work_item",
         "subject_id" => work_item.id,
-        "requested_action" => attrs["requested_action"] || "promote_work_item",
+        "requested_action" => requested_action,
         "decision" => "approved",
         "rationale" => attrs["rationale"] || "Approved for promotion.",
         "promoted_at" => attrs["promoted_at"] || DateTime.utc_now(),
@@ -174,13 +180,55 @@ defmodule HydraX.Runtime.WorkItems do
 
     {:ok, updated} =
       save_work_item(work_item, %{
-        "approval_stage" => "operator_approved",
+        "approval_stage" => next_approval_stage(work_item, requested_action),
+        "result_refs" =>
+          approval_result_refs(work_item, record, requested_action, attrs["metadata"] || %{}),
         "runtime_state" =>
           append_history(work_item.runtime_state, "approved", %{
             "approved_at" => DateTime.utc_now(),
-            "approval_record_id" => record.id
+            "approval_record_id" => record.id,
+            "requested_action" => requested_action
           })
       })
+
+    promote_artifacts!(updated, requested_action)
+
+    {updated, record}
+  end
+
+  def reject_work_item!(id, attrs \\ %{}) when is_integer(id) do
+    work_item = get_work_item!(id)
+    attrs = Helpers.normalize_string_keys(attrs)
+    requested_action = attrs["requested_action"] || "promote_work_item"
+
+    {:ok, record} =
+      create_approval_record(%{
+        "subject_type" => "work_item",
+        "subject_id" => work_item.id,
+        "requested_action" => requested_action,
+        "decision" => "rejected",
+        "rationale" => attrs["rationale"] || "Rejected during promotion review.",
+        "promoted_at" => attrs["promoted_at"],
+        "reviewer_agent_id" => attrs["reviewer_agent_id"],
+        "work_item_id" => attrs["work_item_id"],
+        "metadata" => attrs["metadata"] || %{}
+      })
+
+    {:ok, updated} =
+      save_work_item(work_item, %{
+        "status" => "failed",
+        "approval_stage" => rejection_stage(work_item),
+        "result_refs" =>
+          rejection_result_refs(work_item, record, requested_action, attrs["metadata"] || %{}),
+        "runtime_state" =>
+          append_history(work_item.runtime_state, "rejected", %{
+            "rejected_at" => DateTime.utc_now(),
+            "approval_record_id" => record.id,
+            "requested_action" => requested_action
+          })
+      })
+
+    reject_artifacts!(updated)
 
     {updated, record}
   end
@@ -257,6 +305,24 @@ defmodule HydraX.Runtime.WorkItems do
           select: count(work_item.id)
       )
 
+    pending_operator_approval_count =
+      Repo.one(
+        from work_item in WorkItem,
+          where:
+            work_item.kind in ["engineering", "extension"] and work_item.status == "completed" and
+              work_item.approval_stage == "validated",
+          select: count(work_item.id)
+      )
+
+    pending_extension_enablement_count =
+      Repo.one(
+        from work_item in WorkItem,
+          where:
+            work_item.kind == "extension" and work_item.status == "completed" and
+              work_item.approval_stage in ["validated", "operator_approved"],
+          select: count(work_item.id)
+      )
+
     approval_decisions =
       ApprovalRecord
       |> group_by([record], record.decision)
@@ -272,6 +338,8 @@ defmodule HydraX.Runtime.WorkItems do
       counts: counts,
       overdue_count: overdue_count,
       pending_review_count: pending_review_count,
+      pending_operator_approval_count: pending_operator_approval_count,
+      pending_extension_enablement_count: pending_extension_enablement_count,
       approval_decisions: approval_decisions,
       autonomy_agent_count: length(autonomy_agents),
       active_roles: autonomy_agents |> Enum.map(& &1.role) |> Enum.frequencies(),
@@ -887,7 +955,7 @@ defmodule HydraX.Runtime.WorkItems do
       workspace_snapshot["candidate_files"]
       |> Enum.take(5)
 
-    %{
+    base_payload = %{
       "summary" => "Prepared #{length(changed_files)} candidate files for #{work_item.kind}",
       "body" =>
         """
@@ -909,6 +977,15 @@ defmodule HydraX.Runtime.WorkItems do
       "rollback_notes" => proposal_payload["rollback_notes"],
       "promotion_stage" => "patch_ready"
     }
+
+    if work_item.kind == "extension" do
+      Map.merge(
+        base_payload,
+        extension_package_payload(work_item, workspace_snapshot, changed_files)
+      )
+    else
+      base_payload
+    end
   end
 
   defp build_review_report(work_item, target, change_artifact) do
@@ -916,7 +993,16 @@ defmodule HydraX.Runtime.WorkItems do
     changed_files = List.wrap(change_payload["changed_files"])
     test_commands = List.wrap(change_payload["test_commands"])
     requested_action = work_item.metadata["requested_action"] || "promote_work_item"
-    decision = if(changed_files == [], do: "rejected", else: "approved")
+
+    findings =
+      review_findings(
+        changed_files,
+        test_commands,
+        target && target.kind,
+        change_payload
+      )
+
+    decision = if(findings == [], do: "approved", else: "rejected")
 
     %{
       "summary" =>
@@ -934,7 +1020,7 @@ defmodule HydraX.Runtime.WorkItems do
         """
         |> String.trim(),
       "decision" => decision,
-      "findings" => review_findings(changed_files, test_commands),
+      "findings" => findings,
       "confidence" => if(decision == "approved", do: 0.74, else: 0.41)
     }
   end
@@ -1057,7 +1143,7 @@ defmodule HydraX.Runtime.WorkItems do
     "Revert the #{work_item.kind} patch, restore changed files from git history, and rerun validation commands."
   end
 
-  defp review_findings(changed_files, test_commands) do
+  defp review_findings(changed_files, test_commands, target_kind, change_payload) do
     []
     |> maybe_add_finding(
       changed_files == [],
@@ -1066,6 +1152,15 @@ defmodule HydraX.Runtime.WorkItems do
     |> maybe_add_finding(
       test_commands == [],
       "No validation commands were attached to the change set."
+    )
+    |> maybe_add_finding(
+      target_kind == "extension" and is_nil(change_payload["extension_package"]),
+      "Extension packages must include explicit compatibility and registration metadata."
+    )
+    |> maybe_add_finding(
+      target_kind == "extension" and
+        get_in(change_payload, ["registration", "enablement_status"]) != "approval_required",
+      "Generated extensions must remain approval-gated until an operator enables them."
     )
   end
 
@@ -1295,6 +1390,121 @@ defmodule HydraX.Runtime.WorkItems do
   defp side_effect_class_for_kind("engineering"), do: "repo_write"
   defp side_effect_class_for_kind("extension"), do: "plugin_install"
   defp side_effect_class_for_kind(_kind), do: "read_only"
+
+  defp extension_package_payload(work_item, workspace_snapshot, changed_files) do
+    package_name =
+      work_item.goal
+      |> String.downcase()
+      |> String.replace(~r/[^a-z0-9]+/, "-")
+      |> String.trim("-")
+      |> case do
+        "" -> "autonomy-extension-#{work_item.id || "draft"}"
+        slug -> slug
+      end
+
+    %{
+      "extension_package" => %{
+        "name" => package_name,
+        "package_type" => "hydra_extension",
+        "artifact_contract" => ["proposal", "patch_bundle", "review_report"],
+        "generated_at" => DateTime.utc_now(),
+        "workspace_root" => workspace_snapshot["workspace_root"]
+      },
+      "compatibility" => %{
+        "hydra_runtime" => "post_preview",
+        "required_roles" => ["builder", "reviewer", "operator"],
+        "required_tools" => ["workspace_patch", "workspace_write"],
+        "test_commands" => default_test_commands(work_item)
+      },
+      "registration" => %{
+        "manifest_path" => ".hydra/extensions/#{package_name}.json",
+        "install_mode" => "manual_registration",
+        "enablement_status" => "approval_required",
+        "target_directory" => Path.join(workspace_snapshot["workspace_root"], "priv/extensions")
+      },
+      "changed_files" => changed_files
+    }
+  end
+
+  defp approval_action_allowed?(%WorkItem{kind: kind, approval_stage: stage}, requested_action) do
+    case {kind, requested_action} do
+      {"extension", "enable_extension"} -> stage in ["validated", "operator_approved"]
+      {_, "merge_ready"} -> stage in ["validated", "operator_approved"]
+      {_, "promote_code_change"} -> stage in ["patch_ready", "validated"]
+      {_, "promote_work_item"} -> true
+      _ -> true
+    end
+  end
+
+  defp next_approval_stage(%WorkItem{kind: "extension"}, "enable_extension"),
+    do: "operator_approved"
+
+  defp next_approval_stage(_work_item, "merge_ready"), do: "merge_ready"
+  defp next_approval_stage(_work_item, "promote_code_change"), do: "validated"
+  defp next_approval_stage(_work_item, "promote_work_item"), do: "operator_approved"
+  defp next_approval_stage(work_item, _requested_action), do: work_item.approval_stage
+
+  defp rejection_stage(%WorkItem{approval_stage: "draft"}), do: "proposal_only"
+  defp rejection_stage(%WorkItem{} = work_item), do: work_item.approval_stage
+
+  defp approval_result_refs(work_item, record, requested_action, metadata) do
+    result_refs = work_item.result_refs || %{}
+    approval_ids = Enum.uniq(List.wrap(result_refs["approval_record_ids"]) ++ [record.id])
+
+    result_refs
+    |> Map.put("approval_record_ids", approval_ids)
+    |> Map.put("last_requested_action", requested_action)
+    |> Map.put("last_approval_metadata", metadata)
+    |> maybe_put_extension_enablement(work_item, requested_action)
+  end
+
+  defp rejection_result_refs(work_item, record, requested_action, metadata) do
+    result_refs = work_item.result_refs || %{}
+    approval_ids = Enum.uniq(List.wrap(result_refs["approval_record_ids"]) ++ [record.id])
+
+    result_refs
+    |> Map.put("approval_record_ids", approval_ids)
+    |> Map.put("last_requested_action", requested_action)
+    |> Map.put("last_rejection_metadata", metadata)
+    |> Map.put("rejected_at", DateTime.utc_now())
+  end
+
+  defp maybe_put_extension_enablement(
+         result_refs,
+         %WorkItem{kind: "extension"},
+         "enable_extension"
+       ) do
+    Map.put(result_refs, "extension_enablement_status", "approved_not_enabled")
+  end
+
+  defp maybe_put_extension_enablement(result_refs, _work_item, _requested_action), do: result_refs
+
+  defp promote_artifacts!(%WorkItem{} = work_item, requested_action) do
+    desired_status =
+      case requested_action do
+        "merge_ready" -> "approved"
+        "enable_extension" -> "approved"
+        _ -> "validated"
+      end
+
+    work_item.id
+    |> work_item_artifacts()
+    |> Enum.each(fn artifact ->
+      artifact
+      |> Artifact.changeset(%{"review_status" => desired_status})
+      |> Repo.update!()
+    end)
+  end
+
+  defp reject_artifacts!(%WorkItem{} = work_item) do
+    work_item.id
+    |> work_item_artifacts()
+    |> Enum.each(fn artifact ->
+      artifact
+      |> Artifact.changeset(%{"review_status" => "rejected"})
+      |> Repo.update!()
+    end)
+  end
 
   defp finalize_parent_attrs(claimed, children, summary_artifact, artifact_ids) do
     approval_records = approval_records_for_subject("work_item", claimed.id)

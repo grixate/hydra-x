@@ -1347,7 +1347,7 @@ defmodule HydraX.Runtime.Observability do
     approved = Map.get(autonomy.approval_decisions, "approved", 0)
     rejected = Map.get(autonomy.approval_decisions, "rejected", 0)
 
-    "agents #{autonomy.autonomy_agent_count}; running #{running}; completed #{completed}; overdue #{autonomy.overdue_count}; pending review #{autonomy.pending_review_count}; approvals #{approved}/#{rejected}"
+    "agents #{autonomy.autonomy_agent_count}; running #{running}; completed #{completed}; overdue #{autonomy.overdue_count}; pending review #{autonomy.pending_review_count}; awaiting operator #{autonomy.pending_operator_approval_count}; extensions gated #{autonomy.pending_extension_enablement_count}; approvals #{approved}/#{rejected}"
   end
 
   defp format_persistence_target(nil), do: ""

@@ -923,9 +923,9 @@ defmodule HydraXWeb.HealthLive do
                 </div>
                 <div class="mt-2 text-xs text-[var(--hx-mute)]">
                   level {event.level}
-                  <span :if={event.expired_by}> · expiry                {event.expired_by}</span>
+                  <span :if={event.expired_by}> · expiry                 {event.expired_by}</span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip                {event.ip}</span>
+                  <span :if={event.ip}> · ip                 {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -1096,7 +1096,8 @@ defmodule HydraXWeb.HealthLive do
         <h2 class="mt-3 font-display text-4xl">Work graph posture</h2>
         <p class="mt-3 text-sm text-[var(--hx-mute)]">
           autonomy-capable agents {@autonomy_status.autonomy_agent_count} · overdue{" "}
-          {@autonomy_status.overdue_count} · pending review {@autonomy_status.pending_review_count}
+          {@autonomy_status.overdue_count} · pending review {@autonomy_status.pending_review_count} · awaiting operator {@autonomy_status.pending_operator_approval_count} · extensions gated{" "}
+          {@autonomy_status.pending_extension_enablement_count}
         </p>
         <div class="mt-6 grid gap-3 lg:grid-cols-5">
           <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
@@ -1158,6 +1159,24 @@ defmodule HydraXWeb.HealthLive do
               {Map.get(@autonomy_status.approval_decisions, "rejected", 0)}
             </div>
           </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Awaiting operator
+            </div>
+            <div class="mt-3 font-display text-4xl">
+              {@autonomy_status.pending_operator_approval_count}
+            </div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Extensions gated
+            </div>
+            <div class="mt-3 font-display text-4xl">
+              {@autonomy_status.pending_extension_enablement_count}
+            </div>
+          </article>
+        </div>
+        <div class="mt-4 grid gap-3 lg:grid-cols-4">
           <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4 lg:col-span-2">
             <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
               Recent approvals

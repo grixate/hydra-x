@@ -4052,12 +4052,100 @@ defmodule HydraX.RuntimeTest do
         "rationale" => "Operator approved promotion to merge-ready state."
       })
 
-    assert updated.approval_stage == "operator_approved"
+    assert updated.approval_stage == "merge_ready"
     assert record.decision == "approved"
     assert record.requested_action == "merge_ready"
 
     approvals = Runtime.approval_records_for_subject("work_item", work_item.id)
     assert Enum.any?(approvals, &(&1.id == record.id))
+  end
+
+  test "extension work items produce approval-gated package metadata" do
+    builder =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, builder} = Runtime.save_agent(builder, %{"role" => "builder"})
+
+    File.mkdir_p!(Path.join(builder.workspace_root, "priv/extensions"))
+    File.write!(Path.join(builder.workspace_root, "README.md"), "# Hydra-X extensions\n")
+
+    {:ok, extension_item} =
+      Runtime.save_work_item(%{
+        "kind" => "extension",
+        "goal" => "Create a plugin package for design review automation.",
+        "assigned_agent_id" => builder.id,
+        "assigned_role" => "builder",
+        "execution_mode" => "execute",
+        "review_required" => false
+      })
+
+    assert {:ok, summary} = Runtime.run_autonomy_cycle(builder.id)
+    assert summary.action == "engineering_completed"
+
+    extension_item = Runtime.get_work_item!(extension_item.id)
+    assert extension_item.approval_stage == "validated"
+
+    patch_bundle =
+      Runtime.work_item_artifacts(extension_item.id)
+      |> Enum.find(&(&1.type == "patch_bundle"))
+
+    assert patch_bundle
+    assert patch_bundle.payload["extension_package"]["package_type"] == "hydra_extension"
+    assert patch_bundle.payload["registration"]["enablement_status"] == "approval_required"
+    assert patch_bundle.payload["registration"]["install_mode"] == "manual_registration"
+
+    assert patch_bundle.payload["compatibility"]["required_roles"] == [
+             "builder",
+             "reviewer",
+             "operator"
+           ]
+
+    {approved_item, record} =
+      Runtime.approve_work_item!(extension_item.id, %{
+        "requested_action" => "enable_extension",
+        "rationale" => "Operator approved extension registration."
+      })
+
+    assert approved_item.approval_stage == "operator_approved"
+    assert approved_item.result_refs["extension_enablement_status"] == "approved_not_enabled"
+    assert record.requested_action == "enable_extension"
+  end
+
+  test "operator rejection records fail a reviewed work item" do
+    agent = create_agent()
+
+    {:ok, work_item} =
+      Runtime.save_work_item(%{
+        "kind" => "engineering",
+        "goal" => "Reject the candidate runtime change.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "builder",
+        "status" => "completed",
+        "approval_stage" => "validated"
+      })
+
+    {:ok, _artifact} =
+      Runtime.create_artifact(%{
+        "work_item_id" => work_item.id,
+        "type" => "code_change_set",
+        "title" => "Candidate change set",
+        "summary" => "Candidate runtime change",
+        "review_status" => "validated"
+      })
+
+    {updated, record} =
+      Runtime.reject_work_item!(work_item.id, %{
+        "requested_action" => "merge_ready",
+        "rationale" => "Operator rejected the rollout due to missing test coverage."
+      })
+
+    assert updated.status == "failed"
+    assert updated.approval_stage == "validated"
+    assert record.decision == "rejected"
+
+    [artifact] = Runtime.work_item_artifacts(work_item.id)
+    assert artifact.review_status == "rejected"
   end
 
   test "tool policy disables tools in the registry" do
