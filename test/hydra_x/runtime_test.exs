@@ -4192,6 +4192,100 @@ defmodule HydraX.RuntimeTest do
            end)
   end
 
+  test "publish summary tasks can deliver through configured channels when enabled" do
+    previous = Application.get_env(:hydra_x, :telegram_deliver)
+
+    Application.put_env(:hydra_x, :telegram_deliver, fn payload ->
+      send(self(), {:publish_delivery, payload})
+      {:ok, %{provider_message_id: 91}}
+    end)
+
+    on_exit(fn ->
+      if previous do
+        Application.put_env(:hydra_x, :telegram_deliver, previous)
+      else
+        Application.delete_env(:hydra_x, :telegram_deliver)
+      end
+    end)
+
+    operator =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, operator} = Runtime.save_agent(operator, %{"role" => "operator"})
+
+    {:ok, _telegram} =
+      Runtime.save_telegram_config(%{
+        bot_token: "test-token",
+        bot_username: "hydrax_bot",
+        enabled: true,
+        default_agent_id: operator.id
+      })
+
+    {:ok, parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Publish the autonomy operations summary.",
+        "assigned_agent_id" => operator.id,
+        "assigned_role" => "operator",
+        "status" => "completed",
+        "approval_stage" => "operator_approved"
+      })
+
+    {:ok, summary_artifact} =
+      Runtime.create_artifact(%{
+        "work_item_id" => parent.id,
+        "type" => "decision_ledger",
+        "title" => "Final synthesis",
+        "summary" => "Publish-ready operations summary",
+        "body" =>
+          "Hydra-X should publish validated operations summaries with provenance and confidence."
+      })
+
+    {:ok, publish_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Deliver the finalized autonomy summary to operators.",
+        "assigned_agent_id" => operator.id,
+        "assigned_role" => "operator",
+        "status" => "planned",
+        "approval_stage" => "validated",
+        "parent_work_item_id" => parent.id,
+        "metadata" => %{
+          "task_type" => "publish_summary",
+          "summary_artifact_id" => summary_artifact.id,
+          "delivery" => %{
+            "enabled" => true,
+            "mode" => "channel",
+            "channel" => "telegram",
+            "target" => "9001"
+          },
+          "follow_up_context" => %{
+            "promoted_findings" => [
+              %{
+                "type" => "Claim",
+                "content" => "Keep provenance and confidence visible in publication."
+              }
+            ]
+          }
+        }
+      })
+
+    assert {:ok, summary} = Runtime.run_autonomy_cycle(operator.id)
+    assert summary.action == "delivered_publish_summary"
+
+    assert_receive {:publish_delivery, %{chat_id: "9001", text: content}}
+    assert content =~ "provenance and confidence"
+
+    publish_item = Runtime.get_work_item!(publish_item.id)
+    assert publish_item.result_refs["delivery"]["status"] == "delivered"
+    assert publish_item.result_refs["delivery"]["metadata"]["provider_message_id"] == 91
+
+    [delivery_brief] = Runtime.work_item_artifacts(publish_item.id)
+    assert delivery_brief.payload["delivery"]["status"] == "delivered"
+    assert delivery_brief.payload["delivery"]["metadata"]["provider_message_id"] == 91
+  end
+
   test "approving a research work item promotes memories from report artifacts" do
     researcher =
       create_agent()

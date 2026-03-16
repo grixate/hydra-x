@@ -1071,6 +1071,7 @@ defmodule HydraX.Runtime.WorkItems do
       })
 
     payload = build_delivery_brief(agent, running, summary_artifact, follow_up_context, delivery)
+    delivery_result = maybe_deliver_publish_summary(agent, payload)
 
     {:ok, artifact} =
       create_artifact(%{
@@ -1079,21 +1080,31 @@ defmodule HydraX.Runtime.WorkItems do
         "title" => "Publish-ready summary",
         "summary" => payload["summary"],
         "body" => payload["body"],
-        "payload" => Map.delete(payload, "body"),
+        "payload" => Map.delete(payload, "body") |> Map.put("delivery", delivery_result),
         "provenance" => %{"source" => "autonomy", "phase" => "publish_summary"},
         "confidence" => payload["confidence"],
         "review_status" => "validated"
       })
 
+    action =
+      case delivery_result["status"] do
+        "delivered" -> "delivered_publish_summary"
+        _ -> "prepared_delivery_brief"
+      end
+
     {:ok, completed} =
       save_work_item(running, %{
         "status" => "completed",
-        "result_refs" => %{"artifact_ids" => [artifact.id]},
+        "result_refs" => %{
+          "artifact_ids" => [artifact.id],
+          "delivery" => delivery_result
+        },
         "runtime_state" =>
           append_history(running.runtime_state, "completed", %{
             "completed_at" => DateTime.utc_now(),
             "phase" => "publish_summary",
-            "artifact_id" => artifact.id
+            "artifact_id" => artifact.id,
+            "delivery_status" => delivery_result["status"]
           })
       })
 
@@ -1103,7 +1114,7 @@ defmodule HydraX.Runtime.WorkItems do
        processed_count: 1,
        work_item: completed,
        artifacts: [artifact],
-       action: "prepared_delivery_brief"
+       action: action
      }}
   end
 
@@ -1468,6 +1479,12 @@ defmodule HydraX.Runtime.WorkItems do
       "delivery_mode" => delivery_mode,
       "delivery_channel" => delivery_channel,
       "delivery_target" => delivery_target,
+      "delivery" => %{
+        "enabled" => Map.get(delivery, "enabled", false),
+        "mode" => delivery_mode,
+        "channel" => delivery_channel,
+        "target" => delivery_target
+      },
       "summary_artifact_id" => summary_artifact && summary_artifact.id,
       "source_work_item_id" => work_item.parent_work_item_id,
       "key_findings" => findings,
@@ -1481,6 +1498,172 @@ defmodule HydraX.Runtime.WorkItems do
       "confidence" =>
         summary_payload["confidence"] || (summary_artifact && summary_artifact.confidence) || 0.68
     }
+  end
+
+  defp maybe_deliver_publish_summary(agent, payload) do
+    delivery = payload["delivery"] || %{}
+    enabled? = Map.get(delivery, "enabled", false)
+    channel = delivery["channel"]
+    target = delivery["target"]
+
+    cond do
+      enabled? != true ->
+        %{"status" => "draft"}
+
+      not (is_binary(channel) and channel != "") ->
+        %{"status" => "skipped", "reason" => "missing_delivery_channel"}
+
+      not (is_binary(target) and target != "") ->
+        %{"status" => "skipped", "reason" => "missing_delivery_target", "channel" => channel}
+
+      true ->
+        case HydraX.Runtime.authorize_delivery(agent.id, :job, channel) do
+          :ok ->
+            case deliver_publish_summary(channel, target, payload["body"]) do
+              {:ok, metadata} ->
+                %{
+                  "status" => "delivered",
+                  "channel" => channel,
+                  "target" => target,
+                  "delivered_at" => DateTime.utc_now(),
+                  "metadata" => stringify_delivery_metadata(metadata)
+                }
+
+              {:error, reason} ->
+                %{
+                  "status" => "failed",
+                  "channel" => channel,
+                  "target" => target,
+                  "attempted_at" => DateTime.utc_now(),
+                  "reason" => inspect(reason)
+                }
+            end
+
+          {:error, reason} ->
+            %{
+              "status" => "blocked",
+              "channel" => channel,
+              "target" => target,
+              "attempted_at" => DateTime.utc_now(),
+              "reason" => inspect(reason)
+            }
+        end
+    end
+  end
+
+  defp deliver_publish_summary("telegram", target, content) do
+    with config when not is_nil(config) <- HydraX.Runtime.TelegramAdmin.enabled_telegram_config(),
+         {:ok, state} <-
+           HydraX.Gateway.Adapters.Telegram.connect(%{
+             "bot_token" => config.bot_token,
+             "bot_username" => config.bot_username,
+             "webhook_secret" => config.webhook_secret,
+             "deliver" => Application.get_env(:hydra_x, :telegram_deliver)
+           }),
+         {:ok, metadata} <-
+           normalize_publish_delivery_result(
+             HydraX.Gateway.Adapters.Telegram.send_response(
+               %{content: content, external_ref: target},
+               state
+             )
+           ) do
+      {:ok, metadata}
+    else
+      nil -> {:error, :telegram_not_configured}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp deliver_publish_summary("discord", target, content) do
+    with config when not is_nil(config) <- HydraX.Runtime.DiscordAdmin.enabled_discord_config(),
+         {:ok, state} <-
+           HydraX.Gateway.Adapters.Discord.connect(%{
+             "bot_token" => config.bot_token,
+             "application_id" => config.application_id,
+             "webhook_secret" => config.webhook_secret,
+             "deliver" => Application.get_env(:hydra_x, :discord_deliver)
+           }),
+         {:ok, metadata} <-
+           normalize_publish_delivery_result(
+             HydraX.Gateway.Adapters.Discord.deliver(
+               %{content: content, external_ref: target},
+               state
+             )
+           ) do
+      {:ok, metadata}
+    else
+      nil -> {:error, :discord_not_configured}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp deliver_publish_summary("slack", target, content) do
+    with config when not is_nil(config) <- HydraX.Runtime.SlackAdmin.enabled_slack_config(),
+         {:ok, state} <-
+           HydraX.Gateway.Adapters.Slack.connect(%{
+             "bot_token" => config.bot_token,
+             "signing_secret" => config.signing_secret,
+             "deliver" => Application.get_env(:hydra_x, :slack_deliver)
+           }),
+         {:ok, metadata} <-
+           normalize_publish_delivery_result(
+             HydraX.Gateway.Adapters.Slack.deliver(
+               %{content: content, external_ref: target},
+               state
+             )
+           ) do
+      {:ok, metadata}
+    else
+      nil -> {:error, :slack_not_configured}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp deliver_publish_summary("webchat", target, content) do
+    with config when not is_nil(config) <- HydraX.Runtime.WebchatAdmin.enabled_webchat_config(),
+         {:ok, state} <-
+           HydraX.Gateway.Adapters.Webchat.connect(%{
+             "enabled" => config.enabled,
+             "title" => config.title,
+             "subtitle" => config.subtitle,
+             "welcome_prompt" => config.welcome_prompt,
+             "composer_placeholder" => config.composer_placeholder,
+             "allow_anonymous_messages" => config.allow_anonymous_messages,
+             "attachments_enabled" => config.attachments_enabled,
+             "max_attachment_count" => config.max_attachment_count,
+             "max_attachment_size_kb" => config.max_attachment_size_kb,
+             "session_max_age_minutes" => config.session_max_age_minutes,
+             "session_idle_timeout_minutes" => config.session_idle_timeout_minutes
+           }),
+         {:ok, metadata} <-
+           normalize_publish_delivery_result(
+             HydraX.Gateway.Adapters.Webchat.deliver(
+               %{content: content, external_ref: target},
+               state
+             )
+           ) do
+      {:ok, metadata}
+    else
+      nil -> {:error, :webchat_not_configured}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp deliver_publish_summary(channel, _target, _content),
+    do: {:error, {:unsupported_delivery_channel, channel}}
+
+  defp normalize_publish_delivery_result(:ok), do: {:ok, %{}}
+
+  defp normalize_publish_delivery_result({:ok, metadata}) when is_map(metadata),
+    do: {:ok, metadata}
+
+  defp normalize_publish_delivery_result({:error, reason}), do: {:error, reason}
+
+  defp stringify_delivery_metadata(map) do
+    Enum.reduce(map, %{}, fn
+      {key, value}, acc when is_atom(key) -> Map.put(acc, Atom.to_string(key), value)
+      {key, value}, acc -> Map.put(acc, key, value)
+    end)
   end
 
   defp llm_body_for(agent, prompt, purpose) do
@@ -2675,6 +2858,7 @@ defmodule HydraX.Runtime.WorkItems do
             "task_type" => "publish_summary",
             "summary_artifact_id" => summary_artifact.id,
             "delivery" => %{
+              "enabled" => deliverables["enabled"] == true,
               "mode" => deliverables["mode"] || "report",
               "channel" => deliverables["channel"],
               "target" => deliverables["target"]
