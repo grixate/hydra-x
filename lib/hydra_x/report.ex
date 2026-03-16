@@ -1776,6 +1776,12 @@ defmodule HydraX.Report do
       %{type: "queued_replan_follow_up", count: count} ->
         "replan queued #{count}"
 
+      %{type: "queued_review", count: count, degraded: true} ->
+        "degraded review queued #{count}"
+
+      %{type: "queued_review", count: count} ->
+        "review queued #{count}"
+
       %{type: "queued_follow_up", count: count} ->
         "queued #{count}"
     end
@@ -1820,6 +1826,18 @@ defmodule HydraX.Report do
           degraded: delivery_result["degraded"] == true
         }
 
+      List.wrap(get_in(item.result_refs || %{}, ["child_work_item_ids"])) != [] and
+          item.status == "blocked" ->
+        %{
+          type: "queued_review",
+          count:
+            item.result_refs
+            |> Map.get("child_work_item_ids", [])
+            |> List.wrap()
+            |> length(),
+          degraded: degraded_work_item?(item)
+        }
+
       List.wrap(get_in(item.result_refs || %{}, ["follow_up_work_item_ids"])) != [] ->
         follow_up_snapshot(item)
 
@@ -1862,6 +1880,11 @@ defmodule HydraX.Report do
 
   defp work_item_side_effect_class(item) do
     get_in(item.metadata || %{}, ["side_effect_class"]) || "read_only"
+  end
+
+  defp degraded_work_item?(item) do
+    get_in(item.result_refs || %{}, ["degraded"]) == true or
+      get_in(item.metadata || %{}, ["degraded_execution"]) == true
   end
 
   defp work_item_policy_failure(item) do

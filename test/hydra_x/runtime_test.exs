@@ -4220,12 +4220,18 @@ defmodule HydraX.RuntimeTest do
              "Review the report and promote any durable findings into long-term memory."
   end
 
-  test "degraded research work items require operator promotion instead of auto-approval" do
+  test "degraded research work items queue reviewer follow-up instead of auto-approval" do
     researcher =
       create_agent()
       |> then(fn agent -> Runtime.get_agent!(agent.id) end)
 
     {:ok, researcher} = Runtime.save_agent(researcher, %{"role" => "researcher"})
+
+    reviewer =
+      create_agent()
+      |> then(fn agent -> Runtime.get_agent!(agent.id) end)
+
+    {:ok, reviewer} = Runtime.save_agent(reviewer, %{"role" => "reviewer"})
 
     {:ok, work_item} =
       Runtime.save_work_item(%{
@@ -4250,13 +4256,22 @@ defmodule HydraX.RuntimeTest do
       })
 
     assert {:ok, summary} = Runtime.run_autonomy_cycle(researcher.id)
-    assert summary.action == "researched"
+    assert summary.action == "research_review_requested"
 
     work_item = Runtime.get_work_item!(work_item.id)
+    assert work_item.status == "blocked"
     assert work_item.approval_stage == "validated"
     assert work_item.result_refs["approval_record_ids"] in [nil, []]
     assert work_item.result_refs["degraded"] == true
     assert work_item.metadata["degraded_execution"] == true
+    assert work_item.review_required == true
+
+    [review_item_id] = work_item.result_refs["child_work_item_ids"]
+    review_item = Runtime.get_work_item!(review_item_id)
+    assert review_item.kind == "review"
+    assert review_item.assigned_role == "reviewer"
+    assert review_item.metadata["requested_action"] == "promote_research_findings"
+    assert review_item.metadata["review_target_work_item_id"] == work_item.id
 
     [report_artifact | _] =
       Runtime.work_item_artifacts(work_item.id)
@@ -4266,6 +4281,22 @@ defmodule HydraX.RuntimeTest do
     assert report_artifact.payload["degraded"] == true
     assert report_artifact.payload["constraint_strategy"] =~ "Reuse existing evidence"
     assert report_artifact.confidence <= 0.52
+
+    assert {:ok, reviewer_summary} = Runtime.run_autonomy_cycle(reviewer.id)
+    assert reviewer_summary.action == "review_completed"
+
+    review_item = Runtime.get_work_item!(review_item.id)
+    assert review_item.approval_stage == "validated"
+
+    approvals = Runtime.approval_records_for_subject("work_item", work_item.id)
+    assert Enum.any?(approvals, &(&1.decision == "approved"))
+
+    assert {:ok, finalize_summary} = Runtime.run_autonomy_cycle(researcher.id)
+    assert finalize_summary.action == "finalized_blocked_parent"
+
+    work_item = Runtime.get_work_item!(work_item.id)
+    assert work_item.status == "completed"
+    assert work_item.approval_stage == "validated"
   end
 
   test "planner finalization can enqueue and prepare a publish-ready delivery brief" do

@@ -695,6 +695,25 @@ defmodule HydraX.ReportTest do
         }
       })
 
+    {:ok, _degraded_research_item} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Queue constrained findings for reviewer follow-up.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "researcher",
+        "status" => "blocked",
+        "approval_stage" => "validated",
+        "review_required" => true,
+        "priority" => 100,
+        "result_refs" => %{
+          "degraded" => true,
+          "child_work_item_ids" => [8_201]
+        },
+        "metadata" => %{
+          "degraded_execution" => true
+        }
+      })
+
     {:ok, _artifact} =
       Runtime.create_artifact(%{
         "work_item_id" => work_item.id,
@@ -819,6 +838,8 @@ defmodule HydraX.ReportTest do
 
     assert File.read!(export.markdown_path) =~
              "publish=delivery_draft degraded telegram -> ops-room"
+
+    assert File.read!(export.markdown_path) =~ "publish=degraded review queued 1"
 
     assert File.read!(export.markdown_path) =~ "level=fully_automatic"
     assert File.read!(export.markdown_path) =~ "effect=external_delivery"

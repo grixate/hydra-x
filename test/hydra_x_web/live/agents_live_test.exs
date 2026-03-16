@@ -210,7 +210,7 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "replan follow-up queued 1"
   end
 
-  test "agents page highlights degraded findings and degraded publish drafts", %{conn: conn} do
+  test "agents page highlights degraded review queues and degraded publish drafts", %{conn: conn} do
     {:ok, agent} =
       Runtime.save_agent(%{
         name: "Degraded Agent",
@@ -227,10 +227,11 @@ defmodule HydraXWeb.AgentsLiveTest do
         "goal" => "Review constrained findings before promotion.",
         "assigned_agent_id" => agent.id,
         "assigned_role" => "researcher",
-        "status" => "completed",
+        "status" => "blocked",
         "approval_stage" => "validated",
+        "review_required" => true,
         "priority" => 98,
-        "result_refs" => %{"degraded" => true},
+        "result_refs" => %{"degraded" => true, "child_work_item_ids" => [7_601]},
         "metadata" => %{"degraded_execution" => true}
       })
 
@@ -263,7 +264,7 @@ defmodule HydraXWeb.AgentsLiveTest do
     {:ok, _view, html} = live(conn, ~p"/agents")
 
     assert html =~ degraded_research.goal
-    assert html =~ "Promote degraded findings"
+    assert html =~ "degraded review queued 1"
     assert html =~ degraded_publish.goal
     assert html =~ "delivery degraded draft telegram"
   end

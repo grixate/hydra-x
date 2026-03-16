@@ -927,7 +927,7 @@ defmodule HydraXWeb.HealthLive do
                     · expiry {event.expired_by}
                   </span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip                       {event.ip}</span>
+                  <span :if={event.ip}> · ip                        {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -2097,6 +2097,18 @@ defmodule HydraXWeb.HealthLive do
         |> Enum.reject(&is_nil_or_empty/1)
         |> Enum.join(" ")
 
+      List.wrap(get_in(item.result_refs || %{}, ["child_work_item_ids"])) != [] and
+          item.status == "blocked" ->
+        count =
+          item.result_refs
+          |> Map.get("child_work_item_ids", [])
+          |> List.wrap()
+          |> length()
+
+        if autonomy_degraded?(item),
+          do: "degraded review queued #{count}",
+          else: "review queued #{count}"
+
       List.wrap(get_in(item.result_refs || %{}, ["follow_up_work_item_ids"])) != [] ->
         count = autonomy_follow_up_count(item)
 
@@ -2129,6 +2141,11 @@ defmodule HydraXWeb.HealthLive do
 
   defp autonomy_side_effect_class(item) do
     get_in(item.metadata || %{}, ["side_effect_class"]) || "read_only"
+  end
+
+  defp autonomy_degraded?(item) do
+    get_in(item.result_refs || %{}, ["degraded"]) == true or
+      get_in(item.metadata || %{}, ["degraded_execution"]) == true
   end
 
   defp autonomy_policy_failure_summary(item) do

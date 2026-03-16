@@ -276,6 +276,20 @@ defmodule HydraXWeb.HealthLiveTest do
   test "health page shows degraded publish posture", %{conn: conn} do
     agent = Runtime.ensure_default_agent!()
 
+    {:ok, degraded_research} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Queue constrained research for reviewer follow-up.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "researcher",
+        "status" => "blocked",
+        "approval_stage" => "validated",
+        "review_required" => true,
+        "priority" => 100,
+        "result_refs" => %{"degraded" => true, "child_work_item_ids" => [7_801]},
+        "metadata" => %{"degraded_execution" => true}
+      })
+
     {:ok, degraded_publish} =
       Runtime.save_work_item(%{
         "kind" => "task",
@@ -304,6 +318,8 @@ defmodule HydraXWeb.HealthLiveTest do
 
     {:ok, _view, html} = live(conn, ~p"/health")
 
+    assert html =~ degraded_research.goal
+    assert html =~ "degraded review queued 1"
     assert html =~ degraded_publish.goal
     assert html =~ "delivery degraded draft telegram"
   end

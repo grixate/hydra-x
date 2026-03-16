@@ -703,7 +703,8 @@ defmodule HydraX.Runtime.WorkItems do
 
     report_payload = build_research_report(agent, running, evidence)
 
-    auto_review_required = running.review_required || report_payload["degraded"] == true
+    artifact_review_required = running.review_required || report_payload["degraded"] == true
+    degraded_review_required = report_payload["degraded"] == true
 
     {:ok, report_artifact} =
       create_artifact(%{
@@ -715,7 +716,7 @@ defmodule HydraX.Runtime.WorkItems do
         "payload" => Map.delete(report_payload, "body"),
         "provenance" => %{"source" => "autonomy", "phase" => "research_execution"},
         "confidence" => report_payload["confidence"],
-        "review_status" => if(auto_review_required, do: "proposed", else: "validated")
+        "review_status" => if(artifact_review_required, do: "proposed", else: "validated")
       })
 
     decision_payload = build_research_decision_ledger(running, report_payload)
@@ -730,16 +731,28 @@ defmodule HydraX.Runtime.WorkItems do
         "payload" => Map.delete(decision_payload, "body"),
         "provenance" => %{"source" => "autonomy", "phase" => "research_decision_ledger"},
         "confidence" => report_payload["confidence"],
-        "review_status" => if(auto_review_required, do: "proposed", else: "validated")
+        "review_status" => if(artifact_review_required, do: "proposed", else: "validated")
       })
 
-    if auto_review_required do
-      {:ok, completed} =
+    if degraded_review_required do
+      {:ok, review_item} =
+        enqueue_review_work_item(running, %{
+          "goal" => "Review research work item ##{running.id}: #{running.goal}",
+          "requested_action" => "promote_research_findings",
+          "change_artifact_id" => nil,
+          "proposal_artifact_id" => plan_artifact.id,
+          "report_artifact_id" => report_artifact.id,
+          "decision_artifact_id" => decision_artifact.id
+        })
+
+      {:ok, blocked} =
         save_work_item(running, %{
-          "status" => "completed",
+          "status" => "blocked",
           "approval_stage" => "validated",
+          "review_required" => true,
           "result_refs" => %{
             "artifact_ids" => [plan_artifact.id, report_artifact.id, decision_artifact.id],
+            "child_work_item_ids" => [review_item.id],
             "degraded" => report_payload["degraded"] == true
           },
           "metadata" =>
@@ -747,76 +760,107 @@ defmodule HydraX.Runtime.WorkItems do
             |> Map.put("degraded_execution", report_payload["degraded"] == true)
             |> maybe_put_constraint_strategy(report_payload["constraint_strategy"]),
           "runtime_state" =>
-            append_history(running.runtime_state, "completed", %{
-              "completed_at" => DateTime.utc_now(),
-              "phase" => "research",
+            append_history(running.runtime_state, "blocked", %{
+              "blocked_at" => DateTime.utc_now(),
+              "phase" => "review",
               "artifact_id" => report_artifact.id,
+              "review_work_item_id" => review_item.id,
               "degraded" => report_payload["degraded"] == true
             })
         })
 
       {:processed,
        %{
-         status: "completed",
+         status: "blocked",
          processed_count: 1,
-         work_item: completed,
+         work_item: blocked,
          artifacts: [plan_artifact, report_artifact, decision_artifact],
-         action: "researched"
+         action: "research_review_requested",
+         delegated_work_item: review_item
        }}
     else
-      {:ok, record} =
-        create_approval_record(%{
-          "subject_type" => "work_item",
-          "subject_id" => running.id,
-          "requested_action" => "promote_research_findings",
-          "decision" => "approved",
-          "rationale" => "Research findings were auto-approved because review was not required.",
-          "work_item_id" => running.id,
-          "reviewer_agent_id" => agent.id,
-          "metadata" => %{"auto_approved" => true}
+      if running.review_required do
+        {:ok, completed} =
+          save_work_item(running, %{
+            "status" => "completed",
+            "approval_stage" => "validated",
+            "result_refs" => %{
+              "artifact_ids" => [plan_artifact.id, report_artifact.id, decision_artifact.id],
+              "degraded" => false
+            },
+            "metadata" => Map.put(running.metadata || %{}, "degraded_execution", false),
+            "runtime_state" =>
+              append_history(running.runtime_state, "completed", %{
+                "completed_at" => DateTime.utc_now(),
+                "phase" => "research",
+                "artifact_id" => report_artifact.id
+              })
+          })
+
+        {:processed,
+         %{
+           status: "completed",
+           processed_count: 1,
+           work_item: completed,
+           artifacts: [plan_artifact, report_artifact, decision_artifact],
+           action: "researched"
+         }}
+      else
+        {:ok, record} =
+          create_approval_record(%{
+            "subject_type" => "work_item",
+            "subject_id" => running.id,
+            "requested_action" => "promote_research_findings",
+            "decision" => "approved",
+            "rationale" =>
+              "Research findings were auto-approved because review was not required.",
+            "work_item_id" => running.id,
+            "reviewer_agent_id" => agent.id,
+            "metadata" => %{"auto_approved" => true}
+          })
+
+        {:ok, completed} =
+          save_work_item(running, %{
+            "status" => "completed",
+            "approval_stage" => "operator_approved",
+            "result_refs" => %{
+              "artifact_ids" => [plan_artifact.id, report_artifact.id, decision_artifact.id],
+              "approval_record_ids" => [record.id],
+              "degraded" => false
+            },
+            "metadata" => Map.put(running.metadata || %{}, "degraded_execution", false),
+            "runtime_state" =>
+              append_history(running.runtime_state, "completed", %{
+                "completed_at" => DateTime.utc_now(),
+                "phase" => "research",
+                "artifact_id" => report_artifact.id,
+                "approval_record_id" => record.id
+              })
+          })
+
+        promote_artifacts!(completed, "promote_research_findings", record, %{
+          "auto_approved" => true
         })
 
-      {:ok, completed} =
-        save_work_item(running, %{
-          "status" => "completed",
-          "approval_stage" => "operator_approved",
-          "result_refs" => %{
-            "artifact_ids" => [plan_artifact.id, report_artifact.id, decision_artifact.id],
-            "approval_record_ids" => [record.id],
-            "degraded" => false
-          },
-          "metadata" => Map.put(running.metadata || %{}, "degraded_execution", false),
-          "runtime_state" =>
-            append_history(running.runtime_state, "completed", %{
-              "completed_at" => DateTime.utc_now(),
-              "phase" => "research",
-              "artifact_id" => report_artifact.id,
-              "approval_record_id" => record.id
-            })
-        })
+        promoted_memory_ids =
+          promote_artifact_derived_outputs!(completed, [report_artifact, decision_artifact])
 
-      promote_artifacts!(completed, "promote_research_findings", record, %{
-        "auto_approved" => true
-      })
+        {:ok, completed} =
+          save_work_item(completed, %{
+            "result_refs" =>
+              completed.result_refs
+              |> Map.put("promoted_memory_ids", promoted_memory_ids)
+          })
 
-      promoted_memory_ids =
-        promote_artifact_derived_outputs!(completed, [report_artifact, decision_artifact])
-
-      {:ok, completed} =
-        save_work_item(completed, %{
-          "result_refs" =>
-            completed.result_refs
-            |> Map.put("promoted_memory_ids", promoted_memory_ids)
-        })
-
-      {:processed,
-       %{
-         status: "completed",
-         processed_count: 1,
-         work_item: completed,
-         artifacts: [plan_artifact, report_artifact, decision_artifact],
-         action: "researched"
-       }}
+        {:processed,
+         %{
+           status: "completed",
+           processed_count: 1,
+           work_item: completed,
+           artifacts: [plan_artifact, report_artifact, decision_artifact],
+           action: "researched"
+         }}
+      end
     end
   end
 
@@ -1060,24 +1104,12 @@ defmodule HydraX.Runtime.WorkItems do
         if running.kind == "extension", do: "enable_extension", else: "promote_code_change"
 
       {:ok, review_item} =
-        save_work_item(%{
-          "kind" => "review",
+        enqueue_review_work_item(running, %{
           "goal" => "Review #{running.kind} work item ##{running.id}: #{running.goal}",
-          "status" => "planned",
-          "execution_mode" => "review",
-          "assigned_role" => "reviewer",
-          "parent_work_item_id" => running.id,
-          "priority" => max(running.priority, 1),
-          "autonomy_level" => "execute_with_review",
           "approval_stage" => "patch_ready",
-          "required_outputs" => %{"artifact_types" => ["review_report"]},
-          "metadata" => %{
-            "review_target_work_item_id" => running.id,
-            "change_artifact_id" => change_artifact.id,
-            "proposal_artifact_id" => proposal_artifact.id,
-            "requested_action" => requested_action,
-            "delegation_context" => get_in(running.metadata || %{}, ["delegation_context"])
-          }
+          "requested_action" => requested_action,
+          "change_artifact_id" => change_artifact.id,
+          "proposal_artifact_id" => proposal_artifact.id
         })
 
       {:ok, updated} =
@@ -1230,13 +1262,10 @@ defmodule HydraX.Runtime.WorkItems do
     target_id = work_item.metadata["review_target_work_item_id"]
     target = if is_integer(target_id), do: get_work_item!(target_id), else: nil
 
-    change_artifact =
-      if target && is_integer(work_item.metadata["change_artifact_id"]) do
-        list_artifacts(work_item_id: target.id, limit: 20)
-        |> Enum.find(&(&1.id == work_item.metadata["change_artifact_id"]))
-      end
+    source_artifact =
+      review_source_artifact(target, work_item.metadata || %{})
 
-    review_payload = build_review_report(work_item, target, change_artifact)
+    review_payload = build_review_report(work_item, target, source_artifact)
     decision = review_payload["decision"]
     decision_payload = build_review_decision_ledger(work_item, target, review_payload)
 
@@ -1281,9 +1310,9 @@ defmodule HydraX.Runtime.WorkItems do
         }
       })
 
-    if change_artifact do
+    if source_artifact do
       record_artifact_decision!(
-        change_artifact,
+        source_artifact,
         work_item.metadata["requested_action"] || "promote_work_item",
         decision,
         review_payload["summary"],
@@ -1451,10 +1480,10 @@ defmodule HydraX.Runtime.WorkItems do
     end
   end
 
-  defp build_review_report(work_item, target, change_artifact) do
-    change_payload = (change_artifact && change_artifact.payload) || %{}
-    changed_files = List.wrap(change_payload["changed_files"])
-    test_commands = List.wrap(change_payload["test_commands"])
+  defp build_review_report(work_item, target, source_artifact) do
+    source_payload = (source_artifact && source_artifact.payload) || %{}
+    changed_files = List.wrap(source_payload["changed_files"])
+    test_commands = List.wrap(source_payload["test_commands"])
     requested_action = work_item.metadata["requested_action"] || "promote_work_item"
     delegated_context = delegated_context_memories(target || work_item)
     delegated_context_block = render_delegated_context_block(delegated_context)
@@ -1464,17 +1493,31 @@ defmodule HydraX.Runtime.WorkItems do
         changed_files,
         test_commands,
         target && target.kind,
-        change_payload
+        source_payload,
+        source_artifact
       )
 
     decision = if(findings == [], do: "approved", else: "rejected")
+
+    review_scope =
+      case target && target.kind do
+        kind when kind in ["engineering", "extension"] ->
+          "#{length(changed_files)} candidate files"
+
+        "research" ->
+          "1 structured research report"
+
+        _ ->
+          "the available autonomy payload"
+      end
 
     %{
       "summary" =>
         if(
           decision == "approved",
-          do: "Validated #{requested_action} across #{length(changed_files)} candidate files",
-          else: "Rejected review because no candidate files were prepared"
+          do: "Validated #{requested_action} across #{review_scope}",
+          else:
+            "Rejected review because the supporting #{(target && target.kind) || "work"} artifacts were incomplete"
         ),
       "body" =>
         """
@@ -1482,6 +1525,7 @@ defmodule HydraX.Runtime.WorkItems do
         Decision: #{decision}
         Candidate files: #{if(changed_files == [], do: "none", else: Enum.join(changed_files, ", "))}
         Validation commands: #{if(test_commands == [], do: "none", else: Enum.join(test_commands, ", "))}
+        Source artifact: #{source_artifact && "#{source_artifact.type} ##{source_artifact.id}"}
         Delegated context: #{if(delegated_context_block == "", do: "none", else: delegated_context_block)}
         """
         |> String.trim(),
@@ -1489,11 +1533,54 @@ defmodule HydraX.Runtime.WorkItems do
       "findings" => findings,
       "target_goal" => target && target.goal,
       "delegated_context" => delegated_context,
-      "recommended_actions" => review_recommended_actions(decision, delegated_context),
+      "recommended_actions" =>
+        review_recommended_actions(decision, target && target.kind, delegated_context),
       "memory_origin_role" => "reviewer",
       "scope" => "autonomous review",
       "confidence" => if(decision == "approved", do: 0.74, else: 0.41)
     }
+  end
+
+  defp enqueue_review_work_item(%WorkItem{} = target, attrs) when is_map(attrs) do
+    attrs = Helpers.normalize_string_keys(attrs)
+
+    save_work_item(%{
+      "kind" => "review",
+      "goal" => attrs["goal"] || "Review work item ##{target.id}: #{target.goal}",
+      "status" => "planned",
+      "execution_mode" => "review",
+      "assigned_role" => "reviewer",
+      "parent_work_item_id" => target.id,
+      "priority" => max(target.priority, 1),
+      "autonomy_level" => "execute_with_review",
+      "approval_stage" => attrs["approval_stage"] || target.approval_stage,
+      "required_outputs" => %{"artifact_types" => ["review_report"]},
+      "metadata" => %{
+        "review_target_work_item_id" => target.id,
+        "change_artifact_id" => attrs["change_artifact_id"],
+        "proposal_artifact_id" => attrs["proposal_artifact_id"],
+        "report_artifact_id" => attrs["report_artifact_id"],
+        "decision_artifact_id" => attrs["decision_artifact_id"],
+        "requested_action" => attrs["requested_action"] || "promote_work_item",
+        "delegation_context" => get_in(target.metadata || %{}, ["delegation_context"])
+      }
+    })
+  end
+
+  defp review_source_artifact(nil, _metadata), do: nil
+
+  defp review_source_artifact(%WorkItem{} = target, metadata) when is_map(metadata) do
+    artifact_id =
+      case target.kind do
+        kind when kind in ["engineering", "extension"] -> metadata["change_artifact_id"]
+        "research" -> metadata["report_artifact_id"]
+        _ -> metadata["report_artifact_id"] || metadata["change_artifact_id"]
+      end
+
+    if is_integer(artifact_id) do
+      list_artifacts(work_item_id: target.id, limit: 20)
+      |> Enum.find(&(&1.id == artifact_id))
+    end
   end
 
   defp build_review_decision_ledger(_work_item, target, review_payload) do
@@ -1971,25 +2058,50 @@ defmodule HydraX.Runtime.WorkItems do
     "Revert the #{work_item.kind} patch, restore changed files from git history, and rerun validation commands."
   end
 
-  defp review_findings(changed_files, test_commands, target_kind, change_payload) do
-    []
-    |> maybe_add_finding(
-      changed_files == [],
-      "No candidate changed files were prepared for review."
-    )
-    |> maybe_add_finding(
-      test_commands == [],
-      "No validation commands were attached to the change set."
-    )
-    |> maybe_add_finding(
-      target_kind == "extension" and is_nil(change_payload["extension_package"]),
-      "Extension packages must include explicit compatibility and registration metadata."
-    )
-    |> maybe_add_finding(
-      target_kind == "extension" and
-        get_in(change_payload, ["registration", "enablement_status"]) != "approval_required",
-      "Generated extensions must remain approval-gated until an operator enables them."
-    )
+  defp review_findings(changed_files, test_commands, target_kind, source_payload, source_artifact) do
+    case target_kind do
+      kind when kind in ["engineering", "extension"] ->
+        []
+        |> maybe_add_finding(
+          changed_files == [],
+          "No candidate changed files were prepared for review."
+        )
+        |> maybe_add_finding(
+          test_commands == [],
+          "No validation commands were attached to the change set."
+        )
+        |> maybe_add_finding(
+          target_kind == "extension" and is_nil(source_payload["extension_package"]),
+          "Extension packages must include explicit compatibility and registration metadata."
+        )
+        |> maybe_add_finding(
+          target_kind == "extension" and
+            get_in(source_payload, ["registration", "enablement_status"]) != "approval_required",
+          "Generated extensions must remain approval-gated until an operator enables them."
+        )
+
+      "research" ->
+        []
+        |> maybe_add_finding(
+          is_nil(source_artifact) or source_artifact.type != "research_report",
+          "No structured research report was prepared for reviewer approval."
+        )
+        |> maybe_add_finding(
+          List.wrap(source_payload["claims"]) == [],
+          "Research reports must include explicit claims before findings can be promoted."
+        )
+        |> maybe_add_finding(
+          List.wrap(source_payload["recommended_actions"]) == [],
+          "Research reports must include recommended actions for reviewer approval."
+        )
+
+      _ ->
+        []
+        |> maybe_add_finding(
+          is_nil(source_artifact),
+          "No reviewable artifact payload was prepared for this work item."
+        )
+    end
   end
 
   defp maybe_add_finding(list, false, _message), do: list
@@ -2365,7 +2477,17 @@ defmodule HydraX.Runtime.WorkItems do
     |> Enum.map_join("\n", fn memory -> "- #{memory["type"]}: #{memory["content"]}" end)
   end
 
-  defp review_recommended_actions("approved", delegated_context) do
+  defp review_recommended_actions("approved", "research", delegated_context) do
+    base = ["Promote the validated research findings into durable operator memory."]
+
+    if delegated_context == [] do
+      base
+    else
+      base ++ ["Keep the delegated research findings attached to the promoted report context."]
+    end
+  end
+
+  defp review_recommended_actions("approved", _target_kind, delegated_context) do
     base = ["Promote the validated implementation guidance into durable operator memory."]
 
     if delegated_context == [] do
@@ -2375,7 +2497,7 @@ defmodule HydraX.Runtime.WorkItems do
     end
   end
 
-  defp review_recommended_actions(_decision, _delegated_context), do: []
+  defp review_recommended_actions(_decision, _target_kind, _delegated_context), do: []
 
   defp next_work_item_for_agent(agent) do
     WorkItem
