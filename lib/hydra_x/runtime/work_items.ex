@@ -599,7 +599,12 @@ defmodule HydraX.Runtime.WorkItems do
   defp process_work_item(agent, %WorkItem{execution_mode: "delegate"} = work_item, _opts) do
     child_role = work_item.metadata["delegate_role"] || Autonomy.role_for_kind(work_item.kind)
     child_goal = work_item.metadata["delegate_goal"] || work_item.goal
-    delegation_context = delegation_context_snapshot(agent.id, child_goal)
+
+    delegation_context =
+      merge_delegation_context(
+        delegation_context_snapshot(agent.id, child_goal),
+        delegation_override_context(work_item)
+      )
 
     {:ok, child} =
       save_work_item(%{
@@ -2135,14 +2140,7 @@ defmodule HydraX.Runtime.WorkItems do
     follow_up_context = planner_follow_up_context_snapshot(agent_id, goal, limit)
 
     (memory_context ++ follow_up_context)
-    |> Enum.uniq_by(fn memory ->
-      {memory["source_work_item_id"], memory["source_artifact_type"], memory["type"],
-       memory["content"]}
-    end)
-    |> Enum.sort_by(fn memory ->
-      {-(memory["score"] || 0.0), memory["source_work_item_id"] || 0, memory["content"] || ""}
-    end)
-    |> Enum.take(limit)
+    |> merge_delegation_context([], limit)
   end
 
   defp delegation_context_memory_snapshot(ranked) do
@@ -2214,6 +2212,73 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp planner_follow_up_snapshot(_entry, _work_item, _goal), do: nil
+
+  defp delegation_override_context(%WorkItem{} = work_item) do
+    metadata = work_item.metadata || %{}
+
+    constraint_findings =
+      metadata
+      |> Map.get("constraint_findings", [])
+      |> List.wrap()
+      |> Enum.map(&constraint_context_snapshot(&1, work_item))
+      |> Enum.reject(&is_nil/1)
+
+    strategy =
+      case Map.get(metadata, "constraint_strategy") do
+        value when is_binary(value) and value != "" ->
+          [
+            %{
+              "memory_id" => nil,
+              "type" => "Constraint",
+              "content" => value,
+              "score" => 1.2,
+              "reasons" => ["delegated constraint strategy"],
+              "score_breakdown" => %{"constraint_strategy" => 1.0},
+              "source_work_item_id" => work_item.id,
+              "source_artifact_type" => "constraint_strategy"
+            }
+          ]
+
+        _ ->
+          []
+      end
+
+    constraint_findings ++ strategy
+  end
+
+  defp constraint_context_snapshot(entry, work_item) when is_map(entry) do
+    content = entry["content"] || entry[:content]
+    type = entry["type"] || entry[:type] || "Constraint"
+
+    if is_binary(content) and content != "" do
+      %{
+        "memory_id" => entry["memory_id"] || entry[:memory_id],
+        "type" => type,
+        "content" => content,
+        "score" => entry["score"] || entry[:score] || 1.1,
+        "reasons" => ["delegated constraint"],
+        "score_breakdown" => %{"constraint_signal" => 1.0},
+        "source_work_item_id" =>
+          entry["source_work_item_id"] || entry[:source_work_item_id] || work_item.id,
+        "source_artifact_type" =>
+          entry["source_artifact_type"] || entry[:source_artifact_type] || "constraint"
+      }
+    end
+  end
+
+  defp constraint_context_snapshot(_entry, _work_item), do: nil
+
+  defp merge_delegation_context(base_context, extra_context, limit \\ 3) do
+    (List.wrap(base_context) ++ List.wrap(extra_context))
+    |> Enum.uniq_by(fn memory ->
+      {memory["source_work_item_id"], memory["source_artifact_type"], memory["type"],
+       memory["content"]}
+    end)
+    |> Enum.sort_by(fn memory ->
+      {-(memory["score"] || 0.0), memory["source_work_item_id"] || 0, memory["content"] || ""}
+    end)
+    |> Enum.take(limit)
+  end
 
   defp planner_follow_up_score(parent_goal, content, goal, source_score) do
     delegation_goal_score(parent_goal, goal) +
@@ -3231,6 +3296,51 @@ defmodule HydraX.Runtime.WorkItems do
     }
   end
 
+  defp derive_constraint_strategy(constraint_findings) do
+    constraint_findings
+    |> Enum.map(&constraint_strategy_line/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+    |> Enum.join(" ")
+    |> case do
+      "" ->
+        "Reduce scope, preserve the highest-value finding first, and ask for review if the constrained path is still unsafe."
+
+      strategy ->
+        strategy
+    end
+  end
+
+  defp constraint_strategy_line(%{"policy_failure_type" => "token_budget"}) do
+    "Keep scope narrow, reuse the evidence already captured, and produce the shortest useful synthesis."
+  end
+
+  defp constraint_strategy_line(%{"policy_failure_type" => "tool_budget"}) do
+    "Avoid new tool calls, rely on existing artifacts and memory, and prefer synthesis over fresh collection."
+  end
+
+  defp constraint_strategy_line(%{"policy_failure_type" => "retry_budget"}) do
+    "Do not repeat the same failing approach; change strategy or escalate for review."
+  end
+
+  defp constraint_strategy_line(%{"policy_failure_type" => "time_budget"}) do
+    "Prefer the fastest viable path and summarize known evidence instead of gathering more."
+  end
+
+  defp constraint_strategy_line(%{"policy_failure_type" => "delegation_depth"}) do
+    "Do not delegate further; synthesize the best answer at the current planner level."
+  end
+
+  defp constraint_strategy_line(%{"summary_reason" => "execution_failed"}) do
+    "Retry with a simpler plan and preserve the highest-value partial output first."
+  end
+
+  defp constraint_strategy_line(%{"summary_reason" => "execution_canceled"}) do
+    "Resume with a narrower plan and keep the work restartable."
+  end
+
+  defp constraint_strategy_line(_finding), do: nil
+
   defp merge_supporting_findings(findings) do
     findings
     |> Enum.uniq_by(fn finding ->
@@ -3445,6 +3555,8 @@ defmodule HydraX.Runtime.WorkItems do
          constraint_findings
        ) do
     if parent.assigned_role == "planner" and constraint_findings != [] do
+      constraint_strategy = derive_constraint_strategy(constraint_findings)
+
       {:ok, follow_up_work_item} =
         save_work_item(%{
           "kind" => parent.kind,
@@ -3467,12 +3579,14 @@ defmodule HydraX.Runtime.WorkItems do
             "delegate_goal" => parent.goal,
             "summary_artifact_id" => summary_artifact.id,
             "constraint_findings" => Enum.take(constraint_findings, 5),
+            "constraint_strategy" => constraint_strategy,
             "follow_up_context" =>
               build_follow_up_context(
                 parent,
                 supporting_memories,
                 summary_artifact,
-                constraint_findings
+                constraint_findings,
+                constraint_strategy
               )
           }
         })
@@ -3542,7 +3656,8 @@ defmodule HydraX.Runtime.WorkItems do
          parent,
          supporting_memories,
          summary_artifact,
-         constraint_findings \\ []
+         constraint_findings \\ [],
+         constraint_strategy \\ nil
        ) do
     %{
       "query" => parent.goal,
@@ -3550,6 +3665,7 @@ defmodule HydraX.Runtime.WorkItems do
       "summary_artifact_id" => summary_artifact.id,
       "promoted_findings" => Enum.take(supporting_memories, 5),
       "constraint_findings" => Enum.take(constraint_findings, 5),
+      "constraint_strategy" => constraint_strategy,
       "needs_replan" => constraint_findings != []
     }
   end

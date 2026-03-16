@@ -949,9 +949,9 @@ defmodule HydraX.RuntimeTest do
 
     wait_for(
       fn ->
-        handoff = Runtime.conversation_channel_state(conversation.id).handoff || %{}
         state = Runtime.conversation_channel_state(conversation.id)
-        state.status == "deferred" and handoff["waiting_for"] == "tool_results"
+        handoff = state.handoff || %{}
+        handoff["status"] == "pending" and handoff["waiting_for"] == "tool_results"
       end,
       80
     )
@@ -4121,6 +4121,9 @@ defmodule HydraX.RuntimeTest do
     assert get_in(replan_item.metadata || %{}, ["task_type"]) == "constraint_replan"
     assert get_in(replan_item.metadata || %{}, ["delegate_goal"]) == parent.goal
 
+    assert get_in(replan_item.metadata || %{}, ["constraint_strategy"]) =~
+             "Keep scope narrow"
+
     assert {:ok, replan_summary} = Runtime.run_autonomy_cycle(planner.id)
     assert replan_summary.action == "delegated"
 
@@ -4135,6 +4138,11 @@ defmodule HydraX.RuntimeTest do
              memory["source_work_item_id"] == parent.id and
                "finalized planner synthesis" in (memory["reasons"] || []) and
                memory["content"] =~ "token budget"
+           end)
+
+    assert Enum.any?(delegated_context, fn memory ->
+             "delegated constraint strategy" in (memory["reasons"] || []) and
+               memory["content"] =~ "Keep scope narrow"
            end)
   end
 
