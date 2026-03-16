@@ -544,7 +544,7 @@ defmodule HydraXWeb.AgentsLive do
                       {item.autonomy_level} · effect {work_item_side_effect_class(item)}<span :if={
                         summary = work_item_promoted_memory_summary(item)
                       }> · {summary}</span>
-                      <span :if={summary = work_item_publish_summary(item)}> ·     {summary}</span>
+                      <span :if={summary = work_item_publish_summary(item)}> ·      {summary}</span>
                     </div>
                     <div :if={work_item_actionable?(item)} class="mt-3 flex flex-wrap gap-2">
                       <button
@@ -1419,17 +1419,33 @@ defmodule HydraXWeb.AgentsLive do
         |> Enum.join(" ")
 
       List.wrap(get_in(work_item.result_refs || %{}, ["follow_up_work_item_ids"])) != [] ->
-        count =
-          work_item.result_refs
-          |> Map.get("follow_up_work_item_ids", [])
-          |> List.wrap()
-          |> length()
+        count = follow_up_queue_count(work_item)
 
-        "publish follow-up queued #{count}"
+        case follow_up_queue_type(work_item) do
+          "replan" -> "replan follow-up queued #{count}"
+          "publish" -> "publish follow-up queued #{count}"
+          _ -> "follow-up queued #{count}"
+        end
 
       true ->
         nil
     end
+  end
+
+  defp follow_up_queue_type(work_item) do
+    work_item
+    |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "types"]))
+    |> List.wrap()
+    |> List.first()
+    |> Kernel.||("publish")
+  end
+
+  defp follow_up_queue_count(work_item) do
+    get_in(work_item.result_refs || %{}, ["follow_up_summary", "count"]) ||
+      work_item.result_refs
+      |> Map.get("follow_up_work_item_ids", [])
+      |> List.wrap()
+      |> length()
   end
 
   defp work_item_publish_delivery_result(work_item) do

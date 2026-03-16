@@ -923,9 +923,11 @@ defmodule HydraXWeb.HealthLive do
                 </div>
                 <div class="mt-2 text-xs text-[var(--hx-mute)]">
                   level {event.level}
-                  <span :if={event.expired_by}> · expiry                     {event.expired_by}</span>
+                  <span :if={event.expired_by}>
+                     · expiry                      {event.expired_by}
+                  </span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip                     {event.ip}</span>
+                  <span :if={event.ip}> · ip                      {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -2082,17 +2084,33 @@ defmodule HydraXWeb.HealthLive do
         |> Enum.join(" ")
 
       List.wrap(get_in(item.result_refs || %{}, ["follow_up_work_item_ids"])) != [] ->
-        count =
-          item.result_refs
-          |> Map.get("follow_up_work_item_ids", [])
-          |> List.wrap()
-          |> length()
+        count = autonomy_follow_up_count(item)
 
-        "publish queued #{count}"
+        case autonomy_follow_up_type(item) do
+          "replan" -> "replan queued #{count}"
+          "publish" -> "publish queued #{count}"
+          _ -> "follow-up queued #{count}"
+        end
 
       true ->
         nil
     end
+  end
+
+  defp autonomy_follow_up_type(item) do
+    item
+    |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "types"]))
+    |> List.wrap()
+    |> List.first()
+    |> Kernel.||("publish")
+  end
+
+  defp autonomy_follow_up_count(item) do
+    get_in(item.result_refs || %{}, ["follow_up_summary", "count"]) ||
+      item.result_refs
+      |> Map.get("follow_up_work_item_ids", [])
+      |> List.wrap()
+      |> length()
   end
 
   defp autonomy_side_effect_class(item) do

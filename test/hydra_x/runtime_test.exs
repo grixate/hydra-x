@@ -4047,6 +4047,97 @@ defmodule HydraX.RuntimeTest do
            end)
   end
 
+  test "planner finalization re-plans when delegated child work is budget blocked" do
+    planner =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, planner} = Runtime.save_agent(planner, %{"role" => "planner"})
+
+    researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, researcher} = Runtime.save_agent(researcher, %{"role" => "researcher"})
+
+    {:ok, parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Map autonomy rollout options under a constrained token budget.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "execution_mode" => "delegate",
+        "priority" => 6,
+        "budget" => %{"token_budget" => 5},
+        "metadata" => %{"delegate_role" => "researcher"}
+      })
+
+    assert {:ok, planner_summary} = Runtime.run_autonomy_cycle(planner.id)
+    assert planner_summary.action == "delegated"
+
+    parent = Runtime.get_work_item!(parent.id)
+    [child_id] = parent.result_refs["child_work_item_ids"]
+    child = Runtime.get_work_item!(child_id)
+
+    {:ok, _usage} =
+      Budget.record_usage(researcher.id, nil,
+        tokens_in: 4,
+        tokens_out: 2,
+        metadata: %{purpose: "autonomy_research", work_item_id: child.id}
+      )
+
+    assert {:ok, researcher_summary} = Runtime.run_autonomy_cycle(researcher.id)
+    assert researcher_summary.action == "policy_blocked"
+
+    child = Runtime.get_work_item!(child.id)
+    assert child.status == "failed"
+    assert get_in(child.result_refs || %{}, ["policy_failure", "type"]) == "token_budget"
+
+    assert {:ok, finalize_summary} = Runtime.run_autonomy_cycle(planner.id)
+    assert finalize_summary.action == "finalized_blocked_parent"
+    assert %HydraX.Runtime.WorkItem{} = finalize_summary.follow_up_work_item
+
+    parent = Runtime.get_work_item!(parent.id)
+    assert parent.status == "completed"
+    assert get_in(parent.result_refs || %{}, ["follow_up_summary", "types"]) == ["replan"]
+    assert get_in(parent.metadata || %{}, ["follow_up_context", "needs_replan"]) == true
+
+    assert Enum.any?(
+             get_in(parent.metadata || %{}, ["follow_up_context", "constraint_findings"]) || [],
+             &(&1["content"] =~ "token budget")
+           )
+
+    summary_artifact =
+      Runtime.work_item_artifacts(parent.id)
+      |> Enum.find(&(&1.type == "decision_ledger"))
+
+    assert summary_artifact
+    assert summary_artifact.body =~ "Delegated work outcomes"
+    assert summary_artifact.body =~ "token budget is exhausted"
+
+    replan_item = Runtime.get_work_item!(finalize_summary.follow_up_work_item.id)
+    assert replan_item.assigned_role == "planner"
+    assert replan_item.execution_mode == "delegate"
+    assert get_in(replan_item.metadata || %{}, ["task_type"]) == "constraint_replan"
+    assert get_in(replan_item.metadata || %{}, ["delegate_goal"]) == parent.goal
+
+    assert {:ok, replan_summary} = Runtime.run_autonomy_cycle(planner.id)
+    assert replan_summary.action == "delegated"
+
+    replan_item = Runtime.get_work_item!(replan_item.id)
+    [replan_child_id] = replan_item.result_refs["child_work_item_ids"]
+    replan_child = Runtime.get_work_item!(replan_child_id)
+
+    delegated_context =
+      get_in(replan_child.metadata || %{}, ["delegation_context", "promoted_memories"]) || []
+
+    assert Enum.any?(delegated_context, fn memory ->
+             memory["source_work_item_id"] == parent.id and
+               "finalized planner synthesis" in (memory["reasons"] || []) and
+               memory["content"] =~ "token budget"
+           end)
+  end
+
   test "research work items create a decision ledger and promote approved memories" do
     researcher =
       create_agent()

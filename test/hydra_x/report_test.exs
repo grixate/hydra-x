@@ -719,6 +719,20 @@ defmodule HydraX.ReportTest do
         }
       })
 
+    {:ok, _replan_parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Re-plan the constrained publish escalation.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "planner",
+        "status" => "completed",
+        "priority" => 99,
+        "result_refs" => %{
+          "follow_up_work_item_ids" => [9_201],
+          "follow_up_summary" => %{"count" => 1, "types" => ["replan"]}
+        }
+      })
+
     {:ok, _job} =
       Runtime.save_scheduled_job(%{
         agent_id: agent.id,
@@ -774,6 +788,7 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "patch_bundle:approved/approved"
     assert File.read!(export.markdown_path) =~ "promoted=Decision:"
     assert File.read!(export.markdown_path) =~ "publish=queued 1"
+    assert File.read!(export.markdown_path) =~ "publish=replan queued 1"
     assert File.read!(export.markdown_path) =~ "publish=delivered telegram -> ops-room"
     assert File.read!(export.markdown_path) =~ "level=fully_automatic"
     assert File.read!(export.markdown_path) =~ "effect=external_delivery"

@@ -25,6 +25,7 @@ defmodule HydraX.Runtime.WorkItems do
   }
 
   @claim_ttl_seconds 180
+  @terminal_work_item_statuses ~w(completed failed canceled)
 
   def list_work_items(opts \\ []) do
     limit = Keyword.get(opts, :limit, 50)
@@ -461,14 +462,10 @@ defmodule HydraX.Runtime.WorkItems do
         work_item.status == "blocked" and
           (work_item.assigned_agent_id == ^agent.id or work_item.assigned_role == ^agent.role)
       )
-      |> join(:inner, [work_item], child in WorkItem,
-        on: child.parent_work_item_id == work_item.id
-      )
-      |> where([_work_item, child], child.status == "completed")
-      |> order_by([work_item, _child], desc: work_item.priority, asc: work_item.inserted_at)
-      |> limit(1)
-      |> select([work_item, _child], work_item)
-      |> Repo.one()
+      |> order_by([work_item], desc: work_item.priority, asc: work_item.inserted_at)
+      |> limit(10)
+      |> Repo.all()
+      |> Enum.find(&blocked_parent_ready?/1)
 
     case blocked_parent do
       nil ->
@@ -478,7 +475,11 @@ defmodule HydraX.Runtime.WorkItems do
         case claim_work_item(work_item, metadata: %{"phase" => "finalize"}) do
           {:ok, claimed} ->
             children =
-              list_work_items(parent_work_item_id: claimed.id, status: "completed", limit: 10)
+              list_work_items(
+                parent_work_item_id: claimed.id,
+                statuses: @terminal_work_item_statuses,
+                limit: 10
+              )
 
             artifact_ids =
               children
@@ -488,7 +489,8 @@ defmodule HydraX.Runtime.WorkItems do
                 |> List.wrap()
               end)
 
-            supporting_memories = finalized_child_memories(children)
+            supporting_memories = finalized_child_findings(children)
+            constraint_findings = constrained_child_findings(children)
 
             {:ok, summary_artifact} =
               create_artifact(%{
@@ -500,7 +502,8 @@ defmodule HydraX.Runtime.WorkItems do
                 "payload" => %{
                   "child_work_item_ids" => Enum.map(children, & &1.id),
                   "result_artifact_ids" => artifact_ids,
-                  "promoted_findings" => supporting_memories
+                  "promoted_findings" => supporting_memories,
+                  "constraint_findings" => constraint_findings
                 },
                 "provenance" => %{
                   "source" => "autonomy",
@@ -517,12 +520,28 @@ defmodule HydraX.Runtime.WorkItems do
                   children,
                   summary_artifact,
                   artifact_ids,
-                  supporting_memories
+                  supporting_memories,
+                  constraint_findings
                 )
               )
 
             {:ok, updated, follow_up_work_item} =
-              maybe_enqueue_publish_follow_up(updated, summary_artifact, supporting_memories)
+              case maybe_enqueue_replan_follow_up(
+                     updated,
+                     summary_artifact,
+                     supporting_memories,
+                     constraint_findings
+                   ) do
+                {:ok, replan_parent, %WorkItem{} = replan_item} ->
+                  {:ok, replan_parent, replan_item}
+
+                {:ok, replan_parent, nil} ->
+                  maybe_enqueue_publish_follow_up(
+                    replan_parent,
+                    summary_artifact,
+                    supporting_memories
+                  )
+              end
 
             {:processed,
              %{
@@ -543,6 +562,13 @@ defmodule HydraX.Runtime.WorkItems do
         end
     end
   end
+
+  defp blocked_parent_ready?(%WorkItem{} = work_item) do
+    children = list_work_items(parent_work_item_id: work_item.id, limit: 20, preload: false)
+    children != [] and Enum.all?(children, &terminal_work_item?/1)
+  end
+
+  defp terminal_work_item?(%WorkItem{status: status}), do: status in @terminal_work_item_statuses
 
   defp maybe_run_next_work_item(agent, opts) do
     case next_work_item_for_agent(agent) do
@@ -1927,10 +1953,10 @@ defmodule HydraX.Runtime.WorkItems do
 
     cond do
       finding_count > 0 ->
-        "Planner synthesized #{child_count} delegated results and #{finding_count} promoted findings"
+        "Planner synthesized #{child_count} delegated outcomes and #{finding_count} promoted findings"
 
       true ->
-        "Planner synthesized #{child_count} delegated results"
+        "Planner synthesized #{child_count} delegated outcomes"
     end
   end
 
@@ -1969,13 +1995,26 @@ defmodule HydraX.Runtime.WorkItems do
     """
     Parent goal: #{parent.goal}
 
-    Completed delegated work:
-    #{Enum.map_join(children, "\n", fn child -> "- ##{child.id} #{child.goal}" end)}
+    Delegated work outcomes:
+    #{Enum.map_join(children, "\n", &delegated_child_summary/1)}
 
     Promoted findings shaping this synthesis:
     #{findings_block}
     """
     |> String.trim()
+  end
+
+  defp delegated_child_summary(child) do
+    failure =
+      case get_in(child.result_refs || %{}, ["policy_failure"]) do
+        failure when is_map(failure) ->
+          " (#{policy_failure_summary(failure)})"
+
+        _ ->
+          ""
+      end
+
+    "- ##{child.id} #{child.goal} [#{child.status}]#{failure}"
   end
 
   defp research_plan_body(work_item, evidence) do
@@ -3108,6 +3147,12 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp artifact_memory_blueprints(_artifact_type, _payload), do: []
 
+  defp finalized_child_findings(children) do
+    merge_supporting_findings(
+      finalized_child_memories(children) ++ constrained_child_findings(children)
+    )
+  end
+
   defp finalized_child_memories(children) do
     children
     |> Enum.flat_map(fn child ->
@@ -3115,6 +3160,79 @@ defmodule HydraX.Runtime.WorkItems do
       |> work_item_artifacts()
       |> Enum.flat_map(&finalized_child_artifact_findings(child, &1))
     end)
+  end
+
+  defp constrained_child_findings(children) do
+    children
+    |> Enum.flat_map(&child_constraint_findings/1)
+  end
+
+  defp child_constraint_findings(%WorkItem{} = child) do
+    case get_in(child.result_refs || %{}, ["policy_failure"]) do
+      failure when is_map(failure) ->
+        [constraint_child_finding(child, failure)]
+
+      _ when child.status == "failed" ->
+        [
+          generic_child_constraint_finding(
+            child,
+            "re-plan the delegated work because it failed before completion",
+            "execution_failed"
+          )
+        ]
+
+      _ when child.status == "canceled" ->
+        [
+          generic_child_constraint_finding(
+            child,
+            "re-plan the delegated work because it was canceled before completion",
+            "execution_canceled"
+          )
+        ]
+
+      _ ->
+        []
+    end
+  end
+
+  defp constraint_child_finding(%WorkItem{} = child, failure) do
+    failure = Helpers.normalize_string_keys(failure)
+    failure_type = failure["type"] || "policy_failure"
+
+    %{
+      "memory_id" => nil,
+      "type" => "Constraint",
+      "content" => "Re-plan #{child.goal} because #{policy_failure_summary(failure)}.",
+      "score" => 1.0,
+      "summary_reason" => failure_type,
+      "source_work_item_id" => child.id,
+      "source_goal" => child.goal,
+      "source_kind" => child.kind,
+      "source_role" => child.assigned_role,
+      "source_artifact_type" => "policy_failure",
+      "reasons" => ["constraint_backpressure"],
+      "policy_failure_type" => failure_type
+    }
+  end
+
+  defp generic_child_constraint_finding(%WorkItem{} = child, message, reason) do
+    %{
+      "memory_id" => nil,
+      "type" => "Constraint",
+      "content" => "Re-plan #{child.goal} because #{message}.",
+      "score" => 0.75,
+      "summary_reason" => reason,
+      "source_work_item_id" => child.id,
+      "source_goal" => child.goal,
+      "source_kind" => child.kind,
+      "source_role" => child.assigned_role,
+      "source_artifact_type" => "work_item_status",
+      "reasons" => ["constraint_backpressure"]
+    }
+  end
+
+  defp merge_supporting_findings(findings) do
+    findings
     |> Enum.uniq_by(fn finding ->
       {
         finding["source_work_item_id"],
@@ -3311,16 +3429,58 @@ defmodule HydraX.Runtime.WorkItems do
       {:ok, updated_parent} =
         save_work_item(parent, %{
           "result_refs" =>
-            (parent.result_refs || %{})
-            |> Map.put(
-              "follow_up_work_item_ids",
-              Enum.uniq(
-                List.wrap(get_in(parent.result_refs || %{}, ["follow_up_work_item_ids"])) ++
-                  [
-                    follow_up_work_item.id
-                  ]
+            append_follow_up_result_refs(parent.result_refs, follow_up_work_item, "publish")
+        })
+
+      {:ok, updated_parent, follow_up_work_item}
+    else
+      {:ok, parent, nil}
+    end
+  end
+
+  defp maybe_enqueue_replan_follow_up(
+         %WorkItem{} = parent,
+         %Artifact{} = summary_artifact,
+         supporting_memories,
+         constraint_findings
+       ) do
+    if parent.assigned_role == "planner" and constraint_findings != [] do
+      {:ok, follow_up_work_item} =
+        save_work_item(%{
+          "kind" => parent.kind,
+          "goal" => "Re-plan #{parent.goal} within the current autonomy constraints.",
+          "status" => "planned",
+          "execution_mode" => "delegate",
+          "assigned_role" => "planner",
+          "assigned_agent_id" => parent.assigned_agent_id,
+          "delegated_by_agent_id" => parent.assigned_agent_id || parent.delegated_by_agent_id,
+          "parent_work_item_id" => parent.id,
+          "priority" => max(parent.priority - 1, 0),
+          "autonomy_level" => parent.autonomy_level,
+          "approval_stage" => parent.approval_stage,
+          "deliverables" => parent.deliverables,
+          "input_artifact_refs" => %{"summary_artifact_id" => summary_artifact.id},
+          "required_outputs" => parent.required_outputs,
+          "review_required" => parent.review_required,
+          "metadata" => %{
+            "task_type" => "constraint_replan",
+            "delegate_goal" => parent.goal,
+            "summary_artifact_id" => summary_artifact.id,
+            "constraint_findings" => Enum.take(constraint_findings, 5),
+            "follow_up_context" =>
+              build_follow_up_context(
+                parent,
+                supporting_memories,
+                summary_artifact,
+                constraint_findings
               )
-            )
+          }
+        })
+
+      {:ok, updated_parent} =
+        save_work_item(parent, %{
+          "result_refs" =>
+            append_follow_up_result_refs(parent.result_refs, follow_up_work_item, "replan")
         })
 
       {:ok, updated_parent, follow_up_work_item}
@@ -3334,11 +3494,14 @@ defmodule HydraX.Runtime.WorkItems do
          children,
          summary_artifact,
          artifact_ids,
-         supporting_memories
+         supporting_memories,
+         constraint_findings
        ) do
     approval_records = approval_records_for_subject("work_item", claimed.id)
     latest_decision = approval_records |> List.first() |> then(&(&1 && &1.decision))
-    follow_up_context = build_follow_up_context(claimed, supporting_memories, summary_artifact)
+
+    follow_up_context =
+      build_follow_up_context(claimed, supporting_memories, summary_artifact, constraint_findings)
 
     {status, approval_stage} =
       case latest_decision do
@@ -3375,13 +3538,42 @@ defmodule HydraX.Runtime.WorkItems do
     }
   end
 
-  defp build_follow_up_context(parent, supporting_memories, summary_artifact) do
+  defp build_follow_up_context(
+         parent,
+         supporting_memories,
+         summary_artifact,
+         constraint_findings \\ []
+       ) do
     %{
       "query" => parent.goal,
       "captured_at" => DateTime.utc_now(),
       "summary_artifact_id" => summary_artifact.id,
-      "promoted_findings" => Enum.take(supporting_memories, 5)
+      "promoted_findings" => Enum.take(supporting_memories, 5),
+      "constraint_findings" => Enum.take(constraint_findings, 5),
+      "needs_replan" => constraint_findings != []
     }
+  end
+
+  defp append_follow_up_result_refs(result_refs, %WorkItem{} = follow_up_work_item, type) do
+    ids =
+      result_refs
+      |> Kernel.||(%{})
+      |> Map.get("follow_up_work_item_ids", [])
+      |> List.wrap()
+      |> Kernel.++([follow_up_work_item.id])
+      |> Enum.uniq()
+
+    types =
+      result_refs
+      |> Kernel.||(%{})
+      |> get_in(["follow_up_summary", "types"])
+      |> List.wrap()
+      |> Kernel.++([type])
+      |> Enum.uniq()
+
+    (result_refs || %{})
+    |> Map.put("follow_up_work_item_ids", ids)
+    |> Map.put("follow_up_summary", %{"count" => length(ids), "types" => types})
   end
 
   defp promoted_memory_ids(%WorkItem{} = work_item) do

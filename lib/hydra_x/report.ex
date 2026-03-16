@@ -1772,6 +1772,9 @@ defmodule HydraX.Report do
         |> Enum.reject(&is_nil_or_empty/1)
         |> Enum.join(" ")
 
+      %{type: "queued_replan_follow_up", count: count} ->
+        "replan queued #{count}"
+
       %{type: "queued_follow_up", count: count} ->
         "queued #{count}"
     end
@@ -1816,14 +1819,31 @@ defmodule HydraX.Report do
         }
 
       List.wrap(get_in(item.result_refs || %{}, ["follow_up_work_item_ids"])) != [] ->
-        %{
-          type: "queued_follow_up",
-          count: length(List.wrap(get_in(item.result_refs || %{}, ["follow_up_work_item_ids"])))
-        }
+        follow_up_snapshot(item)
 
       true ->
         nil
     end
+  end
+
+  defp follow_up_snapshot(item) do
+    count =
+      get_in(item.result_refs || %{}, ["follow_up_summary", "count"]) ||
+        length(List.wrap(get_in(item.result_refs || %{}, ["follow_up_work_item_ids"])))
+
+    types =
+      item
+      |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "types"]))
+      |> List.wrap()
+
+    type =
+      cond do
+        "replan" in types -> "queued_replan_follow_up"
+        "publish" in types or types == [] -> "queued_follow_up"
+        true -> "queued_follow_up"
+      end
+
+    %{type: type, count: count}
   end
 
   defp work_item_publish_delivery_result(item) do

@@ -250,6 +250,29 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "budget tokens exhausted"
   end
 
+  test "health page shows replan follow-up posture", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, replan_parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Re-plan the constrained autonomy request.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "planner",
+        "status" => "completed",
+        "priority" => 99,
+        "result_refs" => %{
+          "follow_up_work_item_ids" => [7_701],
+          "follow_up_summary" => %{"count" => 1, "types" => ["replan"]}
+        }
+      })
+
+    {:ok, _view, html} = live(conn, ~p"/health")
+
+    assert html =~ replan_parent.goal
+    assert html =~ "replan queued 1"
+  end
+
   test "health page shows the unified effective policy surface", %{conn: conn} do
     {:ok, _view, html} = live(conn, ~p"/health")
 

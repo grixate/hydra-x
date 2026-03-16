@@ -179,6 +179,37 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "external_delivery"
   end
 
+  test "agents page shows replan follow-up summaries", %{conn: conn} do
+    {:ok, agent} =
+      Runtime.save_agent(%{
+        name: "Planner Agent",
+        slug: "planner-agent-replan",
+        role: "planner",
+        workspace_root: Path.join(System.tmp_dir!(), "hydra-x-planner-agent-replan"),
+        description: "planner",
+        is_default: false
+      })
+
+    {:ok, replan_parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Re-plan the constrained autonomy rollout.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "planner",
+        "status" => "completed",
+        "priority" => 99,
+        "result_refs" => %{
+          "follow_up_work_item_ids" => [9_101],
+          "follow_up_summary" => %{"count" => 1, "types" => ["replan"]}
+        }
+      })
+
+    {:ok, _view, html} = live(conn, ~p"/agents")
+
+    assert html =~ replan_parent.goal
+    assert html =~ "replan follow-up queued 1"
+  end
+
   test "agents page can approve a merge-ready work item from the control plane", %{conn: conn} do
     {:ok, agent} =
       Runtime.save_agent(%{
