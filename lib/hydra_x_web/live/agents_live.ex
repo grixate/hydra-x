@@ -1368,15 +1368,37 @@ defmodule HydraXWeb.AgentsLive do
     cond do
       get_in(work_item.metadata || %{}, ["task_type"]) == "publish_summary" ->
         delivery = get_in(work_item.metadata || %{}, ["delivery"]) || %{}
-        channel = delivery["channel"] || delivery["mode"] || "report"
-        target = delivery["target"]
+        delivery_result = work_item_publish_delivery_result(work_item)
+
+        channel =
+          delivery_result["channel"] || delivery["channel"] || delivery["mode"] || "report"
+
+        target = delivery_result["target"] || delivery["target"]
         artifact_types = work_item_artifact_types(work_item)
 
         prefix =
-          if work_item.status == "completed" and "delivery_brief" in artifact_types do
-            "delivery brief ready"
-          else
-            "publish task #{work_item.status}"
+          case delivery_result["status"] do
+            "delivered" ->
+              "delivery delivered"
+
+            "blocked" ->
+              "delivery blocked"
+
+            "failed" ->
+              "delivery failed"
+
+            "draft" ->
+              "delivery draft"
+
+            "skipped" ->
+              "delivery skipped"
+
+            _ ->
+              if work_item.status == "completed" and "delivery_brief" in artifact_types do
+                "delivery brief ready"
+              else
+                "publish task #{work_item.status}"
+              end
           end
 
         [prefix, channel, target && "-> #{target}"]
@@ -1395,6 +1417,15 @@ defmodule HydraXWeb.AgentsLive do
       true ->
         nil
     end
+  end
+
+  defp work_item_publish_delivery_result(work_item) do
+    get_in(work_item.result_refs || %{}, ["delivery"]) ||
+      Enum.find_value(work_item.artifacts || [], fn artifact ->
+        if artifact.type == "delivery_brief" do
+          Map.get(artifact.payload || %{}, "delivery")
+        end
+      end) || %{}
   end
 
   defp truncate_text(text, max_length) when is_binary(text) do

@@ -161,6 +161,14 @@ defmodule HydraXWeb.HealthLiveTest do
         "assigned_role" => "operator",
         "status" => "completed",
         "approval_stage" => "validated",
+        "result_refs" => %{
+          "delivery" => %{
+            "status" => "delivered",
+            "channel" => "telegram",
+            "target" => "ops-room",
+            "metadata" => %{"provider_message_id" => "health-91"}
+          }
+        },
         "metadata" => %{
           "task_type" => "publish_summary",
           "delivery" => %{"mode" => "channel", "channel" => "telegram", "target" => "ops-room"}
@@ -186,7 +194,8 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ extension_item.goal
     assert html =~ publish_parent.goal
     assert html =~ "publish queued 1"
-    assert html =~ "telegram"
+    assert html =~ "delivered telegram"
+    assert html =~ "ops-room"
   end
 
   test "health page shows the unified effective policy surface", %{conn: conn} do

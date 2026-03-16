@@ -647,6 +647,14 @@ defmodule HydraX.ReportTest do
         "assigned_role" => "operator",
         "status" => "completed",
         "approval_stage" => "validated",
+        "result_refs" => %{
+          "delivery" => %{
+            "status" => "delivered",
+            "channel" => "telegram",
+            "target" => "ops-room",
+            "metadata" => %{"provider_message_id" => "report-91"}
+          }
+        },
         "metadata" => %{
           "task_type" => "publish_summary",
           "delivery" => %{"mode" => "channel", "channel" => "telegram", "target" => "ops-room"}
@@ -722,7 +730,7 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "patch_bundle:approved/approved"
     assert File.read!(export.markdown_path) =~ "promoted=Decision:"
     assert File.read!(export.markdown_path) =~ "publish=queued 1"
-    assert File.read!(export.markdown_path) =~ "publish=delivery_brief_ready telegram -> ops-room"
+    assert File.read!(export.markdown_path) =~ "publish=delivered telegram -> ops-room"
     assert File.read!(export.markdown_path) =~ "Treat approved research findings as live"
     assert File.read!(export.markdown_path) =~ "updates Slack thread"
     assert File.read!(export.markdown_path) =~ "stream_msg=slack-stream-1"
@@ -814,7 +822,12 @@ defmodule HydraX.ReportTest do
     assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~ "\"publish_follow_up\""
 
     assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~
-             "\"delivery_brief_ready\""
+             "\"status\": \"delivered\""
+
+    assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~
+             "\"provider_message_id\": \"report-91\""
+
+    assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~ "\"delivery\": {"
 
     assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~ "\"artifact_derived\""
     assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~ "\"approvals\""

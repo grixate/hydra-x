@@ -2023,10 +2023,24 @@ defmodule HydraXWeb.HealthLive do
     cond do
       get_in(item.metadata || %{}, ["task_type"]) == "publish_summary" ->
         delivery = get_in(item.metadata || %{}, ["delivery"]) || %{}
-        channel = delivery["channel"] || delivery["mode"] || "report"
-        target = delivery["target"]
+        delivery_result = get_in(item.result_refs || %{}, ["delivery"]) || %{}
 
-        ["publish", channel, target && "-> #{target}"]
+        channel =
+          delivery_result["channel"] || delivery["channel"] || delivery["mode"] || "report"
+
+        target = delivery_result["target"] || delivery["target"]
+
+        prefix =
+          case delivery_result["status"] do
+            "delivered" -> "delivered"
+            "blocked" -> "delivery blocked"
+            "failed" -> "delivery failed"
+            "draft" -> "delivery draft"
+            "skipped" -> "delivery skipped"
+            _ -> "publish"
+          end
+
+        [prefix, channel, target && "-> #{target}"]
         |> Enum.reject(&is_nil_or_empty/1)
         |> Enum.join(" ")
 

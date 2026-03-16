@@ -130,6 +130,14 @@ defmodule HydraXWeb.AgentsLiveTest do
         "assigned_role" => "researcher",
         "status" => "completed",
         "approval_stage" => "validated",
+        "result_refs" => %{
+          "delivery" => %{
+            "status" => "delivered",
+            "channel" => "telegram",
+            "target" => "ops-room",
+            "metadata" => %{"provider_message_id" => "91"}
+          }
+        },
         "metadata" => %{
           "task_type" => "publish_summary",
           "delivery" => %{"mode" => "channel", "channel" => "telegram", "target" => "ops-room"}
@@ -165,8 +173,8 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "patch_bundle"
     assert html =~ publish_parent.goal
     assert html =~ "publish follow-up queued 1"
-    assert html =~ "delivery brief ready"
-    assert html =~ "telegram"
+    assert html =~ "delivery delivered telegram"
+    assert html =~ "ops-room"
   end
 
   test "agents page can approve a merge-ready work item from the control plane", %{conn: conn} do

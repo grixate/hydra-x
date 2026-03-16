@@ -1767,17 +1767,38 @@ defmodule HydraX.Report do
     cond do
       get_in(item.metadata || %{}, ["task_type"]) == "publish_summary" ->
         delivery = get_in(item.metadata || %{}, ["delivery"]) || %{}
+        delivery_result = work_item_publish_delivery_result(item)
 
         %{
           type: "publish_summary",
           status:
-            if(
-              Enum.any?(item.artifacts || [], &(&1.type == "delivery_brief")),
-              do: "delivery_brief_ready",
-              else: item.status
-            ),
-          channel: delivery["channel"] || delivery["mode"] || "report",
-          target: delivery["target"]
+            case delivery_result["status"] do
+              "delivered" ->
+                "delivered"
+
+              "blocked" ->
+                "delivery_blocked"
+
+              "failed" ->
+                "delivery_failed"
+
+              "draft" ->
+                "delivery_draft"
+
+              "skipped" ->
+                "delivery_skipped"
+
+              _ ->
+                if(
+                  Enum.any?(item.artifacts || [], &(&1.type == "delivery_brief")),
+                  do: "delivery_brief_ready",
+                  else: item.status
+                )
+            end,
+          channel:
+            delivery_result["channel"] || delivery["channel"] || delivery["mode"] || "report",
+          target: delivery_result["target"] || delivery["target"],
+          delivery: delivery_result
         }
 
       List.wrap(get_in(item.result_refs || %{}, ["follow_up_work_item_ids"])) != [] ->
@@ -1789,6 +1810,15 @@ defmodule HydraX.Report do
       true ->
         nil
     end
+  end
+
+  defp work_item_publish_delivery_result(item) do
+    get_in(item.result_refs || %{}, ["delivery"]) ||
+      Enum.find_value(item.artifacts || [], fn artifact ->
+        if artifact.type == "delivery_brief" do
+          Map.get(artifact.payload || %{}, "delivery")
+        end
+      end) || %{}
   end
 
   defp json_artifact_snapshot(artifact) do
