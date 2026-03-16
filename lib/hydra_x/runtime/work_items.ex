@@ -99,6 +99,12 @@ defmodule HydraX.Runtime.WorkItems do
     |> Repo.all()
   end
 
+  def get_artifact!(id) do
+    Artifact
+    |> Repo.get!(id)
+    |> Repo.preload([:work_item])
+  end
+
   def work_item_artifacts(work_item_id) when is_integer(work_item_id) do
     list_artifacts(work_item_id: work_item_id, limit: 100)
   end
@@ -142,6 +148,10 @@ defmodule HydraX.Runtime.WorkItems do
   def approval_records_for_subject(subject_type, subject_id)
       when is_binary(subject_type) and is_integer(subject_id) do
     list_approval_records(subject_type: subject_type, subject_id: subject_id, limit: 100)
+  end
+
+  def artifact_approval_records(artifact_id) when is_integer(artifact_id) do
+    approval_records_for_subject("artifact", artifact_id)
   end
 
   def create_approval_record(attrs) when is_map(attrs) do
@@ -191,7 +201,7 @@ defmodule HydraX.Runtime.WorkItems do
           })
       })
 
-    promote_artifacts!(updated, requested_action)
+    promote_artifacts!(updated, requested_action, record, attrs["metadata"] || %{})
 
     {updated, record}
   end
@@ -228,9 +238,43 @@ defmodule HydraX.Runtime.WorkItems do
           })
       })
 
-    reject_artifacts!(updated)
+    reject_artifacts!(updated, requested_action, record, attrs["metadata"] || %{})
 
     {updated, record}
+  end
+
+  def approve_artifact!(id, attrs \\ %{}) when is_integer(id) do
+    artifact = get_artifact!(id)
+    attrs = Helpers.normalize_string_keys(attrs)
+    requested_action = attrs["requested_action"] || "promote_artifact"
+    rationale = attrs["rationale"] || "Approved artifact for promotion."
+
+    record_artifact_decision!(
+      artifact,
+      requested_action,
+      "approved",
+      rationale,
+      attrs["metadata"] || %{},
+      attrs["reviewer_agent_id"],
+      attrs["work_item_id"]
+    )
+  end
+
+  def reject_artifact!(id, attrs \\ %{}) when is_integer(id) do
+    artifact = get_artifact!(id)
+    attrs = Helpers.normalize_string_keys(attrs)
+    requested_action = attrs["requested_action"] || "promote_artifact"
+    rationale = attrs["rationale"] || "Rejected artifact during promotion review."
+
+    record_artifact_decision!(
+      artifact,
+      requested_action,
+      "rejected",
+      rationale,
+      attrs["metadata"] || %{},
+      attrs["reviewer_agent_id"],
+      attrs["work_item_id"]
+    )
   end
 
   def cancel_work_item!(id) do
@@ -822,6 +866,8 @@ defmodule HydraX.Runtime.WorkItems do
             })
         })
 
+      promote_artifacts!(updated, "validate_artifact", record, %{"auto_approved" => true})
+
       {:processed,
        %{
          status: "completed",
@@ -873,6 +919,22 @@ defmodule HydraX.Runtime.WorkItems do
           "target_kind" => target && target.kind
         }
       })
+
+    if change_artifact do
+      record_artifact_decision!(
+        change_artifact,
+        work_item.metadata["requested_action"] || "promote_work_item",
+        decision,
+        review_payload["summary"],
+        %{
+          "review_artifact_id" => review_artifact.id,
+          "review_work_item_id" => work_item.id,
+          "target_work_item_id" => target && target.id
+        },
+        agent.id,
+        work_item.id
+      )
+    end
 
     {:ok, updated} =
       save_work_item(work_item, %{
@@ -1479,7 +1541,7 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp maybe_put_extension_enablement(result_refs, _work_item, _requested_action), do: result_refs
 
-  defp promote_artifacts!(%WorkItem{} = work_item, requested_action) do
+  defp promote_artifacts!(%WorkItem{} = work_item, requested_action, parent_record, metadata) do
     desired_status =
       case requested_action do
         "merge_ready" -> "approved"
@@ -1490,21 +1552,97 @@ defmodule HydraX.Runtime.WorkItems do
     work_item.id
     |> work_item_artifacts()
     |> Enum.each(fn artifact ->
-      artifact
-      |> Artifact.changeset(%{"review_status" => desired_status})
-      |> Repo.update!()
+      record_artifact_decision!(
+        artifact,
+        requested_action,
+        "approved",
+        "Artifact approved through work item ##{work_item.id}.",
+        Map.merge(metadata || %{}, %{
+          "parent_work_item_id" => work_item.id,
+          "parent_approval_record_id" => parent_record.id
+        }),
+        parent_record.reviewer_agent_id,
+        parent_record.work_item_id || work_item.id,
+        desired_status
+      )
     end)
   end
 
-  defp reject_artifacts!(%WorkItem{} = work_item) do
+  defp reject_artifacts!(%WorkItem{} = work_item, requested_action, parent_record, metadata) do
     work_item.id
     |> work_item_artifacts()
     |> Enum.each(fn artifact ->
-      artifact
-      |> Artifact.changeset(%{"review_status" => "rejected"})
-      |> Repo.update!()
+      record_artifact_decision!(
+        artifact,
+        requested_action,
+        "rejected",
+        "Artifact rejected through work item ##{work_item.id}.",
+        Map.merge(metadata || %{}, %{
+          "parent_work_item_id" => work_item.id,
+          "parent_approval_record_id" => parent_record.id
+        }),
+        parent_record.reviewer_agent_id,
+        parent_record.work_item_id || work_item.id,
+        "rejected"
+      )
     end)
   end
+
+  defp record_artifact_decision!(
+         %Artifact{} = artifact,
+         requested_action,
+         decision,
+         rationale,
+         metadata,
+         reviewer_agent_id,
+         work_item_id,
+         review_status_override \\ nil
+       ) do
+    {:ok, record} =
+      create_approval_record(%{
+        "subject_type" => "artifact",
+        "subject_id" => artifact.id,
+        "requested_action" => requested_action,
+        "decision" => decision,
+        "rationale" => rationale,
+        "promoted_at" => if(decision == "approved", do: DateTime.utc_now(), else: nil),
+        "reviewer_agent_id" => reviewer_agent_id,
+        "work_item_id" => work_item_id || artifact.work_item_id,
+        "metadata" => metadata || %{}
+      })
+
+    approval_ids =
+      artifact.metadata
+      |> Kernel.||(%{})
+      |> Map.get("approval_record_ids", [])
+      |> List.wrap()
+      |> Kernel.++([record.id])
+      |> Enum.uniq()
+
+    review_status =
+      review_status_override || artifact_review_status_for_decision(requested_action, decision)
+
+    {:ok, updated} =
+      artifact
+      |> Artifact.changeset(%{
+        "review_status" => review_status,
+        "metadata" =>
+          artifact.metadata
+          |> Kernel.||(%{})
+          |> Map.put("approval_record_ids", approval_ids)
+          |> Map.put("last_requested_action", requested_action)
+          |> Map.put("last_approval_decision", decision)
+      })
+      |> Repo.update()
+
+    {updated, record}
+  end
+
+  defp artifact_review_status_for_decision(_requested_action, "rejected"), do: "rejected"
+  defp artifact_review_status_for_decision("merge_ready", "approved"), do: "approved"
+  defp artifact_review_status_for_decision("enable_extension", "approved"), do: "approved"
+  defp artifact_review_status_for_decision("publish_review_report", "approved"), do: "approved"
+  defp artifact_review_status_for_decision(_requested_action, "approved"), do: "validated"
 
   defp finalize_parent_attrs(claimed, children, summary_artifact, artifact_ids) do
     approval_records = approval_records_for_subject("work_item", claimed.id)

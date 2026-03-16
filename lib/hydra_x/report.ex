@@ -656,8 +656,17 @@ defmodule HydraX.Report do
     Enum.map_join(work_items, "\n", fn item ->
       artifacts =
         item.artifacts
-        |> Enum.map(& &1.type)
-        |> Enum.uniq()
+        |> Enum.map(fn artifact ->
+          latest_approval =
+            artifact.approvals
+            |> List.first()
+            |> case do
+              nil -> artifact.review_status
+              record -> "#{artifact.review_status}/#{record.decision}"
+            end
+
+          "#{artifact.type}:#{latest_approval}"
+        end)
         |> Enum.join(",")
 
       latest_approval =
@@ -1668,14 +1677,7 @@ defmodule HydraX.Report do
       updated_at: item.updated_at,
       artifacts:
         Enum.map(item.artifacts, fn artifact ->
-          %{
-            id: artifact.id,
-            type: artifact.type,
-            title: artifact.title,
-            summary: artifact.summary,
-            review_status: artifact.review_status,
-            payload: artifact.payload
-          }
+          json_artifact_snapshot(artifact)
         end),
       approvals:
         Enum.map(item.approvals, fn record ->
@@ -1713,10 +1715,38 @@ defmodule HydraX.Report do
         metadata: item.metadata || %{},
         inserted_at: item.inserted_at,
         updated_at: item.updated_at,
-        artifacts: Runtime.work_item_artifacts(item.id),
+        artifacts:
+          Runtime.work_item_artifacts(item.id)
+          |> Enum.map(fn artifact ->
+            artifact
+            |> Map.from_struct()
+            |> Map.put(:approvals, Runtime.artifact_approval_records(artifact.id))
+          end),
         approvals: approvals
       }
     end)
+  end
+
+  defp json_artifact_snapshot(artifact) do
+    %{
+      id: artifact.id,
+      type: artifact.type,
+      title: artifact.title,
+      summary: artifact.summary,
+      review_status: artifact.review_status,
+      payload: artifact.payload,
+      approvals:
+        Enum.map(Map.get(artifact, :approvals, []), fn record ->
+          %{
+            id: record.id,
+            decision: record.decision,
+            requested_action: record.requested_action,
+            rationale: record.rationale,
+            reviewer_agent_id: record.reviewer_agent_id,
+            inserted_at: record.inserted_at
+          }
+        end)
+    }
   end
 
   defp json_memory(memory) do

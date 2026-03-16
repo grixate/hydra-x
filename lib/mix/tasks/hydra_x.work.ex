@@ -1,7 +1,7 @@
 defmodule Mix.Tasks.HydraX.Work do
   use Mix.Task
 
-  @shortdoc "Lists, inspects, approves, and rejects autonomy work items"
+  @shortdoc "Lists, inspects, and approves autonomy work items and artifacts"
 
   @impl true
   def run(args) do
@@ -16,6 +16,15 @@ defmodule Mix.Tasks.HydraX.Work do
 
       ["reject", id | rest] ->
         reject_work_item(id, rest)
+
+      ["show-artifact", id] ->
+        show_artifact(id)
+
+      ["approve-artifact", id | rest] ->
+        approve_artifact(id, rest)
+
+      ["reject-artifact", id | rest] ->
+        reject_artifact(id, rest)
 
       _ ->
         list_work_items(args)
@@ -79,6 +88,22 @@ defmodule Mix.Tasks.HydraX.Work do
           "\t"
         )
       )
+
+      HydraX.Runtime.artifact_approval_records(artifact.id)
+      |> Enum.each(fn record ->
+        Mix.shell().info(
+          Enum.join(
+            [
+              "artifact_approval",
+              to_string(artifact.id),
+              record.requested_action,
+              record.decision,
+              record.rationale || ""
+            ],
+            "\t"
+          )
+        )
+      end)
     end)
 
     Enum.each(approvals, fn record ->
@@ -132,6 +157,71 @@ defmodule Mix.Tasks.HydraX.Work do
     Mix.shell().info("work_item=#{work_item.id}")
     Mix.shell().info("status=#{work_item.status}")
     Mix.shell().info("approval_stage=#{work_item.approval_stage}")
+    Mix.shell().info("decision=#{record.decision}")
+    Mix.shell().info("action=#{record.requested_action}")
+  end
+
+  defp show_artifact(id) do
+    artifact = HydraX.Runtime.get_artifact!(String.to_integer(id))
+    approvals = HydraX.Runtime.artifact_approval_records(artifact.id)
+
+    Mix.shell().info("artifact=#{artifact.id}")
+    Mix.shell().info("work_item=#{artifact.work_item_id}")
+    Mix.shell().info("type=#{artifact.type}")
+    Mix.shell().info("review_status=#{artifact.review_status}")
+    Mix.shell().info("title=#{artifact.title || "untitled"}")
+    Mix.shell().info("summary=#{artifact.summary || ""}")
+    Mix.shell().info("approvals=#{length(approvals)}")
+
+    Enum.each(approvals, fn record ->
+      Mix.shell().info(
+        Enum.join(
+          [
+            "approval",
+            record.requested_action,
+            record.decision,
+            record.rationale || ""
+          ],
+          "\t"
+        )
+      )
+    end)
+  end
+
+  defp approve_artifact(id, rest) do
+    {opts, _positional, _invalid} =
+      OptionParser.parse(rest, strict: [action: :string, reason: :string])
+
+    action = opts[:action] || "promote_artifact"
+    reason = opts[:reason] || "Approved from mix hydra_x.work."
+
+    {artifact, record} =
+      HydraX.Runtime.approve_artifact!(String.to_integer(id), %{
+        "requested_action" => action,
+        "rationale" => reason
+      })
+
+    Mix.shell().info("artifact=#{artifact.id}")
+    Mix.shell().info("review_status=#{artifact.review_status}")
+    Mix.shell().info("decision=#{record.decision}")
+    Mix.shell().info("action=#{record.requested_action}")
+  end
+
+  defp reject_artifact(id, rest) do
+    {opts, _positional, _invalid} =
+      OptionParser.parse(rest, strict: [action: :string, reason: :string])
+
+    action = opts[:action] || "promote_artifact"
+    reason = opts[:reason] || "Rejected from mix hydra_x.work."
+
+    {artifact, record} =
+      HydraX.Runtime.reject_artifact!(String.to_integer(id), %{
+        "requested_action" => action,
+        "rationale" => reason
+      })
+
+    Mix.shell().info("artifact=#{artifact.id}")
+    Mix.shell().info("review_status=#{artifact.review_status}")
     Mix.shell().info("decision=#{record.decision}")
     Mix.shell().info("action=#{record.requested_action}")
   end

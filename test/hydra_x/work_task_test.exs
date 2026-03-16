@@ -54,6 +54,16 @@ defmodule HydraX.WorkTaskTest do
     assert approve_output =~ "approval_stage=merge_ready"
     assert approve_output =~ "decision=approved"
     assert approve_output =~ "action=merge_ready"
+
+    Mix.Task.reenable("hydra_x.work")
+
+    artifact_output =
+      capture_io(fn ->
+        Mix.Tasks.HydraX.Work.run(["show", to_string(work_item.id)])
+      end)
+
+    assert artifact_output =~ "artifact_approval"
+    assert artifact_output =~ "merge_ready"
   end
 
   test "work task can reject a work item" do
@@ -86,5 +96,54 @@ defmodule HydraX.WorkTaskTest do
     assert output =~ "status=failed"
     assert output =~ "decision=rejected"
     assert output =~ "action=enable_extension"
+  end
+
+  test "work task can inspect and approve an artifact directly" do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, work_item} =
+      Runtime.save_work_item(%{
+        "kind" => "engineering",
+        "goal" => "Approve an artifact directly from the CLI.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "builder",
+        "status" => "completed",
+        "approval_stage" => "validated"
+      })
+
+    {:ok, artifact} =
+      Runtime.create_artifact(%{
+        "work_item_id" => work_item.id,
+        "type" => "proposal",
+        "title" => "Runtime proposal",
+        "summary" => "Prepared runtime proposal"
+      })
+
+    Mix.Task.reenable("hydra_x.work")
+
+    approve_output =
+      capture_io(fn ->
+        Mix.Tasks.HydraX.Work.run([
+          "approve-artifact",
+          to_string(artifact.id),
+          "--action",
+          "publish_review_report",
+          "--reason",
+          "CLI approved artifact publication."
+        ])
+      end)
+
+    assert approve_output =~ "artifact=#{artifact.id}"
+    assert approve_output =~ "review_status=approved"
+
+    Mix.Task.reenable("hydra_x.work")
+
+    show_output =
+      capture_io(fn ->
+        Mix.Tasks.HydraX.Work.run(["show-artifact", to_string(artifact.id)])
+      end)
+
+    assert show_output =~ "approvals=1"
+    assert show_output =~ "publish_review_report"
   end
 end

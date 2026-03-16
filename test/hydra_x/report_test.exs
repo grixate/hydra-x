@@ -600,7 +600,7 @@ defmodule HydraX.ReportTest do
         "assigned_agent_id" => agent.id,
         "assigned_role" => "builder",
         "status" => "completed",
-        "approval_stage" => "operator_approved",
+        "approval_stage" => "validated",
         "result_refs" => %{
           "last_requested_action" => "enable_extension",
           "extension_enablement_status" => "approved_not_enabled"
@@ -618,12 +618,9 @@ defmodule HydraX.ReportTest do
         }
       })
 
-    {:ok, _approval} =
-      Runtime.create_approval_record(%{
-        "subject_type" => "work_item",
-        "subject_id" => work_item.id,
+    {_work_item, _approval} =
+      Runtime.approve_work_item!(work_item.id, %{
         "requested_action" => "enable_extension",
-        "decision" => "approved",
         "rationale" => "Operator approved the extension package for gated enablement."
       })
 
@@ -668,6 +665,7 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "Autonomous Work Items"
     assert File.read!(export.markdown_path) =~ "approval=approved/enable_extension"
     assert File.read!(export.markdown_path) =~ "enablement=approved_not_enabled"
+    assert File.read!(export.markdown_path) =~ "patch_bundle:approved/approved"
     assert File.read!(export.markdown_path) =~ "updates Slack thread"
     assert File.read!(export.markdown_path) =~ "stream_msg=slack-stream-1"
     assert File.read!(export.markdown_path) =~ "preview=Live report stream preview"
@@ -754,6 +752,10 @@ defmodule HydraX.ReportTest do
              "\"approval_stage\": \"operator_approved\""
 
     assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~ "\"patch_bundle\""
+    assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~ "\"approvals\""
+
+    assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~
+             "\"requested_action\": \"enable_extension\""
 
     assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~
              "\"approved_not_enabled\""

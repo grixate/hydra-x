@@ -4068,6 +4068,51 @@ defmodule HydraX.RuntimeTest do
     assert Enum.any?(approvals, &(&1.id == record.id))
   end
 
+  test "artifact approvals are recorded for parent promotion and direct artifact decisions" do
+    agent = create_agent()
+
+    {:ok, work_item} =
+      Runtime.save_work_item(%{
+        "kind" => "engineering",
+        "goal" => "Track artifact approval history.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "builder",
+        "status" => "completed",
+        "approval_stage" => "validated"
+      })
+
+    {:ok, artifact} =
+      Runtime.create_artifact(%{
+        "work_item_id" => work_item.id,
+        "type" => "code_change_set",
+        "title" => "Tracked patch",
+        "summary" => "Track patch promotion history",
+        "review_status" => "validated"
+      })
+
+    {_updated, _record} =
+      Runtime.approve_work_item!(work_item.id, %{
+        "requested_action" => "merge_ready",
+        "rationale" => "Promoted through the parent work item."
+      })
+
+    artifact_approvals = Runtime.artifact_approval_records(artifact.id)
+    assert Enum.any?(artifact_approvals, &(&1.requested_action == "merge_ready"))
+
+    {rejected_artifact, rejection_record} =
+      Runtime.reject_artifact!(artifact.id, %{
+        "requested_action" => "publish_review_report",
+        "rationale" => "Artifact-specific rejection."
+      })
+
+    assert rejected_artifact.review_status == "rejected"
+    assert rejection_record.subject_type == "artifact"
+
+    artifact_approvals = Runtime.artifact_approval_records(artifact.id)
+    assert Enum.any?(artifact_approvals, &(&1.decision == "approved"))
+    assert Enum.any?(artifact_approvals, &(&1.decision == "rejected"))
+  end
+
   test "extension work items produce approval-gated package metadata" do
     builder =
       create_agent()
@@ -4118,6 +4163,10 @@ defmodule HydraX.RuntimeTest do
     assert approved_item.approval_stage == "operator_approved"
     assert approved_item.result_refs["extension_enablement_status"] == "approved_not_enabled"
     assert record.requested_action == "enable_extension"
+
+    artifact_approvals = Runtime.artifact_approval_records(patch_bundle.id)
+    assert Enum.any?(artifact_approvals, &(&1.requested_action == "validate_artifact"))
+    assert Enum.any?(artifact_approvals, &(&1.requested_action == "enable_extension"))
   end
 
   test "operator rejection records fail a reviewed work item" do
