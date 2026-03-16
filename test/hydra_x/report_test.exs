@@ -757,6 +757,34 @@ defmodule HydraX.ReportTest do
         }
       })
 
+    {:ok, _rejected_publish_follow_up_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Queue a degraded publish replan after rejection.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "operator",
+        "status" => "completed",
+        "approval_stage" => "validated",
+        "priority" => 93,
+        "result_refs" => %{
+          "degraded" => true,
+          "follow_up_work_item_ids" => [8_401],
+          "follow_up_summary" => %{"count" => 1, "types" => ["replan"]},
+          "delivery" => %{
+            "status" => "rejected",
+            "degraded" => true,
+            "channel" => "telegram",
+            "target" => "ops-room",
+            "reason" => "operator_rejected_delivery"
+          }
+        },
+        "metadata" => %{
+          "task_type" => "publish_summary",
+          "degraded_execution" => true,
+          "delivery" => %{"mode" => "channel", "channel" => "telegram", "target" => "ops-room"}
+        }
+      })
+
     {:ok, _artifact} =
       Runtime.create_artifact(%{
         "work_item_id" => work_item.id,
@@ -889,6 +917,9 @@ defmodule HydraX.ReportTest do
 
     assert File.read!(export.markdown_path) =~
              "publish=degraded_delivery_rejected telegram -> ops-room"
+
+    assert File.read!(export.markdown_path) =~
+             "publish=delivery_rejected degraded replan queued 1 telegram -> ops-room"
 
     assert File.read!(export.markdown_path) =~ "level=fully_automatic"
     assert File.read!(export.markdown_path) =~ "effect=external_delivery"

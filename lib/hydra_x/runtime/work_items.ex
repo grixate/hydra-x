@@ -3422,12 +3422,21 @@ defmodule HydraX.Runtime.WorkItems do
       })
       |> Repo.update()
 
+    {:ok, updated_publish_item, follow_up_work_item} =
+      maybe_enqueue_rejected_publish_follow_up(
+        updated_publish_item,
+        updated_brief,
+        review_item,
+        rejection_record
+      )
+
     {:ok, updated_review_item} =
       save_work_item(review_item, %{
         "result_refs" =>
           (review_item.result_refs || %{})
           |> Map.put("delivery", rejection_result)
           |> Map.put("linked_publish_work_item_id", updated_publish_item.id)
+          |> maybe_put_follow_up_work_item_id(follow_up_work_item)
           |> Map.put(
             "artifact_ids",
             Enum.uniq(
@@ -3438,6 +3447,177 @@ defmodule HydraX.Runtime.WorkItems do
 
     updated_review_item
   end
+
+  defp maybe_enqueue_rejected_publish_follow_up(
+         %WorkItem{} = publish_item,
+         %Artifact{} = delivery_brief,
+         %WorkItem{} = review_item,
+         rejection_record
+       ) do
+    follow_up_context = get_in(publish_item.metadata || %{}, ["follow_up_context"]) || %{}
+    rejection_finding = rejected_publish_constraint_finding(publish_item, rejection_record)
+
+    constraint_findings =
+      merge_supporting_findings(
+        List.wrap(follow_up_context["constraint_findings"]) ++ [rejection_finding]
+      )
+
+    constraint_strategy =
+      derive_constraint_strategy(constraint_findings)
+
+    supporting_memories =
+      merge_supporting_findings(List.wrap(follow_up_context["promoted_findings"]))
+
+    {planner_agent_id, planner_goal, delegated_by_agent_id, work_kind, approval_stage,
+     deliverables, required_outputs, review_required, budget} =
+      rejected_publish_follow_up_defaults(publish_item)
+
+    {:ok, follow_up_work_item} =
+      save_work_item(%{
+        "kind" => work_kind,
+        "goal" => "Re-plan #{planner_goal} after degraded delivery was rejected.",
+        "status" => "planned",
+        "execution_mode" => "delegate",
+        "assigned_role" => "planner",
+        "assigned_agent_id" => planner_agent_id,
+        "delegated_by_agent_id" => delegated_by_agent_id,
+        "parent_work_item_id" => publish_item.id,
+        "priority" => max(publish_item.priority, 1),
+        "autonomy_level" => publish_item.autonomy_level,
+        "approval_stage" => approval_stage,
+        "deliverables" => deliverables,
+        "budget" => budget,
+        "required_outputs" => required_outputs,
+        "review_required" => review_required,
+        "input_artifact_refs" => %{"summary_artifact_id" => delivery_brief.id},
+        "metadata" => %{
+          "task_type" => "rejected_publish_replan",
+          "delegate_goal" => planner_goal,
+          "delegate_role" => Autonomy.role_for_kind(work_kind),
+          "delivery_brief_artifact_id" => delivery_brief.id,
+          "publish_work_item_id" => publish_item.id,
+          "publish_review_work_item_id" => review_item.id,
+          "constraint_findings" => constraint_findings,
+          "constraint_strategy" => constraint_strategy,
+          "follow_up_context" =>
+            build_follow_up_context(
+              publish_item,
+              supporting_memories,
+              delivery_brief,
+              constraint_findings,
+              constraint_strategy
+            )
+        }
+      })
+
+    {:ok, updated_publish_item} =
+      save_work_item(publish_item, %{
+        "result_refs" =>
+          append_follow_up_result_refs(publish_item.result_refs, follow_up_work_item, "replan"),
+        "runtime_state" =>
+          append_history(publish_item.runtime_state, "blocked", %{
+            "blocked_at" => DateTime.utc_now(),
+            "phase" => "publish_replan",
+            "replan_work_item_id" => follow_up_work_item.id,
+            "approval_record_id" => rejection_record.id
+          })
+      })
+
+    {:ok, updated_publish_item, follow_up_work_item}
+  end
+
+  defp rejected_publish_follow_up_defaults(%WorkItem{} = publish_item) do
+    parent =
+      if is_integer(publish_item.parent_work_item_id) do
+        get_work_item!(publish_item.parent_work_item_id)
+      end
+
+    planner_agent =
+      cond do
+        match?(%WorkItem{assigned_role: "planner"}, parent) and
+            is_integer(parent.assigned_agent_id) ->
+          Agents.get_agent!(parent.assigned_agent_id)
+
+        is_integer(publish_item.assigned_agent_id) ->
+          publish_item.assigned_agent_id
+          |> Agents.get_agent!()
+          |> case do
+            %{role: "planner"} = agent -> agent
+            _other -> planner_fallback_agent()
+          end
+
+        true ->
+          planner_fallback_agent()
+      end
+
+    planner_goal =
+      cond do
+        match?(%WorkItem{}, parent) and present_text?(parent.goal) ->
+          parent.goal
+
+        present_text?(publish_item.goal) ->
+          publish_item.goal
+
+        true ->
+          "the constrained publish workflow"
+      end
+
+    {
+      planner_agent && planner_agent.id,
+      planner_goal,
+      (planner_agent && planner_agent.id) || publish_item.assigned_agent_id,
+      if(match?(%WorkItem{}, parent), do: parent.kind, else: "research"),
+      if(match?(%WorkItem{}, parent),
+        do: parent.approval_stage,
+        else: publish_item.approval_stage
+      ),
+      if(match?(%WorkItem{}, parent), do: parent.deliverables, else: publish_item.deliverables),
+      if(match?(%WorkItem{}, parent),
+        do: parent.required_outputs,
+        else: publish_item.required_outputs
+      ),
+      if(match?(%WorkItem{}, parent),
+        do: parent.review_required,
+        else: publish_item.review_required
+      ),
+      if(match?(%WorkItem{}, parent), do: parent.budget, else: publish_item.budget)
+    }
+  end
+
+  defp planner_fallback_agent do
+    Agents.list_agents()
+    |> Enum.find(fn agent -> agent.role == "planner" end)
+  end
+
+  defp rejected_publish_constraint_finding(%WorkItem{} = publish_item, rejection_record) do
+    rationale =
+      rejection_record.rationale
+      |> case do
+        value when is_binary(value) and value != "" -> value
+        _ -> "operator requested a revised summary before external delivery"
+      end
+
+    %{
+      "memory_id" => nil,
+      "type" => "Constraint",
+      "content" => "Re-plan #{publish_item.goal} because #{rationale}.",
+      "score" => 0.94,
+      "summary_reason" => "delivery_rejected",
+      "source_work_item_id" => publish_item.id,
+      "source_goal" => publish_item.goal,
+      "source_kind" => publish_item.kind,
+      "source_role" => publish_item.assigned_role,
+      "source_artifact_type" => "delivery_review",
+      "reasons" => ["constraint_backpressure"],
+      "policy_failure_type" => "delivery_rejected"
+    }
+  end
+
+  defp maybe_put_follow_up_work_item_id(result_refs, %WorkItem{} = follow_up_work_item) do
+    Map.put(result_refs, "linked_follow_up_work_item_id", follow_up_work_item.id)
+  end
+
+  defp maybe_put_follow_up_work_item_id(result_refs, _follow_up_work_item), do: result_refs
 
   defp maybe_promote_artifact_derived_artifact(%Artifact{type: type} = artifact, requested_action)
        when type in ["research_report", "review_report", "decision_ledger"] and
@@ -3776,6 +3956,10 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp constraint_strategy_line(%{"summary_reason" => "execution_canceled"}) do
     "Resume with a narrower plan and keep the work restartable."
+  end
+
+  defp constraint_strategy_line(%{"summary_reason" => "delivery_rejected"}) do
+    "Strengthen confidence with clearer evidence, revise the summary for review, and avoid external delivery until the revised brief is explicitly approved."
   end
 
   defp constraint_strategy_line(_finding), do: nil

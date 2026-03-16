@@ -927,7 +927,7 @@ defmodule HydraXWeb.HealthLive do
                     · expiry {event.expired_by}
                   </span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip                          {event.ip}</span>
+                  <span :if={event.ip}> · ip  {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -2120,7 +2120,7 @@ defmodule HydraXWeb.HealthLive do
               if(delivery_result["degraded"], do: "publish degraded", else: "publish")
           end
 
-        [prefix, channel, target && "-> #{target}"]
+        [prefix, channel, target && "-> #{target}", publish_replan_summary(item)]
         |> Enum.reject(&is_nil_or_empty/1)
         |> Enum.join(" ")
 
@@ -2164,6 +2164,12 @@ defmodule HydraXWeb.HealthLive do
       |> Map.get("follow_up_work_item_ids", [])
       |> List.wrap()
       |> length()
+  end
+
+  defp publish_replan_summary(item) do
+    if autonomy_follow_up_type(item) == "replan" do
+      "replan queued #{autonomy_follow_up_count(item)}"
+    end
   end
 
   defp autonomy_side_effect_class(item) do

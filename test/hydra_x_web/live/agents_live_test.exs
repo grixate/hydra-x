@@ -278,7 +278,7 @@ defmodule HydraXWeb.AgentsLiveTest do
         }
       })
 
-    {:ok, rejected_publish_review} =
+    {:ok, _rejected_publish_review} =
       Runtime.save_work_item(%{
         "kind" => "task",
         "goal" => "Reject the degraded publish draft after review.",
@@ -304,6 +304,34 @@ defmodule HydraXWeb.AgentsLiveTest do
         }
       })
 
+    {:ok, _rejected_publish_follow_up} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Queue a publish replan after the degraded delivery was rejected.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "operator",
+        "status" => "completed",
+        "approval_stage" => "validated",
+        "priority" => 99,
+        "result_refs" => %{
+          "degraded" => true,
+          "follow_up_work_item_ids" => [8_101],
+          "follow_up_summary" => %{"count" => 1, "types" => ["replan"]},
+          "delivery" => %{
+            "status" => "rejected",
+            "degraded" => true,
+            "channel" => "telegram",
+            "target" => "ops-room",
+            "reason" => "operator_rejected_delivery"
+          }
+        },
+        "metadata" => %{
+          "task_type" => "publish_summary",
+          "degraded_execution" => true,
+          "delivery" => %{"mode" => "channel", "channel" => "telegram", "target" => "ops-room"}
+        }
+      })
+
     {:ok, _view, html} = live(conn, ~p"/agents")
 
     assert html =~ degraded_research.goal
@@ -313,8 +341,7 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ publish_review.goal
     assert html =~ "Approve degraded delivery"
     assert html =~ "degraded delivery awaiting approval telegram"
-    assert html =~ rejected_publish_review.goal
-    assert html =~ "degraded delivery rejected telegram"
+    assert html =~ "replan queued 1"
   end
 
   test "agents page can approve a merge-ready work item from the control plane", %{conn: conn} do

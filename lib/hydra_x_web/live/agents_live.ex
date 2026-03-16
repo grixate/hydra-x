@@ -1469,7 +1469,7 @@ defmodule HydraXWeb.AgentsLive do
               end
           end
 
-        [prefix, channel, target && "-> #{target}"]
+        [prefix, channel, target && "-> #{target}", publish_replan_summary(work_item)]
         |> Enum.reject(&(&1 in [nil, ""]))
         |> Enum.join(" ")
 
@@ -1524,6 +1524,12 @@ defmodule HydraXWeb.AgentsLive do
           Map.get(artifact.payload || %{}, "delivery")
         end
       end) || %{}
+  end
+
+  defp publish_replan_summary(work_item) do
+    if follow_up_queue_type(work_item) == "replan" do
+      "replan queued #{follow_up_queue_count(work_item)}"
+    end
   end
 
   defp degraded_work_item?(work_item) do

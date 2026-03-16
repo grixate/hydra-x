@@ -1772,6 +1772,7 @@ defmodule HydraX.Report do
         [
           status,
           snapshot_degraded_suffix(work_item_publish_snapshot(item)),
+          publish_replan_summary(item),
           channel || "report",
           target && "-> #{target}"
         ]
@@ -1892,6 +1893,17 @@ defmodule HydraX.Report do
       end
 
     %{type: type, count: count}
+  end
+
+  defp publish_replan_summary(item) do
+    snapshot = work_item_publish_snapshot(item)
+
+    if match?(%{type: "publish_summary"}, snapshot) do
+      case follow_up_snapshot(item) do
+        %{type: "queued_replan_follow_up", count: count} -> "replan queued #{count}"
+        _ -> nil
+      end
+    end
   end
 
   defp snapshot_degraded_suffix(%{degraded: true}), do: "degraded"

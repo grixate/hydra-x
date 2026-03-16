@@ -4706,6 +4706,26 @@ defmodule HydraX.RuntimeTest do
     assert publish_item.result_refs["delivery"]["reason"] == "operator_rejected_delivery"
     assert publish_item.metadata["degraded_execution"] == true
 
+    assert "replan" in List.wrap(
+             get_in(publish_item.result_refs || %{}, ["follow_up_summary", "types"])
+           )
+
+    [replan_work_item_id] =
+      publish_item.result_refs["follow_up_work_item_ids"]
+      |> List.wrap()
+      |> Enum.reject(&(&1 == approval_item_id))
+
+    replan_work_item = Runtime.get_work_item!(replan_work_item_id)
+    assert replan_work_item.assigned_role == "planner"
+    assert replan_work_item.execution_mode == "delegate"
+    assert replan_work_item.parent_work_item_id == publish_item.id
+    assert replan_work_item.metadata["task_type"] == "rejected_publish_replan"
+    assert replan_work_item.metadata["publish_work_item_id"] == publish_item.id
+    assert replan_work_item.metadata["publish_review_work_item_id"] == approval_item.id
+    assert replan_work_item.metadata["constraint_strategy"] =~ "avoid external delivery"
+    assert replan_work_item.result_refs == %{}
+    assert rejected_review.result_refs["linked_follow_up_work_item_id"] == replan_work_item.id
+
     [delivery_brief] =
       Runtime.work_item_artifacts(publish_item.id)
       |> Enum.filter(&(&1.type == "delivery_brief"))
