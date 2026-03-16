@@ -544,7 +544,7 @@ defmodule HydraXWeb.AgentsLive do
                       {item.autonomy_level} · effect {work_item_side_effect_class(item)}<span :if={
                         summary = work_item_promoted_memory_summary(item)
                       }> · {summary}</span>
-                      <span :if={summary = work_item_publish_summary(item)}> ·      {summary}</span>
+                      <span :if={summary = work_item_publish_summary(item)}> ·       {summary}</span>
                     </div>
                     <div :if={work_item_actionable?(item)} class="mt-3 flex flex-wrap gap-2">
                       <button
@@ -1309,10 +1309,23 @@ defmodule HydraXWeb.AgentsLive do
 
   defp work_item_primary_action_label(work_item) do
     case work_item_primary_action(work_item) do
-      "enable_extension" -> "Approve extension"
-      "merge_ready" -> "Promote to merge-ready"
-      "promote_work_item" -> "Promote findings"
-      _ -> "Approve"
+      "enable_extension" ->
+        "Approve extension"
+
+      "merge_ready" ->
+        if(degraded_work_item?(work_item),
+          do: "Promote constrained patch",
+          else: "Promote to merge-ready"
+        )
+
+      "promote_work_item" ->
+        if(degraded_work_item?(work_item),
+          do: "Promote degraded findings",
+          else: "Promote findings"
+        )
+
+      _ ->
+        "Approve"
     end
   end
 
@@ -1392,7 +1405,7 @@ defmodule HydraXWeb.AgentsLive do
         prefix =
           case delivery_result["status"] do
             "delivered" ->
-              "delivery delivered"
+              if(delivery_result["degraded"], do: "delivery degraded", else: "delivery delivered")
 
             "blocked" ->
               "delivery blocked"
@@ -1401,7 +1414,10 @@ defmodule HydraXWeb.AgentsLive do
               "delivery failed"
 
             "draft" ->
-              "delivery draft"
+              if(delivery_result["degraded"],
+                do: "delivery degraded draft",
+                else: "delivery draft"
+              )
 
             "skipped" ->
               "delivery skipped"
@@ -1455,6 +1471,11 @@ defmodule HydraXWeb.AgentsLive do
           Map.get(artifact.payload || %{}, "delivery")
         end
       end) || %{}
+  end
+
+  defp degraded_work_item?(work_item) do
+    get_in(work_item.result_refs || %{}, ["degraded"]) == true or
+      get_in(work_item.metadata || %{}, ["degraded_execution"]) == true
   end
 
   defp work_item_side_effect_class(work_item) do

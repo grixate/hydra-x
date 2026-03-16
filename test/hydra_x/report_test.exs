@@ -669,6 +669,32 @@ defmodule HydraX.ReportTest do
         "summary" => "Prepared channel delivery brief"
       })
 
+    {:ok, _degraded_publish_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Hold the degraded publish draft for review.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "operator",
+        "status" => "completed",
+        "approval_stage" => "validated",
+        "priority" => 99,
+        "result_refs" => %{
+          "degraded" => true,
+          "delivery" => %{
+            "status" => "draft",
+            "degraded" => true,
+            "channel" => "telegram",
+            "target" => "ops-room",
+            "reason" => "degraded_confidence_requires_review"
+          }
+        },
+        "metadata" => %{
+          "task_type" => "publish_summary",
+          "degraded_execution" => true,
+          "delivery" => %{"mode" => "channel", "channel" => "telegram", "target" => "ops-room"}
+        }
+      })
+
     {:ok, _artifact} =
       Runtime.create_artifact(%{
         "work_item_id" => work_item.id,
@@ -790,6 +816,10 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "publish=queued 1"
     assert File.read!(export.markdown_path) =~ "publish=replan queued 1"
     assert File.read!(export.markdown_path) =~ "publish=delivered telegram -> ops-room"
+
+    assert File.read!(export.markdown_path) =~
+             "publish=delivery_draft degraded telegram -> ops-room"
+
     assert File.read!(export.markdown_path) =~ "level=fully_automatic"
     assert File.read!(export.markdown_path) =~ "effect=external_delivery"
     assert File.read!(export.markdown_path) =~ "policy=autonomy_fully_automatic"

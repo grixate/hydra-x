@@ -924,10 +924,10 @@ defmodule HydraXWeb.HealthLive do
                 <div class="mt-2 text-xs text-[var(--hx-mute)]">
                   level {event.level}
                   <span :if={event.expired_by}>
-                     · expiry                      {event.expired_by}
+                    · expiry {event.expired_by}
                   </span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip                      {event.ip}</span>
+                  <span :if={event.ip}> · ip                       {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -2071,12 +2071,26 @@ defmodule HydraXWeb.HealthLive do
 
         prefix =
           case delivery_result["status"] do
-            "delivered" -> "delivered"
-            "blocked" -> "delivery blocked"
-            "failed" -> "delivery failed"
-            "draft" -> "delivery draft"
-            "skipped" -> "delivery skipped"
-            _ -> "publish"
+            "delivered" ->
+              "delivered"
+
+            "blocked" ->
+              "delivery blocked"
+
+            "failed" ->
+              "delivery failed"
+
+            "draft" ->
+              if(delivery_result["degraded"],
+                do: "delivery degraded draft",
+                else: "delivery draft"
+              )
+
+            "skipped" ->
+              "delivery skipped"
+
+            _ ->
+              if(delivery_result["degraded"], do: "publish degraded", else: "publish")
           end
 
         [prefix, channel, target && "-> #{target}"]

@@ -703,6 +703,8 @@ defmodule HydraX.Runtime.WorkItems do
 
     report_payload = build_research_report(agent, running, evidence)
 
+    auto_review_required = running.review_required || report_payload["degraded"] == true
+
     {:ok, report_artifact} =
       create_artifact(%{
         "work_item_id" => running.id,
@@ -713,7 +715,7 @@ defmodule HydraX.Runtime.WorkItems do
         "payload" => Map.delete(report_payload, "body"),
         "provenance" => %{"source" => "autonomy", "phase" => "research_execution"},
         "confidence" => report_payload["confidence"],
-        "review_status" => if(running.review_required, do: "proposed", else: "validated")
+        "review_status" => if(auto_review_required, do: "proposed", else: "validated")
       })
 
     decision_payload = build_research_decision_ledger(running, report_payload)
@@ -728,22 +730,28 @@ defmodule HydraX.Runtime.WorkItems do
         "payload" => Map.delete(decision_payload, "body"),
         "provenance" => %{"source" => "autonomy", "phase" => "research_decision_ledger"},
         "confidence" => report_payload["confidence"],
-        "review_status" => if(running.review_required, do: "proposed", else: "validated")
+        "review_status" => if(auto_review_required, do: "proposed", else: "validated")
       })
 
-    if running.review_required do
+    if auto_review_required do
       {:ok, completed} =
         save_work_item(running, %{
           "status" => "completed",
           "approval_stage" => "validated",
           "result_refs" => %{
-            "artifact_ids" => [plan_artifact.id, report_artifact.id, decision_artifact.id]
+            "artifact_ids" => [plan_artifact.id, report_artifact.id, decision_artifact.id],
+            "degraded" => report_payload["degraded"] == true
           },
+          "metadata" =>
+            (running.metadata || %{})
+            |> Map.put("degraded_execution", report_payload["degraded"] == true)
+            |> maybe_put_constraint_strategy(report_payload["constraint_strategy"]),
           "runtime_state" =>
             append_history(running.runtime_state, "completed", %{
               "completed_at" => DateTime.utc_now(),
               "phase" => "research",
-              "artifact_id" => report_artifact.id
+              "artifact_id" => report_artifact.id,
+              "degraded" => report_payload["degraded"] == true
             })
         })
 
@@ -774,8 +782,10 @@ defmodule HydraX.Runtime.WorkItems do
           "approval_stage" => "operator_approved",
           "result_refs" => %{
             "artifact_ids" => [plan_artifact.id, report_artifact.id, decision_artifact.id],
-            "approval_record_ids" => [record.id]
+            "approval_record_ids" => [record.id],
+            "degraded" => false
           },
+          "metadata" => Map.put(running.metadata || %{}, "degraded_execution", false),
           "runtime_state" =>
             append_history(running.runtime_state, "completed", %{
               "completed_at" => DateTime.utc_now(),
@@ -880,6 +890,8 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp build_research_report(agent, work_item, evidence) do
     delegated_context = delegated_context_memories(work_item)
+    degraded? = degraded_execution?(work_item)
+    constraint_strategy = delegated_constraint_strategy(delegated_context)
 
     evidence_lines =
       evidence
@@ -953,10 +965,12 @@ defmodule HydraX.Runtime.WorkItems do
       "sources" => Enum.map(evidence, &source_snapshot/1),
       "evidence" => Enum.map(evidence, &evidence_snapshot/1),
       "planning_context" => delegated_context,
+      "degraded" => degraded?,
+      "constraint_strategy" => constraint_strategy,
       "claims" => derive_claims(evidence, delegated_context),
       "open_questions" => derive_open_questions(work_item, evidence, delegated_context),
       "recommended_actions" => derive_recommended_actions(work_item, evidence, delegated_context),
-      "confidence" => derive_confidence(evidence),
+      "confidence" => adjusted_confidence(derive_confidence(evidence), degraded?),
       "body" => llm_body
     }
   end
@@ -976,6 +990,9 @@ defmodule HydraX.Runtime.WorkItems do
 
       Recommended actions:
       #{Enum.map_join(report_payload["recommended_actions"], "\n", &"- #{&1}")}
+
+      Delivery posture: #{if(report_payload["degraded"], do: "degraded", else: "standard")}
+      Constraint strategy: #{report_payload["constraint_strategy"] || "none"}
 
       Open questions:
       #{Enum.map_join(report_payload["open_questions"], "\n", &"- #{&1}")}
@@ -1166,7 +1183,7 @@ defmodule HydraX.Runtime.WorkItems do
         "payload" => Map.delete(payload, "body") |> Map.put("delivery", delivery_result),
         "provenance" => %{"source" => "autonomy", "phase" => "publish_summary"},
         "confidence" => payload["confidence"],
-        "review_status" => "validated"
+        "review_status" => if(payload["degraded"], do: "proposed", else: "validated")
       })
 
     action =
@@ -1178,16 +1195,24 @@ defmodule HydraX.Runtime.WorkItems do
     {:ok, completed} =
       save_work_item(running, %{
         "status" => "completed",
+        "approval_stage" =>
+          if(payload["degraded"], do: "validated", else: running.approval_stage),
         "result_refs" => %{
           "artifact_ids" => [artifact.id],
-          "delivery" => delivery_result
+          "delivery" => delivery_result,
+          "degraded" => payload["degraded"] == true
         },
+        "metadata" =>
+          (running.metadata || %{})
+          |> Map.put("degraded_execution", payload["degraded"] == true)
+          |> maybe_put_constraint_strategy(payload["constraint_strategy"]),
         "runtime_state" =>
           append_history(running.runtime_state, "completed", %{
             "completed_at" => DateTime.utc_now(),
             "phase" => "publish_summary",
             "artifact_id" => artifact.id,
-            "delivery_status" => delivery_result["status"]
+            "delivery_status" => delivery_result["status"],
+            "degraded" => payload["degraded"] == true
           })
       })
 
@@ -1511,7 +1536,14 @@ defmodule HydraX.Runtime.WorkItems do
     delivery_channel = delivery["channel"]
     delivery_target = delivery["target"]
     summary_payload = (summary_artifact && summary_artifact.payload) || %{}
+    follow_up_metadata = get_in(work_item.metadata || %{}, ["follow_up_context"]) || %{}
     findings = Enum.take(follow_up_context, 4)
+    degraded? = degraded_delivery_brief?(follow_up_metadata, summary_payload, findings)
+
+    constraint_strategy =
+      follow_up_metadata["constraint_strategy"] ||
+        summary_payload["constraint_strategy"] ||
+        delegated_constraint_strategy(findings)
 
     publish_lines =
       findings
@@ -1530,6 +1562,8 @@ defmodule HydraX.Runtime.WorkItems do
         Delivery mode: #{delivery_mode}
         Delivery channel: #{delivery_channel || "report"}
         Delivery target: #{delivery_target || "control plane"}
+        Delivery posture: #{if(degraded?, do: "degraded", else: "standard")}
+        Constraint strategy: #{constraint_strategy || "none"}
 
         Summary artifact:
         #{(summary_artifact && summary_artifact.body) || work_item.goal}
@@ -1547,6 +1581,8 @@ defmodule HydraX.Runtime.WorkItems do
         Delivery mode: #{delivery_mode}
         Delivery channel: #{delivery_channel || "report"}
         Delivery target: #{delivery_target || "control plane"}
+        Delivery posture: #{if(degraded?, do: "degraded", else: "standard")}
+        Constraint strategy: #{constraint_strategy || "none"}
 
         Summary ready for publication:
         #{(summary_artifact && summary_artifact.body) || work_item.goal}
@@ -1558,11 +1594,13 @@ defmodule HydraX.Runtime.WorkItems do
 
     %{
       "summary" =>
-        "Prepared #{delivery_mode} delivery brief for #{delivery_channel || "report"} publication",
+        "Prepared #{if(degraded?, do: "degraded ", else: "")}#{delivery_mode} delivery brief for #{delivery_channel || "report"} publication",
       "body" => body,
       "delivery_mode" => delivery_mode,
       "delivery_channel" => delivery_channel,
       "delivery_target" => delivery_target,
+      "degraded" => degraded?,
+      "constraint_strategy" => constraint_strategy,
       "delivery" => %{
         "enabled" => Map.get(delivery, "enabled", false),
         "mode" => delivery_mode,
@@ -1574,13 +1612,21 @@ defmodule HydraX.Runtime.WorkItems do
       "key_findings" => findings,
       "recommended_actions" =>
         [
-          "Review the publish-ready summary before external delivery.",
+          if(
+            degraded?,
+            do: "Review the degraded publish-ready summary before any external delivery.",
+            else: "Review the publish-ready summary before external delivery."
+          ),
           delivery_target &&
             "Deliver to #{delivery_target} via #{delivery_channel || delivery_mode}."
         ]
         |> Enum.reject(&(&1 in [nil, ""])),
       "confidence" =>
-        summary_payload["confidence"] || (summary_artifact && summary_artifact.confidence) || 0.68
+        adjusted_confidence(
+          summary_payload["confidence"] || (summary_artifact && summary_artifact.confidence) ||
+            0.68,
+          degraded?
+        )
     }
   end
 
@@ -1593,7 +1639,16 @@ defmodule HydraX.Runtime.WorkItems do
     result =
       cond do
         enabled? != true ->
-          %{"status" => "draft"}
+          %{"status" => "draft", "degraded" => payload["degraded"] == true}
+
+        payload["degraded"] == true ->
+          %{
+            "status" => "draft",
+            "channel" => channel,
+            "target" => target,
+            "degraded" => true,
+            "reason" => "degraded_confidence_requires_review"
+          }
 
         not (is_binary(channel) and channel != "") ->
           %{"status" => "skipped", "reason" => "missing_delivery_channel"}
@@ -3340,6 +3395,42 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp constraint_strategy_line(_finding), do: nil
+
+  defp degraded_execution?(%WorkItem{} = work_item) do
+    delegated_context_memories(work_item)
+    |> Enum.any?(fn memory ->
+      memory["type"] == "Constraint" or
+        "delegated constraint" in List.wrap(memory["reasons"]) or
+        "delegated constraint strategy" in List.wrap(memory["reasons"])
+    end)
+  end
+
+  defp degraded_delivery_brief?(follow_up_metadata, summary_payload, findings) do
+    Map.get(follow_up_metadata || %{}, "needs_replan") == true or
+      present_text?(Map.get(follow_up_metadata || %{}, "constraint_strategy")) or
+      present_text?(summary_payload["constraint_strategy"]) or
+      List.wrap(summary_payload["constraint_findings"]) != [] or
+      Enum.any?(List.wrap(findings), &((&1["type"] || &1[:type]) == "Constraint"))
+  end
+
+  defp delegated_constraint_strategy(delegated_context) do
+    delegated_context
+    |> List.wrap()
+    |> Enum.find_value(fn memory ->
+      if "delegated constraint strategy" in List.wrap(memory["reasons"]) do
+        memory["content"]
+      end
+    end)
+  end
+
+  defp adjusted_confidence(value, true) when is_float(value), do: min(value, 0.52)
+  defp adjusted_confidence(value, true) when is_integer(value), do: min(value * 1.0, 0.52)
+  defp adjusted_confidence(value, _degraded), do: value
+
+  defp maybe_put_constraint_strategy(metadata, value) when is_binary(value) and value != "",
+    do: Map.put(metadata, "constraint_strategy", value)
+
+  defp maybe_put_constraint_strategy(metadata, _value), do: metadata
 
   defp merge_supporting_findings(findings) do
     findings

@@ -585,12 +585,16 @@ defmodule HydraX.RuntimeTest do
 
     wait_for(
       fn ->
-        Runtime.list_turns(conversation.id)
-        |> Enum.any?(
-          &(&1.role == "assistant" and &1.content == "Captured before ownership handoff.")
-        )
+        channel_state = Runtime.conversation_channel_state(conversation.id)
+
+        channel_state.status == "completed" and
+          channel_state.pending_response == nil and
+          Enum.any?(
+            Runtime.list_turns(conversation.id),
+            &(&1.role == "assistant" and &1.content == "Captured before ownership handoff.")
+          )
       end,
-      400
+      600
     )
 
     final_state = Runtime.conversation_channel_state(conversation.id)
@@ -741,11 +745,15 @@ defmodule HydraX.RuntimeTest do
     |> Ecto.Changeset.change(expires_at: DateTime.add(DateTime.utc_now(), -60, :second))
     |> Repo.update!()
 
-    assert {:ok, _lease} =
-             Runtime.claim_lease("conversation:#{conversation.id}",
-               owner: "node:remote",
-               ttl_seconds: 60
-             )
+    wait_for(fn ->
+      match?(
+        {:ok, _lease},
+        Runtime.claim_lease("conversation:#{conversation.id}",
+          owner: "node:remote",
+          ttl_seconds: 60
+        )
+      )
+    end)
 
     send(channel_pid, :lease_tick)
 
@@ -4212,6 +4220,54 @@ defmodule HydraX.RuntimeTest do
              "Review the report and promote any durable findings into long-term memory."
   end
 
+  test "degraded research work items require operator promotion instead of auto-approval" do
+    researcher =
+      create_agent()
+      |> then(fn agent -> Runtime.get_agent!(agent.id) end)
+
+    {:ok, researcher} = Runtime.save_agent(researcher, %{"role" => "researcher"})
+
+    {:ok, work_item} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Summarize constrained research without new collection.",
+        "assigned_agent_id" => researcher.id,
+        "assigned_role" => "researcher",
+        "execution_mode" => "execute",
+        "review_required" => false,
+        "metadata" => %{
+          "delegation_context" => %{
+            "promoted_memories" => [
+              %{
+                "type" => "Constraint",
+                "content" => "Reuse existing evidence and keep the scope narrow.",
+                "reasons" => ["delegated constraint strategy"],
+                "score" => 1.2
+              }
+            ]
+          }
+        }
+      })
+
+    assert {:ok, summary} = Runtime.run_autonomy_cycle(researcher.id)
+    assert summary.action == "researched"
+
+    work_item = Runtime.get_work_item!(work_item.id)
+    assert work_item.approval_stage == "validated"
+    assert work_item.result_refs["approval_record_ids"] in [nil, []]
+    assert work_item.result_refs["degraded"] == true
+    assert work_item.metadata["degraded_execution"] == true
+
+    [report_artifact | _] =
+      Runtime.work_item_artifacts(work_item.id)
+      |> Enum.filter(&(&1.type == "research_report"))
+
+    assert report_artifact.review_status == "proposed"
+    assert report_artifact.payload["degraded"] == true
+    assert report_artifact.payload["constraint_strategy"] =~ "Reuse existing evidence"
+    assert report_artifact.confidence <= 0.52
+  end
+
   test "planner finalization can enqueue and prepare a publish-ready delivery brief" do
     planner =
       create_agent()
@@ -4384,6 +4440,105 @@ defmodule HydraX.RuntimeTest do
     [delivery_brief] = Runtime.work_item_artifacts(publish_item.id)
     assert delivery_brief.payload["delivery"]["status"] == "delivered"
     assert delivery_brief.payload["delivery"]["metadata"]["provider_message_id"] == 91
+  end
+
+  test "degraded publish summary tasks stay draft until operator review" do
+    previous = Application.get_env(:hydra_x, :telegram_deliver)
+
+    Application.put_env(:hydra_x, :telegram_deliver, fn payload ->
+      send(self(), {:unexpected_publish_delivery, payload})
+      {:ok, %{provider_message_id: 999}}
+    end)
+
+    on_exit(fn ->
+      if previous do
+        Application.put_env(:hydra_x, :telegram_deliver, previous)
+      else
+        Application.delete_env(:hydra_x, :telegram_deliver)
+      end
+    end)
+
+    operator =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, operator} = Runtime.save_agent(operator, %{"role" => "operator"})
+
+    {:ok, _telegram} =
+      Runtime.save_telegram_config(%{
+        bot_token: "test-token",
+        bot_username: "hydrax_bot",
+        enabled: true,
+        default_agent_id: operator.id
+      })
+
+    {:ok, parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Publish the constrained autonomy summary.",
+        "assigned_agent_id" => operator.id,
+        "assigned_role" => "operator",
+        "status" => "completed",
+        "approval_stage" => "validated"
+      })
+
+    {:ok, summary_artifact} =
+      Runtime.create_artifact(%{
+        "work_item_id" => parent.id,
+        "type" => "decision_ledger",
+        "title" => "Constrained synthesis",
+        "summary" => "Publish the constrained autonomy summary carefully",
+        "body" => "Keep the summary narrow and preserve the existing evidence only."
+      })
+
+    {:ok, publish_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Prepare a degraded publish-ready summary for operators.",
+        "assigned_agent_id" => operator.id,
+        "assigned_role" => "operator",
+        "status" => "planned",
+        "approval_stage" => "validated",
+        "parent_work_item_id" => parent.id,
+        "metadata" => %{
+          "task_type" => "publish_summary",
+          "summary_artifact_id" => summary_artifact.id,
+          "delivery" => %{
+            "enabled" => true,
+            "mode" => "channel",
+            "channel" => "telegram",
+            "target" => "9001"
+          },
+          "follow_up_context" => %{
+            "needs_replan" => true,
+            "constraint_strategy" =>
+              "Reuse existing evidence and ask for operator review before external delivery.",
+            "promoted_findings" => [
+              %{
+                "type" => "Constraint",
+                "content" => "Reuse existing evidence only."
+              }
+            ]
+          }
+        }
+      })
+
+    assert {:ok, summary} = Runtime.run_autonomy_cycle(operator.id)
+    assert summary.action == "prepared_delivery_brief"
+    refute_receive {:unexpected_publish_delivery, _payload}, 200
+
+    publish_item = Runtime.get_work_item!(publish_item.id)
+    assert publish_item.result_refs["delivery"]["status"] == "draft"
+    assert publish_item.result_refs["delivery"]["reason"] == "degraded_confidence_requires_review"
+    assert publish_item.result_refs["degraded"] == true
+    assert publish_item.metadata["degraded_execution"] == true
+
+    [delivery_brief] = Runtime.work_item_artifacts(publish_item.id)
+    assert delivery_brief.review_status == "proposed"
+    assert delivery_brief.payload["degraded"] == true
+    assert delivery_brief.payload["delivery"]["status"] == "draft"
+    assert delivery_brief.payload["constraint_strategy"] =~ "Reuse existing evidence"
+    assert delivery_brief.confidence <= 0.52
   end
 
   test "approving a research work item promotes memories from report artifacts" do

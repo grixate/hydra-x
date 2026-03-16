@@ -1766,6 +1766,7 @@ defmodule HydraX.Report do
       %{type: "publish_summary", status: status, channel: channel, target: target} ->
         [
           status,
+          snapshot_degraded_suffix(work_item_publish_snapshot(item)),
           channel || "report",
           target && "-> #{target}"
         ]
@@ -1815,7 +1816,8 @@ defmodule HydraX.Report do
           channel:
             delivery_result["channel"] || delivery["channel"] || delivery["mode"] || "report",
           target: delivery_result["target"] || delivery["target"],
-          delivery: delivery_result
+          delivery: delivery_result,
+          degraded: delivery_result["degraded"] == true
         }
 
       List.wrap(get_in(item.result_refs || %{}, ["follow_up_work_item_ids"])) != [] ->
@@ -1845,6 +1847,9 @@ defmodule HydraX.Report do
 
     %{type: type, count: count}
   end
+
+  defp snapshot_degraded_suffix(%{degraded: true}), do: "degraded"
+  defp snapshot_degraded_suffix(_snapshot), do: nil
 
   defp work_item_publish_delivery_result(item) do
     get_in(item.result_refs || %{}, ["delivery"]) ||

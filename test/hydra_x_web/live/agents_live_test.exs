@@ -210,6 +210,64 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "replan follow-up queued 1"
   end
 
+  test "agents page highlights degraded findings and degraded publish drafts", %{conn: conn} do
+    {:ok, agent} =
+      Runtime.save_agent(%{
+        name: "Degraded Agent",
+        slug: "degraded-agent",
+        role: "researcher",
+        workspace_root: Path.join(System.tmp_dir!(), "hydra-x-degraded-agent"),
+        description: "degraded",
+        is_default: false
+      })
+
+    {:ok, degraded_research} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Review constrained findings before promotion.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "researcher",
+        "status" => "completed",
+        "approval_stage" => "validated",
+        "priority" => 98,
+        "result_refs" => %{"degraded" => true},
+        "metadata" => %{"degraded_execution" => true}
+      })
+
+    {:ok, degraded_publish} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Prepare the degraded publish draft for operators.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "operator",
+        "status" => "completed",
+        "approval_stage" => "validated",
+        "priority" => 97,
+        "result_refs" => %{
+          "degraded" => true,
+          "delivery" => %{
+            "status" => "draft",
+            "degraded" => true,
+            "channel" => "telegram",
+            "target" => "ops-room",
+            "reason" => "degraded_confidence_requires_review"
+          }
+        },
+        "metadata" => %{
+          "task_type" => "publish_summary",
+          "degraded_execution" => true,
+          "delivery" => %{"mode" => "channel", "channel" => "telegram", "target" => "ops-room"}
+        }
+      })
+
+    {:ok, _view, html} = live(conn, ~p"/agents")
+
+    assert html =~ degraded_research.goal
+    assert html =~ "Promote degraded findings"
+    assert html =~ degraded_publish.goal
+    assert html =~ "delivery degraded draft telegram"
+  end
+
   test "agents page can approve a merge-ready work item from the control plane", %{conn: conn} do
     {:ok, agent} =
       Runtime.save_agent(%{

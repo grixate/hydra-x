@@ -273,6 +273,41 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "replan queued 1"
   end
 
+  test "health page shows degraded publish posture", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, degraded_publish} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Hold the constrained publish draft for review.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "operator",
+        "status" => "completed",
+        "approval_stage" => "validated",
+        "priority" => 99,
+        "result_refs" => %{
+          "degraded" => true,
+          "delivery" => %{
+            "status" => "draft",
+            "degraded" => true,
+            "channel" => "telegram",
+            "target" => "ops-room",
+            "reason" => "degraded_confidence_requires_review"
+          }
+        },
+        "metadata" => %{
+          "task_type" => "publish_summary",
+          "degraded_execution" => true,
+          "delivery" => %{"mode" => "channel", "channel" => "telegram", "target" => "ops-room"}
+        }
+      })
+
+    {:ok, _view, html} = live(conn, ~p"/health")
+
+    assert html =~ degraded_publish.goal
+    assert html =~ "delivery degraded draft telegram"
+  end
+
   test "health page shows the unified effective policy surface", %{conn: conn} do
     {:ok, _view, html} = live(conn, ~p"/health")
 
