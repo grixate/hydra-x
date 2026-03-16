@@ -516,6 +516,7 @@ defmodule HydraX.Runtime.WorkItems do
   defp process_work_item(agent, %WorkItem{execution_mode: "delegate"} = work_item, _opts) do
     child_role = work_item.metadata["delegate_role"] || Autonomy.role_for_kind(work_item.kind)
     child_goal = work_item.metadata["delegate_goal"] || work_item.goal
+    delegation_context = delegation_context_snapshot(agent.id, child_goal)
 
     {:ok, child} =
       save_work_item(%{
@@ -532,10 +533,12 @@ defmodule HydraX.Runtime.WorkItems do
         "review_required" => work_item.review_required,
         "budget" => work_item.budget,
         "required_outputs" => work_item.required_outputs,
-        "metadata" => %{
-          "delegated_from_role" => agent.role,
-          "delegated_from_work_item_id" => work_item.id
-        }
+        "metadata" =>
+          %{
+            "delegated_from_role" => agent.role,
+            "delegated_from_work_item_id" => work_item.id
+          }
+          |> maybe_put_delegation_context(delegation_context, agent.id, child_goal)
       })
 
     {:ok, plan_artifact} =
@@ -544,11 +547,12 @@ defmodule HydraX.Runtime.WorkItems do
         "type" => "plan",
         "title" => "Delegation plan",
         "summary" => "Delegated #{work_item.kind} to #{child_role}",
-        "body" => delegation_plan_body(work_item, child),
+        "body" => delegation_plan_body(work_item, child, delegation_context),
         "payload" => %{
           "delegated_work_item_id" => child.id,
           "assigned_role" => child_role,
-          "required_outputs" => work_item.required_outputs
+          "required_outputs" => work_item.required_outputs,
+          "delegation_context" => delegation_context
         },
         "provenance" => %{"source" => "autonomy", "phase" => "delegate"},
         "confidence" => 0.78
@@ -775,6 +779,8 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp build_research_report(agent, work_item, evidence) do
+    delegated_context = delegated_context_memories(work_item)
+
     evidence_lines =
       evidence
       |> Enum.map(fn ranked ->
@@ -783,12 +789,22 @@ defmodule HydraX.Runtime.WorkItems do
         "- [#{score}] #{ranked.entry.content}#{if(source, do: " (#{source})", else: "")}"
       end)
 
+    delegated_context_lines =
+      delegated_context
+      |> Enum.map(fn memory ->
+        score = memory["score"] || 0.0
+        "- [#{Float.round(score, 2)}] #{memory["content"]} (delegated #{memory["type"]})"
+      end)
+
     prompt =
       [
         "You are Hydra-X's research worker.",
         "Produce a concise structured research report.",
         "Question: #{work_item.goal}",
         "Return short claims, open questions, and recommended actions grounded in the evidence.",
+        if(delegated_context_lines != [],
+          do: "Delegated planning context:\n" <> Enum.join(delegated_context_lines, "\n")
+        ),
         "Evidence:",
         Enum.join(evidence_lines, "\n")
       ]
@@ -828,9 +844,10 @@ defmodule HydraX.Runtime.WorkItems do
       "scope" => work_item.metadata["scope"] || "autonomous research",
       "sources" => Enum.map(evidence, &source_snapshot/1),
       "evidence" => Enum.map(evidence, &evidence_snapshot/1),
-      "claims" => derive_claims(evidence),
-      "open_questions" => derive_open_questions(work_item, evidence),
-      "recommended_actions" => derive_recommended_actions(work_item, evidence),
+      "planning_context" => delegated_context,
+      "claims" => derive_claims(evidence, delegated_context),
+      "open_questions" => derive_open_questions(work_item, evidence, delegated_context),
+      "recommended_actions" => derive_recommended_actions(work_item, evidence, delegated_context),
       "confidence" => derive_confidence(evidence),
       "body" => llm_body
     }
@@ -1088,8 +1105,13 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp fallback_research_body(work_item, evidence) do
+    delegated_context = delegated_context_memories(work_item)
+
     """
     Research question: #{work_item.goal}
+
+    Delegated context:
+    #{Enum.map_join(delegated_context, "\n", fn memory -> "- #{memory["type"]}: #{memory["content"]}" end)}
 
     Evidence summary:
     #{Enum.map_join(evidence, "\n", fn ranked -> "- #{ranked.entry.content}" end)}
@@ -1103,6 +1125,12 @@ defmodule HydraX.Runtime.WorkItems do
       |> Enum.take(4)
       |> Enum.join(", ")
 
+    delegated_context = delegated_context_memories(work_item)
+
+    delegated_context_block =
+      delegated_context
+      |> Enum.map_join("\n", fn memory -> "- #{memory["type"]}: #{memory["content"]}" end)
+
     prompt =
       [
         "You are Hydra-X's builder agent.",
@@ -1110,6 +1138,9 @@ defmodule HydraX.Runtime.WorkItems do
         "Goal: #{work_item.goal}",
         "Role: #{agent.role}",
         "Workspace focus: #{focus_files}",
+        if(delegated_context_block != "",
+          do: "Delegated planning context:\n" <> delegated_context_block
+        ),
         "Respond with a short proposal that includes likely changes, validation, risks, and rollback notes."
       ]
       |> Enum.join("\n\n")
@@ -1118,6 +1149,7 @@ defmodule HydraX.Runtime.WorkItems do
       llm_body_for(agent, prompt, "autonomy_engineering") ||
         """
         Goal: #{work_item.goal}
+        Delegated context: #{if(delegated_context_block == "", do: "none", else: delegated_context_block)}
         Likely changes: focus on #{focus_files}.
         Validation: run #{Enum.join(default_test_commands(work_item), ", ")}.
         Risks: validate policy drift and regression scope.
@@ -1354,12 +1386,14 @@ defmodule HydraX.Runtime.WorkItems do
   defp maybe_add_finding(list, false, _message), do: list
   defp maybe_add_finding(list, true, message), do: list ++ [message]
 
-  defp delegation_plan_body(parent, child) do
+  defp delegation_plan_body(parent, child, delegation_context) do
     """
     Parent goal: #{parent.goal}
     Delegated role: #{child.assigned_role}
     Child work item: ##{child.id}
     Execution mode: #{child.execution_mode}
+    Delegated context:
+    #{Enum.map_join(delegation_context, "\n", fn memory -> "- #{memory["type"]}: #{memory["content"]}" end)}
     """
     |> String.trim()
   end
@@ -1384,26 +1418,43 @@ defmodule HydraX.Runtime.WorkItems do
     |> String.trim()
   end
 
-  defp derive_claims(evidence) do
-    evidence
-    |> Enum.take(3)
-    |> Enum.map(fn ranked -> ranked.entry.content end)
+  defp derive_claims(evidence, delegated_context) do
+    evidence_claims =
+      evidence
+      |> Enum.take(3)
+      |> Enum.map(fn ranked -> ranked.entry.content end)
+
+    if evidence_claims == [] do
+      delegated_context
+      |> Enum.take(3)
+      |> Enum.map(& &1["content"])
+    else
+      evidence_claims
+    end
   end
 
-  defp derive_open_questions(work_item, evidence) do
+  defp derive_open_questions(work_item, evidence, delegated_context) do
     cond do
-      evidence == [] ->
+      evidence == [] and delegated_context == [] ->
         ["No supporting memory evidence was found for #{work_item.goal}."]
+
+      delegated_context != [] ->
+        ["Which delegated findings should be validated with fresh evidence before wider action?"]
 
       true ->
         ["What new external evidence should be gathered to validate the current findings?"]
     end
   end
 
-  defp derive_recommended_actions(work_item, evidence) do
+  defp derive_recommended_actions(work_item, evidence, delegated_context) do
     cond do
-      evidence == [] ->
+      evidence == [] and delegated_context == [] ->
         ["Gather fresh sources for #{work_item.goal} before acting on it."]
+
+      delegated_context != [] ->
+        [
+          "Validate the delegated research findings and use them to guide the next execution step."
+        ]
 
       true ->
         ["Review the report and promote any durable findings into long-term memory."]
@@ -1460,6 +1511,47 @@ defmodule HydraX.Runtime.WorkItems do
       "" -> nil
       label -> label
     end
+  end
+
+  defp delegation_context_snapshot(agent_id, goal, limit \\ 3) do
+    agent_id
+    |> Memory.search_ranked(goal, max(limit * 4, 8), status: "active")
+    |> Enum.filter(fn ranked ->
+      metadata = ranked.entry.metadata || %{}
+      metadata["memory_scope"] == "artifact_derived"
+    end)
+    |> Enum.take(limit)
+    |> Enum.map(&delegation_context_memory_snapshot/1)
+  end
+
+  defp delegation_context_memory_snapshot(ranked) do
+    metadata = ranked.entry.metadata || %{}
+
+    %{
+      "memory_id" => ranked.entry.id,
+      "type" => ranked.entry.type,
+      "content" => ranked.entry.content,
+      "score" => ranked.score,
+      "reasons" => ranked.reasons || [],
+      "score_breakdown" => ranked.score_breakdown || %{},
+      "source_work_item_id" => metadata["source_work_item_id"],
+      "source_artifact_type" => metadata["source_artifact_type"]
+    }
+  end
+
+  defp maybe_put_delegation_context(metadata, [], _agent_id, _goal), do: metadata
+
+  defp maybe_put_delegation_context(metadata, delegation_context, agent_id, goal) do
+    Map.put(metadata, "delegation_context", %{
+      "source_agent_id" => agent_id,
+      "query" => goal,
+      "captured_at" => DateTime.utc_now(),
+      "promoted_memories" => delegation_context
+    })
+  end
+
+  defp delegated_context_memories(work_item) do
+    get_in(work_item.metadata || %{}, ["delegation_context", "promoted_memories"]) || []
   end
 
   defp next_work_item_for_agent(agent) do

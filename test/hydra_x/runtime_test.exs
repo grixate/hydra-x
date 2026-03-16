@@ -3922,6 +3922,80 @@ defmodule HydraX.RuntimeTest do
     assert length(parent.result_refs["artifact_ids"]) >= 1
   end
 
+  test "planner delegation carries artifact-derived context into child research work" do
+    planner =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, planner} = Runtime.save_agent(planner, %{"role" => "planner"})
+
+    researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, researcher} = Runtime.save_agent(researcher, %{"role" => "researcher"})
+
+    {:ok, _memory} =
+      Memory.create_memory(%{
+        agent_id: planner.id,
+        type: "Decision",
+        content: "Use approved report exports as the primary operator-facing research surface.",
+        importance: 0.87,
+        metadata: %{
+          "memory_scope" => "artifact_derived",
+          "source_work_item_id" => 101,
+          "source_artifact_type" => "decision_ledger"
+        },
+        last_seen_at: DateTime.utc_now()
+      })
+
+    {:ok, parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Assess the best operator-facing surface for approved research findings.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "execution_mode" => "delegate",
+        "priority" => 7,
+        "metadata" => %{"delegate_role" => "researcher"}
+      })
+
+    assert {:ok, planner_summary} = Runtime.run_autonomy_cycle(planner.id)
+    assert planner_summary.action == "delegated"
+
+    parent = Runtime.get_work_item!(parent.id)
+    [child_id] = parent.result_refs["child_work_item_ids"]
+    child = Runtime.get_work_item!(child_id)
+
+    delegated_context = get_in(child.metadata || %{}, ["delegation_context", "promoted_memories"])
+    assert is_list(delegated_context)
+
+    assert Enum.any?(delegated_context, fn memory ->
+             memory["content"] =~ "primary operator-facing research surface"
+           end)
+
+    assert {:ok, researcher_summary} = Runtime.run_autonomy_cycle(researcher.id)
+    assert researcher_summary.action == "researched"
+
+    report =
+      Runtime.work_item_artifacts(child.id)
+      |> Enum.find(&(&1.type == "research_report"))
+
+    assert report
+
+    assert Enum.any?(report.payload["planning_context"] || [], fn memory ->
+             memory["content"] =~ "primary operator-facing research surface"
+           end)
+
+    assert Enum.any?(report.payload["claims"] || [], fn claim ->
+             claim =~ "primary operator-facing research surface"
+           end)
+
+    assert Enum.any?(report.payload["recommended_actions"] || [], fn action ->
+             action =~ "Validate the delegated research findings"
+           end)
+  end
+
   test "research work items create a decision ledger and promote approved memories" do
     researcher =
       create_agent()
