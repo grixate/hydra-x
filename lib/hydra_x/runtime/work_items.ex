@@ -202,6 +202,7 @@ defmodule HydraX.Runtime.WorkItems do
       })
 
     promote_artifacts!(updated, requested_action, record, attrs["metadata"] || %{})
+    updated = maybe_promote_research_work_item(updated, requested_action)
 
     {updated, record}
   end
@@ -249,15 +250,20 @@ defmodule HydraX.Runtime.WorkItems do
     requested_action = attrs["requested_action"] || "promote_artifact"
     rationale = attrs["rationale"] || "Approved artifact for promotion."
 
-    record_artifact_decision!(
-      artifact,
-      requested_action,
-      "approved",
-      rationale,
-      attrs["metadata"] || %{},
-      attrs["reviewer_agent_id"],
-      attrs["work_item_id"]
-    )
+    {updated, record} =
+      record_artifact_decision!(
+        artifact,
+        requested_action,
+        "approved",
+        rationale,
+        attrs["metadata"] || %{},
+        attrs["reviewer_agent_id"],
+        attrs["work_item_id"]
+      )
+
+    maybe_promote_research_artifact(updated, requested_action)
+
+    {updated, record}
   end
 
   def reject_artifact!(id, attrs \\ %{}) when is_integer(id) do
@@ -605,26 +611,98 @@ defmodule HydraX.Runtime.WorkItems do
         "review_status" => if(running.review_required, do: "proposed", else: "validated")
       })
 
-    {:ok, completed} =
-      save_work_item(running, %{
-        "status" => "completed",
-        "result_refs" => %{"artifact_ids" => [plan_artifact.id, report_artifact.id]},
-        "runtime_state" =>
-          append_history(running.runtime_state, "completed", %{
-            "completed_at" => DateTime.utc_now(),
-            "phase" => "research",
-            "artifact_id" => report_artifact.id
-          })
+    decision_payload = build_research_decision_ledger(running, report_payload)
+
+    {:ok, decision_artifact} =
+      create_artifact(%{
+        "work_item_id" => running.id,
+        "type" => "decision_ledger",
+        "title" => "Research decision ledger",
+        "summary" => decision_payload["summary"],
+        "body" => decision_payload["body"],
+        "payload" => Map.delete(decision_payload, "body"),
+        "provenance" => %{"source" => "autonomy", "phase" => "research_decision_ledger"},
+        "confidence" => report_payload["confidence"],
+        "review_status" => if(running.review_required, do: "proposed", else: "validated")
       })
 
-    {:processed,
-     %{
-       status: "completed",
-       processed_count: 1,
-       work_item: completed,
-       artifacts: [plan_artifact, report_artifact],
-       action: "researched"
-     }}
+    if running.review_required do
+      {:ok, completed} =
+        save_work_item(running, %{
+          "status" => "completed",
+          "approval_stage" => "validated",
+          "result_refs" => %{
+            "artifact_ids" => [plan_artifact.id, report_artifact.id, decision_artifact.id]
+          },
+          "runtime_state" =>
+            append_history(running.runtime_state, "completed", %{
+              "completed_at" => DateTime.utc_now(),
+              "phase" => "research",
+              "artifact_id" => report_artifact.id
+            })
+        })
+
+      {:processed,
+       %{
+         status: "completed",
+         processed_count: 1,
+         work_item: completed,
+         artifacts: [plan_artifact, report_artifact, decision_artifact],
+         action: "researched"
+       }}
+    else
+      {:ok, record} =
+        create_approval_record(%{
+          "subject_type" => "work_item",
+          "subject_id" => running.id,
+          "requested_action" => "promote_research_findings",
+          "decision" => "approved",
+          "rationale" => "Research findings were auto-approved because review was not required.",
+          "work_item_id" => running.id,
+          "reviewer_agent_id" => agent.id,
+          "metadata" => %{"auto_approved" => true}
+        })
+
+      {:ok, completed} =
+        save_work_item(running, %{
+          "status" => "completed",
+          "approval_stage" => "operator_approved",
+          "result_refs" => %{
+            "artifact_ids" => [plan_artifact.id, report_artifact.id, decision_artifact.id],
+            "approval_record_ids" => [record.id]
+          },
+          "runtime_state" =>
+            append_history(running.runtime_state, "completed", %{
+              "completed_at" => DateTime.utc_now(),
+              "phase" => "research",
+              "artifact_id" => report_artifact.id,
+              "approval_record_id" => record.id
+            })
+        })
+
+      promote_artifacts!(completed, "promote_research_findings", record, %{
+        "auto_approved" => true
+      })
+
+      promoted_memory_ids =
+        promote_research_outputs!(completed, [report_artifact, decision_artifact])
+
+      {:ok, completed} =
+        save_work_item(completed, %{
+          "result_refs" =>
+            completed.result_refs
+            |> Map.put("promoted_memory_ids", promoted_memory_ids)
+        })
+
+      {:processed,
+       %{
+         status: "completed",
+         processed_count: 1,
+         work_item: completed,
+         artifacts: [plan_artifact, report_artifact, decision_artifact],
+         action: "researched"
+       }}
+    end
   end
 
   defp process_work_item(agent, %WorkItem{kind: kind} = work_item, _opts)
@@ -742,6 +820,40 @@ defmodule HydraX.Runtime.WorkItems do
       "recommended_actions" => derive_recommended_actions(work_item, evidence),
       "confidence" => derive_confidence(evidence),
       "body" => llm_body
+    }
+  end
+
+  defp build_research_decision_ledger(work_item, report_payload) do
+    summary =
+      List.first(report_payload["recommended_actions"]) ||
+        "Promote approved findings into durable memory."
+
+    body =
+      """
+      Research question: #{report_payload["question"]}
+      Scope: #{report_payload["scope"]}
+
+      Claims:
+      #{Enum.map_join(report_payload["claims"], "\n", &"- #{&1}")}
+
+      Recommended actions:
+      #{Enum.map_join(report_payload["recommended_actions"], "\n", &"- #{&1}")}
+
+      Open questions:
+      #{Enum.map_join(report_payload["open_questions"], "\n", &"- #{&1}")}
+      """
+      |> String.trim()
+
+    %{
+      "summary" => summary,
+      "body" => body,
+      "question" => report_payload["question"],
+      "scope" => report_payload["scope"],
+      "claims" => report_payload["claims"],
+      "recommended_actions" => report_payload["recommended_actions"],
+      "open_questions" => report_payload["open_questions"],
+      "confidence" => report_payload["confidence"],
+      "memory_promotions" => research_memory_blueprints(work_item, report_payload)
     }
   end
 
@@ -1638,10 +1750,155 @@ defmodule HydraX.Runtime.WorkItems do
     {updated, record}
   end
 
+  defp maybe_promote_research_work_item(%WorkItem{kind: "research"} = work_item, requested_action)
+       when requested_action in ["promote_work_item", "promote_research_findings"] do
+    artifacts = work_item_artifacts(work_item.id)
+    promoted_memory_ids = promote_research_outputs!(work_item, artifacts)
+
+    if promoted_memory_ids == [] do
+      work_item
+    else
+      {:ok, updated} =
+        save_work_item(work_item, %{
+          "result_refs" =>
+            (work_item.result_refs || %{})
+            |> Map.put("promoted_memory_ids", promoted_memory_ids)
+        })
+
+      updated
+    end
+  end
+
+  defp maybe_promote_research_work_item(%WorkItem{} = work_item, _requested_action), do: work_item
+
+  defp maybe_promote_research_artifact(%Artifact{type: type} = artifact, requested_action)
+       when type in ["research_report", "decision_ledger"] and
+              requested_action in [
+                "promote_artifact",
+                "publish_research_report",
+                "publish_review_report"
+              ] do
+    work_item = get_work_item!(artifact.work_item_id)
+    promoted_memory_ids = promote_research_outputs!(work_item, [artifact])
+
+    if promoted_memory_ids == [] do
+      artifact
+    else
+      {:ok, _updated} =
+        save_work_item(work_item, %{
+          "result_refs" =>
+            (work_item.result_refs || %{})
+            |> Map.put(
+              "promoted_memory_ids",
+              Enum.uniq(
+                List.wrap(get_in(work_item.result_refs || %{}, ["promoted_memory_ids"])) ++
+                  promoted_memory_ids
+              )
+            )
+        })
+
+      artifact
+    end
+  end
+
+  defp maybe_promote_research_artifact(%Artifact{} = artifact, _requested_action), do: artifact
+
+  defp promote_research_outputs!(%WorkItem{} = work_item, artifacts) do
+    artifacts
+    |> Enum.flat_map(&promote_memories_from_artifact(work_item, &1))
+    |> Enum.uniq()
+  end
+
+  defp promote_memories_from_artifact(_work_item, %Artifact{type: type})
+       when type not in ["research_report", "decision_ledger"],
+       do: []
+
+  defp promote_memories_from_artifact(%WorkItem{} = work_item, %Artifact{} = artifact) do
+    research_memory_blueprints(work_item, artifact.payload || %{})
+    |> Enum.with_index()
+    |> Enum.flat_map(fn {memory_attrs, index} ->
+      existing =
+        Memory.list_memories(agent_id: work_item.assigned_agent_id, limit: 500)
+        |> Enum.find(fn entry ->
+          metadata = entry.metadata || %{}
+
+          metadata["source_artifact_id"] == artifact.id and
+            metadata["promotion_slot"] == memory_attrs["promotion_slot"] and
+            metadata["promotion_index"] == index
+        end)
+
+      if existing do
+        [existing.id]
+      else
+        {:ok, memory} =
+          Memory.create_memory(%{
+            agent_id: work_item.assigned_agent_id,
+            type: memory_attrs["type"],
+            status: "active",
+            content: memory_attrs["content"],
+            importance: memory_attrs["importance"],
+            metadata:
+              memory_attrs["metadata"]
+              |> Map.put("source_work_item_id", work_item.id)
+              |> Map.put("source_artifact_id", artifact.id)
+              |> Map.put("source_artifact_type", artifact.type)
+              |> Map.put("promotion_slot", memory_attrs["promotion_slot"])
+              |> Map.put("promotion_index", index)
+              |> Map.put("research_question", work_item.goal),
+            last_seen_at: DateTime.utc_now()
+          })
+
+        [memory.id]
+      end
+    end)
+  end
+
+  defp research_memory_blueprints(_work_item, payload) do
+    claim_memories =
+      payload
+      |> Map.get("claims", [])
+      |> Enum.take(3)
+      |> Enum.map(fn claim ->
+        %{
+          "type" => "Fact",
+          "content" => claim,
+          "importance" => 0.77,
+          "promotion_slot" => "claims",
+          "metadata" => %{
+            "promotion_state" => "approved",
+            "confidence" => payload["confidence"],
+            "scope" => payload["scope"],
+            "expires_at" => DateTime.add(DateTime.utc_now(), 30 * 24 * 60 * 60, :second)
+          }
+        }
+      end)
+
+    action_memories =
+      payload
+      |> Map.get("recommended_actions", [])
+      |> Enum.take(3)
+      |> Enum.map(fn action ->
+        %{
+          "type" => "Goal",
+          "content" => action,
+          "importance" => 0.72,
+          "promotion_slot" => "recommended_actions",
+          "metadata" => %{
+            "promotion_state" => "approved",
+            "confidence" => payload["confidence"],
+            "scope" => payload["scope"]
+          }
+        }
+      end)
+
+    claim_memories ++ action_memories
+  end
+
   defp artifact_review_status_for_decision(_requested_action, "rejected"), do: "rejected"
   defp artifact_review_status_for_decision("merge_ready", "approved"), do: "approved"
   defp artifact_review_status_for_decision("enable_extension", "approved"), do: "approved"
   defp artifact_review_status_for_decision("publish_review_report", "approved"), do: "approved"
+  defp artifact_review_status_for_decision("publish_research_report", "approved"), do: "approved"
   defp artifact_review_status_for_decision(_requested_action, "approved"), do: "validated"
 
   defp finalize_parent_attrs(claimed, children, summary_artifact, artifact_ids) do

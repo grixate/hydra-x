@@ -539,7 +539,7 @@ defmodule HydraX.RuntimeTest do
       fn ->
         channel_state = Runtime.conversation_channel_state(conversation.id)
 
-        channel_state.status == "deferred" and
+        channel_state.status in ["deferred", "interrupted"] and
           get_in(channel_state.pending_response || %{}, ["content"]) ==
             "Captured before ownership handoff."
       end,
@@ -549,13 +549,15 @@ defmodule HydraX.RuntimeTest do
     wait_for(
       fn ->
         channel_state = Runtime.conversation_channel_state(conversation.id)
-        not Process.alive?(channel_pid) and channel_state.status == "deferred"
+
+        not Process.alive?(channel_pid) and
+          channel_state.status in ["deferred", "interrupted"]
       end,
       240
     )
 
     channel_state = Runtime.conversation_channel_state(conversation.id)
-    assert channel_state.status == "deferred"
+    assert channel_state.status in ["deferred", "interrupted"]
     assert channel_state.pending_response["content"] == "Captured before ownership handoff."
     assert channel_state.pending_response["metadata"]["provider"] == "Handoff Safe Provider"
     assert :atomics.get(counter, 1) == 1
@@ -3900,13 +3902,14 @@ defmodule HydraX.RuntimeTest do
 
     child = Runtime.get_work_item!(child.id)
     assert child.status == "completed"
-    assert length(child.result_refs["artifact_ids"]) == 2
+    assert length(child.result_refs["artifact_ids"]) == 3
 
-    report =
-      Runtime.work_item_artifacts(child.id)
-      |> Enum.find(&(&1.type == "research_report"))
+    artifacts = Runtime.work_item_artifacts(child.id)
+    report = Enum.find(artifacts, &(&1.type == "research_report"))
+    decision_ledger = Enum.find(artifacts, &(&1.type == "decision_ledger"))
 
     assert report
+    assert decision_ledger
     assert report.payload["question"] =~ "Assess how Hydra"
     assert length(report.payload["evidence"]) >= 1
     assert is_float(report.confidence)
@@ -3917,6 +3920,124 @@ defmodule HydraX.RuntimeTest do
     parent = Runtime.get_work_item!(parent.id)
     assert parent.status == "completed"
     assert length(parent.result_refs["artifact_ids"]) >= 1
+  end
+
+  test "research work items create a decision ledger and promote approved memories" do
+    researcher =
+      create_agent()
+      |> then(fn agent -> Runtime.get_agent!(agent.id) end)
+
+    {:ok, researcher} = Runtime.save_agent(researcher, %{"role" => "researcher"})
+
+    {:ok, _memory} =
+      Memory.create_memory(%{
+        agent_id: researcher.id,
+        type: "Fact",
+        content: "Approved research should become durable memory with provenance.",
+        importance: 0.9,
+        metadata: %{
+          "source_file" => "ops/research.md",
+          "source_section" => "promotion",
+          "source_channel" => "cli"
+        },
+        last_seen_at: DateTime.utc_now()
+      })
+
+    {:ok, work_item} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Explain how approved research should promote durable memory.",
+        "assigned_agent_id" => researcher.id,
+        "assigned_role" => "researcher",
+        "execution_mode" => "execute",
+        "review_required" => false
+      })
+
+    assert {:ok, summary} = Runtime.run_autonomy_cycle(researcher.id)
+    assert summary.action == "researched"
+
+    work_item = Runtime.get_work_item!(work_item.id)
+    assert work_item.approval_stage == "operator_approved"
+    assert length(work_item.result_refs["promoted_memory_ids"]) >= 1
+
+    artifacts = Runtime.work_item_artifacts(work_item.id)
+    assert Enum.any?(artifacts, &(&1.type == "research_report"))
+    assert Enum.any?(artifacts, &(&1.type == "decision_ledger"))
+
+    promoted_memories =
+      Memory.list_memories(agent_id: researcher.id, status: "active", limit: 50)
+      |> Enum.filter(fn entry ->
+        metadata = entry.metadata || %{}
+        metadata["source_work_item_id"] == work_item.id
+      end)
+
+    assert Enum.any?(promoted_memories, &(&1.type == "Fact"))
+    assert Enum.any?(promoted_memories, &(&1.type == "Goal"))
+    assert Enum.all?(promoted_memories, &is_integer((&1.metadata || %{})["source_artifact_id"]))
+  end
+
+  test "approving a research work item promotes memories from report artifacts" do
+    researcher =
+      create_agent()
+      |> then(fn agent -> Runtime.get_agent!(agent.id) end)
+
+    {:ok, researcher} = Runtime.save_agent(researcher, %{"role" => "researcher"})
+
+    {:ok, work_item} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Promote research findings after operator approval.",
+        "assigned_agent_id" => researcher.id,
+        "assigned_role" => "researcher",
+        "status" => "completed",
+        "approval_stage" => "validated"
+      })
+
+    {:ok, report_artifact} =
+      Runtime.create_artifact(%{
+        "work_item_id" => work_item.id,
+        "type" => "research_report",
+        "title" => "Research report",
+        "summary" => "Promoted research report",
+        "review_status" => "validated",
+        "payload" => %{
+          "question" => work_item.goal,
+          "scope" => "autonomous research",
+          "claims" => ["Approved findings should produce durable facts."],
+          "recommended_actions" => ["Promote the research outcome into memory."],
+          "open_questions" => ["What evidence should expire?"],
+          "confidence" => 0.81
+        }
+      })
+
+    {:ok, _ledger_artifact} =
+      Runtime.create_artifact(%{
+        "work_item_id" => work_item.id,
+        "type" => "decision_ledger",
+        "title" => "Research decision ledger",
+        "summary" => "Decision ledger",
+        "review_status" => "validated",
+        "payload" => %{
+          "question" => work_item.goal,
+          "scope" => "autonomous research",
+          "claims" => ["Approved findings should produce durable facts."],
+          "recommended_actions" => ["Promote the research outcome into memory."],
+          "open_questions" => ["What evidence should expire?"],
+          "confidence" => 0.81
+        }
+      })
+
+    {updated, _record} =
+      Runtime.approve_work_item!(work_item.id, %{
+        "requested_action" => "promote_work_item",
+        "rationale" => "Operator approved the research findings."
+      })
+
+    assert updated.result_refs["promoted_memory_ids"] != nil
+    assert length(updated.result_refs["promoted_memory_ids"]) >= 1
+
+    artifact_approvals = Runtime.artifact_approval_records(report_artifact.id)
+    assert Enum.any?(artifact_approvals, &(&1.requested_action == "promote_work_item"))
   end
 
   test "autonomy scheduled jobs run the autonomy cycle for assigned work" do

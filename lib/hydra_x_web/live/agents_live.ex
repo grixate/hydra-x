@@ -1258,8 +1258,15 @@ defmodule HydraXWeb.AgentsLive do
        when stage in ["validated", "operator_approved"],
        do: "enable_extension"
 
+  defp work_item_primary_action(%{
+         kind: "engineering",
+         status: "completed",
+         approval_stage: "validated"
+       }),
+       do: "merge_ready"
+
   defp work_item_primary_action(%{status: "completed", approval_stage: "validated"}),
-    do: "merge_ready"
+    do: "promote_work_item"
 
   defp work_item_primary_action(%{status: "completed", approval_stage: "operator_approved"}),
     do: "promote_work_item"
@@ -1270,7 +1277,7 @@ defmodule HydraXWeb.AgentsLive do
     case work_item_primary_action(work_item) do
       "enable_extension" -> "Approve extension"
       "merge_ready" -> "Promote to merge-ready"
-      "promote_work_item" -> "Promote"
+      "promote_work_item" -> "Promote findings"
       _ -> "Approve"
     end
   end
