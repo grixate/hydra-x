@@ -8,6 +8,7 @@ defmodule HydraX.Runtime.WorkItems do
   alias HydraX.Budget
   alias HydraX.LLM.Router
   alias HydraX.Memory
+  alias HydraX.Memory.Entry
   alias HydraX.Repo
   alias HydraX.Workspace
 
@@ -107,6 +108,18 @@ defmodule HydraX.Runtime.WorkItems do
 
   def work_item_artifacts(work_item_id) when is_integer(work_item_id) do
     list_artifacts(work_item_id: work_item_id, limit: 100)
+  end
+
+  def promoted_work_item_memories(%WorkItem{} = work_item) do
+    work_item
+    |> promoted_memory_ids()
+    |> promoted_memories_by_ids()
+  end
+
+  def promoted_work_item_memories(work_item_id) when is_integer(work_item_id) do
+    work_item_id
+    |> get_work_item!()
+    |> promoted_work_item_memories()
   end
 
   def create_artifact(attrs) when is_map(attrs) do
@@ -2017,6 +2030,26 @@ defmodule HydraX.Runtime.WorkItems do
           "approval_decision" => latest_decision
         })
     }
+  end
+
+  defp promoted_memory_ids(%WorkItem{} = work_item) do
+    work_item.result_refs
+    |> Map.get("promoted_memory_ids", [])
+    |> List.wrap()
+    |> Enum.filter(&is_integer/1)
+    |> Enum.uniq()
+  end
+
+  defp promoted_memories_by_ids([]), do: []
+
+  defp promoted_memories_by_ids(ids) do
+    Entry
+    |> where([entry], entry.id in ^ids)
+    |> preload([:conversation])
+    |> Repo.all()
+    |> Enum.sort_by(fn entry ->
+      Enum.find_index(ids, &(&1 == entry.id)) || length(ids)
+    end)
   end
 
   defp maybe_filter_work_item_status(query, nil), do: query

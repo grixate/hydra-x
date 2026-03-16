@@ -199,6 +199,10 @@ defmodule HydraX.Runtime do
   defdelegate approve_artifact!(id), to: HydraX.Runtime.WorkItems
   defdelegate approve_artifact!(id, attrs), to: HydraX.Runtime.WorkItems
   defdelegate reject_artifact!(id), to: HydraX.Runtime.WorkItems
+
+  def promoted_work_item_memories(work_item_or_id),
+    do: HydraX.Runtime.WorkItems.promoted_work_item_memories(work_item_or_id)
+
   defdelegate reject_artifact!(id, attrs), to: HydraX.Runtime.WorkItems
   defdelegate claim_work_item(work_item), to: HydraX.Runtime.WorkItems
   defdelegate claim_work_item(work_item, opts), to: HydraX.Runtime.WorkItems

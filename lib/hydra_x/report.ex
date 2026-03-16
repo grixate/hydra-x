@@ -669,6 +669,13 @@ defmodule HydraX.Report do
         end)
         |> Enum.join(",")
 
+      promoted_memories =
+        item.promoted_memories
+        |> Enum.map(fn memory ->
+          "#{memory.type}:#{truncate_text(memory.content, 48)}"
+        end)
+        |> Enum.join(",")
+
       latest_approval =
         item.approvals
         |> List.first()
@@ -686,6 +693,7 @@ defmodule HydraX.Report do
         item.result_refs["extension_enablement_status"] &&
           "enablement=#{item.result_refs["extension_enablement_status"]}",
         artifacts != "" && "artifacts=#{artifacts}",
+        promoted_memories != "" && "promoted=#{promoted_memories}",
         item.goal
       ]
       |> Enum.reject(&is_nil_or_empty/1)
@@ -1675,6 +1683,10 @@ defmodule HydraX.Report do
       metadata: item.metadata,
       inserted_at: item.inserted_at,
       updated_at: item.updated_at,
+      promoted_memories:
+        Enum.map(item.promoted_memories || [], fn memory ->
+          json_promoted_memory(memory)
+        end),
       artifacts:
         Enum.map(item.artifacts, fn artifact ->
           json_artifact_snapshot(artifact)
@@ -1715,6 +1727,7 @@ defmodule HydraX.Report do
         metadata: item.metadata || %{},
         inserted_at: item.inserted_at,
         updated_at: item.updated_at,
+        promoted_memories: Runtime.promoted_work_item_memories(item),
         artifacts:
           Runtime.work_item_artifacts(item.id)
           |> Enum.map(fn artifact ->
@@ -1746,6 +1759,19 @@ defmodule HydraX.Report do
             inserted_at: record.inserted_at
           }
         end)
+    }
+  end
+
+  defp json_promoted_memory(memory) do
+    %{
+      id: memory.id,
+      type: memory.type,
+      status: memory.status,
+      content: memory.content,
+      importance: memory.importance,
+      metadata: memory.metadata,
+      inserted_at: memory.inserted_at,
+      updated_at: memory.updated_at
     }
   end
 

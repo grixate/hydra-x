@@ -540,7 +540,9 @@ defmodule HydraXWeb.AgentsLive do
                     </div>
                     <p class="mt-2 text-sm text-[var(--hx-mute)]">{item.goal}</p>
                     <div class="mt-2 text-xs text-[var(--hx-mute)]">
-                      priority {item.priority} · {work_item_artifact_summary(item)}
+                      priority {item.priority} · {work_item_artifact_summary(item)}<span :if={
+                        summary = work_item_promoted_memory_summary(item)
+                      }> · {summary}</span>
                     </div>
                     <div :if={work_item_actionable?(item)} class="mt-3 flex flex-wrap gap-2">
                       <button
@@ -585,6 +587,17 @@ defmodule HydraXWeb.AgentsLive do
                         class="rounded-full border border-white/10 px-3 py-1 text-[11px] text-[var(--hx-mute)]"
                       >
                         {type}
+                      </span>
+                    </div>
+                    <div
+                      :if={work_item_promoted_memory_labels(item) != []}
+                      class="mt-2 flex flex-wrap gap-2"
+                    >
+                      <span
+                        :for={label <- work_item_promoted_memory_labels(item)}
+                        class="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 text-[11px] text-emerald-200"
+                      >
+                        {label}
                       </span>
                     </div>
                   </div>
@@ -1188,6 +1201,7 @@ defmodule HydraXWeb.AgentsLive do
       |> Map.put(
         :recent_work_items,
         Runtime.list_work_items(agent_id: agent.id, limit: 4)
+        |> Enum.map(&attach_promoted_work_item_memories/1)
       )
       |> Map.put(:work_queue, work_queue_summary(agent.id))
       |> Map.put(:tool_policy_override, Runtime.get_agent_tool_policy(agent.id))
@@ -1313,6 +1327,45 @@ defmodule HydraXWeb.AgentsLive do
     |> length()
     |> then(&"artifacts #{&1}")
   end
+
+  defp attach_promoted_work_item_memories(work_item) do
+    Map.put(work_item, :promoted_memories, Runtime.promoted_work_item_memories(work_item))
+  end
+
+  defp work_item_promoted_memories(work_item) do
+    Map.get(work_item, :promoted_memories, [])
+  end
+
+  defp work_item_promoted_memory_summary(work_item) do
+    memories = work_item_promoted_memories(work_item)
+
+    case memories do
+      [] ->
+        nil
+
+      entries ->
+        "promoted #{length(entries)} findings"
+    end
+  end
+
+  defp work_item_promoted_memory_labels(work_item) do
+    work_item
+    |> work_item_promoted_memories()
+    |> Enum.take(3)
+    |> Enum.map(fn memory ->
+      "#{memory.type}: #{truncate_text(memory.content, 60)}"
+    end)
+  end
+
+  defp truncate_text(text, max_length) when is_binary(text) do
+    if String.length(text) <= max_length do
+      text
+    else
+      String.slice(text, 0, max_length - 1) <> "…"
+    end
+  end
+
+  defp truncate_text(value, _max_length), do: value
 
   defp skill_tags(skill) do
     get_in(skill.metadata || %{}, ["tags"]) || []

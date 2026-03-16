@@ -607,6 +607,27 @@ defmodule HydraX.ReportTest do
         }
       })
 
+    {:ok, promoted_memory} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Decision",
+        content: "Treat approved research findings as live operator context.",
+        importance: 0.83,
+        metadata: %{"memory_scope" => "artifact_derived"},
+        last_seen_at: DateTime.utc_now()
+      })
+
+    {:ok, _research_item} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Publish the approved research operating context.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "researcher",
+        "status" => "completed",
+        "approval_stage" => "operator_approved",
+        "result_refs" => %{"promoted_memory_ids" => [promoted_memory.id]}
+      })
+
     {:ok, _artifact} =
       Runtime.create_artifact(%{
         "work_item_id" => work_item.id,
@@ -666,6 +687,8 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "approval=approved/enable_extension"
     assert File.read!(export.markdown_path) =~ "enablement=approved_not_enabled"
     assert File.read!(export.markdown_path) =~ "patch_bundle:approved/approved"
+    assert File.read!(export.markdown_path) =~ "promoted=Decision:"
+    assert File.read!(export.markdown_path) =~ "Treat approved research findings as live"
     assert File.read!(export.markdown_path) =~ "updates Slack thread"
     assert File.read!(export.markdown_path) =~ "stream_msg=slack-stream-1"
     assert File.read!(export.markdown_path) =~ "preview=Live report stream preview"
@@ -752,6 +775,8 @@ defmodule HydraX.ReportTest do
              "\"approval_stage\": \"operator_approved\""
 
     assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~ "\"patch_bundle\""
+    assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~ "\"promoted_memories\""
+    assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~ "\"artifact_derived\""
     assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~ "\"approvals\""
 
     assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~

@@ -2,7 +2,7 @@ defmodule HydraXWeb.AgentsLiveTest do
   use HydraXWeb.ConnCase
   @moduletag seed_default_agent: false
 
-  alias HydraX.Runtime
+  alias HydraX.{Memory, Runtime}
 
   setup do
     on_exit(fn ->
@@ -67,7 +67,26 @@ defmodule HydraXWeb.AgentsLiveTest do
         "goal" => "Map the current operator-facing autonomy work.",
         "assigned_agent_id" => agent.id,
         "assigned_role" => "researcher",
-        "status" => "planned"
+        "status" => "completed",
+        "approval_stage" => "operator_approved",
+        "result_refs" => %{"promoted_memory_ids" => []}
+      })
+
+    {:ok, promoted_memory} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Decision",
+        content: "Use approved research findings as live operating context.",
+        importance: 0.84,
+        metadata: %{"memory_scope" => "artifact_derived"},
+        last_seen_at: DateTime.utc_now()
+      })
+
+    [research_item | _] = Runtime.list_work_items(agent_id: agent.id, limit: 1)
+
+    {:ok, _research_item} =
+      Runtime.save_work_item(research_item, %{
+        "result_refs" => %{"promoted_memory_ids" => [promoted_memory.id]}
       })
 
     {:ok, extension_item} =
@@ -106,6 +125,8 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "Awaiting operator"
     assert html =~ "Extensions gated"
     assert html =~ "Map the current operator-facing autonomy work."
+    assert html =~ "promoted 1 findings"
+    assert html =~ "Decision: Use approved research findings as live operating contex"
     assert html =~ "action promote_work_item"
     assert html =~ "approved_not_enabled"
     assert html =~ "patch_bundle"
