@@ -4006,6 +4006,44 @@ defmodule HydraX.RuntimeTest do
     assert Enum.any?(report.payload["recommended_actions"] || [], fn action ->
              action =~ "Validate the delegated research findings"
            end)
+
+    assert {:ok, finalize_summary} = Runtime.run_autonomy_cycle(planner.id)
+    assert finalize_summary.action == "finalized_blocked_parent"
+
+    parent = Runtime.get_work_item!(parent.id)
+
+    assert get_in(parent.metadata || %{}, ["follow_up_context", "promoted_findings"]) != []
+
+    {:ok, follow_up_parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" =>
+          "Plan a follow-up delivery strategy for autonomous research reports with provenance and confidence.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "execution_mode" => "delegate",
+        "priority" => 6,
+        "metadata" => %{"delegate_role" => "researcher"}
+      })
+
+    assert {:ok, follow_up_summary} = Runtime.run_autonomy_cycle(planner.id)
+    assert follow_up_summary.action == "delegated"
+
+    follow_up_parent = Runtime.get_work_item!(follow_up_parent.id)
+    [follow_up_child_id] = follow_up_parent.result_refs["child_work_item_ids"]
+    follow_up_child = Runtime.get_work_item!(follow_up_child_id)
+
+    follow_up_context =
+      get_in(follow_up_child.metadata || %{}, ["delegation_context", "promoted_memories"]) || []
+
+    assert Enum.any?(follow_up_context, fn memory ->
+             "finalized planner synthesis" in (memory["reasons"] || [])
+           end)
+
+    assert Enum.any?(follow_up_context, fn memory ->
+             memory["source_work_item_id"] == parent.id and
+               memory["source_artifact_type"] == "decision_ledger"
+           end)
   end
 
   test "research work items create a decision ledger and promote approved memories" do

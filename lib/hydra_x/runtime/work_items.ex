@@ -1427,14 +1427,21 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp workspace_goal_score(path, goal) do
+    delegation_goal_score(path, goal)
+  end
+
+  defp delegation_goal_score(text, goal)
+       when is_binary(text) and is_binary(goal) do
     tokens =
       goal
       |> String.downcase()
       |> String.split(~r/[^a-z0-9]+/, trim: true)
 
-    downcased = String.downcase(path)
+    downcased = String.downcase(text)
     Enum.count(tokens, &String.contains?(downcased, &1))
   end
+
+  defp delegation_goal_score(_text, _goal), do: 0
 
   defp default_test_commands(%WorkItem{kind: "extension"}),
     do: ["mix test --failed", "mix compile"]
@@ -1653,14 +1660,26 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp delegation_context_snapshot(agent_id, goal, limit \\ 3) do
-    agent_id
-    |> Memory.search_ranked(goal, max(limit * 4, 8), status: "active")
-    |> Enum.filter(fn ranked ->
-      metadata = ranked.entry.metadata || %{}
-      metadata["memory_scope"] == "artifact_derived"
+    memory_context =
+      agent_id
+      |> Memory.search_ranked(goal, max(limit * 4, 8), status: "active")
+      |> Enum.filter(fn ranked ->
+        metadata = ranked.entry.metadata || %{}
+        metadata["memory_scope"] == "artifact_derived"
+      end)
+      |> Enum.map(&delegation_context_memory_snapshot/1)
+
+    follow_up_context = planner_follow_up_context_snapshot(agent_id, goal, limit)
+
+    (memory_context ++ follow_up_context)
+    |> Enum.uniq_by(fn memory ->
+      {memory["source_work_item_id"], memory["source_artifact_type"], memory["type"],
+       memory["content"]}
+    end)
+    |> Enum.sort_by(fn memory ->
+      {-(memory["score"] || 0.0), memory["source_work_item_id"] || 0, memory["content"] || ""}
     end)
     |> Enum.take(limit)
-    |> Enum.map(&delegation_context_memory_snapshot/1)
   end
 
   defp delegation_context_memory_snapshot(ranked) do
@@ -1677,6 +1696,71 @@ defmodule HydraX.Runtime.WorkItems do
       "source_artifact_type" => metadata["source_artifact_type"]
     }
   end
+
+  defp planner_follow_up_context_snapshot(agent_id, goal, limit) do
+    WorkItem
+    |> where(
+      [work_item],
+      work_item.status == "completed" and
+        work_item.assigned_role == "planner" and
+        work_item.assigned_agent_id == ^agent_id
+    )
+    |> order_by([work_item], desc: work_item.updated_at)
+    |> limit(^max(limit * 3, 6))
+    |> Repo.all()
+    |> Enum.flat_map(fn work_item ->
+      work_item
+      |> finalized_follow_up_entries()
+      |> Enum.map(&planner_follow_up_snapshot(&1, work_item, goal))
+    end)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp finalized_follow_up_entries(%WorkItem{} = work_item) do
+    work_item.metadata
+    |> case do
+      metadata when is_map(metadata) -> Map.get(metadata, "follow_up_context", %{})
+      _ -> %{}
+    end
+    |> Map.get("promoted_findings", [])
+    |> List.wrap()
+  end
+
+  defp planner_follow_up_snapshot(entry, work_item, goal) when is_map(entry) do
+    content = entry["content"] || entry["action"]
+    score = planner_follow_up_score(work_item.goal, content, goal, entry["score"])
+
+    if score <= 0.0 do
+      nil
+    else
+      %{
+        "memory_id" => entry["memory_id"],
+        "type" => entry["type"] || "Decision",
+        "content" => content,
+        "score" => score,
+        "reasons" => ["finalized planner synthesis"],
+        "score_breakdown" => %{
+          "finalized_parent_goal_fit" => delegation_goal_score(work_item.goal, goal),
+          "finalized_finding_fit" => delegation_goal_score(content, goal),
+          "source_score" => base_follow_up_score(entry["score"])
+        },
+        "source_work_item_id" => work_item.id,
+        "source_artifact_type" => entry["source_artifact_type"] || "decision_ledger"
+      }
+    end
+  end
+
+  defp planner_follow_up_snapshot(_entry, _work_item, _goal), do: nil
+
+  defp planner_follow_up_score(parent_goal, content, goal, source_score) do
+    delegation_goal_score(parent_goal, goal) +
+      delegation_goal_score(content, goal) +
+      base_follow_up_score(source_score)
+  end
+
+  defp base_follow_up_score(score) when is_float(score), do: score
+  defp base_follow_up_score(score) when is_integer(score), do: score * 1.0
+  defp base_follow_up_score(_score), do: 0.35
 
   defp maybe_put_delegation_context(metadata, [], _agent_id, _goal), do: metadata
 
@@ -2421,6 +2505,7 @@ defmodule HydraX.Runtime.WorkItems do
        ) do
     approval_records = approval_records_for_subject("work_item", claimed.id)
     latest_decision = approval_records |> List.first() |> then(&(&1 && &1.decision))
+    follow_up_context = build_follow_up_context(claimed, supporting_memories, summary_artifact)
 
     {status, approval_stage} =
       case latest_decision do
@@ -2440,8 +2525,12 @@ defmodule HydraX.Runtime.WorkItems do
           supporting_memories
           |> Enum.map(& &1["memory_id"])
           |> Enum.filter(&is_integer/1)
-          |> Enum.uniq()
+          |> Enum.uniq(),
+        "follow_up_context" => follow_up_context
       },
+      "metadata" =>
+        (claimed.metadata || %{})
+        |> Map.put("follow_up_context", follow_up_context),
       "runtime_state" =>
         append_history(claimed.runtime_state, status, %{
           "completed_at" => DateTime.utc_now(),
@@ -2450,6 +2539,15 @@ defmodule HydraX.Runtime.WorkItems do
           "approval_decision" => latest_decision,
           "supporting_memory_count" => length(supporting_memories)
         })
+    }
+  end
+
+  defp build_follow_up_context(parent, supporting_memories, summary_artifact) do
+    %{
+      "query" => parent.goal,
+      "captured_at" => DateTime.utc_now(),
+      "summary_artifact_id" => summary_artifact.id,
+      "promoted_findings" => Enum.take(supporting_memories, 5)
     }
   end
 
