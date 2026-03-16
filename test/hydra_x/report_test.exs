@@ -628,6 +628,39 @@ defmodule HydraX.ReportTest do
         "result_refs" => %{"promoted_memory_ids" => [promoted_memory.id]}
       })
 
+    {:ok, _publish_parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Prepare a publish-ready autonomy summary for operators.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "planner",
+        "status" => "completed",
+        "approval_stage" => "operator_approved",
+        "result_refs" => %{"follow_up_work_item_ids" => [8_001]}
+      })
+
+    {:ok, publish_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Publish the finalized autonomy summary.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "operator",
+        "status" => "completed",
+        "approval_stage" => "validated",
+        "metadata" => %{
+          "task_type" => "publish_summary",
+          "delivery" => %{"mode" => "channel", "channel" => "telegram", "target" => "ops-room"}
+        }
+      })
+
+    {:ok, _delivery_brief} =
+      Runtime.create_artifact(%{
+        "work_item_id" => publish_item.id,
+        "type" => "delivery_brief",
+        "title" => "Publish-ready autonomy summary",
+        "summary" => "Prepared channel delivery brief"
+      })
+
     {:ok, _artifact} =
       Runtime.create_artifact(%{
         "work_item_id" => work_item.id,
@@ -688,6 +721,8 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "enablement=approved_not_enabled"
     assert File.read!(export.markdown_path) =~ "patch_bundle:approved/approved"
     assert File.read!(export.markdown_path) =~ "promoted=Decision:"
+    assert File.read!(export.markdown_path) =~ "publish=queued 1"
+    assert File.read!(export.markdown_path) =~ "publish=delivery_brief_ready telegram -> ops-room"
     assert File.read!(export.markdown_path) =~ "Treat approved research findings as live"
     assert File.read!(export.markdown_path) =~ "updates Slack thread"
     assert File.read!(export.markdown_path) =~ "stream_msg=slack-stream-1"
@@ -776,6 +811,11 @@ defmodule HydraX.ReportTest do
 
     assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~ "\"patch_bundle\""
     assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~ "\"promoted_memories\""
+    assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~ "\"publish_follow_up\""
+
+    assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~
+             "\"delivery_brief_ready\""
+
     assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~ "\"artifact_derived\""
     assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~ "\"approvals\""
 

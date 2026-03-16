@@ -923,9 +923,9 @@ defmodule HydraXWeb.HealthLive do
                 </div>
                 <div class="mt-2 text-xs text-[var(--hx-mute)]">
                   level {event.level}
-                  <span :if={event.expired_by}> · expiry                 {event.expired_by}</span>
+                  <span :if={event.expired_by}> · expiry                  {event.expired_by}</span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip                 {event.ip}</span>
+                  <span :if={event.ip}> · ip                  {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -2010,7 +2010,38 @@ defmodule HydraXWeb.HealthLive do
       |> List.wrap()
       |> length()
 
-    "priority #{item.priority} · artifacts #{artifact_count}"
+    [
+      "priority #{item.priority}",
+      "artifacts #{artifact_count}",
+      autonomy_publish_summary(item)
+    ]
+    |> Enum.reject(&is_nil_or_empty/1)
+    |> Enum.join(" · ")
+  end
+
+  defp autonomy_publish_summary(item) do
+    cond do
+      get_in(item.metadata || %{}, ["task_type"]) == "publish_summary" ->
+        delivery = get_in(item.metadata || %{}, ["delivery"]) || %{}
+        channel = delivery["channel"] || delivery["mode"] || "report"
+        target = delivery["target"]
+
+        ["publish", channel, target && "-> #{target}"]
+        |> Enum.reject(&is_nil_or_empty/1)
+        |> Enum.join(" ")
+
+      List.wrap(get_in(item.result_refs || %{}, ["follow_up_work_item_ids"])) != [] ->
+        count =
+          item.result_refs
+          |> Map.get("follow_up_work_item_ids", [])
+          |> List.wrap()
+          |> length()
+
+        "publish queued #{count}"
+
+      true ->
+        nil
+    end
   end
 
   defp is_nil_or_empty(nil), do: true

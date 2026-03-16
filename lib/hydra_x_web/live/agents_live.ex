@@ -543,6 +543,7 @@ defmodule HydraXWeb.AgentsLive do
                       priority {item.priority} · {work_item_artifact_summary(item)}<span :if={
                         summary = work_item_promoted_memory_summary(item)
                       }> · {summary}</span>
+                      <span :if={summary = work_item_publish_summary(item)}> ·  {summary}</span>
                     </div>
                     <div :if={work_item_actionable?(item)} class="mt-3 flex flex-wrap gap-2">
                       <button
@@ -579,6 +580,12 @@ defmodule HydraXWeb.AgentsLive do
                         class="rounded-full border border-amber-400/20 bg-amber-400/10 px-3 py-1 text-amber-200"
                       >
                         {work_item_enablement_status(item)}
+                      </span>
+                      <span
+                        :if={summary = work_item_publish_summary(item)}
+                        class="rounded-full border border-sky-400/20 bg-sky-400/10 px-3 py-1 text-sky-200"
+                      >
+                        {summary}
                       </span>
                     </div>
                     <div :if={work_item_artifact_types(item) != []} class="mt-2 flex flex-wrap gap-2">
@@ -1355,6 +1362,39 @@ defmodule HydraXWeb.AgentsLive do
     |> Enum.map(fn memory ->
       "#{memory.type}: #{truncate_text(memory.content, 60)}"
     end)
+  end
+
+  defp work_item_publish_summary(work_item) do
+    cond do
+      get_in(work_item.metadata || %{}, ["task_type"]) == "publish_summary" ->
+        delivery = get_in(work_item.metadata || %{}, ["delivery"]) || %{}
+        channel = delivery["channel"] || delivery["mode"] || "report"
+        target = delivery["target"]
+        artifact_types = work_item_artifact_types(work_item)
+
+        prefix =
+          if work_item.status == "completed" and "delivery_brief" in artifact_types do
+            "delivery brief ready"
+          else
+            "publish task #{work_item.status}"
+          end
+
+        [prefix, channel, target && "-> #{target}"]
+        |> Enum.reject(&(&1 in [nil, ""]))
+        |> Enum.join(" ")
+
+      List.wrap(get_in(work_item.result_refs || %{}, ["follow_up_work_item_ids"])) != [] ->
+        count =
+          work_item.result_refs
+          |> Map.get("follow_up_work_item_ids", [])
+          |> List.wrap()
+          |> length()
+
+        "publish follow-up queued #{count}"
+
+      true ->
+        nil
+    end
   end
 
   defp truncate_text(text, max_length) when is_binary(text) do

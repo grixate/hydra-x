@@ -684,6 +684,8 @@ defmodule HydraX.Report do
           record -> "#{record.decision}/#{record.requested_action}"
         end
 
+      publish = render_work_item_publish_summary(item)
+
       [
         "##{item.id}",
         "#{item.kind}/#{item.status}",
@@ -694,6 +696,7 @@ defmodule HydraX.Report do
           "enablement=#{item.result_refs["extension_enablement_status"]}",
         artifacts != "" && "artifacts=#{artifacts}",
         promoted_memories != "" && "promoted=#{promoted_memories}",
+        publish && "publish=#{publish}",
         item.goal
       ]
       |> Enum.reject(&is_nil_or_empty/1)
@@ -1681,6 +1684,7 @@ defmodule HydraX.Report do
       priority: item.priority,
       result_refs: item.result_refs,
       metadata: item.metadata,
+      publish_follow_up: work_item_publish_snapshot(item),
       inserted_at: item.inserted_at,
       updated_at: item.updated_at,
       promoted_memories:
@@ -1738,6 +1742,53 @@ defmodule HydraX.Report do
         approvals: approvals
       }
     end)
+  end
+
+  defp render_work_item_publish_summary(item) do
+    case work_item_publish_snapshot(item) do
+      nil ->
+        nil
+
+      %{type: "publish_summary", status: status, channel: channel, target: target} ->
+        [
+          status,
+          channel || "report",
+          target && "-> #{target}"
+        ]
+        |> Enum.reject(&is_nil_or_empty/1)
+        |> Enum.join(" ")
+
+      %{type: "queued_follow_up", count: count} ->
+        "queued #{count}"
+    end
+  end
+
+  defp work_item_publish_snapshot(item) do
+    cond do
+      get_in(item.metadata || %{}, ["task_type"]) == "publish_summary" ->
+        delivery = get_in(item.metadata || %{}, ["delivery"]) || %{}
+
+        %{
+          type: "publish_summary",
+          status:
+            if(
+              Enum.any?(item.artifacts || [], &(&1.type == "delivery_brief")),
+              do: "delivery_brief_ready",
+              else: item.status
+            ),
+          channel: delivery["channel"] || delivery["mode"] || "report",
+          target: delivery["target"]
+        }
+
+      List.wrap(get_in(item.result_refs || %{}, ["follow_up_work_item_ids"])) != [] ->
+        %{
+          type: "queued_follow_up",
+          count: length(List.wrap(get_in(item.result_refs || %{}, ["follow_up_work_item_ids"])))
+        }
+
+      true ->
+        nil
+    end
   end
 
   defp json_artifact_snapshot(artifact) do

@@ -142,6 +142,31 @@ defmodule HydraXWeb.HealthLiveTest do
         "approval_stage" => "validated"
       })
 
+    {:ok, publish_parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Publish the autonomy research summary.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "planner",
+        "status" => "completed",
+        "approval_stage" => "operator_approved",
+        "result_refs" => %{"follow_up_work_item_ids" => [7_001]}
+      })
+
+    {:ok, _publish_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Prepare the publish-ready summary for operators.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "operator",
+        "status" => "completed",
+        "approval_stage" => "validated",
+        "metadata" => %{
+          "task_type" => "publish_summary",
+          "delivery" => %{"mode" => "channel", "channel" => "telegram", "target" => "ops-room"}
+        }
+      })
+
     {_updated, _record} =
       Runtime.approve_work_item!(work_item.id, %{
         "requested_action" => "promote_work_item",
@@ -159,6 +184,9 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "Operator confirmed the rollout."
     assert html =~ "Prepare autonomous research rollout."
     assert html =~ extension_item.goal
+    assert html =~ publish_parent.goal
+    assert html =~ "publish queued 1"
+    assert html =~ "telegram"
   end
 
   test "health page shows the unified effective policy surface", %{conn: conn} do

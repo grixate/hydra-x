@@ -111,6 +111,39 @@ defmodule HydraXWeb.AgentsLiveTest do
         "summary" => "Packaged autonomy extension"
       })
 
+    {:ok, publish_parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Prepare a publish-ready summary for autonomy findings.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "researcher",
+        "status" => "completed",
+        "approval_stage" => "operator_approved",
+        "result_refs" => %{"follow_up_work_item_ids" => [9_001]}
+      })
+
+    {:ok, publish_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Publish the finalized summary for autonomy findings.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "researcher",
+        "status" => "completed",
+        "approval_stage" => "validated",
+        "metadata" => %{
+          "task_type" => "publish_summary",
+          "delivery" => %{"mode" => "channel", "channel" => "telegram", "target" => "ops-room"}
+        }
+      })
+
+    {:ok, _delivery_brief} =
+      Runtime.create_artifact(%{
+        "work_item_id" => publish_item.id,
+        "type" => "delivery_brief",
+        "title" => "Publish-ready summary",
+        "summary" => "Prepared operator delivery brief"
+      })
+
     {_updated, _record} =
       Runtime.approve_work_item!(extension_item.id, %{
         "requested_action" => "promote_work_item",
@@ -130,6 +163,10 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "action promote_work_item"
     assert html =~ "approved_not_enabled"
     assert html =~ "patch_bundle"
+    assert html =~ publish_parent.goal
+    assert html =~ "publish follow-up queued 1"
+    assert html =~ "delivery brief ready"
+    assert html =~ "telegram"
   end
 
   test "agents page can approve a merge-ready work item from the control plane", %{conn: conn} do
