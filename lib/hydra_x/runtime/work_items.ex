@@ -256,6 +256,7 @@ defmodule HydraX.Runtime.WorkItems do
       })
 
     reject_artifacts!(updated, requested_action, record, attrs["metadata"] || %{})
+    updated = maybe_reject_publish_review_work_item(updated, requested_action, record)
 
     {updated, record}
   end
@@ -3266,6 +3267,28 @@ defmodule HydraX.Runtime.WorkItems do
        ),
        do: work_item
 
+  defp maybe_reject_publish_review_work_item(
+         %WorkItem{} = work_item,
+         requested_action,
+         rejection_record
+       )
+       when requested_action in ["publish_review_report", "promote_work_item"] do
+    metadata = work_item.metadata || %{}
+
+    if metadata["task_type"] == "publish_approval" do
+      reject_publish_review!(work_item, rejection_record)
+    else
+      work_item
+    end
+  end
+
+  defp maybe_reject_publish_review_work_item(
+         %WorkItem{} = work_item,
+         _requested_action,
+         _record
+       ),
+       do: work_item
+
   defp complete_publish_review!(%WorkItem{} = review_item, approval_record) do
     publish_item = get_work_item!(review_item.metadata["publish_work_item_id"])
     delivery_brief = get_artifact!(review_item.metadata["delivery_brief_artifact_id"])
@@ -3335,6 +3358,82 @@ defmodule HydraX.Runtime.WorkItems do
           )
           |> Map.put("delivery", delivery_result)
           |> Map.put("linked_publish_work_item_id", updated_publish_item.id)
+      })
+
+    updated_review_item
+  end
+
+  defp reject_publish_review!(%WorkItem{} = review_item, rejection_record) do
+    publish_item = get_work_item!(review_item.metadata["publish_work_item_id"])
+    delivery_brief = get_artifact!(review_item.metadata["delivery_brief_artifact_id"])
+    delivery = review_item.metadata["delivery"] || %{}
+
+    rejection_result = %{
+      "status" => "rejected",
+      "channel" => delivery["channel"],
+      "target" => delivery["target"],
+      "degraded" => true,
+      "reason" => "operator_rejected_delivery",
+      "reviewed_at" => DateTime.utc_now()
+    }
+
+    {:ok, updated_publish_item} =
+      save_work_item(publish_item, %{
+        "result_refs" =>
+          (publish_item.result_refs || %{})
+          |> Map.put("delivery", rejection_result)
+          |> Map.put("last_requested_action", "publish_review_report")
+          |> Map.put("last_rejection_metadata", %{
+            "approval_record_id" => rejection_record.id,
+            "rationale" => rejection_record.rationale
+          }),
+        "metadata" =>
+          (publish_item.metadata || %{})
+          |> Map.put("degraded_execution", true),
+        "runtime_state" =>
+          append_history(publish_item.runtime_state, "rejected", %{
+            "rejected_at" => DateTime.utc_now(),
+            "phase" => "publish_review",
+            "approval_record_id" => rejection_record.id,
+            "delivery_status" => rejection_result["status"]
+          })
+      })
+
+    {updated_brief, _artifact_record} =
+      record_artifact_decision!(
+        delivery_brief,
+        "publish_review_report",
+        "rejected",
+        "Rejected degraded delivery through work item ##{review_item.id}.",
+        %{
+          "review_work_item_id" => review_item.id,
+          "publish_work_item_id" => publish_item.id,
+          "delivery_status" => rejection_result["status"]
+        },
+        rejection_record.reviewer_agent_id,
+        review_item.id,
+        "rejected"
+      )
+
+    {:ok, updated_brief} =
+      updated_brief
+      |> Artifact.changeset(%{
+        "payload" => Map.put(updated_brief.payload || %{}, "delivery", rejection_result)
+      })
+      |> Repo.update()
+
+    {:ok, updated_review_item} =
+      save_work_item(review_item, %{
+        "result_refs" =>
+          (review_item.result_refs || %{})
+          |> Map.put("delivery", rejection_result)
+          |> Map.put("linked_publish_work_item_id", updated_publish_item.id)
+          |> Map.put(
+            "artifact_ids",
+            Enum.uniq(
+              List.wrap((review_item.result_refs || %{})["artifact_ids"]) ++ [updated_brief.id]
+            )
+          )
       })
 
     updated_review_item

@@ -545,7 +545,7 @@ defmodule HydraXWeb.AgentsLive do
                         summary = work_item_promoted_memory_summary(item)
                       }> · {summary}</span>
                       <span :if={summary = work_item_publish_summary(item)}>
-                         ·         {summary}
+                        · {summary}
                       </span>
                     </div>
                     <div :if={work_item_actionable?(item)} class="mt-3 flex flex-wrap gap-2">
@@ -1413,6 +1413,7 @@ defmodule HydraXWeb.AgentsLive do
             "delivered" -> "degraded delivery approved"
             "blocked" -> "degraded delivery blocked"
             "failed" -> "degraded delivery failed"
+            "rejected" -> "degraded delivery rejected"
             _ -> "degraded delivery awaiting approval"
           end
 
@@ -1444,6 +1445,12 @@ defmodule HydraXWeb.AgentsLive do
 
             "failed" ->
               "delivery failed"
+
+            "rejected" ->
+              if(delivery_result["degraded"],
+                do: "delivery degraded rejected",
+                else: "delivery rejected"
+              )
 
             "draft" ->
               if(delivery_result["degraded"],

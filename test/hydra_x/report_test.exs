@@ -731,6 +731,32 @@ defmodule HydraX.ReportTest do
         }
       })
 
+    {:ok, _rejected_publish_review_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Reject the degraded publish draft after review.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "operator",
+        "status" => "failed",
+        "approval_stage" => "validated",
+        "priority" => 94,
+        "result_refs" => %{
+          "degraded" => true,
+          "delivery" => %{
+            "status" => "rejected",
+            "degraded" => true,
+            "channel" => "telegram",
+            "target" => "ops-room",
+            "reason" => "operator_rejected_delivery"
+          }
+        },
+        "metadata" => %{
+          "task_type" => "publish_approval",
+          "degraded_execution" => true,
+          "delivery" => %{"mode" => "channel", "channel" => "telegram", "target" => "ops-room"}
+        }
+      })
+
     {:ok, _artifact} =
       Runtime.create_artifact(%{
         "work_item_id" => work_item.id,
@@ -860,6 +886,9 @@ defmodule HydraX.ReportTest do
 
     assert File.read!(export.markdown_path) =~
              "publish=degraded_delivery_awaiting_approval telegram -> ops-room"
+
+    assert File.read!(export.markdown_path) =~
+             "publish=degraded_delivery_rejected telegram -> ops-room"
 
     assert File.read!(export.markdown_path) =~ "level=fully_automatic"
     assert File.read!(export.markdown_path) =~ "effect=external_delivery"

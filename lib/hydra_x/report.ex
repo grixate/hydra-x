@@ -1805,6 +1805,7 @@ defmodule HydraX.Report do
               "delivered" -> "degraded_delivery_approved"
               "blocked" -> "degraded_delivery_blocked"
               "failed" -> "degraded_delivery_failed"
+              "rejected" -> "degraded_delivery_rejected"
               _ -> "degraded_delivery_awaiting_approval"
             end,
           channel: delivery["channel"] || delivery["mode"] || "report",
@@ -1829,6 +1830,9 @@ defmodule HydraX.Report do
 
               "failed" ->
                 "delivery_failed"
+
+              "rejected" ->
+                "delivery_rejected"
 
               "draft" ->
                 "delivery_draft"

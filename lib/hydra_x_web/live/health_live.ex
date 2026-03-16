@@ -927,7 +927,7 @@ defmodule HydraXWeb.HealthLive do
                     · expiry {event.expired_by}
                   </span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip                         {event.ip}</span>
+                  <span :if={event.ip}> · ip                          {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -2069,6 +2069,7 @@ defmodule HydraXWeb.HealthLive do
             "delivered" -> "degraded delivery approved"
             "blocked" -> "degraded delivery blocked"
             "failed" -> "degraded delivery failed"
+            "rejected" -> "degraded delivery rejected"
             _ -> "degraded delivery awaiting approval"
           end
 
@@ -2099,6 +2100,12 @@ defmodule HydraXWeb.HealthLive do
 
             "failed" ->
               "delivery failed"
+
+            "rejected" ->
+              if(delivery_result["degraded"],
+                do: "delivery degraded rejected",
+                else: "delivery rejected"
+              )
 
             "draft" ->
               if(delivery_result["degraded"],

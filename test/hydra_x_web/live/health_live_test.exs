@@ -333,6 +333,32 @@ defmodule HydraXWeb.HealthLiveTest do
         }
       })
 
+    {:ok, rejected_publish_review} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Reject the constrained publish draft after review.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "operator",
+        "status" => "failed",
+        "approval_stage" => "validated",
+        "priority" => 97,
+        "result_refs" => %{
+          "degraded" => true,
+          "delivery" => %{
+            "status" => "rejected",
+            "degraded" => true,
+            "channel" => "telegram",
+            "target" => "ops-room",
+            "reason" => "operator_rejected_delivery"
+          }
+        },
+        "metadata" => %{
+          "task_type" => "publish_approval",
+          "degraded_execution" => true,
+          "delivery" => %{"mode" => "channel", "channel" => "telegram", "target" => "ops-room"}
+        }
+      })
+
     {:ok, _view, html} = live(conn, ~p"/health")
 
     assert html =~ degraded_research.goal
@@ -341,6 +367,8 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "delivery degraded draft telegram"
     assert html =~ publish_review.goal
     assert html =~ "degraded delivery awaiting approval telegram"
+    assert html =~ rejected_publish_review.goal
+    assert html =~ "degraded delivery rejected telegram"
   end
 
   test "health page shows the unified effective policy surface", %{conn: conn} do

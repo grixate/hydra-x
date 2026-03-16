@@ -4600,6 +4600,120 @@ defmodule HydraX.RuntimeTest do
     assert delivery_brief.payload["delivery"]["status"] == "delivered"
   end
 
+  test "rejecting degraded publish approval closes delivery without sending" do
+    previous = Application.get_env(:hydra_x, :telegram_deliver)
+
+    Application.put_env(:hydra_x, :telegram_deliver, fn payload ->
+      send(self(), {:unexpected_rejected_publish_delivery, payload})
+      {:ok, %{provider_message_id: 1_111}}
+    end)
+
+    on_exit(fn ->
+      if previous do
+        Application.put_env(:hydra_x, :telegram_deliver, previous)
+      else
+        Application.delete_env(:hydra_x, :telegram_deliver)
+      end
+    end)
+
+    operator =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, operator} = Runtime.save_agent(operator, %{"role" => "operator"})
+
+    {:ok, _telegram} =
+      Runtime.save_telegram_config(%{
+        bot_token: "test-token",
+        bot_username: "hydrax_bot",
+        enabled: true,
+        default_agent_id: operator.id
+      })
+
+    {:ok, parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Reject the constrained autonomy summary for external delivery.",
+        "assigned_agent_id" => operator.id,
+        "assigned_role" => "operator",
+        "status" => "completed",
+        "approval_stage" => "validated"
+      })
+
+    {:ok, summary_artifact} =
+      Runtime.create_artifact(%{
+        "work_item_id" => parent.id,
+        "type" => "decision_ledger",
+        "title" => "Rejected constrained synthesis",
+        "summary" => "Do not deliver the constrained autonomy summary yet",
+        "body" => "Keep the summary internal until the evidence is expanded."
+      })
+
+    {:ok, publish_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Prepare a degraded publish-ready summary for operators.",
+        "assigned_agent_id" => operator.id,
+        "assigned_role" => "operator",
+        "status" => "planned",
+        "approval_stage" => "validated",
+        "parent_work_item_id" => parent.id,
+        "metadata" => %{
+          "task_type" => "publish_summary",
+          "summary_artifact_id" => summary_artifact.id,
+          "delivery" => %{
+            "enabled" => true,
+            "mode" => "channel",
+            "channel" => "telegram",
+            "target" => "9001"
+          },
+          "follow_up_context" => %{
+            "needs_replan" => true,
+            "constraint_strategy" =>
+              "Reuse existing evidence and require a stronger review gate before delivery.",
+            "promoted_findings" => [
+              %{
+                "type" => "Constraint",
+                "content" => "Keep the summary internal until evidence expands."
+              }
+            ]
+          }
+        }
+      })
+
+    assert {:ok, summary} = Runtime.run_autonomy_cycle(operator.id)
+    assert summary.action == "prepared_delivery_brief"
+    refute_receive {:unexpected_rejected_publish_delivery, _payload}, 200
+
+    publish_item = Runtime.get_work_item!(publish_item.id)
+    [approval_item_id] = publish_item.result_refs["follow_up_work_item_ids"]
+    approval_item = Runtime.get_work_item!(approval_item_id)
+
+    {rejected_review, record} =
+      Runtime.reject_work_item!(approval_item.id, %{
+        "requested_action" => "publish_review_report",
+        "rationale" => "Operator rejected the degraded delivery."
+      })
+
+    assert record.decision == "rejected"
+    assert rejected_review.status == "failed"
+    assert rejected_review.result_refs["delivery"]["status"] == "rejected"
+
+    refute_receive {:unexpected_rejected_publish_delivery, _payload}, 200
+
+    publish_item = Runtime.get_work_item!(publish_item.id)
+    assert publish_item.result_refs["delivery"]["status"] == "rejected"
+    assert publish_item.result_refs["delivery"]["reason"] == "operator_rejected_delivery"
+    assert publish_item.metadata["degraded_execution"] == true
+
+    [delivery_brief] =
+      Runtime.work_item_artifacts(publish_item.id)
+      |> Enum.filter(&(&1.type == "delivery_brief"))
+
+    assert delivery_brief.review_status == "rejected"
+    assert delivery_brief.payload["delivery"]["status"] == "rejected"
+  end
+
   test "approving a research work item promotes memories from report artifacts" do
     researcher =
       create_agent()
