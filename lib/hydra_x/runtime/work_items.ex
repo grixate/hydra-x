@@ -823,7 +823,7 @@ defmodule HydraX.Runtime.WorkItems do
     }
   end
 
-  defp build_research_decision_ledger(work_item, report_payload) do
+  defp build_research_decision_ledger(_work_item, report_payload) do
     summary =
       List.first(report_payload["recommended_actions"]) ||
         "Promote approved findings into durable memory."
@@ -853,7 +853,7 @@ defmodule HydraX.Runtime.WorkItems do
       "recommended_actions" => report_payload["recommended_actions"],
       "open_questions" => report_payload["open_questions"],
       "confidence" => report_payload["confidence"],
-      "memory_promotions" => research_memory_blueprints(work_item, report_payload)
+      "memory_promotions" => research_memory_blueprints("decision_ledger", report_payload)
     }
   end
 
@@ -1804,9 +1804,16 @@ defmodule HydraX.Runtime.WorkItems do
   defp maybe_promote_research_artifact(%Artifact{} = artifact, _requested_action), do: artifact
 
   defp promote_research_outputs!(%WorkItem{} = work_item, artifacts) do
-    artifacts
-    |> Enum.flat_map(&promote_memories_from_artifact(work_item, &1))
-    |> Enum.uniq()
+    promoted_memory_ids =
+      artifacts
+      |> Enum.flat_map(&promote_memories_from_artifact(work_item, &1))
+      |> Enum.uniq()
+
+    if promoted_memory_ids != [] and is_integer(work_item.assigned_agent_id) do
+      Agents.refresh_agent_bulletin!(work_item.assigned_agent_id)
+    end
+
+    promoted_memory_ids
   end
 
   defp promote_memories_from_artifact(_work_item, %Artifact{type: type})
@@ -1814,17 +1821,21 @@ defmodule HydraX.Runtime.WorkItems do
        do: []
 
   defp promote_memories_from_artifact(%WorkItem{} = work_item, %Artifact{} = artifact) do
-    research_memory_blueprints(work_item, artifact.payload || %{})
+    research_memory_blueprints(artifact.type, artifact.payload || %{})
     |> Enum.with_index()
     |> Enum.flat_map(fn {memory_attrs, index} ->
+      promotion_key =
+        memory_attrs["promotion_key"] ||
+          "#{memory_attrs["promotion_slot"]}:#{memory_attrs["type"]}:#{memory_attrs["content"]}"
+
       existing =
         Memory.list_memories(agent_id: work_item.assigned_agent_id, limit: 500)
         |> Enum.find(fn entry ->
           metadata = entry.metadata || %{}
 
-          metadata["source_artifact_id"] == artifact.id and
-            metadata["promotion_slot"] == memory_attrs["promotion_slot"] and
-            metadata["promotion_index"] == index
+          metadata["source_artifact_id"] == artifact.id or
+            (metadata["source_work_item_id"] == work_item.id and
+               metadata["promotion_key"] == promotion_key)
         end)
 
       if existing do
@@ -1843,6 +1854,7 @@ defmodule HydraX.Runtime.WorkItems do
               |> Map.put("source_artifact_id", artifact.id)
               |> Map.put("source_artifact_type", artifact.type)
               |> Map.put("promotion_slot", memory_attrs["promotion_slot"])
+              |> Map.put("promotion_key", promotion_key)
               |> Map.put("promotion_index", index)
               |> Map.put("research_question", work_item.goal),
             last_seen_at: DateTime.utc_now()
@@ -1853,46 +1865,123 @@ defmodule HydraX.Runtime.WorkItems do
     end)
   end
 
-  defp research_memory_blueprints(_work_item, payload) do
-    claim_memories =
-      payload
-      |> Map.get("claims", [])
-      |> Enum.take(3)
-      |> Enum.map(fn claim ->
+  defp research_memory_blueprints("research_report", payload) do
+    payload
+    |> Map.get("claims", [])
+    |> Enum.take(3)
+    |> Enum.map(fn claim ->
+      research_memory_blueprint(
+        "Fact",
+        claim,
+        "claims",
+        0.77,
+        payload,
         %{
-          "type" => "Fact",
-          "content" => claim,
-          "importance" => 0.77,
-          "promotion_slot" => "claims",
-          "metadata" => %{
-            "promotion_state" => "approved",
-            "confidence" => payload["confidence"],
-            "scope" => payload["scope"],
-            "expires_at" => DateTime.add(DateTime.utc_now(), 30 * 24 * 60 * 60, :second)
-          }
+          "expires_at" => DateTime.add(DateTime.utc_now(), 30 * 24 * 60 * 60, :second),
+          "promotion_reason" => "approved_research_claim"
         }
-      end)
+      )
+    end)
+  end
+
+  defp research_memory_blueprints("decision_ledger", payload) do
+    decision_memories =
+      case decision_memory_summary(payload) do
+        nil ->
+          []
+
+        summary ->
+          [
+            research_memory_blueprint(
+              "Decision",
+              summary,
+              "decision_summary",
+              0.82,
+              payload,
+              %{"promotion_reason" => "approved_research_decision"}
+            )
+          ]
+      end
 
     action_memories =
       payload
       |> Map.get("recommended_actions", [])
       |> Enum.take(3)
       |> Enum.map(fn action ->
-        %{
-          "type" => "Goal",
-          "content" => action,
-          "importance" => 0.72,
-          "promotion_slot" => "recommended_actions",
-          "metadata" => %{
-            "promotion_state" => "approved",
-            "confidence" => payload["confidence"],
-            "scope" => payload["scope"]
-          }
-        }
+        research_memory_blueprint(
+          "Goal",
+          action,
+          "recommended_actions",
+          0.72,
+          payload,
+          %{"promotion_reason" => "approved_research_action"}
+        )
       end)
 
-    claim_memories ++ action_memories
+    open_question_memories =
+      payload
+      |> Map.get("open_questions", [])
+      |> Enum.reject(&generic_open_question?/1)
+      |> Enum.take(2)
+      |> Enum.map(fn question ->
+        research_memory_blueprint(
+          "Todo",
+          "Investigate: #{question}",
+          "open_questions",
+          0.61,
+          payload,
+          %{"promotion_reason" => "approved_research_follow_up"}
+        )
+      end)
+
+    decision_memories ++ action_memories ++ open_question_memories
   end
+
+  defp research_memory_blueprints(_artifact_type, _payload), do: []
+
+  defp research_memory_blueprint(type, content, slot, importance, payload, metadata) do
+    scope = payload["scope"] || "autonomous research"
+
+    %{
+      "type" => type,
+      "content" => content,
+      "importance" => importance,
+      "promotion_slot" => slot,
+      "promotion_key" => "#{slot}:#{type}:#{content}",
+      "metadata" =>
+        metadata
+        |> Map.put("promotion_state", "durable")
+        |> Map.put("memory_scope", "artifact_derived")
+        |> Map.put("memory_origin_role", "researcher")
+        |> Map.put("confidence", payload["confidence"])
+        |> Map.put("scope", scope)
+    }
+  end
+
+  defp decision_memory_summary(payload) do
+    cond do
+      present_text?(payload["summary"]) ->
+        payload["summary"]
+
+      present_text?(List.first(payload["recommended_actions"] || [])) ->
+        List.first(payload["recommended_actions"])
+
+      present_text?(payload["question"]) ->
+        "Research decision: #{payload["question"]}"
+
+      true ->
+        nil
+    end
+  end
+
+  defp generic_open_question?(question) when is_binary(question) do
+    String.contains?(String.downcase(question), "what new external evidence should be gathered")
+  end
+
+  defp generic_open_question?(_question), do: false
+
+  defp present_text?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present_text?(_value), do: false
 
   defp artifact_review_status_for_decision(_requested_action, "rejected"), do: "rejected"
   defp artifact_review_status_for_decision("merge_ready", "approved"), do: "approved"

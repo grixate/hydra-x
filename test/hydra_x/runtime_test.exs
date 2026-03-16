@@ -3972,8 +3972,20 @@ defmodule HydraX.RuntimeTest do
       end)
 
     assert Enum.any?(promoted_memories, &(&1.type == "Fact"))
-    assert Enum.any?(promoted_memories, &(&1.type == "Goal"))
+    assert Enum.any?(promoted_memories, &(&1.type == "Decision"))
+
+    assert Enum.all?(promoted_memories, fn memory ->
+             metadata = memory.metadata || %{}
+             metadata["memory_scope"] == "artifact_derived"
+           end)
+
     assert Enum.all?(promoted_memories, &is_integer((&1.metadata || %{})["source_artifact_id"]))
+
+    bulletin = Runtime.agent_bulletin(researcher.id)
+    assert bulletin.content =~ "Current Decisions And Preferences"
+
+    assert bulletin.content =~
+             "Review the report and promote any durable findings into long-term memory."
   end
 
   test "approving a research work item promotes memories from report artifacts" do
@@ -4018,6 +4030,7 @@ defmodule HydraX.RuntimeTest do
         "summary" => "Decision ledger",
         "review_status" => "validated",
         "payload" => %{
+          "summary" => "Explain the approval path and promote the durable research decision.",
           "question" => work_item.goal,
           "scope" => "autonomous research",
           "claims" => ["Approved findings should produce durable facts."],
@@ -4036,8 +4049,27 @@ defmodule HydraX.RuntimeTest do
     assert updated.result_refs["promoted_memory_ids"] != nil
     assert length(updated.result_refs["promoted_memory_ids"]) >= 1
 
+    promoted_memories =
+      Memory.list_memories(agent_id: researcher.id, status: "active", limit: 50)
+      |> Enum.filter(fn entry ->
+        metadata = entry.metadata || %{}
+        metadata["source_work_item_id"] == work_item.id
+      end)
+
+    assert Enum.any?(promoted_memories, &(&1.type == "Decision"))
+
+    assert Enum.any?(promoted_memories, fn memory ->
+             metadata = memory.metadata || %{}
+             metadata["memory_scope"] == "artifact_derived"
+           end)
+
     artifact_approvals = Runtime.artifact_approval_records(report_artifact.id)
     assert Enum.any?(artifact_approvals, &(&1.requested_action == "promote_work_item"))
+
+    bulletin = Runtime.agent_bulletin(researcher.id)
+
+    assert bulletin.content =~
+             "Explain the approval path and promote the durable research decision."
   end
 
   test "autonomy scheduled jobs run the autonomy cycle for assigned work" do
