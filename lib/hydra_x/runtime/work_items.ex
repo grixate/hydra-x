@@ -1123,7 +1123,7 @@ defmodule HydraX.Runtime.WorkItems do
       })
 
     payload = build_delivery_brief(agent, running, summary_artifact, follow_up_context, delivery)
-    delivery_result = maybe_deliver_publish_summary(agent, payload)
+    delivery_result = maybe_deliver_publish_summary(agent, running, payload)
 
     {:ok, artifact} =
       create_artifact(%{
@@ -1553,55 +1553,59 @@ defmodule HydraX.Runtime.WorkItems do
     }
   end
 
-  defp maybe_deliver_publish_summary(agent, payload) do
+  defp maybe_deliver_publish_summary(agent, work_item, payload) do
     delivery = payload["delivery"] || %{}
     enabled? = Map.get(delivery, "enabled", false)
     channel = delivery["channel"]
     target = delivery["target"]
 
-    cond do
-      enabled? != true ->
-        %{"status" => "draft"}
+    result =
+      cond do
+        enabled? != true ->
+          %{"status" => "draft"}
 
-      not (is_binary(channel) and channel != "") ->
-        %{"status" => "skipped", "reason" => "missing_delivery_channel"}
+        not (is_binary(channel) and channel != "") ->
+          %{"status" => "skipped", "reason" => "missing_delivery_channel"}
 
-      not (is_binary(target) and target != "") ->
-        %{"status" => "skipped", "reason" => "missing_delivery_target", "channel" => channel}
+        not (is_binary(target) and target != "") ->
+          %{"status" => "skipped", "reason" => "missing_delivery_target", "channel" => channel}
 
-      true ->
-        case HydraX.Runtime.authorize_delivery(agent.id, :job, channel) do
-          :ok ->
-            case deliver_publish_summary(channel, target, payload["body"]) do
-              {:ok, metadata} ->
-                %{
-                  "status" => "delivered",
-                  "channel" => channel,
-                  "target" => target,
-                  "delivered_at" => DateTime.utc_now(),
-                  "metadata" => stringify_delivery_metadata(metadata)
-                }
+        true ->
+          case HydraX.Runtime.authorize_delivery(agent.id, :job, channel) do
+            :ok ->
+              case deliver_publish_summary(channel, target, payload["body"]) do
+                {:ok, metadata} ->
+                  %{
+                    "status" => "delivered",
+                    "channel" => channel,
+                    "target" => target,
+                    "delivered_at" => DateTime.utc_now(),
+                    "metadata" => stringify_delivery_metadata(metadata)
+                  }
 
-              {:error, reason} ->
-                %{
-                  "status" => "failed",
-                  "channel" => channel,
-                  "target" => target,
-                  "attempted_at" => DateTime.utc_now(),
-                  "reason" => inspect(reason)
-                }
-            end
+                {:error, reason} ->
+                  %{
+                    "status" => "failed",
+                    "channel" => channel,
+                    "target" => target,
+                    "attempted_at" => DateTime.utc_now(),
+                    "reason" => inspect(reason)
+                  }
+              end
 
-          {:error, reason} ->
-            %{
-              "status" => "blocked",
-              "channel" => channel,
-              "target" => target,
-              "attempted_at" => DateTime.utc_now(),
-              "reason" => inspect(reason)
-            }
-        end
-    end
+            {:error, reason} ->
+              %{
+                "status" => "blocked",
+                "channel" => channel,
+                "target" => target,
+                "attempted_at" => DateTime.utc_now(),
+                "reason" => inspect(reason)
+              }
+          end
+      end
+
+    maybe_record_work_item_budget_usage(agent, work_item, "autonomy_delivery", 0, 0)
+    result
   end
 
   defp deliver_publish_summary("telegram", target, content) do
@@ -1732,14 +1736,13 @@ defmodule HydraX.Runtime.WorkItems do
                  process_type: "autonomy"
                }) do
             {:ok, response} ->
-              Budget.record_usage(agent.id, nil,
-                tokens_in: estimated_tokens,
-                tokens_out: Budget.estimate_tokens(response.content || ""),
-                metadata: %{
-                  provider: response.provider,
-                  purpose: purpose,
-                  work_item_id: work_item.id
-                }
+              maybe_record_work_item_budget_usage(
+                agent,
+                work_item,
+                purpose,
+                estimated_tokens,
+                Budget.estimate_tokens(response.content || ""),
+                %{provider: response.provider}
               )
 
               response.content
@@ -1765,6 +1768,25 @@ defmodule HydraX.Runtime.WorkItems do
         usage = Budget.work_item_usage(agent.id, work_item.id)
         usage.total_tokens + estimated_tokens <= limit
     end
+  end
+
+  defp maybe_record_work_item_budget_usage(
+         agent,
+         %WorkItem{} = work_item,
+         purpose,
+         tokens_in,
+         tokens_out,
+         extra_metadata \\ %{}
+       ) do
+    Budget.record_usage(agent.id, nil,
+      tokens_in: tokens_in,
+      tokens_out: tokens_out,
+      metadata:
+        extra_metadata
+        |> Helpers.normalize_string_keys()
+        |> Map.put("purpose", purpose)
+        |> Map.put("work_item_id", work_item.id)
+    )
   end
 
   defp workspace_snapshot(workspace_root, goal) do
@@ -2296,6 +2318,8 @@ defmodule HydraX.Runtime.WorkItems do
          :ok <- validate_time_budget(work_item),
          :ok <- validate_delegation_depth(work_item),
          :ok <- validate_token_budget(agent, work_item),
+         :ok <- validate_tool_budget(agent, work_item),
+         :ok <- validate_retry_budget(work_item),
          :ok <- validate_side_effect_class(capability, work_item, side_effect_class),
          :ok <- validate_external_delivery_approval(work_item, side_effect_class),
          :ok <- validate_financial_action_mode(work_item, side_effect_class) do
@@ -2373,6 +2397,52 @@ defmodule HydraX.Runtime.WorkItems do
              "reason" => "work item token budget is exhausted"
            }}
         end
+    end
+  end
+
+  defp validate_tool_budget(agent, %WorkItem{} = work_item) do
+    limit = get_in(work_item.budget || %{}, ["tool_budget"])
+
+    cond do
+      not is_integer(limit) or limit <= 0 ->
+        :ok
+
+      true ->
+        usage = Budget.work_item_usage(agent.id, work_item.id)
+
+        if usage.entries < limit do
+          :ok
+        else
+          {:error,
+           %{
+             "type" => "tool_budget",
+             "limit_calls" => limit,
+             "used_calls" => usage.entries,
+             "reason" => "work item tool budget is exhausted"
+           }}
+        end
+    end
+  end
+
+  defp validate_retry_budget(%WorkItem{} = work_item) do
+    limit = get_in(work_item.budget || %{}, ["max_retries"])
+    retries = work_item_retry_count(work_item)
+
+    cond do
+      not is_integer(limit) or limit < 0 ->
+        :ok
+
+      retries < limit ->
+        :ok
+
+      true ->
+        {:error,
+         %{
+           "type" => "retry_budget",
+           "limit_retries" => limit,
+           "used_retries" => retries,
+           "reason" => "work item retry budget is exhausted"
+         }}
     end
   end
 
@@ -2552,8 +2622,18 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp budget_policy_failure?(result_refs) when is_map(result_refs) do
     case get_in(result_refs, ["policy_failure", "type"]) do
-      type when type in ["token_budget", "time_budget", "delegation_depth"] -> true
-      _ -> false
+      type
+      when type in [
+             "token_budget",
+             "time_budget",
+             "delegation_depth",
+             "tool_budget",
+             "retry_budget"
+           ] ->
+        true
+
+      _ ->
+        false
     end
   end
 
@@ -2571,6 +2651,14 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp work_item_delegation_depth(%WorkItem{} = work_item) do
     do_work_item_delegation_depth(work_item.parent_work_item_id, 0)
+  end
+
+  defp work_item_retry_count(%WorkItem{} = work_item) do
+    history = get_in(work_item.runtime_state || %{}, ["history"]) || []
+
+    Enum.count(history, fn entry ->
+      entry["status"] in ["failed", "rejected"]
+    end)
   end
 
   defp do_work_item_delegation_depth(nil, depth), do: depth

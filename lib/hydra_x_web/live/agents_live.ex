@@ -544,7 +544,7 @@ defmodule HydraXWeb.AgentsLive do
                       {item.autonomy_level} · effect {work_item_side_effect_class(item)}<span :if={
                         summary = work_item_promoted_memory_summary(item)
                       }> · {summary}</span>
-                      <span :if={summary = work_item_publish_summary(item)}> ·    {summary}</span>
+                      <span :if={summary = work_item_publish_summary(item)}> ·     {summary}</span>
                     </div>
                     <div :if={work_item_actionable?(item)} class="mt-3 flex flex-wrap gap-2">
                       <button
@@ -1464,6 +1464,12 @@ defmodule HydraXWeb.AgentsLive do
 
       %{"type" => "delegation_depth"} ->
         "budget depth exhausted"
+
+      %{"type" => "tool_budget"} ->
+        "budget tools exhausted"
+
+      %{"type" => "retry_budget"} ->
+        "budget retries exhausted"
 
       %{"type" => "financial_action_locked"} ->
         "simulation only"

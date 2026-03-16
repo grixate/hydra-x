@@ -923,9 +923,9 @@ defmodule HydraXWeb.HealthLive do
                 </div>
                 <div class="mt-2 text-xs text-[var(--hx-mute)]">
                   level {event.level}
-                  <span :if={event.expired_by}> · expiry                    {event.expired_by}</span>
+                  <span :if={event.expired_by}> · expiry                     {event.expired_by}</span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip                    {event.ip}</span>
+                  <span :if={event.ip}> · ip                     {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -2118,6 +2118,12 @@ defmodule HydraXWeb.HealthLive do
 
       %{"type" => "delegation_depth"} ->
         "budget depth exhausted"
+
+      %{"type" => "tool_budget"} ->
+        "budget tools exhausted"
+
+      %{"type" => "retry_budget"} ->
+        "budget retries exhausted"
 
       %{"type" => "financial_action_locked"} ->
         "simulation only"

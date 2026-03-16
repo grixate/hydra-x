@@ -1859,6 +1859,12 @@ defmodule HydraX.Report do
       %{"type" => "delegation_depth"} ->
         "budget_depth"
 
+      %{"type" => "tool_budget"} ->
+        "budget_tools"
+
+      %{"type" => "retry_budget"} ->
+        "budget_retries"
+
       %{"type" => "financial_action_locked"} ->
         "simulation_only"
 

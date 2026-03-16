@@ -791,7 +791,7 @@ defmodule HydraX.RuntimeTest do
       if Process.alive?(resumed_channel_pid), do: shutdown_process(resumed_channel_pid)
     end)
 
-    assert_receive {:tool_round_requested, 2}, 1_000
+    wait_for(fn -> :atomics.get(counter, 1) >= 2 end, 120)
 
     wait_for(
       fn ->
@@ -976,7 +976,7 @@ defmodule HydraX.RuntimeTest do
       if Process.alive?(resumed_channel_pid), do: shutdown_process(resumed_channel_pid)
     end)
 
-    assert_receive {:restartable_tool_round_requested, 2}, 1_000
+    wait_for(fn -> :atomics.get(counter, 1) >= 2 end, 120)
 
     wait_for(
       fn ->
@@ -4572,6 +4572,37 @@ defmodule HydraX.RuntimeTest do
     assert get_in(work_item.result_refs || %{}, ["policy_failure", "type"]) == "token_budget"
   end
 
+  test "autonomy cycle blocks work items that exceed their tool budget" do
+    agent =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, agent} = Runtime.save_agent(agent, %{"role" => "researcher"})
+
+    {:ok, work_item} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Use more tool calls than the work item allows.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "researcher",
+        "budget" => %{"tool_budget" => 1}
+      })
+
+    {:ok, _usage} =
+      Budget.record_usage(agent.id, nil,
+        tokens_in: 0,
+        tokens_out: 0,
+        metadata: %{purpose: "autonomy_delivery", work_item_id: work_item.id}
+      )
+
+    assert {:ok, summary} = Runtime.run_autonomy_cycle(agent.id)
+    assert summary.action == "policy_blocked"
+
+    work_item = Runtime.get_work_item!(work_item.id)
+    assert work_item.status == "failed"
+    assert get_in(work_item.result_refs || %{}, ["policy_failure", "type"]) == "tool_budget"
+  end
+
   test "autonomy cycle blocks work items that exceed their time budget" do
     agent =
       create_agent()
@@ -4599,6 +4630,39 @@ defmodule HydraX.RuntimeTest do
     work_item = Runtime.get_work_item!(work_item.id)
     assert work_item.status == "failed"
     assert get_in(work_item.result_refs || %{}, ["policy_failure", "type"]) == "time_budget"
+  end
+
+  test "autonomy cycle blocks work items that exceed their retry budget" do
+    agent =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, agent} = Runtime.save_agent(agent, %{"role" => "researcher"})
+
+    {:ok, work_item} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Retry more times than the work item permits.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "researcher",
+        "budget" => %{"max_retries" => 1},
+        "runtime_state" => %{
+          "history" => [
+            %{
+              "status" => "failed",
+              "details" => %{"reason" => "initial attempt failed"},
+              "at" => DateTime.utc_now() |> DateTime.to_iso8601()
+            }
+          ]
+        }
+      })
+
+    assert {:ok, summary} = Runtime.run_autonomy_cycle(agent.id)
+    assert summary.action == "policy_blocked"
+
+    work_item = Runtime.get_work_item!(work_item.id)
+    assert work_item.status == "failed"
+    assert get_in(work_item.result_refs || %{}, ["policy_failure", "type"]) == "retry_budget"
   end
 
   test "planner delegation respects max delegation depth budgets" do
