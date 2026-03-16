@@ -4218,6 +4218,20 @@ defmodule HydraX.RuntimeTest do
 
     {:ok, reviewer} = Runtime.save_agent(reviewer, %{"role" => "reviewer"})
 
+    {:ok, delegated_memory} =
+      Memory.create_memory(%{
+        agent_id: builder.id,
+        type: "Decision",
+        content: "Keep validated runtime approval guidance visible during engineering review.",
+        importance: 0.86,
+        metadata: %{
+          "memory_scope" => "artifact_derived",
+          "source_work_item_id" => 202,
+          "source_artifact_type" => "decision_ledger"
+        },
+        last_seen_at: DateTime.utc_now()
+      })
+
     File.write!(Path.join(builder.workspace_root, "README.md"), "# Hydra-X\n")
     File.mkdir_p!(Path.join(builder.workspace_root, "lib"))
 
@@ -4234,7 +4248,26 @@ defmodule HydraX.RuntimeTest do
         "assigned_role" => "builder",
         "execution_mode" => "execute",
         "priority" => 9,
-        "review_required" => true
+        "review_required" => true,
+        "metadata" => %{
+          "delegation_context" => %{
+            "source_agent_id" => builder.id,
+            "query" => "runtime approval pipeline",
+            "captured_at" => DateTime.utc_now(),
+            "promoted_memories" => [
+              %{
+                "memory_id" => delegated_memory.id,
+                "type" => "Decision",
+                "content" => delegated_memory.content,
+                "score" => 1.2,
+                "reasons" => ["artifact-derived memory"],
+                "score_breakdown" => %{"artifact" => 1.2},
+                "source_work_item_id" => 202,
+                "source_artifact_type" => "decision_ledger"
+              }
+            ]
+          }
+        }
       })
 
     assert {:ok, builder_summary} = Runtime.run_autonomy_cycle(builder.id)
@@ -4253,11 +4286,47 @@ defmodule HydraX.RuntimeTest do
     assert review_item.kind == "review"
     assert review_item.assigned_role == "reviewer"
 
+    delegated_context =
+      get_in(review_item.metadata || %{}, ["delegation_context", "promoted_memories"]) || []
+
+    assert delegated_context != []
+
+    assert Enum.any?(
+             delegated_context,
+             &String.contains?(&1["content"], "validated runtime approval guidance")
+           )
+
     assert {:ok, reviewer_summary} = Runtime.run_autonomy_cycle(reviewer.id)
     assert reviewer_summary.action == "review_completed"
 
+    review_item = Runtime.get_work_item!(review_item.id)
+    review_artifacts = Runtime.work_item_artifacts(review_item.id)
+    assert Enum.any?(review_artifacts, &(&1.type == "review_report"))
+    assert Enum.any?(review_artifacts, &(&1.type == "decision_ledger"))
+    assert length(review_item.result_refs["promoted_memory_ids"] || []) >= 1
+
+    review_report = Enum.find(review_artifacts, &(&1.type == "review_report"))
+
+    assert Enum.any?(review_report.payload["delegated_context"] || [], fn memory ->
+             memory["content"] =~ "validated runtime approval guidance"
+           end)
+
     approvals = Runtime.approval_records_for_subject("work_item", parent.id)
     assert Enum.any?(approvals, &(&1.decision == "approved"))
+
+    reviewer_memories =
+      Memory.list_memories(agent_id: reviewer.id, status: "active", limit: 50)
+      |> Enum.filter(fn entry ->
+        metadata = entry.metadata || %{}
+        metadata["source_work_item_id"] == review_item.id
+      end)
+
+    assert Enum.any?(reviewer_memories, &(&1.type == "Decision"))
+
+    assert Enum.all?(reviewer_memories, fn memory ->
+             metadata = memory.metadata || %{}
+             metadata["memory_origin_role"] == "reviewer"
+           end)
 
     assert {:ok, finalize_summary} = Runtime.run_autonomy_cycle(builder.id)
     assert finalize_summary.action == "finalized_blocked_parent"
