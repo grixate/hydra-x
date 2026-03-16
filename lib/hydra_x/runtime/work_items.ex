@@ -218,6 +218,7 @@ defmodule HydraX.Runtime.WorkItems do
 
     promote_artifacts!(updated, requested_action, record, attrs["metadata"] || %{})
     updated = maybe_promote_artifact_derived_work_item(updated, requested_action)
+    updated = maybe_complete_publish_review_work_item(updated, requested_action, record)
 
     {updated, record}
   end
@@ -1248,13 +1249,17 @@ defmodule HydraX.Runtime.WorkItems do
           })
       })
 
+    {:ok, completed, publish_review_item} =
+      maybe_enqueue_publish_review_follow_up(completed, artifact, delivery, payload)
+
     {:processed,
      %{
        status: "completed",
        processed_count: 1,
        work_item: completed,
        artifacts: [artifact],
-       action: action
+       action: action,
+       follow_up_work_item: publish_review_item
      }}
   end
 
@@ -1744,41 +1749,101 @@ defmodule HydraX.Runtime.WorkItems do
           %{"status" => "skipped", "reason" => "missing_delivery_target", "channel" => channel}
 
         true ->
-          case HydraX.Runtime.authorize_delivery(agent.id, :job, channel) do
-            :ok ->
-              case deliver_publish_summary(channel, target, payload["body"]) do
-                {:ok, metadata} ->
-                  %{
-                    "status" => "delivered",
-                    "channel" => channel,
-                    "target" => target,
-                    "delivered_at" => DateTime.utc_now(),
-                    "metadata" => stringify_delivery_metadata(metadata)
-                  }
-
-                {:error, reason} ->
-                  %{
-                    "status" => "failed",
-                    "channel" => channel,
-                    "target" => target,
-                    "attempted_at" => DateTime.utc_now(),
-                    "reason" => inspect(reason)
-                  }
-              end
-
-            {:error, reason} ->
-              %{
-                "status" => "blocked",
-                "channel" => channel,
-                "target" => target,
-                "attempted_at" => DateTime.utc_now(),
-                "reason" => inspect(reason)
-              }
-          end
+          execute_publish_delivery(agent, channel, target, payload["body"])
       end
 
     maybe_record_work_item_budget_usage(agent, work_item, "autonomy_delivery", 0, 0)
     result
+  end
+
+  defp maybe_enqueue_publish_review_follow_up(
+         %WorkItem{} = publish_item,
+         %Artifact{} = delivery_brief,
+         delivery,
+         payload
+       ) do
+    cond do
+      payload["degraded"] != true ->
+        {:ok, publish_item, nil}
+
+      Map.get(delivery || %{}, "enabled", false) != true ->
+        {:ok, publish_item, nil}
+
+      true ->
+        {:ok, review_item} =
+          save_work_item(%{
+            "kind" => "task",
+            "goal" =>
+              "Approve degraded delivery for #{Map.get(delivery || %{}, "channel", "report")} #{Map.get(delivery || %{}, "target", "control-plane")}",
+            "status" => "completed",
+            "execution_mode" => "execute",
+            "assigned_agent_id" => publish_item.assigned_agent_id,
+            "assigned_role" => "operator",
+            "parent_work_item_id" => publish_item.id,
+            "priority" => max(publish_item.priority, 1),
+            "autonomy_level" => "execute_with_review",
+            "approval_stage" => "validated",
+            "result_refs" => %{
+              "artifact_ids" => [delivery_brief.id],
+              "degraded" => true
+            },
+            "metadata" => %{
+              "task_type" => "publish_approval",
+              "publish_work_item_id" => publish_item.id,
+              "delivery_brief_artifact_id" => delivery_brief.id,
+              "delivery" => delivery || %{},
+              "degraded_execution" => true,
+              "requested_action" => "publish_review_report",
+              "follow_up_context" => get_in(publish_item.metadata || %{}, ["follow_up_context"])
+            }
+          })
+
+        {:ok, updated_publish_item} =
+          save_work_item(publish_item, %{
+            "result_refs" =>
+              append_follow_up_result_refs(
+                publish_item.result_refs,
+                review_item,
+                "publish_review"
+              )
+          })
+
+        {:ok, updated_publish_item, review_item}
+    end
+  end
+
+  defp execute_publish_delivery(agent, channel, target, content) do
+    case HydraX.Runtime.authorize_delivery(agent.id, :job, channel) do
+      :ok ->
+        case deliver_publish_summary(channel, target, content) do
+          {:ok, metadata} ->
+            %{
+              "status" => "delivered",
+              "channel" => channel,
+              "target" => target,
+              "delivered_at" => DateTime.utc_now(),
+              "metadata" => stringify_delivery_metadata(metadata)
+            }
+
+          {:error, reason} ->
+            %{
+              "status" => "failed",
+              "channel" => channel,
+              "target" => target,
+              "attempted_at" => DateTime.utc_now(),
+              "reason" => inspect(reason)
+            }
+        end
+
+      {:error, reason} ->
+        %{
+          "status" => "blocked",
+          "channel" => channel,
+          "target" => target,
+          "attempted_at" => DateTime.utc_now(),
+          "reason" => inspect(reason)
+        }
+    end
   end
 
   defp deliver_publish_summary("telegram", target, content) do
@@ -3002,6 +3067,7 @@ defmodule HydraX.Runtime.WorkItems do
       {"extension", "enable_extension"} -> stage in ["validated", "operator_approved"]
       {_, "merge_ready"} -> stage in ["validated", "operator_approved"]
       {_, "promote_code_change"} -> stage in ["patch_ready", "validated"]
+      {_, "publish_review_report"} -> stage in ["validated", "operator_approved"]
       {_, "promote_work_item"} -> true
       _ -> true
     end
@@ -3012,6 +3078,7 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp next_approval_stage(_work_item, "merge_ready"), do: "merge_ready"
   defp next_approval_stage(_work_item, "promote_code_change"), do: "validated"
+  defp next_approval_stage(_work_item, "publish_review_report"), do: "operator_approved"
   defp next_approval_stage(_work_item, "promote_work_item"), do: "operator_approved"
   defp next_approval_stage(work_item, _requested_action), do: work_item.approval_stage
 
@@ -3176,6 +3243,102 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp maybe_promote_artifact_derived_work_item(%WorkItem{} = work_item, _requested_action),
     do: work_item
+
+  defp maybe_complete_publish_review_work_item(
+         %WorkItem{} = work_item,
+         requested_action,
+         approval_record
+       )
+       when requested_action in ["publish_review_report", "promote_work_item"] do
+    metadata = work_item.metadata || %{}
+
+    if metadata["task_type"] == "publish_approval" do
+      complete_publish_review!(work_item, approval_record)
+    else
+      work_item
+    end
+  end
+
+  defp maybe_complete_publish_review_work_item(
+         %WorkItem{} = work_item,
+         _requested_action,
+         _record
+       ),
+       do: work_item
+
+  defp complete_publish_review!(%WorkItem{} = review_item, approval_record) do
+    publish_item = get_work_item!(review_item.metadata["publish_work_item_id"])
+    delivery_brief = get_artifact!(review_item.metadata["delivery_brief_artifact_id"])
+    delivery = review_item.metadata["delivery"] || %{}
+    agent_id = review_item.assigned_agent_id || publish_item.assigned_agent_id
+    agent = Agents.get_agent!(agent_id)
+
+    delivery_result =
+      execute_publish_delivery(
+        agent,
+        delivery["channel"],
+        delivery["target"],
+        delivery_brief.body
+      )
+
+    {:ok, updated_publish_item} =
+      save_work_item(publish_item, %{
+        "approval_stage" => "operator_approved",
+        "result_refs" =>
+          (publish_item.result_refs || %{})
+          |> Map.put("delivery", delivery_result)
+          |> Map.put("last_requested_action", "publish_review_report"),
+        "metadata" =>
+          (publish_item.metadata || %{})
+          |> Map.put("degraded_execution", false),
+        "runtime_state" =>
+          append_history(publish_item.runtime_state, "approved", %{
+            "approved_at" => DateTime.utc_now(),
+            "phase" => "publish_review",
+            "approval_record_id" => approval_record.id,
+            "delivery_status" => delivery_result["status"]
+          })
+      })
+
+    {updated_brief, _artifact_record} =
+      record_artifact_decision!(
+        delivery_brief,
+        "publish_review_report",
+        "approved",
+        "Approved degraded delivery through work item ##{review_item.id}.",
+        %{
+          "review_work_item_id" => review_item.id,
+          "publish_work_item_id" => publish_item.id,
+          "delivery_status" => delivery_result["status"]
+        },
+        approval_record.reviewer_agent_id || agent.id,
+        review_item.id,
+        "approved"
+      )
+
+    {:ok, updated_brief} =
+      updated_brief
+      |> Artifact.changeset(%{
+        "payload" => Map.put(updated_brief.payload || %{}, "delivery", delivery_result)
+      })
+      |> Repo.update()
+
+    {:ok, updated_review_item} =
+      save_work_item(review_item, %{
+        "result_refs" =>
+          (review_item.result_refs || %{})
+          |> Map.put(
+            "artifact_ids",
+            Enum.uniq(
+              List.wrap((review_item.result_refs || %{})["artifact_ids"]) ++ [updated_brief.id]
+            )
+          )
+          |> Map.put("delivery", delivery_result)
+          |> Map.put("linked_publish_work_item_id", updated_publish_item.id)
+      })
+
+    updated_review_item
+  end
 
   defp maybe_promote_artifact_derived_artifact(%Artifact{type: type} = artifact, requested_action)
        when type in ["research_report", "review_report", "decision_ledger"] and

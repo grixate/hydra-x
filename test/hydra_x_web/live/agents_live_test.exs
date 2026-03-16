@@ -261,12 +261,32 @@ defmodule HydraXWeb.AgentsLiveTest do
         }
       })
 
+    {:ok, publish_review} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Approve the degraded publish draft for delivery.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "operator",
+        "status" => "completed",
+        "approval_stage" => "validated",
+        "priority" => 96,
+        "result_refs" => %{"degraded" => true},
+        "metadata" => %{
+          "task_type" => "publish_approval",
+          "degraded_execution" => true,
+          "delivery" => %{"mode" => "channel", "channel" => "telegram", "target" => "ops-room"}
+        }
+      })
+
     {:ok, _view, html} = live(conn, ~p"/agents")
 
     assert html =~ degraded_research.goal
     assert html =~ "degraded review queued 1"
     assert html =~ degraded_publish.goal
     assert html =~ "delivery degraded draft telegram"
+    assert html =~ publish_review.goal
+    assert html =~ "Approve degraded delivery"
+    assert html =~ "degraded delivery awaiting approval telegram"
   end
 
   test "agents page can approve a merge-ready work item from the control plane", %{conn: conn} do

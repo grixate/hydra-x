@@ -544,7 +544,9 @@ defmodule HydraXWeb.AgentsLive do
                       {item.autonomy_level} · effect {work_item_side_effect_class(item)}<span :if={
                         summary = work_item_promoted_memory_summary(item)
                       }> · {summary}</span>
-                      <span :if={summary = work_item_publish_summary(item)}> ·        {summary}</span>
+                      <span :if={summary = work_item_publish_summary(item)}>
+                         ·         {summary}
+                      </span>
                     </div>
                     <div :if={work_item_actionable?(item)} class="mt-3 flex flex-wrap gap-2">
                       <button
@@ -1293,6 +1295,13 @@ defmodule HydraXWeb.AgentsLive do
        do: "enable_extension"
 
   defp work_item_primary_action(%{
+         metadata: %{"task_type" => "publish_approval"},
+         status: "completed",
+         approval_stage: "validated"
+       }),
+       do: "publish_review_report"
+
+  defp work_item_primary_action(%{
          kind: "engineering",
          status: "completed",
          approval_stage: "validated"
@@ -1317,6 +1326,9 @@ defmodule HydraXWeb.AgentsLive do
           do: "Promote constrained patch",
           else: "Promote to merge-ready"
         )
+
+      "publish_review_report" ->
+        "Approve degraded delivery"
 
       "promote_work_item" ->
         if(degraded_work_item?(work_item),
@@ -1392,6 +1404,26 @@ defmodule HydraXWeb.AgentsLive do
 
   defp work_item_publish_summary(work_item) do
     cond do
+      get_in(work_item.metadata || %{}, ["task_type"]) == "publish_approval" ->
+        delivery = get_in(work_item.metadata || %{}, ["delivery"]) || %{}
+        delivery_result = get_in(work_item.result_refs || %{}, ["delivery"]) || %{}
+
+        prefix =
+          case delivery_result["status"] do
+            "delivered" -> "degraded delivery approved"
+            "blocked" -> "degraded delivery blocked"
+            "failed" -> "degraded delivery failed"
+            _ -> "degraded delivery awaiting approval"
+          end
+
+        [
+          prefix,
+          delivery["channel"] || delivery["mode"] || "report",
+          delivery["target"] && "-> #{delivery["target"]}"
+        ]
+        |> Enum.reject(&(&1 in [nil, ""]))
+        |> Enum.join(" ")
+
       get_in(work_item.metadata || %{}, ["task_type"]) == "publish_summary" ->
         delivery = get_in(work_item.metadata || %{}, ["delivery"]) || %{}
         delivery_result = work_item_publish_delivery_result(work_item)

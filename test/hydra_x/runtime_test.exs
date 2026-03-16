@@ -4473,11 +4473,11 @@ defmodule HydraX.RuntimeTest do
     assert delivery_brief.payload["delivery"]["metadata"]["provider_message_id"] == 91
   end
 
-  test "degraded publish summary tasks stay draft until operator review" do
+  test "degraded publish summary tasks queue operator approval before delivery" do
     previous = Application.get_env(:hydra_x, :telegram_deliver)
 
     Application.put_env(:hydra_x, :telegram_deliver, fn payload ->
-      send(self(), {:unexpected_publish_delivery, payload})
+      send(self(), {:degraded_publish_delivery, payload})
       {:ok, %{provider_message_id: 999}}
     end)
 
@@ -4556,13 +4556,19 @@ defmodule HydraX.RuntimeTest do
 
     assert {:ok, summary} = Runtime.run_autonomy_cycle(operator.id)
     assert summary.action == "prepared_delivery_brief"
-    refute_receive {:unexpected_publish_delivery, _payload}, 200
+    refute_receive {:degraded_publish_delivery, _payload}, 200
 
     publish_item = Runtime.get_work_item!(publish_item.id)
     assert publish_item.result_refs["delivery"]["status"] == "draft"
     assert publish_item.result_refs["delivery"]["reason"] == "degraded_confidence_requires_review"
     assert publish_item.result_refs["degraded"] == true
     assert publish_item.metadata["degraded_execution"] == true
+    [approval_item_id] = publish_item.result_refs["follow_up_work_item_ids"]
+
+    approval_item = Runtime.get_work_item!(approval_item_id)
+    assert approval_item.metadata["task_type"] == "publish_approval"
+    assert approval_item.approval_stage == "validated"
+    assert approval_item.result_refs["degraded"] == true
 
     [delivery_brief] = Runtime.work_item_artifacts(publish_item.id)
     assert delivery_brief.review_status == "proposed"
@@ -4570,6 +4576,28 @@ defmodule HydraX.RuntimeTest do
     assert delivery_brief.payload["delivery"]["status"] == "draft"
     assert delivery_brief.payload["constraint_strategy"] =~ "Reuse existing evidence"
     assert delivery_brief.confidence <= 0.52
+
+    {approved_review, record} =
+      Runtime.approve_work_item!(approval_item.id, %{
+        "requested_action" => "publish_review_report",
+        "rationale" => "Operator approved the degraded publish brief after review."
+      })
+
+    assert record.requested_action == "publish_review_report"
+    assert approved_review.approval_stage == "operator_approved"
+    assert approved_review.result_refs["delivery"]["status"] == "delivered"
+
+    assert_receive {:degraded_publish_delivery, %{chat_id: "9001", text: content}}
+    assert content =~ "Keep the summary narrow"
+
+    publish_item = Runtime.get_work_item!(publish_item.id)
+    assert publish_item.approval_stage == "operator_approved"
+    assert publish_item.result_refs["delivery"]["status"] == "delivered"
+    assert publish_item.result_refs["delivery"]["metadata"]["provider_message_id"] == 999
+
+    delivery_brief = Runtime.get_artifact!(delivery_brief.id)
+    assert delivery_brief.review_status == "approved"
+    assert delivery_brief.payload["delivery"]["status"] == "delivered"
   end
 
   test "approving a research work item promotes memories from report artifacts" do

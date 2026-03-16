@@ -1763,6 +1763,11 @@ defmodule HydraX.Report do
       nil ->
         nil
 
+      %{type: "publish_approval", status: status, channel: channel, target: target} ->
+        [status, channel || "report", target && "-> #{target}"]
+        |> Enum.reject(&is_nil_or_empty/1)
+        |> Enum.join(" ")
+
       %{type: "publish_summary", status: status, channel: channel, target: target} ->
         [
           status,
@@ -1789,6 +1794,25 @@ defmodule HydraX.Report do
 
   defp work_item_publish_snapshot(item) do
     cond do
+      get_in(item.metadata || %{}, ["task_type"]) == "publish_approval" ->
+        delivery = get_in(item.metadata || %{}, ["delivery"]) || %{}
+        delivery_result = get_in(item.result_refs || %{}, ["delivery"]) || %{}
+
+        %{
+          type: "publish_approval",
+          status:
+            case delivery_result["status"] do
+              "delivered" -> "degraded_delivery_approved"
+              "blocked" -> "degraded_delivery_blocked"
+              "failed" -> "degraded_delivery_failed"
+              _ -> "degraded_delivery_awaiting_approval"
+            end,
+          channel: delivery["channel"] || delivery["mode"] || "report",
+          target: delivery["target"],
+          delivery: delivery_result,
+          degraded: true
+        }
+
       get_in(item.metadata || %{}, ["task_type"]) == "publish_summary" ->
         delivery = get_in(item.metadata || %{}, ["delivery"]) || %{}
         delivery_result = work_item_publish_delivery_result(item)

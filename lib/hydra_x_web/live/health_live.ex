@@ -927,7 +927,7 @@ defmodule HydraXWeb.HealthLive do
                     · expiry {event.expired_by}
                   </span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip                        {event.ip}</span>
+                  <span :if={event.ip}> · ip                         {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -2060,6 +2060,26 @@ defmodule HydraXWeb.HealthLive do
 
   defp autonomy_publish_summary(item) do
     cond do
+      get_in(item.metadata || %{}, ["task_type"]) == "publish_approval" ->
+        delivery = get_in(item.metadata || %{}, ["delivery"]) || %{}
+        delivery_result = get_in(item.result_refs || %{}, ["delivery"]) || %{}
+
+        prefix =
+          case delivery_result["status"] do
+            "delivered" -> "degraded delivery approved"
+            "blocked" -> "degraded delivery blocked"
+            "failed" -> "degraded delivery failed"
+            _ -> "degraded delivery awaiting approval"
+          end
+
+        [
+          prefix,
+          delivery["channel"] || delivery["mode"] || "report",
+          delivery["target"] && "-> #{delivery["target"]}"
+        ]
+        |> Enum.reject(&is_nil_or_empty/1)
+        |> Enum.join(" ")
+
       get_in(item.metadata || %{}, ["task_type"]) == "publish_summary" ->
         delivery = get_in(item.metadata || %{}, ["delivery"]) || %{}
         delivery_result = get_in(item.result_refs || %{}, ["delivery"]) || %{}
