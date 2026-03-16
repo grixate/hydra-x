@@ -111,6 +111,38 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "patch_bundle"
   end
 
+  test "agents page can approve a merge-ready work item from the control plane", %{conn: conn} do
+    {:ok, agent} =
+      Runtime.save_agent(%{
+        name: "Builder Agent",
+        slug: "builder-agent",
+        role: "builder",
+        workspace_root: Path.join(System.tmp_dir!(), "hydra-x-builder-agent"),
+        description: "builder",
+        is_default: false
+      })
+
+    {:ok, work_item} =
+      Runtime.save_work_item(%{
+        "kind" => "engineering",
+        "goal" => "Promote this work item from the agents page.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "builder",
+        "status" => "completed",
+        "approval_stage" => "validated"
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/agents")
+
+    view
+    |> element("#approve-work-item-#{work_item.id}")
+    |> render_click()
+
+    html = render(view)
+    assert html =~ "Approved engineering work item ##{work_item.id}"
+    assert Runtime.get_work_item!(work_item.id).approval_stage == "merge_ready"
+  end
+
   test "agents page can repair a workspace scaffold", %{conn: conn} do
     {:ok, agent} =
       Runtime.save_agent(%{

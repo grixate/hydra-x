@@ -91,6 +91,40 @@ defmodule HydraXWeb.AgentsLive do
      |> assign(:stats, stats())}
   end
 
+  def handle_event("approve_work_item", %{"id" => id, "action" => action}, socket) do
+    work_item_id = String.to_integer(id)
+    work_item = Runtime.get_work_item!(work_item_id)
+
+    {_updated, _record} =
+      Runtime.approve_work_item!(work_item_id, %{
+        "requested_action" => action,
+        "rationale" => "Approved from the /agents control plane."
+      })
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Approved #{work_item.kind} work item ##{work_item.id}")
+     |> assign(:agents, agents_with_runtime())
+     |> assign(:stats, stats())}
+  end
+
+  def handle_event("reject_work_item", %{"id" => id, "action" => action}, socket) do
+    work_item_id = String.to_integer(id)
+    work_item = Runtime.get_work_item!(work_item_id)
+
+    {_updated, _record} =
+      Runtime.reject_work_item!(work_item_id, %{
+        "requested_action" => action,
+        "rationale" => "Rejected from the /agents control plane."
+      })
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Rejected #{work_item.kind} work item ##{work_item.id}")
+     |> assign(:agents, agents_with_runtime())
+     |> assign(:stats, stats())}
+  end
+
   def handle_event("start_runtime", %{"id" => id}, socket) do
     Runtime.start_agent_runtime!(id)
 
@@ -507,6 +541,26 @@ defmodule HydraXWeb.AgentsLive do
                     <p class="mt-2 text-sm text-[var(--hx-mute)]">{item.goal}</p>
                     <div class="mt-2 text-xs text-[var(--hx-mute)]">
                       priority {item.priority} · {work_item_artifact_summary(item)}
+                    </div>
+                    <div :if={work_item_actionable?(item)} class="mt-3 flex flex-wrap gap-2">
+                      <button
+                        id={"approve-work-item-#{item.id}"}
+                        phx-click="approve_work_item"
+                        phx-value-id={item.id}
+                        phx-value-action={work_item_primary_action(item)}
+                        class="btn btn-sm btn-outline border-emerald-400/20 bg-emerald-400/10 text-emerald-200 hover:bg-emerald-400/20"
+                      >
+                        {work_item_primary_action_label(item)}
+                      </button>
+                      <button
+                        id={"reject-work-item-#{item.id}"}
+                        phx-click="reject_work_item"
+                        phx-value-id={item.id}
+                        phx-value-action={work_item_primary_action(item)}
+                        class="btn btn-sm btn-outline border-amber-400/20 bg-amber-400/10 text-amber-200 hover:bg-amber-400/20"
+                      >
+                        Reject
+                      </button>
                     </div>
                     <div class="mt-2 flex flex-wrap gap-2 text-[11px] text-[var(--hx-mute)]">
                       <span class="rounded-full border border-white/10 px-3 py-1">
@@ -1194,6 +1248,31 @@ defmodule HydraXWeb.AgentsLive do
     |> Enum.map(& &1.type)
     |> Enum.uniq()
     |> Enum.sort()
+  end
+
+  defp work_item_actionable?(work_item) do
+    work_item_primary_action(work_item) != nil
+  end
+
+  defp work_item_primary_action(%{kind: "extension", status: "completed", approval_stage: stage})
+       when stage in ["validated", "operator_approved"],
+       do: "enable_extension"
+
+  defp work_item_primary_action(%{status: "completed", approval_stage: "validated"}),
+    do: "merge_ready"
+
+  defp work_item_primary_action(%{status: "completed", approval_stage: "operator_approved"}),
+    do: "promote_work_item"
+
+  defp work_item_primary_action(_work_item), do: nil
+
+  defp work_item_primary_action_label(work_item) do
+    case work_item_primary_action(work_item) do
+      "enable_extension" -> "Approve extension"
+      "merge_ready" -> "Promote to merge-ready"
+      "promote_work_item" -> "Promote"
+      _ -> "Approve"
+    end
   end
 
   defp provider_routing_form(agent) do

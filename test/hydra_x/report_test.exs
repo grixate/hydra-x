@@ -593,6 +593,40 @@ defmodule HydraX.ReportTest do
         }
       })
 
+    {:ok, work_item} =
+      Runtime.save_work_item(%{
+        "kind" => "extension",
+        "goal" => "Package the operator-visible extension rollout.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "builder",
+        "status" => "completed",
+        "approval_stage" => "operator_approved",
+        "result_refs" => %{
+          "last_requested_action" => "enable_extension",
+          "extension_enablement_status" => "approved_not_enabled"
+        }
+      })
+
+    {:ok, _artifact} =
+      Runtime.create_artifact(%{
+        "work_item_id" => work_item.id,
+        "type" => "patch_bundle",
+        "title" => "Operator extension bundle",
+        "summary" => "Packaged extension rollout",
+        "payload" => %{
+          "registration" => %{"enablement_status" => "approval_required"}
+        }
+      })
+
+    {:ok, _approval} =
+      Runtime.create_approval_record(%{
+        "subject_type" => "work_item",
+        "subject_id" => work_item.id,
+        "requested_action" => "enable_extension",
+        "decision" => "approved",
+        "rationale" => "Operator approved the extension package for gated enablement."
+      })
+
     {:ok, export} = Report.export_snapshot(output_root)
 
     assert File.exists?(export.markdown_path)
@@ -609,6 +643,7 @@ defmodule HydraX.ReportTest do
     assert File.exists?(Path.join(export.bundle_dir, "skills.json"))
     assert File.exists?(Path.join(export.bundle_dir, "memory.json"))
     assert File.exists?(Path.join(export.bundle_dir, "conversations.json"))
+    assert File.exists?(Path.join(export.bundle_dir, "work_items.json"))
     assert File.exists?(Path.join(export.bundle_dir, "incidents.json"))
     assert File.exists?(Path.join(export.bundle_dir, "audit.json"))
     assert File.read!(export.markdown_path) =~ "Hydra-X Operator Report"
@@ -630,6 +665,9 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "Operator Auth"
     assert File.read!(export.markdown_path) =~ "Channel Failure Summary"
     assert File.read!(export.markdown_path) =~ "Active streaming deliveries"
+    assert File.read!(export.markdown_path) =~ "Autonomous Work Items"
+    assert File.read!(export.markdown_path) =~ "approval=approved/enable_extension"
+    assert File.read!(export.markdown_path) =~ "enablement=approved_not_enabled"
     assert File.read!(export.markdown_path) =~ "updates Slack thread"
     assert File.read!(export.markdown_path) =~ "stream_msg=slack-stream-1"
     assert File.read!(export.markdown_path) =~ "preview=Live report stream preview"
@@ -676,6 +714,7 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.json_path) =~ "\"source_section\""
     assert File.read!(export.json_path) =~ "\"skills\""
     assert File.read!(export.json_path) =~ "\"top_memories\""
+    assert File.read!(export.json_path) =~ "\"work_items\""
 
     assert File.read!(Path.join(export.bundle_dir, "agents.json")) =~
              "\"skill_requirement_count\""
@@ -710,6 +749,14 @@ defmodule HydraX.ReportTest do
 
     assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~
              "\"pending_response\""
+
+    assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~
+             "\"approval_stage\": \"operator_approved\""
+
+    assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~ "\"patch_bundle\""
+
+    assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~
+             "\"approved_not_enabled\""
   end
 
   test "export_snapshot includes stale streaming recovery markers" do

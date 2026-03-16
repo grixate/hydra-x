@@ -18,7 +18,8 @@ defmodule HydraX.Report do
       incident_limit: Keyword.get(opts, :incident_limit, 20),
       audit_limit: Keyword.get(opts, :audit_limit, 30),
       job_limit: Keyword.get(opts, :job_limit, 10),
-      conversation_limit: Keyword.get(opts, :conversation_limit, 10)
+      conversation_limit: Keyword.get(opts, :conversation_limit, 10),
+      work_item_limit: Keyword.get(opts, :work_item_limit, 20)
     }
 
     %{
@@ -61,7 +62,8 @@ defmodule HydraX.Report do
       },
       agents: agent_snapshots(),
       skills: Runtime.list_skills(),
-      conversations: Runtime.list_conversations(limit: filters.conversation_limit)
+      conversations: Runtime.list_conversations(limit: filters.conversation_limit),
+      work_items: work_item_snapshots(filters.work_item_limit)
     }
   end
 
@@ -209,6 +211,9 @@ defmodule HydraX.Report do
 
     ## Conversations
     #{render_conversations(snapshot.conversations)}
+
+    ## Autonomous Work Items
+    #{render_work_items(snapshot.work_items)}
 
     ## Observability
     #{render_observability_summary(snapshot.observability.telemetry_summary)}
@@ -642,6 +647,41 @@ defmodule HydraX.Report do
       attachments = render_conversation_attachments(conversation)
 
       "- ##{conversation.id} #{conversation.channel}/#{conversation.status}: #{conversation.title || conversation.external_ref || "untitled"}#{attachments}#{delivery}#{execution}"
+    end)
+  end
+
+  defp render_work_items([]), do: "- none"
+
+  defp render_work_items(work_items) do
+    Enum.map_join(work_items, "\n", fn item ->
+      artifacts =
+        item.artifacts
+        |> Enum.map(& &1.type)
+        |> Enum.uniq()
+        |> Enum.join(",")
+
+      latest_approval =
+        item.approvals
+        |> List.first()
+        |> case do
+          nil -> "pending"
+          record -> "#{record.decision}/#{record.requested_action}"
+        end
+
+      [
+        "##{item.id}",
+        "#{item.kind}/#{item.status}",
+        "role=#{item.assigned_role}",
+        "stage=#{item.approval_stage}",
+        "approval=#{latest_approval}",
+        item.result_refs["extension_enablement_status"] &&
+          "enablement=#{item.result_refs["extension_enablement_status"]}",
+        artifacts != "" && "artifacts=#{artifacts}",
+        item.goal
+      ]
+      |> Enum.reject(&is_nil_or_empty/1)
+      |> Enum.join(" ")
+      |> then(&("- " <> &1))
     end)
   end
 
@@ -1316,7 +1356,8 @@ defmodule HydraX.Report do
       },
       agents: Enum.map(snapshot.agents, &json_agent_snapshot/1),
       skills: Enum.map(snapshot.skills, &json_skill/1),
-      conversations: Enum.map(snapshot.conversations, &json_conversation/1)
+      conversations: Enum.map(snapshot.conversations, &json_conversation/1),
+      work_items: Enum.map(snapshot.work_items, &json_work_item/1)
     }
   end
 
@@ -1440,6 +1481,11 @@ defmodule HydraX.Report do
       Jason.encode_to_iodata!(Enum.map(snapshot.conversations, &json_conversation/1),
         pretty: true
       )
+    )
+
+    File.write!(
+      Path.join(bundle_dir, "work_items.json"),
+      Jason.encode_to_iodata!(Enum.map(snapshot.work_items, &json_work_item/1), pretty: true)
     )
 
     File.write!(
@@ -1602,6 +1648,75 @@ defmodule HydraX.Report do
       inserted_at: conversation.inserted_at,
       updated_at: conversation.updated_at
     }
+  end
+
+  defp json_work_item(item) do
+    %{
+      id: item.id,
+      kind: item.kind,
+      goal: item.goal,
+      status: item.status,
+      execution_mode: item.execution_mode,
+      assigned_role: item.assigned_role,
+      assigned_agent_id: item.assigned_agent_id,
+      approval_stage: item.approval_stage,
+      review_required: item.review_required,
+      priority: item.priority,
+      result_refs: item.result_refs,
+      metadata: item.metadata,
+      inserted_at: item.inserted_at,
+      updated_at: item.updated_at,
+      artifacts:
+        Enum.map(item.artifacts, fn artifact ->
+          %{
+            id: artifact.id,
+            type: artifact.type,
+            title: artifact.title,
+            summary: artifact.summary,
+            review_status: artifact.review_status,
+            payload: artifact.payload
+          }
+        end),
+      approvals:
+        Enum.map(item.approvals, fn record ->
+          %{
+            id: record.id,
+            decision: record.decision,
+            requested_action: record.requested_action,
+            rationale: record.rationale,
+            reviewer_agent_id: record.reviewer_agent_id,
+            inserted_at: record.inserted_at
+          }
+        end)
+    }
+  end
+
+  defp work_item_snapshots(limit) do
+    Runtime.list_work_items(limit: limit)
+    |> Enum.map(fn item ->
+      approvals =
+        Runtime.approval_records_for_subject("work_item", item.id)
+        |> Enum.sort_by(& &1.inserted_at, {:desc, DateTime})
+
+      %{
+        id: item.id,
+        kind: item.kind,
+        goal: item.goal,
+        status: item.status,
+        execution_mode: item.execution_mode,
+        assigned_role: item.assigned_role,
+        assigned_agent_id: item.assigned_agent_id,
+        approval_stage: item.approval_stage,
+        review_required: item.review_required,
+        priority: item.priority,
+        result_refs: item.result_refs || %{},
+        metadata: item.metadata || %{},
+        inserted_at: item.inserted_at,
+        updated_at: item.updated_at,
+        artifacts: Runtime.work_item_artifacts(item.id),
+        approvals: approvals
+      }
+    end)
   end
 
   defp json_memory(memory) do

@@ -35,5 +35,6 @@ defmodule HydraX.ReportTaskTest do
     assert File.exists?(Path.join(bundle_dir, "channels.json"))
     assert File.exists?(Path.join(bundle_dir, "coordination.json"))
     assert File.exists?(Path.join(bundle_dir, "secrets.json"))
+    assert File.exists?(Path.join(bundle_dir, "work_items.json"))
   end
 end
