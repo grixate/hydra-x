@@ -20,6 +20,7 @@ defmodule HydraX.Runtime.WorkItems do
     Autonomy,
     Coordination,
     Helpers,
+    ScheduledJob,
     WorkItem
   }
 
@@ -393,9 +394,38 @@ defmodule HydraX.Runtime.WorkItems do
       |> Repo.all()
       |> Map.new()
 
+    active_autonomy_job_count =
+      Repo.one(
+        from job in ScheduledJob,
+          where: job.kind == "autonomy" and job.enabled == true,
+          select: count(job.id)
+      )
+
     autonomy_agents =
       Agents.list_agents()
       |> Enum.filter(&(Map.get(capability_profile(&1), "max_autonomy_level") != "observe"))
+
+    unsafe_request_count =
+      list_work_items(limit: 500, preload: false)
+      |> Enum.count(&(not is_nil(get_in(&1.result_refs || %{}, ["policy_failure", "type"]))))
+
+    capability_drifts =
+      autonomy_agents
+      |> Enum.map(fn agent ->
+        drift = Autonomy.capability_drift(agent.role, capability_profile(agent))
+
+        if drift == %{} do
+          nil
+        else
+          %{
+            agent_id: agent.id,
+            agent_name: agent.name,
+            role: agent.role,
+            drift: drift
+          }
+        end
+      end)
+      |> Enum.reject(&is_nil/1)
 
     %{
       counts: counts,
@@ -404,8 +434,11 @@ defmodule HydraX.Runtime.WorkItems do
       pending_operator_approval_count: pending_operator_approval_count,
       pending_extension_enablement_count: pending_extension_enablement_count,
       approval_decisions: approval_decisions,
+      active_autonomy_job_count: active_autonomy_job_count,
+      unsafe_request_count: unsafe_request_count,
       autonomy_agent_count: length(autonomy_agents),
       active_roles: autonomy_agents |> Enum.map(& &1.role) |> Enum.frequencies(),
+      capability_drifts: capability_drifts,
       recent_work_items: list_work_items(limit: 6, preload: false),
       recent_approvals: list_approval_records(limit: 6)
     }
@@ -514,7 +547,13 @@ defmodule HydraX.Runtime.WorkItems do
       %WorkItem{} = work_item ->
         case claim_work_item(work_item, metadata: %{"phase" => "run"}) do
           {:ok, claimed} ->
-            process_work_item(agent, claimed, opts)
+            case authorize_work_item(agent, claimed) do
+              :ok ->
+                process_work_item(agent, claimed, opts)
+
+              {:error, failure} ->
+                block_work_item_for_policy(claimed, failure)
+            end
 
           {:error, {:taken, _lease}} ->
             {:idle, nil}
@@ -2148,6 +2187,19 @@ defmodule HydraX.Runtime.WorkItems do
         work_item.assigned_role ||
         Autonomy.role_for_kind(normalized["kind"] || work_item.kind)
 
+    base_metadata = normalized["metadata"] || work_item.metadata || %{}
+
+    metadata =
+      base_metadata
+      |> Helpers.normalize_string_keys()
+      |> Map.put_new(
+        "side_effect_class",
+        side_effect_class_for_kind_and_metadata(
+          normalized["kind"] || work_item.kind,
+          base_metadata
+        )
+      )
+
     normalized
     |> Map.put_new("kind", work_item.kind || "task")
     |> Map.put_new("status", work_item.status || "planned")
@@ -2170,7 +2222,7 @@ defmodule HydraX.Runtime.WorkItems do
     |> Map.put_new("deliverables", work_item.deliverables || %{})
     |> Map.put_new("result_refs", work_item.result_refs || %{})
     |> Map.put_new("runtime_state", work_item.runtime_state || %{})
-    |> Map.put_new("metadata", work_item.metadata || %{})
+    |> Map.put("metadata", metadata)
   end
 
   defp default_execution_mode("planner"), do: "delegate"
@@ -2202,6 +2254,126 @@ defmodule HydraX.Runtime.WorkItems do
     do: %{"artifact_types" => ["review_report", "decision_ledger"]}
 
   defp default_required_outputs(_kind), do: %{"artifact_types" => ["note"]}
+
+  defp authorize_work_item(agent, %WorkItem{} = work_item) do
+    capability = capability_profile(agent)
+    side_effect_class = side_effect_class_for_work_item(work_item)
+
+    with :ok <- validate_autonomy_level(capability, work_item),
+         :ok <- validate_side_effect_class(capability, work_item, side_effect_class),
+         :ok <- validate_external_delivery_approval(work_item, side_effect_class),
+         :ok <- validate_financial_action_mode(work_item, side_effect_class) do
+      :ok
+    end
+  end
+
+  defp validate_autonomy_level(capability, %WorkItem{} = work_item) do
+    if Autonomy.autonomy_level_allowed?(capability, work_item.autonomy_level) do
+      :ok
+    else
+      {:error,
+       %{
+         "type" => "autonomy_level",
+         "requested_level" => work_item.autonomy_level,
+         "max_allowed_level" => capability["max_autonomy_level"],
+         "reason" => "requested autonomy exceeds the assigned agent capability profile"
+       }}
+    end
+  end
+
+  defp validate_side_effect_class(capability, %WorkItem{} = work_item, side_effect_class) do
+    if Autonomy.side_effect_allowed?(capability, side_effect_class) do
+      :ok
+    else
+      {:error,
+       %{
+         "type" => "side_effect_class",
+         "requested_class" => side_effect_class,
+         "allowed_classes" => List.wrap(capability["side_effect_classes"]),
+         "reason" => "requested side effect is not permitted for the assigned agent role",
+         "work_item_kind" => work_item.kind
+       }}
+    end
+  end
+
+  defp validate_external_delivery_approval(%WorkItem{} = work_item, "external_delivery") do
+    if work_item.approval_stage in ["validated", "operator_approved", "merge_ready"] do
+      :ok
+    else
+      {:error,
+       %{
+         "type" => "approval_stage",
+         "required_stage" => "validated",
+         "current_stage" => work_item.approval_stage,
+         "reason" => "external delivery requires a validated or operator-approved work item"
+       }}
+    end
+  end
+
+  defp validate_external_delivery_approval(_work_item, _side_effect_class), do: :ok
+
+  defp validate_financial_action_mode(%WorkItem{metadata: metadata}, "financial_action")
+       when is_map(metadata) do
+    if metadata["simulation"] == true do
+      :ok
+    else
+      {:error,
+       %{
+         "type" => "financial_action_locked",
+         "required_mode" => "simulation",
+         "reason" => "financial autonomy stays simulation-only until explicitly unlocked"
+       }}
+    end
+  end
+
+  defp validate_financial_action_mode(_work_item, _side_effect_class), do: :ok
+
+  defp block_work_item_for_policy(%WorkItem{} = work_item, failure) do
+    summary = "Autonomy policy blocked execution: #{policy_failure_summary(failure)}"
+
+    {:ok, artifact} =
+      create_artifact(%{
+        "work_item_id" => work_item.id,
+        "type" => "note",
+        "title" => "Policy block",
+        "summary" => summary,
+        "body" => summary,
+        "payload" => %{"policy_failure" => failure},
+        "provenance" => %{"source" => "autonomy", "phase" => "policy_gate"},
+        "review_status" => "validated"
+      })
+
+    artifact_ids =
+      (work_item.result_refs || %{})
+      |> Map.get("artifact_ids", [])
+      |> List.wrap()
+      |> Kernel.++([artifact.id])
+      |> Enum.uniq()
+
+    {:ok, updated} =
+      save_work_item(work_item, %{
+        "status" => "failed",
+        "result_refs" =>
+          (work_item.result_refs || %{})
+          |> Map.put("artifact_ids", artifact_ids)
+          |> Map.put("policy_failure", failure),
+        "runtime_state" =>
+          append_history(work_item.runtime_state, "failed", %{
+            "phase" => "policy_gate",
+            "policy_failure" => failure
+          })
+      })
+
+    {:processed,
+     %{
+       status: "failed",
+       processed_count: 0,
+       action: "policy_blocked",
+       work_item: updated,
+       artifacts: [artifact],
+       error: failure
+     }}
+  end
 
   defp append_history(runtime_state, status, details) do
     runtime_state = runtime_state || %{}
@@ -2237,9 +2409,37 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp lease_name(work_item_id), do: "work_item:#{work_item_id}"
 
+  defp side_effect_class_for_work_item(%WorkItem{metadata: metadata, kind: kind}) do
+    side_effect_class_for_kind_and_metadata(kind, metadata || %{})
+  end
+
+  defp side_effect_class_for_kind_and_metadata(kind, metadata) when is_map(metadata) do
+    metadata = Helpers.normalize_string_keys(metadata)
+
+    cond do
+      metadata["side_effect_class"] in Autonomy.side_effect_classes() ->
+        metadata["side_effect_class"]
+
+      kind == "task" and metadata["task_type"] == "publish_summary" and
+          get_in(metadata, ["delivery", "enabled"]) == true ->
+        "external_delivery"
+
+      true ->
+        side_effect_class_for_kind(kind)
+    end
+  end
+
+  defp side_effect_class_for_kind_and_metadata(kind, _metadata),
+    do: side_effect_class_for_kind(kind)
+
   defp side_effect_class_for_kind("engineering"), do: "repo_write"
   defp side_effect_class_for_kind("extension"), do: "plugin_install"
+  defp side_effect_class_for_kind("trading"), do: "financial_action"
   defp side_effect_class_for_kind(_kind), do: "read_only"
+
+  defp policy_failure_summary(%{"reason" => reason}) when is_binary(reason), do: reason
+  defp policy_failure_summary(%{reason: reason}) when is_binary(reason), do: reason
+  defp policy_failure_summary(_failure), do: "policy requirements were not satisfied"
 
   defp extension_package_payload(work_item, workspace_snapshot, changed_files) do
     package_name =

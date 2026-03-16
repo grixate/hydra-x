@@ -686,6 +686,33 @@ defmodule HydraX.ReportTest do
         "rationale" => "Operator approved the extension package for gated enablement."
       })
 
+    {:ok, _unsafe_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Blocked publish escalation.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "operator",
+        "status" => "failed",
+        "autonomy_level" => "fully_automatic",
+        "metadata" => %{"side_effect_class" => "external_delivery"},
+        "result_refs" => %{
+          "policy_failure" => %{
+            "type" => "autonomy_level",
+            "requested_level" => "fully_automatic"
+          }
+        }
+      })
+
+    {:ok, _job} =
+      Runtime.save_scheduled_job(%{
+        agent_id: agent.id,
+        name: "Report autonomy sweep",
+        kind: "autonomy",
+        schedule_mode: "interval",
+        interval_minutes: 60,
+        enabled: true
+      })
+
     {:ok, export} = Report.export_snapshot(output_root)
 
     assert File.exists?(export.markdown_path)
@@ -725,12 +752,16 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "Channel Failure Summary"
     assert File.read!(export.markdown_path) =~ "Active streaming deliveries"
     assert File.read!(export.markdown_path) =~ "Autonomous Work Items"
+    assert File.read!(export.markdown_path) =~ "active_jobs=1 unsafe_requests=1"
     assert File.read!(export.markdown_path) =~ "approval=approved/enable_extension"
     assert File.read!(export.markdown_path) =~ "enablement=approved_not_enabled"
     assert File.read!(export.markdown_path) =~ "patch_bundle:approved/approved"
     assert File.read!(export.markdown_path) =~ "promoted=Decision:"
     assert File.read!(export.markdown_path) =~ "publish=queued 1"
     assert File.read!(export.markdown_path) =~ "publish=delivered telegram -> ops-room"
+    assert File.read!(export.markdown_path) =~ "level=fully_automatic"
+    assert File.read!(export.markdown_path) =~ "effect=external_delivery"
+    assert File.read!(export.markdown_path) =~ "policy=autonomy_fully_automatic"
     assert File.read!(export.markdown_path) =~ "Treat approved research findings as live"
     assert File.read!(export.markdown_path) =~ "updates Slack thread"
     assert File.read!(export.markdown_path) =~ "stream_msg=slack-stream-1"
@@ -779,6 +810,8 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.json_path) =~ "\"skills\""
     assert File.read!(export.json_path) =~ "\"top_memories\""
     assert File.read!(export.json_path) =~ "\"work_items\""
+    assert File.read!(export.json_path) =~ "\"active_autonomy_job_count\": 1"
+    assert File.read!(export.json_path) =~ "\"unsafe_request_count\": 1"
 
     assert File.read!(Path.join(export.bundle_dir, "agents.json")) =~
              "\"skill_requirement_count\""

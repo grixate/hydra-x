@@ -175,6 +175,8 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "publish follow-up queued 1"
     assert html =~ "delivery delivered telegram"
     assert html =~ "ops-room"
+    assert html =~ "execute_with_review"
+    assert html =~ "external_delivery"
   end
 
   test "agents page can approve a merge-ready work item from the control plane", %{conn: conn} do

@@ -4410,7 +4410,11 @@ defmodule HydraX.RuntimeTest do
       create_agent()
       |> then(fn current -> Runtime.get_agent!(current.id) end)
 
-    {:ok, agent} = Runtime.save_agent(agent, %{"role" => "planner"})
+    {:ok, agent} =
+      Runtime.save_agent(agent, %{
+        "role" => "planner",
+        "capability_profile" => %{"side_effect_classes" => ["external_delivery"]}
+      })
 
     {:ok, work_item} =
       Runtime.save_work_item(%{
@@ -4421,12 +4425,102 @@ defmodule HydraX.RuntimeTest do
         "status" => "planned"
       })
 
+    {:ok, _unsafe_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Blocked by autonomy policy.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "planner",
+        "status" => "failed",
+        "result_refs" => %{
+          "policy_failure" => %{
+            "type" => "autonomy_level",
+            "requested_level" => "fully_automatic"
+          }
+        }
+      })
+
+    {:ok, _job} =
+      Runtime.save_scheduled_job(%{
+        agent_id: agent.id,
+        name: "Autonomy posture sweep",
+        kind: "autonomy",
+        schedule_mode: "interval",
+        interval_minutes: 60,
+        enabled: true
+      })
+
     status = Runtime.autonomy_status()
 
     assert status.autonomy_agent_count >= 1
     assert Map.get(status.active_roles, "planner", 0) >= 1
     assert Map.get(status.counts, "planned", 0) >= 1
+    assert status.active_autonomy_job_count >= 1
+    assert status.unsafe_request_count >= 1
+    assert Enum.any?(status.capability_drifts, &(&1.agent_id == agent.id))
     assert Enum.any?(status.recent_work_items, &(&1.id == work_item.id))
+  end
+
+  test "autonomy cycle blocks work items that exceed the agent autonomy ceiling" do
+    agent =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, agent} = Runtime.save_agent(agent, %{"role" => "researcher"})
+
+    {:ok, work_item} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Run unrestricted autonomy without review.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "researcher",
+        "autonomy_level" => "fully_automatic"
+      })
+
+    assert {:ok, summary} = Runtime.run_autonomy_cycle(agent.id)
+    assert summary.action == "policy_blocked"
+
+    work_item = Runtime.get_work_item!(work_item.id)
+    assert work_item.status == "failed"
+
+    assert get_in(work_item.result_refs || %{}, ["policy_failure", "type"]) == "autonomy_level"
+
+    assert get_in(work_item.result_refs || %{}, ["policy_failure", "requested_level"]) ==
+             "fully_automatic"
+  end
+
+  test "external delivery work items require validated approval before execution" do
+    operator =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, operator} = Runtime.save_agent(operator, %{"role" => "operator"})
+
+    {:ok, work_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Publish this draft summary immediately.",
+        "assigned_agent_id" => operator.id,
+        "assigned_role" => "operator",
+        "approval_stage" => "draft",
+        "metadata" => %{
+          "task_type" => "publish_summary",
+          "delivery" => %{
+            "enabled" => true,
+            "mode" => "channel",
+            "channel" => "telegram",
+            "target" => "ops-room"
+          }
+        }
+      })
+
+    assert {:ok, summary} = Runtime.run_autonomy_cycle(operator.id)
+    assert summary.action == "policy_blocked"
+
+    work_item = Runtime.get_work_item!(work_item.id)
+    assert work_item.status == "failed"
+    assert get_in(work_item.metadata || %{}, ["side_effect_class"]) == "external_delivery"
+    assert get_in(work_item.result_refs || %{}, ["policy_failure", "type"]) == "approval_stage"
   end
 
   test "engineering work items create proposal, change set, review, and approval records" do

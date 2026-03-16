@@ -923,9 +923,9 @@ defmodule HydraXWeb.HealthLive do
                 </div>
                 <div class="mt-2 text-xs text-[var(--hx-mute)]">
                   level {event.level}
-                  <span :if={event.expired_by}> · expiry                  {event.expired_by}</span>
+                  <span :if={event.expired_by}> · expiry                   {event.expired_by}</span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip                  {event.ip}</span>
+                  <span :if={event.ip}> · ip                   {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -1202,6 +1202,32 @@ defmodule HydraXWeb.HealthLive do
                   {record.rationale || "No rationale recorded."}
                 </p>
               </div>
+            </div>
+          </article>
+        </div>
+        <div class="mt-4 grid gap-3 lg:grid-cols-3">
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Autonomy jobs
+            </div>
+            <div class="mt-3 font-display text-4xl">
+              {@autonomy_status.active_autonomy_job_count}
+            </div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Unsafe requests
+            </div>
+            <div class="mt-3 font-display text-4xl">
+              {@autonomy_status.unsafe_request_count}
+            </div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Capability drift
+            </div>
+            <div class="mt-3 font-display text-4xl">
+              {length(@autonomy_status.capability_drifts)}
             </div>
           </article>
         </div>
@@ -2013,6 +2039,9 @@ defmodule HydraXWeb.HealthLive do
     [
       "priority #{item.priority}",
       "artifacts #{artifact_count}",
+      "level #{item.autonomy_level}",
+      "effect #{autonomy_side_effect_class(item)}",
+      autonomy_policy_failure_summary(item),
       autonomy_publish_summary(item)
     ]
     |> Enum.reject(&is_nil_or_empty/1)
@@ -2054,6 +2083,29 @@ defmodule HydraXWeb.HealthLive do
         "publish queued #{count}"
 
       true ->
+        nil
+    end
+  end
+
+  defp autonomy_side_effect_class(item) do
+    get_in(item.metadata || %{}, ["side_effect_class"]) || "read_only"
+  end
+
+  defp autonomy_policy_failure_summary(item) do
+    case get_in(item.result_refs || %{}, ["policy_failure"]) do
+      %{"type" => "autonomy_level", "requested_level" => requested} ->
+        "blocked autonomy #{requested}"
+
+      %{"type" => "side_effect_class", "requested_class" => requested} ->
+        "blocked effect #{requested}"
+
+      %{"type" => "approval_stage"} ->
+        "blocked pending approval"
+
+      %{"type" => "financial_action_locked"} ->
+        "simulation only"
+
+      _ ->
         nil
     end
   end

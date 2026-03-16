@@ -52,6 +52,7 @@ defmodule HydraX.Report do
       audit: audit_snapshot(filters.audit_limit),
       memory: Runtime.memory_triage_status(agent),
       budget: Runtime.budget_status(agent),
+      autonomy: Runtime.autonomy_status(),
       default_agent: %{
         id: agent.id,
         name: agent.name,
@@ -213,6 +214,7 @@ defmodule HydraX.Report do
     #{render_conversations(snapshot.conversations)}
 
     ## Autonomous Work Items
+    - active_jobs=#{snapshot.autonomy.active_autonomy_job_count} unsafe_requests=#{snapshot.autonomy.unsafe_request_count} capability_drift=#{length(snapshot.autonomy.capability_drifts)}
     #{render_work_items(snapshot.work_items)}
 
     ## Observability
@@ -690,8 +692,11 @@ defmodule HydraX.Report do
         "##{item.id}",
         "#{item.kind}/#{item.status}",
         "role=#{item.assigned_role}",
+        "level=#{item.autonomy_level}",
+        "effect=#{work_item_side_effect_class(item)}",
         "stage=#{item.approval_stage}",
         "approval=#{latest_approval}",
+        work_item_policy_failure(item) && "policy=#{work_item_policy_failure(item)}",
         item.result_refs["extension_enablement_status"] &&
           "enablement=#{item.result_refs["extension_enablement_status"]}",
         artifacts != "" && "artifacts=#{artifacts}",
@@ -1361,6 +1366,13 @@ defmodule HydraX.Report do
         recent_conflicts: Enum.map(snapshot.memory.recent_conflicts, &json_memory/1)
       },
       budget: json_budget(snapshot.budget),
+      autonomy: %{
+        counts: snapshot.autonomy.counts,
+        active_autonomy_job_count: snapshot.autonomy.active_autonomy_job_count,
+        unsafe_request_count: snapshot.autonomy.unsafe_request_count,
+        active_roles: snapshot.autonomy.active_roles,
+        capability_drifts: snapshot.autonomy.capability_drifts
+      },
       default_agent: %{
         id: snapshot.default_agent.id,
         name: snapshot.default_agent.name,
@@ -1724,6 +1736,7 @@ defmodule HydraX.Report do
         execution_mode: item.execution_mode,
         assigned_role: item.assigned_role,
         assigned_agent_id: item.assigned_agent_id,
+        autonomy_level: item.autonomy_level,
         approval_stage: item.approval_stage,
         review_required: item.review_required,
         priority: item.priority,
@@ -1819,6 +1832,29 @@ defmodule HydraX.Report do
           Map.get(artifact.payload || %{}, "delivery")
         end
       end) || %{}
+  end
+
+  defp work_item_side_effect_class(item) do
+    get_in(item.metadata || %{}, ["side_effect_class"]) || "read_only"
+  end
+
+  defp work_item_policy_failure(item) do
+    case get_in(item.result_refs || %{}, ["policy_failure"]) do
+      %{"type" => "autonomy_level", "requested_level" => requested} ->
+        "autonomy_#{requested}"
+
+      %{"type" => "side_effect_class", "requested_class" => requested} ->
+        "effect_#{requested}"
+
+      %{"type" => "approval_stage"} ->
+        "pending_approval"
+
+      %{"type" => "financial_action_locked"} ->
+        "simulation_only"
+
+      _ ->
+        nil
+    end
   end
 
   defp json_artifact_snapshot(artifact) do

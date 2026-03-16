@@ -540,10 +540,11 @@ defmodule HydraXWeb.AgentsLive do
                     </div>
                     <p class="mt-2 text-sm text-[var(--hx-mute)]">{item.goal}</p>
                     <div class="mt-2 text-xs text-[var(--hx-mute)]">
-                      priority {item.priority} · {work_item_artifact_summary(item)}<span :if={
+                      priority {item.priority} · {work_item_artifact_summary(item)} · level{" "}
+                      {item.autonomy_level} · effect {work_item_side_effect_class(item)}<span :if={
                         summary = work_item_promoted_memory_summary(item)
                       }> · {summary}</span>
-                      <span :if={summary = work_item_publish_summary(item)}> ·  {summary}</span>
+                      <span :if={summary = work_item_publish_summary(item)}> ·   {summary}</span>
                     </div>
                     <div :if={work_item_actionable?(item)} class="mt-3 flex flex-wrap gap-2">
                       <button
@@ -580,6 +581,18 @@ defmodule HydraXWeb.AgentsLive do
                         class="rounded-full border border-amber-400/20 bg-amber-400/10 px-3 py-1 text-amber-200"
                       >
                         {work_item_enablement_status(item)}
+                      </span>
+                      <span class="rounded-full border border-white/10 px-3 py-1">
+                        level {item.autonomy_level}
+                      </span>
+                      <span class="rounded-full border border-white/10 px-3 py-1">
+                        effect {work_item_side_effect_class(item)}
+                      </span>
+                      <span
+                        :if={label = work_item_policy_failure_label(item)}
+                        class="rounded-full border border-rose-400/20 bg-rose-400/10 px-3 py-1 text-rose-200"
+                      >
+                        {label}
                       </span>
                       <span
                         :if={summary = work_item_publish_summary(item)}
@@ -1426,6 +1439,29 @@ defmodule HydraXWeb.AgentsLive do
           Map.get(artifact.payload || %{}, "delivery")
         end
       end) || %{}
+  end
+
+  defp work_item_side_effect_class(work_item) do
+    get_in(work_item.metadata || %{}, ["side_effect_class"]) || "read_only"
+  end
+
+  defp work_item_policy_failure_label(work_item) do
+    case get_in(work_item.result_refs || %{}, ["policy_failure"]) do
+      %{"type" => "autonomy_level", "requested_level" => requested} ->
+        "blocked autonomy #{requested}"
+
+      %{"type" => "side_effect_class", "requested_class" => requested} ->
+        "blocked effect #{requested}"
+
+      %{"type" => "approval_stage"} ->
+        "blocked pending approval"
+
+      %{"type" => "financial_action_locked"} ->
+        "simulation only"
+
+      _ ->
+        nil
+    end
   end
 
   defp truncate_text(text, max_length) when is_binary(text) do

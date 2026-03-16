@@ -123,6 +123,11 @@ defmodule HydraXWeb.HealthLiveTest do
 
     {:ok, agent} = Runtime.save_agent(agent, %{"role" => "planner"})
 
+    {:ok, agent} =
+      Runtime.save_agent(agent, %{
+        "capability_profile" => %{"side_effect_classes" => ["external_delivery"]}
+      })
+
     {:ok, work_item} =
       Runtime.save_work_item(%{
         "kind" => "task",
@@ -175,6 +180,31 @@ defmodule HydraXWeb.HealthLiveTest do
         }
       })
 
+    {:ok, _unsafe_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Blocked autonomy request.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "planner",
+        "status" => "failed",
+        "result_refs" => %{
+          "policy_failure" => %{
+            "type" => "autonomy_level",
+            "requested_level" => "fully_automatic"
+          }
+        }
+      })
+
+    {:ok, _job} =
+      Runtime.save_scheduled_job(%{
+        agent_id: agent.id,
+        name: "Health autonomy sweep",
+        kind: "autonomy",
+        schedule_mode: "interval",
+        interval_minutes: 60,
+        enabled: true
+      })
+
     {_updated, _record} =
       Runtime.approve_work_item!(work_item.id, %{
         "requested_action" => "promote_work_item",
@@ -189,6 +219,9 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "Recent approvals"
     assert html =~ "Awaiting operator"
     assert html =~ "Extensions gated"
+    assert html =~ "Autonomy jobs"
+    assert html =~ "Unsafe requests"
+    assert html =~ "Capability drift"
     assert html =~ "Operator confirmed the rollout."
     assert html =~ "Prepare autonomous research rollout."
     assert html =~ extension_item.goal
@@ -196,6 +229,7 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "publish queued 1"
     assert html =~ "delivered telegram"
     assert html =~ "ops-room"
+    assert html =~ "blocked autonomy fully_automatic"
   end
 
   test "health page shows the unified effective policy surface", %{conn: conn} do

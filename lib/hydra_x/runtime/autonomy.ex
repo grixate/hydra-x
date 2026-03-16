@@ -8,6 +8,13 @@ defmodule HydraX.Runtime.Autonomy do
   @roles ~w(planner researcher builder reviewer operator designer trader)
   @autonomy_levels ~w(observe recommend execute_with_review execute_with_promotion fully_automatic)
   @side_effect_classes ~w(read_only external_delivery repo_write plugin_install financial_action)
+  @autonomy_level_ranks %{
+    "observe" => 0,
+    "recommend" => 1,
+    "execute_with_review" => 2,
+    "execute_with_promotion" => 3,
+    "fully_automatic" => 4
+  }
 
   def roles, do: @roles
   def autonomy_levels, do: @autonomy_levels
@@ -72,6 +79,7 @@ defmodule HydraX.Runtime.Autonomy do
           "tools" => ["memory_recall", "web_search", "http_fetch", "browser_automation"],
           "artifact_types" => ["research_report", "plan", "source_snapshot"],
           "memory_scope" => ["global_agent_memory", "work_item_scratch_memory"],
+          "side_effect_classes" => ["read_only", "external_delivery"],
           "delivery_modes" => ["report", "channel"],
           "max_autonomy_level" => "execute_with_review"
         })
@@ -107,6 +115,7 @@ defmodule HydraX.Runtime.Autonomy do
           "tools" => ["memory_recall", "browser_automation"],
           "artifact_types" => ["design_spec", "screenshot", "plan"],
           "memory_scope" => ["global_agent_memory", "artifact_derived_memory"],
+          "side_effect_classes" => ["read_only", "external_delivery"],
           "delivery_modes" => ["report", "channel"],
           "max_autonomy_level" => "execute_with_review"
         })
@@ -126,6 +135,7 @@ defmodule HydraX.Runtime.Autonomy do
           "tools" => ["memory_recall", "skill_inspect", "mcp_catalog"],
           "artifact_types" => ["note", "decision_ledger"],
           "memory_scope" => ["global_agent_memory", "artifact_derived_memory"],
+          "side_effect_classes" => ["read_only", "external_delivery"],
           "delivery_modes" => ["report", "control_plane"],
           "max_autonomy_level" => "execute_with_review"
         })
@@ -146,6 +156,43 @@ defmodule HydraX.Runtime.Autonomy do
     class in List.wrap(profile["side_effect_classes"])
   end
 
+  def autonomy_level_allowed?(profile, requested_level)
+      when is_map(profile) and is_binary(requested_level) do
+    autonomy_level_rank(requested_level) <= autonomy_level_rank(profile["max_autonomy_level"])
+  end
+
+  def autonomy_level_rank(level) when is_binary(level) do
+    Map.get(@autonomy_level_ranks, level, @autonomy_level_ranks["recommend"])
+  end
+
+  def capability_drift(role, profile) when is_map(profile) do
+    defaults = default_capability_profile(role)
+
+    drift =
+      %{
+        extra_tools: list_difference(profile["tools"], defaults["tools"]),
+        extra_mcp_actions: list_difference(profile["mcp_actions"], defaults["mcp_actions"]),
+        extra_delivery_modes:
+          list_difference(profile["delivery_modes"], defaults["delivery_modes"]),
+        extra_side_effect_classes:
+          list_difference(profile["side_effect_classes"], defaults["side_effect_classes"]),
+        elevated_max_autonomy:
+          if autonomy_level_rank(profile["max_autonomy_level"]) >
+               autonomy_level_rank(defaults["max_autonomy_level"]) do
+            %{
+              from: defaults["max_autonomy_level"],
+              to: profile["max_autonomy_level"]
+            }
+          end
+      }
+
+    Enum.reduce(drift, %{}, fn
+      {_key, nil}, acc -> acc
+      {_key, []}, acc -> acc
+      {key, value}, acc -> Map.put(acc, key, value)
+    end)
+  end
+
   def normalize_role(role) when role in @roles, do: role
   def normalize_role(role) when is_binary(role) and role in @roles, do: role
   def normalize_role(_role), do: default_role()
@@ -158,4 +205,10 @@ defmodule HydraX.Runtime.Autonomy do
   end
 
   defp merge_capability_value(_left, right), do: right
+
+  defp list_difference(left, right) do
+    MapSet.difference(MapSet.new(List.wrap(left)), MapSet.new(List.wrap(right)))
+    |> MapSet.to_list()
+    |> Enum.sort()
+  end
 end
