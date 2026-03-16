@@ -4112,6 +4112,86 @@ defmodule HydraX.RuntimeTest do
              "Review the report and promote any durable findings into long-term memory."
   end
 
+  test "planner finalization can enqueue and prepare a publish-ready delivery brief" do
+    planner =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, planner} = Runtime.save_agent(planner, %{"role" => "planner"})
+
+    researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, researcher} = Runtime.save_agent(researcher, %{"role" => "researcher"})
+
+    operator =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, operator} = Runtime.save_agent(operator, %{"role" => "operator"})
+
+    {:ok, _memory} =
+      Memory.create_memory(%{
+        agent_id: researcher.id,
+        type: "Fact",
+        content: "Hydra-X should publish research summaries with provenance and confidence.",
+        importance: 0.82,
+        metadata: %{"source_file" => "ops/research.md", "source_section" => "delivery"},
+        last_seen_at: DateTime.utc_now()
+      })
+
+    {:ok, parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Assess how Hydra should publish autonomous research findings.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "execution_mode" => "delegate",
+        "priority" => 8,
+        "deliverables" => %{
+          "publish_summary" => true,
+          "assigned_role" => "operator",
+          "mode" => "channel",
+          "channel" => "telegram",
+          "target" => "ops-room"
+        }
+      })
+
+    assert {:ok, planner_summary} = Runtime.run_autonomy_cycle(planner.id)
+    assert planner_summary.action == "delegated"
+
+    assert {:ok, researcher_summary} = Runtime.run_autonomy_cycle(researcher.id)
+    assert researcher_summary.action == "researched"
+
+    assert {:ok, finalize_summary} = Runtime.run_autonomy_cycle(planner.id)
+    assert finalize_summary.action == "finalized_blocked_parent"
+
+    parent = Runtime.get_work_item!(parent.id)
+    [publish_item_id] = parent.result_refs["follow_up_work_item_ids"]
+    publish_item = Runtime.get_work_item!(publish_item_id)
+
+    assert publish_item.assigned_role == "operator"
+    assert publish_item.metadata["task_type"] == "publish_summary"
+    assert get_in(publish_item.metadata || %{}, ["delivery", "channel"]) == "telegram"
+    assert get_in(publish_item.metadata || %{}, ["delivery", "target"]) == "ops-room"
+
+    assert {:ok, operator_summary} = Runtime.run_autonomy_cycle(operator.id)
+    assert operator_summary.action == "prepared_delivery_brief"
+
+    publish_item = Runtime.get_work_item!(publish_item.id)
+    assert publish_item.status == "completed"
+
+    [delivery_brief] = Runtime.work_item_artifacts(publish_item.id)
+    assert delivery_brief.type == "delivery_brief"
+    assert delivery_brief.payload["delivery_channel"] == "telegram"
+    assert delivery_brief.payload["delivery_target"] == "ops-room"
+
+    assert Enum.any?(delivery_brief.payload["key_findings"] || [], fn finding ->
+             finding["content"] =~ "provenance and confidence"
+           end)
+  end
+
   test "approving a research work item promotes memories from report artifacts" do
     researcher =
       create_agent()

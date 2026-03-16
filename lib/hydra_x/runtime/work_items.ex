@@ -483,13 +483,17 @@ defmodule HydraX.Runtime.WorkItems do
                 )
               )
 
+            {:ok, updated, follow_up_work_item} =
+              maybe_enqueue_publish_follow_up(updated, summary_artifact, supporting_memories)
+
             {:processed,
              %{
                status: "completed",
                processed_count: 1,
                work_item: updated,
                artifacts: [summary_artifact],
-               action: "finalized_blocked_parent"
+               action: "finalized_blocked_parent",
+               follow_up_work_item: follow_up_work_item
              }}
 
           {:error, {:taken, _lease}} ->
@@ -752,7 +756,19 @@ defmodule HydraX.Runtime.WorkItems do
     do_review_work_item(agent, work_item)
   end
 
+  defp process_work_item(agent, %WorkItem{kind: "task", metadata: metadata} = work_item, _opts)
+       when is_map(metadata) do
+    case metadata["task_type"] do
+      "publish_summary" -> do_publish_summary_work_item(agent, work_item)
+      _ -> process_generic_work_item(agent, work_item)
+    end
+  end
+
   defp process_work_item(agent, %WorkItem{} = work_item, _opts) do
+    process_generic_work_item(agent, work_item)
+  end
+
+  defp process_generic_work_item(agent, %WorkItem{} = work_item) do
     summary = "Autonomy execution for #{work_item.kind} is not implemented yet."
 
     {:ok, artifact} =
@@ -1029,6 +1045,66 @@ defmodule HydraX.Runtime.WorkItems do
          action: "engineering_completed"
        }}
     end
+  end
+
+  defp do_publish_summary_work_item(agent, work_item) do
+    summary_artifact_id = get_in(work_item.metadata || %{}, ["summary_artifact_id"])
+
+    summary_artifact =
+      if is_integer(summary_artifact_id) do
+        get_artifact!(summary_artifact_id)
+      end
+
+    follow_up_context =
+      get_in(work_item.metadata || %{}, ["follow_up_context", "promoted_findings"]) || []
+
+    delivery = get_in(work_item.metadata || %{}, ["delivery"]) || %{}
+
+    {:ok, running} =
+      save_work_item(work_item, %{
+        "status" => "running",
+        "runtime_state" =>
+          append_history(work_item.runtime_state, "running", %{
+            "started_at" => DateTime.utc_now(),
+            "phase" => "publish_summary"
+          })
+      })
+
+    payload = build_delivery_brief(agent, running, summary_artifact, follow_up_context, delivery)
+
+    {:ok, artifact} =
+      create_artifact(%{
+        "work_item_id" => running.id,
+        "type" => "delivery_brief",
+        "title" => "Publish-ready summary",
+        "summary" => payload["summary"],
+        "body" => payload["body"],
+        "payload" => Map.delete(payload, "body"),
+        "provenance" => %{"source" => "autonomy", "phase" => "publish_summary"},
+        "confidence" => payload["confidence"],
+        "review_status" => "validated"
+      })
+
+    {:ok, completed} =
+      save_work_item(running, %{
+        "status" => "completed",
+        "result_refs" => %{"artifact_ids" => [artifact.id]},
+        "runtime_state" =>
+          append_history(running.runtime_state, "completed", %{
+            "completed_at" => DateTime.utc_now(),
+            "phase" => "publish_summary",
+            "artifact_id" => artifact.id
+          })
+      })
+
+    {:processed,
+     %{
+       status: "completed",
+       processed_count: 1,
+       work_item: completed,
+       artifacts: [artifact],
+       action: "prepared_delivery_brief"
+     }}
   end
 
   defp do_review_work_item(agent, work_item) do
@@ -1333,6 +1409,77 @@ defmodule HydraX.Runtime.WorkItems do
       "confidence" => review_payload["confidence"],
       "memory_origin_role" => "reviewer",
       "scope" => "autonomous review"
+    }
+  end
+
+  defp build_delivery_brief(agent, work_item, summary_artifact, follow_up_context, delivery) do
+    delivery_mode = delivery["mode"] || "report"
+    delivery_channel = delivery["channel"]
+    delivery_target = delivery["target"]
+    summary_payload = (summary_artifact && summary_artifact.payload) || %{}
+    findings = Enum.take(follow_up_context, 4)
+
+    publish_lines =
+      findings
+      |> Enum.map(fn finding ->
+        "- #{finding["type"]}: #{finding["content"]}"
+      end)
+
+    llm_body =
+      llm_body_for(
+        agent,
+        """
+        You are Hydra-X's operator preparing a publish-ready summary.
+
+        Goal: #{work_item.goal}
+        Delivery mode: #{delivery_mode}
+        Delivery channel: #{delivery_channel || "report"}
+        Delivery target: #{delivery_target || "control plane"}
+
+        Summary artifact:
+        #{(summary_artifact && summary_artifact.body) || work_item.goal}
+
+        Follow-up findings:
+        #{Enum.join(publish_lines, "\n")}
+        """,
+        "autonomy_delivery_brief"
+      )
+
+    body =
+      llm_body ||
+        """
+        Publish goal: #{work_item.goal}
+        Delivery mode: #{delivery_mode}
+        Delivery channel: #{delivery_channel || "report"}
+        Delivery target: #{delivery_target || "control plane"}
+
+        Summary ready for publication:
+        #{(summary_artifact && summary_artifact.body) || work_item.goal}
+
+        Key findings to preserve:
+        #{if(publish_lines == [], do: "- none", else: Enum.join(publish_lines, "\n"))}
+        """
+        |> String.trim()
+
+    %{
+      "summary" =>
+        "Prepared #{delivery_mode} delivery brief for #{delivery_channel || "report"} publication",
+      "body" => body,
+      "delivery_mode" => delivery_mode,
+      "delivery_channel" => delivery_channel,
+      "delivery_target" => delivery_target,
+      "summary_artifact_id" => summary_artifact && summary_artifact.id,
+      "source_work_item_id" => work_item.parent_work_item_id,
+      "key_findings" => findings,
+      "recommended_actions" =>
+        [
+          "Review the publish-ready summary before external delivery.",
+          delivery_target &&
+            "Deliver to #{delivery_target} via #{delivery_channel || delivery_mode}."
+        ]
+        |> Enum.reject(&(&1 in [nil, ""])),
+      "confidence" =>
+        summary_payload["confidence"] || (summary_artifact && summary_artifact.confidence) || 0.68
     }
   end
 
@@ -2495,6 +2642,68 @@ defmodule HydraX.Runtime.WorkItems do
   defp artifact_review_status_for_decision("publish_review_report", "approved"), do: "approved"
   defp artifact_review_status_for_decision("publish_research_report", "approved"), do: "approved"
   defp artifact_review_status_for_decision(_requested_action, "approved"), do: "validated"
+
+  defp maybe_enqueue_publish_follow_up(
+         %WorkItem{} = parent,
+         %Artifact{} = summary_artifact,
+         supporting_memories
+       ) do
+    deliverables = parent.deliverables || %{}
+
+    if parent.assigned_role == "planner" and deliverables["publish_summary"] == true do
+      goal =
+        deliverables["goal"] ||
+          "Publish the finalized summary for #{parent.goal}"
+
+      {:ok, follow_up_work_item} =
+        save_work_item(%{
+          "kind" => "task",
+          "goal" => goal,
+          "status" => "planned",
+          "execution_mode" => "execute",
+          "assigned_role" => deliverables["assigned_role"] || "operator",
+          "assigned_agent_id" => deliverables["assigned_agent_id"],
+          "delegated_by_agent_id" => parent.assigned_agent_id || parent.delegated_by_agent_id,
+          "parent_work_item_id" => parent.id,
+          "priority" => max(parent.priority - 1, 0),
+          "autonomy_level" => parent.autonomy_level,
+          "approval_stage" => "validated",
+          "deliverables" => deliverables,
+          "input_artifact_refs" => %{"summary_artifact_id" => summary_artifact.id},
+          "required_outputs" => %{"artifact_types" => ["delivery_brief"]},
+          "metadata" => %{
+            "task_type" => "publish_summary",
+            "summary_artifact_id" => summary_artifact.id,
+            "delivery" => %{
+              "mode" => deliverables["mode"] || "report",
+              "channel" => deliverables["channel"],
+              "target" => deliverables["target"]
+            },
+            "follow_up_context" =>
+              build_follow_up_context(parent, supporting_memories, summary_artifact)
+          }
+        })
+
+      {:ok, updated_parent} =
+        save_work_item(parent, %{
+          "result_refs" =>
+            (parent.result_refs || %{})
+            |> Map.put(
+              "follow_up_work_item_ids",
+              Enum.uniq(
+                List.wrap(get_in(parent.result_refs || %{}, ["follow_up_work_item_ids"])) ++
+                  [
+                    follow_up_work_item.id
+                  ]
+              )
+            )
+        })
+
+      {:ok, updated_parent, follow_up_work_item}
+    else
+      {:ok, parent, nil}
+    end
+  end
 
   defp finalize_parent_attrs(
          claimed,
