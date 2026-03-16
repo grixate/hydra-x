@@ -450,16 +450,19 @@ defmodule HydraX.Runtime.WorkItems do
                 |> List.wrap()
               end)
 
+            supporting_memories = finalized_child_memories(children)
+
             {:ok, summary_artifact} =
               create_artifact(%{
                 "work_item_id" => claimed.id,
                 "type" => "decision_ledger",
                 "title" => "Delegation synthesis",
-                "summary" => "Planner synthesized #{length(children)} delegated results",
-                "body" => delegation_summary_body(claimed, children),
+                "summary" => delegation_summary_line(claimed, children, supporting_memories),
+                "body" => delegation_summary_body(claimed, children, supporting_memories),
                 "payload" => %{
                   "child_work_item_ids" => Enum.map(children, & &1.id),
-                  "result_artifact_ids" => artifact_ids
+                  "result_artifact_ids" => artifact_ids,
+                  "promoted_findings" => supporting_memories
                 },
                 "provenance" => %{
                   "source" => "autonomy",
@@ -471,7 +474,13 @@ defmodule HydraX.Runtime.WorkItems do
             {:ok, updated} =
               save_work_item(
                 claimed,
-                finalize_parent_attrs(claimed, children, summary_artifact, artifact_ids)
+                finalize_parent_attrs(
+                  claimed,
+                  children,
+                  summary_artifact,
+                  artifact_ids,
+                  supporting_memories
+                )
               )
 
             {:processed,
@@ -1481,12 +1490,59 @@ defmodule HydraX.Runtime.WorkItems do
     |> String.trim()
   end
 
-  defp delegation_summary_body(parent, children) do
+  defp delegation_summary_line(_parent, children, supporting_memories) do
+    child_count = length(children)
+    finding_count = length(supporting_memories)
+
+    cond do
+      finding_count > 0 ->
+        "Planner synthesized #{child_count} delegated results and #{finding_count} promoted findings"
+
+      true ->
+        "Planner synthesized #{child_count} delegated results"
+    end
+  end
+
+  defp delegation_summary_body(parent, children, supporting_memories) do
+    findings_block =
+      case supporting_memories do
+        [] ->
+          "No promoted findings were available from completed delegated work."
+
+        findings ->
+          Enum.map_join(findings, "\n", fn finding ->
+            score =
+              case finding["score"] do
+                value when is_float(value) -> " [#{Float.round(value, 2)}]"
+                value when is_integer(value) -> " [#{value}]"
+                _ -> ""
+              end
+
+            source =
+              [
+                finding["source_role"],
+                finding["source_artifact_type"]
+              ]
+              |> Enum.reject(&(&1 in [nil, ""]))
+              |> Enum.join(" · ")
+
+            reason =
+              finding["summary_reason"] ||
+                List.first(List.wrap(finding["reasons"])) ||
+                "promoted child finding"
+
+            "- ##{finding["source_work_item_id"]} #{finding["type"]}#{score}: #{finding["content"]} (#{reason})#{if(source == "", do: "", else: " [#{source}]")}"
+          end)
+      end
+
     """
     Parent goal: #{parent.goal}
 
     Completed delegated work:
     #{Enum.map_join(children, "\n", fn child -> "- ##{child.id} #{child.goal}" end)}
+
+    Promoted findings shaping this synthesis:
+    #{findings_block}
     """
     |> String.trim()
   end
@@ -2198,6 +2254,90 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp artifact_memory_blueprints(_artifact_type, _payload), do: []
 
+  defp finalized_child_memories(children) do
+    children
+    |> Enum.flat_map(fn child ->
+      child.id
+      |> work_item_artifacts()
+      |> Enum.flat_map(&finalized_child_artifact_findings(child, &1))
+    end)
+    |> Enum.uniq_by(fn finding ->
+      {
+        finding["source_work_item_id"],
+        finding["source_artifact_type"],
+        finding["type"],
+        finding["content"]
+      }
+    end)
+    |> Enum.sort_by(fn finding ->
+      {-(finding["score"] || 0.0), finding["source_work_item_id"] || 0, finding["content"] || ""}
+    end)
+    |> Enum.take(8)
+  end
+
+  defp finalized_child_artifact_findings(child, %Artifact{} = artifact) do
+    payload = artifact.payload || %{}
+    source_role = payload["memory_origin_role"] || child.assigned_role
+    score = artifact.confidence || 0.0
+
+    summary_finding =
+      case artifact.summary do
+        summary when is_binary(summary) and summary != "" ->
+          [
+            finalized_child_finding(
+              child,
+              artifact,
+              inferred_artifact_finding_type(artifact.type),
+              summary,
+              score,
+              source_role
+            )
+          ]
+
+        _ ->
+          []
+      end
+
+    claim_findings =
+      payload
+      |> Map.get("claims", [])
+      |> Enum.take(2)
+      |> Enum.map(fn claim ->
+        finalized_child_finding(child, artifact, "Claim", claim, score, source_role)
+      end)
+
+    action_findings =
+      payload
+      |> Map.get("recommended_actions", [])
+      |> Enum.take(2)
+      |> Enum.map(fn action ->
+        finalized_child_finding(child, artifact, "Goal", action, score, source_role)
+      end)
+
+    summary_finding ++ claim_findings ++ action_findings
+  end
+
+  defp finalized_child_finding(child, artifact, type, content, score, source_role) do
+    %{
+      "memory_id" => nil,
+      "type" => type,
+      "content" => content,
+      "score" => score,
+      "summary_reason" => artifact.type,
+      "source_work_item_id" => child.id,
+      "source_goal" => child.goal,
+      "source_kind" => child.kind,
+      "source_role" => source_role,
+      "source_artifact_type" => artifact.type,
+      "reasons" => []
+    }
+  end
+
+  defp inferred_artifact_finding_type("decision_ledger"), do: "Decision"
+  defp inferred_artifact_finding_type("review_report"), do: "Decision"
+  defp inferred_artifact_finding_type("research_report"), do: "Finding"
+  defp inferred_artifact_finding_type(_artifact_type), do: "Finding"
+
   defp artifact_memory_blueprint(type, content, slot, importance, payload, metadata) do
     scope = payload["scope"] || artifact_scope(payload)
 
@@ -2272,7 +2412,13 @@ defmodule HydraX.Runtime.WorkItems do
   defp artifact_review_status_for_decision("publish_research_report", "approved"), do: "approved"
   defp artifact_review_status_for_decision(_requested_action, "approved"), do: "validated"
 
-  defp finalize_parent_attrs(claimed, children, summary_artifact, artifact_ids) do
+  defp finalize_parent_attrs(
+         claimed,
+         children,
+         summary_artifact,
+         artifact_ids,
+         supporting_memories
+       ) do
     approval_records = approval_records_for_subject("work_item", claimed.id)
     latest_decision = approval_records |> List.first() |> then(&(&1 && &1.decision))
 
@@ -2289,14 +2435,20 @@ defmodule HydraX.Runtime.WorkItems do
       "result_refs" => %{
         "artifact_ids" => Enum.uniq([summary_artifact.id | artifact_ids]),
         "child_work_item_ids" => Enum.map(children, & &1.id),
-        "approval_record_ids" => Enum.map(approval_records, & &1.id)
+        "approval_record_ids" => Enum.map(approval_records, & &1.id),
+        "supporting_memory_ids" =>
+          supporting_memories
+          |> Enum.map(& &1["memory_id"])
+          |> Enum.filter(&is_integer/1)
+          |> Enum.uniq()
       },
       "runtime_state" =>
         append_history(claimed.runtime_state, status, %{
           "completed_at" => DateTime.utc_now(),
           "phase" => "finalize",
           "summary_artifact_id" => summary_artifact.id,
-          "approval_decision" => latest_decision
+          "approval_decision" => latest_decision,
+          "supporting_memory_count" => length(supporting_memories)
         })
     }
   end

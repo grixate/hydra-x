@@ -3920,6 +3920,18 @@ defmodule HydraX.RuntimeTest do
     parent = Runtime.get_work_item!(parent.id)
     assert parent.status == "completed"
     assert length(parent.result_refs["artifact_ids"]) >= 1
+
+    parent_artifacts = Runtime.work_item_artifacts(parent.id)
+    synthesis = Enum.find(parent_artifacts, &(&1.type == "decision_ledger"))
+
+    assert synthesis
+    assert synthesis.payload["promoted_findings"] != []
+
+    assert Enum.any?(synthesis.payload["promoted_findings"], fn finding ->
+             finding["content"] =~ "provenance and confidence"
+           end)
+
+    assert synthesis.body =~ "Promoted findings shaping this synthesis"
   end
 
   test "planner delegation carries artifact-derived context into child research work" do
@@ -4335,6 +4347,15 @@ defmodule HydraX.RuntimeTest do
     assert parent.status == "completed"
     assert parent.approval_stage == "validated"
     assert length(parent.result_refs["approval_record_ids"]) >= 1
+
+    parent_artifacts = Runtime.work_item_artifacts(parent.id)
+    synthesis = Enum.find(parent_artifacts, &(&1.type == "decision_ledger"))
+
+    assert synthesis
+
+    assert Enum.any?(synthesis.payload["promoted_findings"] || [], fn finding ->
+             finding["source_role"] == "reviewer"
+           end)
   end
 
   test "operator approval records can promote a work item" do
