@@ -195,6 +195,22 @@ defmodule HydraXWeb.HealthLiveTest do
         }
       })
 
+    {:ok, _budget_blocked_item} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Budget-blocked autonomy request.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "planner",
+        "status" => "failed",
+        "result_refs" => %{
+          "policy_failure" => %{
+            "type" => "token_budget",
+            "limit_tokens" => 12,
+            "used_tokens" => 12
+          }
+        }
+      })
+
     {:ok, _job} =
       Runtime.save_scheduled_job(%{
         agent_id: agent.id,
@@ -221,6 +237,7 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "Extensions gated"
     assert html =~ "Autonomy jobs"
     assert html =~ "Unsafe requests"
+    assert html =~ "Budget blocked"
     assert html =~ "Capability drift"
     assert html =~ "Operator confirmed the rollout."
     assert html =~ "Prepare autonomous research rollout."
@@ -230,6 +247,7 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "delivered telegram"
     assert html =~ "ops-room"
     assert html =~ "blocked autonomy fully_automatic"
+    assert html =~ "budget tokens exhausted"
   end
 
   test "health page shows the unified effective policy surface", %{conn: conn} do

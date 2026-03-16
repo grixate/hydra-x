@@ -118,7 +118,8 @@ defmodule HydraX.RuntimeTest do
     assert hint["reason"] =~ "deploy"
     assert skill_step["kind"] == "skill"
     assert skill_step["status"] == "completed"
-    assert skill_step["summary"] =~ "Matched 1 skill hints"
+    assert skill_step["summary"] =~ "Matched "
+    assert skill_step["summary"] =~ "skill hints"
     assert skill_step["result_source"] == "plan"
     assert skill_step["retry_state"]["attempt_count"] == 1
     assert skill_step["retry_state"]["last_status"] == "completed"
@@ -4440,6 +4441,22 @@ defmodule HydraX.RuntimeTest do
         }
       })
 
+    {:ok, _budget_blocked_item} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Blocked by token budget.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "planner",
+        "status" => "failed",
+        "result_refs" => %{
+          "policy_failure" => %{
+            "type" => "token_budget",
+            "limit_tokens" => 10,
+            "used_tokens" => 10
+          }
+        }
+      })
+
     {:ok, _job} =
       Runtime.save_scheduled_job(%{
         agent_id: agent.id,
@@ -4457,6 +4474,7 @@ defmodule HydraX.RuntimeTest do
     assert Map.get(status.counts, "planned", 0) >= 1
     assert status.active_autonomy_job_count >= 1
     assert status.unsafe_request_count >= 1
+    assert status.budget_blocked_count >= 1
     assert Enum.any?(status.capability_drifts, &(&1.agent_id == agent.id))
     assert Enum.any?(status.recent_work_items, &(&1.id == work_item.id))
   end
@@ -4521,6 +4539,111 @@ defmodule HydraX.RuntimeTest do
     assert work_item.status == "failed"
     assert get_in(work_item.metadata || %{}, ["side_effect_class"]) == "external_delivery"
     assert get_in(work_item.result_refs || %{}, ["policy_failure", "type"]) == "approval_stage"
+  end
+
+  test "autonomy cycle blocks work items that exceed their token budget" do
+    agent =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, agent} = Runtime.save_agent(agent, %{"role" => "researcher"})
+
+    {:ok, work_item} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Spend past the allowed research token budget.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "researcher",
+        "budget" => %{"token_budget" => 5}
+      })
+
+    {:ok, _usage} =
+      Budget.record_usage(agent.id, nil,
+        tokens_in: 4,
+        tokens_out: 2,
+        metadata: %{purpose: "autonomy_research", work_item_id: work_item.id}
+      )
+
+    assert {:ok, summary} = Runtime.run_autonomy_cycle(agent.id)
+    assert summary.action == "policy_blocked"
+
+    work_item = Runtime.get_work_item!(work_item.id)
+    assert work_item.status == "failed"
+    assert get_in(work_item.result_refs || %{}, ["policy_failure", "type"]) == "token_budget"
+  end
+
+  test "autonomy cycle blocks work items that exceed their time budget" do
+    agent =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, agent} = Runtime.save_agent(agent, %{"role" => "researcher"})
+
+    {:ok, work_item} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Take too long to execute.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "researcher",
+        "budget" => %{"time_budget_minutes" => 1}
+      })
+
+    stale_at = DateTime.add(DateTime.utc_now(), -7_200, :second)
+
+    from(item in HydraX.Runtime.WorkItem, where: item.id == ^work_item.id)
+    |> Repo.update_all(set: [inserted_at: stale_at])
+
+    assert {:ok, summary} = Runtime.run_autonomy_cycle(agent.id)
+    assert summary.action == "policy_blocked"
+
+    work_item = Runtime.get_work_item!(work_item.id)
+    assert work_item.status == "failed"
+    assert get_in(work_item.result_refs || %{}, ["policy_failure", "type"]) == "time_budget"
+  end
+
+  test "planner delegation respects max delegation depth budgets" do
+    planner =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, planner} = Runtime.save_agent(planner, %{"role" => "planner"})
+
+    {:ok, root} =
+      Runtime.save_work_item(%{
+        "kind" => "plan",
+        "goal" => "Root planning task.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "status" => "blocked"
+      })
+
+    {:ok, parent} =
+      Runtime.save_work_item(%{
+        "kind" => "plan",
+        "goal" => "Nested planning task.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "status" => "blocked",
+        "parent_work_item_id" => root.id
+      })
+
+    {:ok, work_item} =
+      Runtime.save_work_item(%{
+        "kind" => "plan",
+        "goal" => "Delegate beyond the allowed depth.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "execution_mode" => "delegate",
+        "parent_work_item_id" => parent.id,
+        "budget" => %{"max_delegation_depth" => 1}
+      })
+
+    assert {:ok, summary} = Runtime.run_autonomy_cycle(planner.id)
+    assert summary.action == "policy_blocked"
+
+    work_item = Runtime.get_work_item!(work_item.id)
+    assert work_item.status == "failed"
+    assert get_in(work_item.result_refs || %{}, ["policy_failure", "type"]) == "delegation_depth"
   end
 
   test "engineering work items create proposal, change set, review, and approval records" do

@@ -214,7 +214,7 @@ defmodule HydraX.Report do
     #{render_conversations(snapshot.conversations)}
 
     ## Autonomous Work Items
-    - active_jobs=#{snapshot.autonomy.active_autonomy_job_count} unsafe_requests=#{snapshot.autonomy.unsafe_request_count} capability_drift=#{length(snapshot.autonomy.capability_drifts)}
+    - active_jobs=#{snapshot.autonomy.active_autonomy_job_count} unsafe_requests=#{snapshot.autonomy.unsafe_request_count} budget_blocked=#{snapshot.autonomy.budget_blocked_count} capability_drift=#{length(snapshot.autonomy.capability_drifts)}
     #{render_work_items(snapshot.work_items)}
 
     ## Observability
@@ -1370,6 +1370,7 @@ defmodule HydraX.Report do
         counts: snapshot.autonomy.counts,
         active_autonomy_job_count: snapshot.autonomy.active_autonomy_job_count,
         unsafe_request_count: snapshot.autonomy.unsafe_request_count,
+        budget_blocked_count: snapshot.autonomy.budget_blocked_count,
         active_roles: snapshot.autonomy.active_roles,
         capability_drifts: snapshot.autonomy.capability_drifts
       },
@@ -1848,6 +1849,15 @@ defmodule HydraX.Report do
 
       %{"type" => "approval_stage"} ->
         "pending_approval"
+
+      %{"type" => "token_budget"} ->
+        "budget_tokens"
+
+      %{"type" => "time_budget"} ->
+        "budget_time"
+
+      %{"type" => "delegation_depth"} ->
+        "budget_depth"
 
       %{"type" => "financial_action_locked"} ->
         "simulation_only"

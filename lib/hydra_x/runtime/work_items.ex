@@ -409,6 +409,10 @@ defmodule HydraX.Runtime.WorkItems do
       list_work_items(limit: 500, preload: false)
       |> Enum.count(&(not is_nil(get_in(&1.result_refs || %{}, ["policy_failure", "type"]))))
 
+    budget_blocked_count =
+      list_work_items(limit: 500, preload: false)
+      |> Enum.count(&budget_policy_failure?(&1.result_refs || %{}))
+
     capability_drifts =
       autonomy_agents
       |> Enum.map(fn agent ->
@@ -436,6 +440,7 @@ defmodule HydraX.Runtime.WorkItems do
       approval_decisions: approval_decisions,
       active_autonomy_job_count: active_autonomy_job_count,
       unsafe_request_count: unsafe_request_count,
+      budget_blocked_count: budget_blocked_count,
       autonomy_agent_count: length(autonomy_agents),
       active_roles: autonomy_agents |> Enum.map(& &1.role) |> Enum.frequencies(),
       capability_drifts: capability_drifts,
@@ -879,28 +884,36 @@ defmodule HydraX.Runtime.WorkItems do
     estimated_tokens = Budget.estimate_prompt_tokens(messages)
 
     llm_body =
-      case Budget.preflight(agent.id, nil, estimated_tokens) do
-        {:ok, _result} ->
-          case Router.complete(%{
-                 messages: messages,
-                 agent_id: agent.id,
-                 process_type: "autonomy"
-               }) do
-            {:ok, response} ->
-              Budget.record_usage(agent.id, nil,
-                tokens_in: estimated_tokens,
-                tokens_out: Budget.estimate_tokens(response.content || ""),
-                metadata: %{provider: response.provider, purpose: "autonomy_research"}
-              )
+      if token_budget_available?(agent, work_item, estimated_tokens) do
+        case Budget.preflight(agent.id, nil, estimated_tokens) do
+          {:ok, _result} ->
+            case Router.complete(%{
+                   messages: messages,
+                   agent_id: agent.id,
+                   process_type: "autonomy"
+                 }) do
+              {:ok, response} ->
+                Budget.record_usage(agent.id, nil,
+                  tokens_in: estimated_tokens,
+                  tokens_out: Budget.estimate_tokens(response.content || ""),
+                  metadata: %{
+                    provider: response.provider,
+                    purpose: "autonomy_research",
+                    work_item_id: work_item.id
+                  }
+                )
 
-              response.content || fallback_research_body(work_item, evidence)
+                response.content || fallback_research_body(work_item, evidence)
 
-            {:error, _reason} ->
-              fallback_research_body(work_item, evidence)
-          end
+              {:error, _reason} ->
+                fallback_research_body(work_item, evidence)
+            end
 
-        {:error, _details} ->
-          fallback_research_body(work_item, evidence)
+          {:error, _details} ->
+            fallback_research_body(work_item, evidence)
+        end
+      else
+        fallback_research_body(work_item, evidence)
       end
 
     %{
@@ -1321,7 +1334,7 @@ defmodule HydraX.Runtime.WorkItems do
       |> Enum.join("\n\n")
 
     body =
-      llm_body_for(agent, prompt, "autonomy_engineering") ||
+      llm_body_for(agent, work_item, prompt, "autonomy_engineering") ||
         """
         Goal: #{work_item.goal}
         Delegated context: #{if(delegated_context_block == "", do: "none", else: delegated_context_block)}
@@ -1478,6 +1491,7 @@ defmodule HydraX.Runtime.WorkItems do
     llm_body =
       llm_body_for(
         agent,
+        work_item,
         """
         You are Hydra-X's operator preparing a publish-ready summary.
 
@@ -1705,32 +1719,51 @@ defmodule HydraX.Runtime.WorkItems do
     end)
   end
 
-  defp llm_body_for(agent, prompt, purpose) do
+  defp llm_body_for(agent, %WorkItem{} = work_item, prompt, purpose) do
     messages = [%{role: "user", content: prompt}]
     estimated_tokens = Budget.estimate_prompt_tokens(messages)
 
-    case Budget.preflight(agent.id, nil, estimated_tokens) do
-      {:ok, _} ->
-        case Router.complete(%{
-               messages: messages,
-               agent_id: agent.id,
-               process_type: "autonomy"
-             }) do
-          {:ok, response} ->
-            Budget.record_usage(agent.id, nil,
-              tokens_in: estimated_tokens,
-              tokens_out: Budget.estimate_tokens(response.content || ""),
-              metadata: %{provider: response.provider, purpose: purpose}
-            )
+    if token_budget_available?(agent, work_item, estimated_tokens) do
+      case Budget.preflight(agent.id, nil, estimated_tokens) do
+        {:ok, _} ->
+          case Router.complete(%{
+                 messages: messages,
+                 agent_id: agent.id,
+                 process_type: "autonomy"
+               }) do
+            {:ok, response} ->
+              Budget.record_usage(agent.id, nil,
+                tokens_in: estimated_tokens,
+                tokens_out: Budget.estimate_tokens(response.content || ""),
+                metadata: %{
+                  provider: response.provider,
+                  purpose: purpose,
+                  work_item_id: work_item.id
+                }
+              )
 
-            response.content
+              response.content
 
-          {:error, _reason} ->
-            nil
-        end
+            {:error, _reason} ->
+              nil
+          end
 
-      {:error, _} ->
-        nil
+        {:error, _} ->
+          nil
+      end
+    end
+  end
+
+  defp token_budget_available?(agent, %WorkItem{} = work_item, estimated_tokens) do
+    limit = get_in(work_item.budget || %{}, ["token_budget"])
+
+    cond do
+      not is_integer(limit) or limit <= 0 ->
+        true
+
+      true ->
+        usage = Budget.work_item_usage(agent.id, work_item.id)
+        usage.total_tokens + estimated_tokens <= limit
     end
   end
 
@@ -2260,10 +2293,86 @@ defmodule HydraX.Runtime.WorkItems do
     side_effect_class = side_effect_class_for_work_item(work_item)
 
     with :ok <- validate_autonomy_level(capability, work_item),
+         :ok <- validate_time_budget(work_item),
+         :ok <- validate_delegation_depth(work_item),
+         :ok <- validate_token_budget(agent, work_item),
          :ok <- validate_side_effect_class(capability, work_item, side_effect_class),
          :ok <- validate_external_delivery_approval(work_item, side_effect_class),
          :ok <- validate_financial_action_mode(work_item, side_effect_class) do
       :ok
+    end
+  end
+
+  defp validate_time_budget(%WorkItem{} = work_item) do
+    limit = get_in(work_item.budget || %{}, ["time_budget_minutes"])
+    started_at = work_item_started_at(work_item)
+
+    cond do
+      not is_integer(limit) or limit <= 0 ->
+        :ok
+
+      is_nil(started_at) ->
+        :ok
+
+      DateTime.diff(DateTime.utc_now(), started_at, :minute) < limit ->
+        :ok
+
+      true ->
+        {:error,
+         %{
+           "type" => "time_budget",
+           "limit_minutes" => limit,
+           "elapsed_minutes" => DateTime.diff(DateTime.utc_now(), started_at, :minute),
+           "reason" => "work item exceeded its allowed execution window"
+         }}
+    end
+  end
+
+  defp validate_delegation_depth(%WorkItem{execution_mode: "delegate"} = work_item) do
+    limit = get_in(work_item.budget || %{}, ["max_delegation_depth"])
+    depth = work_item_delegation_depth(work_item)
+
+    cond do
+      not is_integer(limit) or limit < 0 ->
+        :ok
+
+      depth < limit ->
+        :ok
+
+      true ->
+        {:error,
+         %{
+           "type" => "delegation_depth",
+           "limit" => limit,
+           "current_depth" => depth,
+           "reason" => "delegation depth budget is exhausted"
+         }}
+    end
+  end
+
+  defp validate_delegation_depth(_work_item), do: :ok
+
+  defp validate_token_budget(agent, %WorkItem{} = work_item) do
+    limit = get_in(work_item.budget || %{}, ["token_budget"])
+
+    cond do
+      not is_integer(limit) or limit <= 0 ->
+        :ok
+
+      true ->
+        usage = Budget.work_item_usage(agent.id, work_item.id)
+
+        if usage.total_tokens < limit do
+          :ok
+        else
+          {:error,
+           %{
+             "type" => "token_budget",
+             "limit_tokens" => limit,
+             "used_tokens" => usage.total_tokens,
+             "reason" => "work item token budget is exhausted"
+           }}
+        end
     end
   end
 
@@ -2440,6 +2549,49 @@ defmodule HydraX.Runtime.WorkItems do
   defp policy_failure_summary(%{"reason" => reason}) when is_binary(reason), do: reason
   defp policy_failure_summary(%{reason: reason}) when is_binary(reason), do: reason
   defp policy_failure_summary(_failure), do: "policy requirements were not satisfied"
+
+  defp budget_policy_failure?(result_refs) when is_map(result_refs) do
+    case get_in(result_refs, ["policy_failure", "type"]) do
+      type when type in ["token_budget", "time_budget", "delegation_depth"] -> true
+      _ -> false
+    end
+  end
+
+  defp work_item_started_at(%WorkItem{} = work_item) do
+    history = get_in(work_item.runtime_state || %{}, ["history"]) || []
+
+    Enum.find_value(history, fn entry ->
+      details = entry["details"] || %{}
+
+      if entry["status"] == "running" do
+        parse_datetime(details["started_at"])
+      end
+    end) || work_item.inserted_at
+  end
+
+  defp work_item_delegation_depth(%WorkItem{} = work_item) do
+    do_work_item_delegation_depth(work_item.parent_work_item_id, 0)
+  end
+
+  defp do_work_item_delegation_depth(nil, depth), do: depth
+
+  defp do_work_item_delegation_depth(parent_id, depth) when is_integer(parent_id) do
+    case Repo.get(WorkItem, parent_id) do
+      nil -> depth
+      %WorkItem{} = item -> do_work_item_delegation_depth(item.parent_work_item_id, depth + 1)
+    end
+  end
+
+  defp parse_datetime(%DateTime{} = value), do: value
+
+  defp parse_datetime(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} -> datetime
+      _ -> nil
+    end
+  end
+
+  defp parse_datetime(_value), do: nil
 
   defp extension_package_payload(work_item, workspace_snapshot, changed_files) do
     package_name =

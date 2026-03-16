@@ -703,6 +703,22 @@ defmodule HydraX.ReportTest do
         }
       })
 
+    {:ok, _budget_blocked_item} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Budget-blocked publish escalation.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "operator",
+        "status" => "failed",
+        "result_refs" => %{
+          "policy_failure" => %{
+            "type" => "token_budget",
+            "limit_tokens" => 20,
+            "used_tokens" => 20
+          }
+        }
+      })
+
     {:ok, _job} =
       Runtime.save_scheduled_job(%{
         agent_id: agent.id,
@@ -752,7 +768,7 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "Channel Failure Summary"
     assert File.read!(export.markdown_path) =~ "Active streaming deliveries"
     assert File.read!(export.markdown_path) =~ "Autonomous Work Items"
-    assert File.read!(export.markdown_path) =~ "active_jobs=1 unsafe_requests=1"
+    assert File.read!(export.markdown_path) =~ "active_jobs=1 unsafe_requests=2 budget_blocked=1"
     assert File.read!(export.markdown_path) =~ "approval=approved/enable_extension"
     assert File.read!(export.markdown_path) =~ "enablement=approved_not_enabled"
     assert File.read!(export.markdown_path) =~ "patch_bundle:approved/approved"
@@ -762,6 +778,7 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "level=fully_automatic"
     assert File.read!(export.markdown_path) =~ "effect=external_delivery"
     assert File.read!(export.markdown_path) =~ "policy=autonomy_fully_automatic"
+    assert File.read!(export.markdown_path) =~ "policy=budget_tokens"
     assert File.read!(export.markdown_path) =~ "Treat approved research findings as live"
     assert File.read!(export.markdown_path) =~ "updates Slack thread"
     assert File.read!(export.markdown_path) =~ "stream_msg=slack-stream-1"
@@ -811,7 +828,8 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.json_path) =~ "\"top_memories\""
     assert File.read!(export.json_path) =~ "\"work_items\""
     assert File.read!(export.json_path) =~ "\"active_autonomy_job_count\": 1"
-    assert File.read!(export.json_path) =~ "\"unsafe_request_count\": 1"
+    assert File.read!(export.json_path) =~ "\"unsafe_request_count\": 2"
+    assert File.read!(export.json_path) =~ "\"budget_blocked_count\": 1"
 
     assert File.read!(Path.join(export.bundle_dir, "agents.json")) =~
              "\"skill_requirement_count\""

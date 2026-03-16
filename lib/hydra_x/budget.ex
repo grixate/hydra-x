@@ -162,4 +162,30 @@ defmodule HydraX.Budget do
     |> preload([:conversation])
     |> Repo.all()
   end
+
+  def work_item_usage(agent_id, work_item_id)
+      when is_integer(agent_id) and is_integer(work_item_id) do
+    Usage
+    |> where([usage], usage.agent_id == ^agent_id)
+    |> Repo.all()
+    |> Enum.filter(fn usage ->
+      metadata = usage.metadata || %{}
+      work_item_ref = metadata["work_item_id"] || metadata[:work_item_id]
+      work_item_ref == work_item_id
+    end)
+    |> Enum.reduce(
+      %{tokens_in: 0, tokens_out: 0, total_tokens: 0, entries: 0},
+      fn usage, acc ->
+        tokens_in = usage.tokens_in || 0
+        tokens_out = usage.tokens_out || 0
+
+        %{
+          tokens_in: acc.tokens_in + tokens_in,
+          tokens_out: acc.tokens_out + tokens_out,
+          total_tokens: acc.total_tokens + tokens_in + tokens_out,
+          entries: acc.entries + 1
+        }
+      end
+    )
+  end
 end

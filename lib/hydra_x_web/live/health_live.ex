@@ -923,9 +923,9 @@ defmodule HydraXWeb.HealthLive do
                 </div>
                 <div class="mt-2 text-xs text-[var(--hx-mute)]">
                   level {event.level}
-                  <span :if={event.expired_by}> · expiry                   {event.expired_by}</span>
+                  <span :if={event.expired_by}> · expiry                    {event.expired_by}</span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip                   {event.ip}</span>
+                  <span :if={event.ip}> · ip                    {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -1205,7 +1205,7 @@ defmodule HydraXWeb.HealthLive do
             </div>
           </article>
         </div>
-        <div class="mt-4 grid gap-3 lg:grid-cols-3">
+        <div class="mt-4 grid gap-3 lg:grid-cols-4">
           <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
             <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
               Autonomy jobs
@@ -1220,6 +1220,14 @@ defmodule HydraXWeb.HealthLive do
             </div>
             <div class="mt-3 font-display text-4xl">
               {@autonomy_status.unsafe_request_count}
+            </div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Budget blocked
+            </div>
+            <div class="mt-3 font-display text-4xl">
+              {@autonomy_status.budget_blocked_count}
             </div>
           </article>
           <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
@@ -2101,6 +2109,15 @@ defmodule HydraXWeb.HealthLive do
 
       %{"type" => "approval_stage"} ->
         "blocked pending approval"
+
+      %{"type" => "token_budget"} ->
+        "budget tokens exhausted"
+
+      %{"type" => "time_budget"} ->
+        "budget time exhausted"
+
+      %{"type" => "delegation_depth"} ->
+        "budget depth exhausted"
 
       %{"type" => "financial_action_locked"} ->
         "simulation only"
