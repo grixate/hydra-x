@@ -4345,9 +4345,7 @@ defmodule HydraX.Runtime.WorkItems do
       resolved_deliverables =
         apply_delivery_recovery_to_deliverables(deliverables, delivery_recovery)
 
-      goal =
-        resolved_deliverables["goal"] ||
-          "Publish the finalized summary for #{parent.goal}"
+      goal = publish_follow_up_goal(parent, resolved_deliverables, delivery_recovery)
 
       {:ok, follow_up_work_item} =
         save_work_item(%{
@@ -4453,6 +4451,36 @@ defmodule HydraX.Runtime.WorkItems do
       {:ok, parent, nil}
     end
   end
+
+  defp publish_follow_up_goal(parent, resolved_deliverables, delivery_recovery) do
+    resolved_deliverables = Helpers.normalize_string_keys(resolved_deliverables || %{})
+    delivery_recovery = Helpers.normalize_string_keys(delivery_recovery || %{})
+    channel = resolved_deliverables["channel"]
+    target = resolved_deliverables["target"]
+
+    cond do
+      present_text?(resolved_deliverables["goal"]) ->
+        resolved_deliverables["goal"]
+
+      delivery_recovery["strategy"] == "switch_delivery_channel" and present_text?(channel) ->
+        "Revise and publish the finalized summary for #{parent.goal} through #{channel}#{publish_target_suffix(target)}"
+
+      delivery_recovery["strategy"] == "internal_report_fallback" ->
+        "Prepare an internal operator report for #{parent.goal}#{publish_target_suffix(target)}"
+
+      delivery_recovery["strategy"] == "revise_and_retry_channel" and present_text?(channel) ->
+        "Revise and retry the finalized summary for #{parent.goal} through #{channel}#{publish_target_suffix(target)}"
+
+      present_text?(channel) ->
+        "Publish the finalized summary for #{parent.goal} through #{channel}#{publish_target_suffix(target)}"
+
+      true ->
+        "Publish the finalized summary for #{parent.goal}"
+    end
+  end
+
+  defp publish_target_suffix(target) when is_binary(target) and target != "", do: " to #{target}"
+  defp publish_target_suffix(_target), do: ""
 
   defp finalize_parent_attrs(
          claimed,

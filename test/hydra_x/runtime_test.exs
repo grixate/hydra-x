@@ -5234,6 +5234,8 @@ defmodule HydraX.RuntimeTest do
 
     publish_follow_up = Runtime.get_work_item!(publish_follow_up_id)
     assert publish_follow_up.metadata["task_type"] == "publish_summary"
+    assert publish_follow_up.goal =~ "through slack"
+    assert publish_follow_up.goal =~ "ops-room"
     assert get_in(publish_follow_up.metadata || %{}, ["delivery", "channel"]) == "slack"
     assert get_in(publish_follow_up.metadata || %{}, ["delivery", "target"]) == "ops-room"
 
@@ -5395,6 +5397,8 @@ defmodule HydraX.RuntimeTest do
 
     publish_follow_up = Runtime.get_work_item!(publish_follow_up_id)
     assert publish_follow_up.metadata["task_type"] == "publish_summary"
+    assert publish_follow_up.goal =~ "Revise and retry"
+    assert publish_follow_up.goal =~ "9001"
     assert get_in(publish_follow_up.metadata || %{}, ["delivery", "mode"]) == "channel"
     assert get_in(publish_follow_up.metadata || %{}, ["delivery", "target"]) == "9001"
 
