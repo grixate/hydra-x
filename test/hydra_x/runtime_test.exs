@@ -4698,6 +4698,13 @@ defmodule HydraX.RuntimeTest do
     assert delivery_brief.payload["delivery_channel"] == nil
     assert delivery_brief.payload["delivery_target"] == "control-plane"
     assert delivery_brief.payload["delivery_recovery"]["strategy"] == "internal_report_fallback"
+    assert delivery_brief.payload["delivery_heading"] == "Internal operator report"
+    assert delivery_brief.payload["publish_objective"] =~ "internal operator report"
+    assert delivery_brief.body =~ "Delivery objective: Prepare an internal operator report"
+
+    assert Enum.any?(delivery_brief.payload["recommended_actions"] || [], fn action ->
+             action =~ "control plane"
+           end)
   end
 
   test "degraded publish approvals honor switched recovery channels" do
@@ -4821,6 +4828,15 @@ defmodule HydraX.RuntimeTest do
     [delivery_brief] = Runtime.work_item_artifacts(publish_item.id)
     assert delivery_brief.payload["delivery"]["channel"] == "slack"
     assert delivery_brief.payload["delivery_recovery"]["strategy"] == "switch_delivery_channel"
+    assert delivery_brief.payload["delivery_heading"] == "Revised summary for rerouted delivery"
+    assert delivery_brief.payload["publish_objective"] =~ "through slack"
+
+    assert delivery_brief.body =~
+             "Delivery objective: Revise the summary and route it through slack"
+
+    assert Enum.any?(delivery_brief.payload["recommended_actions"] || [], fn action ->
+             action =~ "rerouted delivery target"
+           end)
 
     {approved_review, _record} =
       Runtime.approve_work_item!(approval_item.id, %{
@@ -5253,6 +5269,18 @@ defmodule HydraX.RuntimeTest do
     [next_approval_item_id] = publish_follow_up.result_refs["follow_up_work_item_ids"]
     next_approval_item = Runtime.get_work_item!(next_approval_item_id)
     assert next_approval_item.metadata["delivery"]["channel"] == "slack"
+
+    [next_delivery_brief] =
+      Runtime.work_item_artifacts(publish_follow_up.id)
+      |> Enum.filter(&(&1.type == "delivery_brief"))
+
+    assert next_delivery_brief.payload["delivery_heading"] ==
+             "Revised summary for rerouted delivery"
+
+    assert next_delivery_brief.payload["publish_objective"] =~ "through slack"
+
+    assert next_delivery_brief.body =~
+             "Delivery objective: Revise the summary and route it through slack"
   end
 
   test "rejected publish replan can upgrade inherited internal recovery into revise-and-retry" do
@@ -5420,6 +5448,19 @@ defmodule HydraX.RuntimeTest do
 
     assert publish_follow_up.result_refs["delivery"]["target"] == "9001"
     assert length(List.wrap(publish_follow_up.result_refs["follow_up_work_item_ids"])) == 1
+
+    [retry_delivery_brief] =
+      Runtime.work_item_artifacts(publish_follow_up.id)
+      |> Enum.filter(&(&1.type == "delivery_brief"))
+
+    assert retry_delivery_brief.payload["delivery_heading"] ==
+             "Revised summary for retry delivery"
+
+    assert retry_delivery_brief.payload["publish_objective"] =~ "retry delivery through telegram"
+
+    assert Enum.any?(retry_delivery_brief.payload["recommended_actions"] || [], fn action ->
+             action =~ "retry brief"
+           end)
   end
 
   test "approving a research work item promotes memories from report artifacts" do

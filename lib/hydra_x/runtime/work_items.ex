@@ -1641,6 +1641,17 @@ defmodule HydraX.Runtime.WorkItems do
     delivery_channel = effective_delivery["channel"]
     delivery_target = effective_delivery["target"]
 
+    publish_objective =
+      delivery_recovery_objective(
+        work_item,
+        delivery_recovery,
+        delivery_mode,
+        delivery_channel,
+        delivery_target
+      )
+
+    delivery_heading = delivery_recovery_heading(delivery_recovery)
+
     constraint_strategy =
       follow_up_metadata["constraint_strategy"] ||
         summary_payload["constraint_strategy"] ||
@@ -1666,6 +1677,7 @@ defmodule HydraX.Runtime.WorkItems do
         Delivery posture: #{if(degraded?, do: "degraded", else: "standard")}
         Delivery recovery: #{delivery_recovery["strategy"] || "none"}
         Constraint strategy: #{constraint_strategy || "none"}
+        Delivery objective: #{publish_objective}
 
         Summary artifact:
         #{(summary_artifact && summary_artifact.body) || work_item.goal}
@@ -1686,8 +1698,9 @@ defmodule HydraX.Runtime.WorkItems do
         Delivery posture: #{if(degraded?, do: "degraded", else: "standard")}
         Delivery recovery: #{delivery_recovery["strategy"] || "none"}
         Constraint strategy: #{constraint_strategy || "none"}
+        Delivery objective: #{publish_objective}
 
-        Summary ready for publication:
+        #{delivery_heading}:
         #{(summary_artifact && summary_artifact.body) || work_item.goal}
 
         Key findings to preserve:
@@ -1703,6 +1716,8 @@ defmodule HydraX.Runtime.WorkItems do
       "delivery_channel" => delivery_channel,
       "delivery_target" => delivery_target,
       "degraded" => degraded?,
+      "publish_objective" => publish_objective,
+      "delivery_heading" => delivery_heading,
       "constraint_strategy" => constraint_strategy,
       "delivery_recovery" => delivery_recovery,
       "delivery" => %{
@@ -1717,13 +1732,9 @@ defmodule HydraX.Runtime.WorkItems do
       "recommended_actions" =>
         [
           delivery_recovery["recommended_action"],
-          if(
-            degraded?,
-            do: "Review the degraded publish-ready summary before any external delivery.",
-            else: "Review the publish-ready summary before external delivery."
-          ),
+          delivery_recovery_guidance(delivery_recovery, degraded?),
           delivery_target &&
-            "Deliver to #{delivery_target} via #{delivery_channel || delivery_mode}."
+            "Deliver to #{delivery_target} via #{delivery_channel || delivery_mode} once the chosen recovery path is approved."
         ]
         |> Enum.reject(&(&1 in [nil, ""])),
       "confidence" =>
@@ -1733,6 +1744,66 @@ defmodule HydraX.Runtime.WorkItems do
           degraded?
         )
     }
+  end
+
+  defp delivery_recovery_objective(
+         work_item,
+         delivery_recovery,
+         delivery_mode,
+         delivery_channel,
+         delivery_target
+       ) do
+    cond do
+      delivery_recovery["strategy"] == "switch_delivery_channel" and
+          present_text?(delivery_channel) ->
+        "Revise the summary and route it through #{delivery_channel}#{publish_target_suffix(delivery_target)}."
+
+      delivery_recovery["strategy"] == "internal_report_fallback" ->
+        "Prepare an internal operator report#{publish_target_suffix(delivery_target || "control-plane")} until external delivery is safe again."
+
+      delivery_recovery["strategy"] == "revise_and_retry_channel" and
+          present_text?(delivery_channel) ->
+        "Revise the summary and retry delivery through #{delivery_channel}#{publish_target_suffix(delivery_target)}."
+
+      present_text?(delivery_channel) ->
+        "Publish the finalized summary through #{delivery_channel}#{publish_target_suffix(delivery_target)}."
+
+      true ->
+        "Prepare the next #{delivery_mode} delivery for #{work_item.goal}."
+    end
+  end
+
+  defp delivery_recovery_heading(delivery_recovery) do
+    case delivery_recovery["strategy"] do
+      "switch_delivery_channel" -> "Revised summary for rerouted delivery"
+      "internal_report_fallback" -> "Internal operator report"
+      "revise_and_retry_channel" -> "Revised summary for retry delivery"
+      _ -> "Summary ready for publication"
+    end
+  end
+
+  defp delivery_recovery_guidance(delivery_recovery, degraded?) do
+    case delivery_recovery["strategy"] do
+      "switch_delivery_channel" ->
+        "Confirm the rerouted delivery target before external publication."
+
+      "internal_report_fallback" ->
+        "Keep this brief on the control plane until stronger evidence and explicit approval restore external delivery."
+
+      "revise_and_retry_channel" ->
+        if degraded? do
+          "Review the degraded retry brief before another external delivery attempt."
+        else
+          "Review the revised retry brief before external delivery."
+        end
+
+      _ ->
+        if degraded? do
+          "Review the degraded publish-ready summary before any external delivery."
+        else
+          "Review the publish-ready summary before external delivery."
+        end
+    end
   end
 
   defp maybe_deliver_publish_summary(agent, work_item, payload) do
