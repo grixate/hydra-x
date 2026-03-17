@@ -2114,6 +2114,7 @@ defmodule HydraX.Report do
 
   defp json_artifact_snapshot(artifact) do
     decision_entries = artifact_delivery_decision_entries(artifact)
+    decision_snapshot = get_in(artifact.payload || %{}, ["delivery_decision_snapshot"]) || %{}
 
     %{
       id: artifact.id,
@@ -2124,13 +2125,13 @@ defmodule HydraX.Report do
       payload: artifact.payload,
       delivery_decision_kind: artifact_delivery_decision_kind(artifact),
       delivery_decision_entries: decision_entries,
+      delivery_decision_snapshot: decision_snapshot,
       delivery_decision_summary:
-        decision_entries
-        |> List.first()
-        |> case do
-          %{"content" => value} when is_binary(value) and value != "" -> value
-          _ -> nil
-        end,
+        decision_snapshot["current_summary"] ||
+          case List.first(decision_entries) do
+            %{"content" => value} when is_binary(value) and value != "" -> value
+            _ -> nil
+          end,
       approvals:
         Enum.map(Map.get(artifact, :approvals, []), fn record ->
           %{

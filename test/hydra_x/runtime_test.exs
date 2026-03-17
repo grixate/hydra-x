@@ -5280,10 +5280,18 @@ defmodule HydraX.RuntimeTest do
 
     assert review_report.body =~ "Delivery decision context:"
     assert review_report.body =~ "telegram"
+    assert review_report.body =~ "Delivery decision comparison:"
+    assert review_report.payload["delivery_decision_snapshot"]["current_summary"] =~ "telegram"
 
     assert Enum.any?(review_decision.payload["delivery_decision_context"] || [], fn finding ->
              finding["content"] =~ "telegram" or finding["content"] =~ "ops-room"
            end)
+
+    assert review_decision.payload["delivery_decision_snapshot"]["comparison_summary"] in [
+             "Established delivery guidance for this artifact.",
+             "Retained the prior delivery guidance.",
+             "Shifted delivery guidance from the prior path to the current recommendation."
+           ]
 
     assert {:ok, researcher_finalize_summary} = Runtime.run_autonomy_cycle(researcher.id)
     assert researcher_finalize_summary.action == "finalized_blocked_parent"
@@ -5318,6 +5326,13 @@ defmodule HydraX.RuntimeTest do
     assert replan_synthesis.body =~ "Slack"
     assert replan_synthesis.payload["decision_type"] == "delegation_synthesis"
     assert replan_synthesis.payload["summary_source"] == "planner"
+    assert replan_synthesis.payload["delivery_decision_snapshot"]["prior_summary"] =~ "telegram"
+
+    assert replan_synthesis.payload["delivery_decision_snapshot"]["comparison_summary"] in [
+             "Established delivery guidance for this artifact.",
+             "Retained the prior delivery guidance.",
+             "Shifted delivery guidance from the prior path to the current recommendation."
+           ]
 
     assert Enum.any?(replan_synthesis.payload["delivery_decisions"] || [], fn finding ->
              finding["content"] =~ "Slack" or finding["content"] =~ "telegram"

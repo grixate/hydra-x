@@ -1022,6 +1022,7 @@ defmodule HydraX.ReportTest do
     work_items_json = File.read!(Path.join(export.bundle_dir, "work_items.json"))
 
     assert work_items_json =~ "\"delivery_decision_kind\": \"review\""
+    assert work_items_json =~ "\"delivery_decision_snapshot\":"
 
     assert work_items_json =~
              "\"delivery_decision_summary\": \"Route the revised summary through Slack because the operator requested a channel switch.\""

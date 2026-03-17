@@ -38,7 +38,12 @@ defmodule HydraX.WorkTaskTest do
               "content" =>
                 "Route the revised publish through Slack because the operator rejected Telegram delivery."
             }
-          ]
+          ],
+          "delivery_decision_snapshot" => %{
+            "prior_summary" => "Keep the original Telegram path until the summary is revised.",
+            "comparison_summary" =>
+              "Shifted delivery guidance from the prior path to the current recommendation."
+          }
         }
       })
 
@@ -55,7 +60,12 @@ defmodule HydraX.WorkTaskTest do
               "content" =>
                 "Keep the rerouted Slack path because it preserves operator intent while staying publish-ready."
             }
-          ]
+          ],
+          "delivery_decision_snapshot" => %{
+            "prior_summary" => "Keep the original Telegram path until the summary is revised.",
+            "comparison_summary" =>
+              "Shifted delivery guidance from the prior path to the current recommendation."
+          }
         }
       })
 
@@ -74,6 +84,7 @@ defmodule HydraX.WorkTaskTest do
     assert show_output =~ "Route the revised publish through Slack"
     assert show_output =~ "synthesis_delivery_decision_1"
     assert show_output =~ "Keep the rerouted Slack path"
+    assert show_output =~ "decision_comparison"
 
     Mix.Task.reenable("hydra_x.work")
 
@@ -161,7 +172,11 @@ defmodule HydraX.WorkTaskTest do
               "content" =>
                 "Hold the publish brief on the control plane until the reviewer approves external delivery."
             }
-          ]
+          ],
+          "delivery_decision_snapshot" => %{
+            "prior_summary" => "External publication is still blocked.",
+            "comparison_summary" => "Retained the prior delivery guidance."
+          }
         }
       })
 
@@ -193,5 +208,6 @@ defmodule HydraX.WorkTaskTest do
     assert show_output =~ "publish_review_report"
     assert show_output =~ "review_delivery_decision_1"
     assert show_output =~ "Hold the publish brief on the control plane"
+    assert show_output =~ "decision_comparison"
   end
 end

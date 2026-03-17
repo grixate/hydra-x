@@ -234,20 +234,33 @@ defmodule Mix.Tasks.HydraX.Work do
 
   defp artifact_delivery_decision_lines(artifact) do
     payload = artifact.payload || %{}
+    decision_snapshot = Map.get(payload, "delivery_decision_snapshot", %{})
 
-    artifact
-    |> artifact_delivery_decision_entries()
-    |> Enum.take(2)
-    |> Enum.with_index(1)
-    |> Enum.map(fn {entry, index} ->
-      summary =
-        case entry["content"] do
-          value when is_binary(value) -> value
-          _ -> inspect(entry)
-        end
+    entry_lines =
+      artifact
+      |> artifact_delivery_decision_entries()
+      |> Enum.take(2)
+      |> Enum.with_index(1)
+      |> Enum.map(fn {entry, index} ->
+        summary =
+          case entry["content"] do
+            value when is_binary(value) -> value
+            _ -> inspect(entry)
+          end
 
-      "artifact_detail\t#{artifact.id}\t#{artifact_delivery_decision_kind(payload)}_delivery_decision_#{index}\t#{summary}"
-    end)
+        "artifact_detail\t#{artifact.id}\t#{artifact_delivery_decision_kind(payload)}_delivery_decision_#{index}\t#{summary}"
+      end)
+
+    snapshot_lines =
+      [
+        decision_snapshot["prior_summary"] &&
+          "artifact_detail\t#{artifact.id}\tdecision_prior\t#{decision_snapshot["prior_summary"]}",
+        decision_snapshot["comparison_summary"] &&
+          "artifact_detail\t#{artifact.id}\tdecision_comparison\t#{decision_snapshot["comparison_summary"]}"
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    entry_lines ++ snapshot_lines
   end
 
   defp artifact_delivery_decision_entries(artifact) do

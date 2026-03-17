@@ -494,12 +494,22 @@ defmodule HydraX.Runtime.WorkItems do
             supporting_memories = finalized_child_findings(children)
             constraint_findings = constrained_child_findings(children)
 
+            inherited_delivery_decisions =
+              List.wrap(
+                get_in(claimed.metadata || %{}, ["follow_up_context", "delivery_decisions"])
+              )
+
             delivery_decisions =
               merge_supporting_findings(
-                delivery_decision_findings(supporting_memories) ++
-                  List.wrap(
-                    get_in(claimed.metadata || %{}, ["follow_up_context", "delivery_decisions"])
-                  )
+                delivery_decision_findings(supporting_memories) ++ inherited_delivery_decisions
+              )
+
+            delivery_decision_snapshot =
+              build_delivery_decision_snapshot(
+                delivery_decisions,
+                inherited_delivery_decisions,
+                decision_basis: "planner_synthesis",
+                decision_scope: "planner"
               )
 
             {:ok, summary_artifact} =
@@ -516,7 +526,8 @@ defmodule HydraX.Runtime.WorkItems do
                   "result_artifact_ids" => artifact_ids,
                   "promoted_findings" => supporting_memories,
                   "constraint_findings" => constraint_findings,
-                  "delivery_decisions" => delivery_decisions
+                  "delivery_decisions" => delivery_decisions,
+                  "delivery_decision_snapshot" => delivery_decision_snapshot
                 },
                 "provenance" => %{
                   "source" => "autonomy",
@@ -1505,13 +1516,23 @@ defmodule HydraX.Runtime.WorkItems do
     delegated_context = delegated_context_memories(target || work_item)
     delegated_context_block = render_delegated_context_block(delegated_context)
 
-    delivery_decisions =
+    inherited_delivery_decisions =
       merge_supporting_findings(
-        delivery_decision_memories(delegated_context) ++
-          List.wrap(get_in(target.metadata || %{}, ["follow_up_context", "delivery_decisions"])) ++
+        List.wrap(get_in(target.metadata || %{}, ["follow_up_context", "delivery_decisions"])) ++
           List.wrap(
             get_in(work_item.metadata || %{}, ["follow_up_context", "delivery_decisions"])
           )
+      )
+
+    delivery_decisions =
+      merge_supporting_findings(
+        delivery_decision_memories(delegated_context) ++ inherited_delivery_decisions
+      )
+
+    decision_snapshot =
+      build_delivery_decision_snapshot(delivery_decisions, inherited_delivery_decisions,
+        decision_basis: "review_context",
+        decision_scope: "review"
       )
 
     delivery_decision_block =
@@ -1560,6 +1581,7 @@ defmodule HydraX.Runtime.WorkItems do
         Source artifact: #{source_artifact && "#{source_artifact.type} ##{source_artifact.id}"}
         Delegated context: #{if(delegated_context_block == "", do: "none", else: delegated_context_block)}
         Delivery decision context: #{if(delivery_decision_block == "", do: "none", else: "\n" <> delivery_decision_block)}
+        Delivery decision comparison: #{decision_snapshot["comparison_summary"] || "none"}
         """
         |> String.trim(),
       "decision" => decision,
@@ -1567,6 +1589,7 @@ defmodule HydraX.Runtime.WorkItems do
       "target_goal" => target && target.goal,
       "delegated_context" => delegated_context,
       "delivery_decision_context" => delivery_decisions,
+      "delivery_decision_snapshot" => decision_snapshot,
       "recommended_actions" =>
         review_recommended_actions(decision, target && target.kind, delegated_context),
       "memory_origin_role" => "reviewer",
@@ -1620,6 +1643,7 @@ defmodule HydraX.Runtime.WorkItems do
   defp build_review_decision_ledger(_work_item, target, review_payload) do
     delegated_context = review_payload["delegated_context"] || []
     delivery_decision_context = review_payload["delivery_decision_context"] || []
+    delivery_decision_snapshot = review_payload["delivery_decision_snapshot"] || %{}
 
     %{
       "summary" => review_payload["summary"],
@@ -1636,6 +1660,9 @@ defmodule HydraX.Runtime.WorkItems do
         Delivery decisions considered:
         #{Enum.map_join(delivery_decision_context, "\n", fn memory -> "- #{memory["content"]}" end)}
 
+        Delivery decision comparison:
+        #{delivery_decision_snapshot["comparison_summary"] || "none"}
+
         Delegated context:
         #{Enum.map_join(delegated_context, "\n", fn memory -> "- #{memory["type"]}: #{memory["content"]}" end)}
         """
@@ -1647,6 +1674,7 @@ defmodule HydraX.Runtime.WorkItems do
       "recommended_actions" => review_payload["recommended_actions"] || [],
       "open_questions" => [],
       "delivery_decision_context" => delivery_decision_context,
+      "delivery_decision_snapshot" => delivery_decision_snapshot,
       "claims" =>
         (delivery_decision_context ++ delegated_context)
         |> Enum.take(2)
@@ -4595,6 +4623,47 @@ defmodule HydraX.Runtime.WorkItems do
     end)
     |> Enum.take(3)
   end
+
+  defp build_delivery_decision_snapshot(current_entries, prior_entries, attrs) do
+    current_entries = List.wrap(current_entries)
+    prior_entries = List.wrap(prior_entries)
+    current_summary = delivery_decision_summary(List.first(current_entries))
+    prior_summary = delivery_decision_summary(List.first(prior_entries))
+
+    %{
+      "decision_scope" => Keyword.get(attrs, :decision_scope),
+      "decision_basis" => Keyword.get(attrs, :decision_basis),
+      "current_summary" => current_summary,
+      "prior_summary" => prior_summary,
+      "comparison_summary" =>
+        delivery_decision_comparison_summary(current_summary, prior_summary),
+      "current_count" => length(current_entries),
+      "prior_count" => length(prior_entries)
+    }
+    |> Enum.reject(fn {_key, value} -> value in [nil, ""] end)
+    |> Map.new()
+  end
+
+  defp delivery_decision_summary(%{"content" => value}) when is_binary(value) and value != "",
+    do: value
+
+  defp delivery_decision_summary(_entry), do: nil
+
+  defp delivery_decision_comparison_summary(current, prior)
+       when is_binary(current) and current != "" and is_binary(prior) and prior != "" do
+    if current == prior do
+      "Retained the prior delivery guidance."
+    else
+      "Shifted delivery guidance from the prior path to the current recommendation."
+    end
+  end
+
+  defp delivery_decision_comparison_summary(current, _prior)
+       when is_binary(current) and current != "" do
+    "Established delivery guidance for this artifact."
+  end
+
+  defp delivery_decision_comparison_summary(_current, _prior), do: nil
 
   defp inferred_artifact_finding_type("decision_ledger"), do: "Decision"
   defp inferred_artifact_finding_type("review_report"), do: "Decision"
