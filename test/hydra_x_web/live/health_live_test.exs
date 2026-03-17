@@ -217,7 +217,8 @@ defmodule HydraXWeb.HealthLiveTest do
         "kind" => "task",
         "goal" => "Await a concrete operator assignment.",
         "assigned_role" => "operator",
-        "status" => "planned"
+        "status" => "planned",
+        "metadata" => %{"assignment_mode" => "role_claim"}
       })
 
     {:ok, _claimed_item} =
@@ -320,6 +321,12 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "Role-only open"
     assert html =~ "Active claims"
     assert html =~ "Remote claims"
+    assert html =~ "Role backlog"
+    assert html =~ "Saturated workers"
+    assert html =~ "Role queue backlog"
+    assert html =~ "Worker pressure"
+    assert html =~ "queued"
+    assert html =~ "shared backlog"
     assert html =~ "Operator confirmed the rollout."
     assert html =~ "ownership #{local_owner} · completed"
     assert html =~ "ownership node:remote-health · claimed_remote"

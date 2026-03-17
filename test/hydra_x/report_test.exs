@@ -1180,6 +1180,8 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.json_path) =~ "\"auto_assigned_count\":"
     assert File.read!(export.json_path) =~ "\"capability_fallback_count\":"
     assert File.read!(export.json_path) =~ "\"role_only_open_count\":"
+    assert File.read!(export.json_path) =~ "\"role_queue_backlog\":"
+    assert File.read!(export.json_path) =~ "\"worker_pressure\":"
     assert File.read!(export.json_path) =~ "\"active_claimed_count\": 1"
     assert File.read!(export.json_path) =~ "\"remote_claimed_count\": 1"
 

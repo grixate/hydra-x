@@ -216,7 +216,12 @@ defmodule HydraX.Report do
     #{render_conversations(snapshot.conversations)}
 
     ## Autonomous Work Items
-    - active_jobs=#{snapshot.autonomy.active_autonomy_job_count} unsafe_requests=#{snapshot.autonomy.unsafe_request_count} budget_blocked=#{snapshot.autonomy.budget_blocked_count} auto_assigned=#{snapshot.autonomy.auto_assigned_count} fallback_assigned=#{snapshot.autonomy.capability_fallback_count} role_only_open=#{snapshot.autonomy.role_only_open_count} active_claimed=#{snapshot.autonomy.active_claimed_count} remote_claimed=#{snapshot.autonomy.remote_claimed_count} capability_drift=#{length(snapshot.autonomy.capability_drifts)}
+    - active_jobs=#{snapshot.autonomy.active_autonomy_job_count} unsafe_requests=#{snapshot.autonomy.unsafe_request_count} budget_blocked=#{snapshot.autonomy.budget_blocked_count} auto_assigned=#{snapshot.autonomy.auto_assigned_count} fallback_assigned=#{snapshot.autonomy.capability_fallback_count} role_only_open=#{snapshot.autonomy.role_only_open_count} active_claimed=#{snapshot.autonomy.active_claimed_count} remote_claimed=#{snapshot.autonomy.remote_claimed_count} role_backlog=#{render_role_queue_backlog_summary(snapshot.autonomy.role_queue_backlog)} saturated_workers=#{Enum.count(snapshot.autonomy.worker_pressure, &(&1.capacity_posture == "saturated"))} capability_drift=#{length(snapshot.autonomy.capability_drifts)}
+    ### Role Queue Backlog
+    #{render_role_queue_backlog(snapshot.autonomy.role_queue_backlog)}
+
+    ### Worker Pressure
+    #{render_worker_pressure(snapshot.autonomy.worker_pressure)}
     #{render_work_items(snapshot.work_items)}
 
     ## Observability
@@ -284,6 +289,46 @@ defmodule HydraX.Report do
     errors = render_scheduler_count(pass, "error_count")
     owner = render_scheduler_owner(pass) || "unknown"
     "#{verb}=#{count}; skipped=#{skipped}; errors=#{errors}; owner=#{owner}"
+  end
+
+  defp render_role_queue_backlog_summary(entries) do
+    entries
+    |> List.wrap()
+    |> Enum.map_join(", ", fn entry ->
+      "#{entry.role}:#{entry.queued_count}"
+    end)
+    |> case do
+      "" -> "none"
+      text -> text
+    end
+  end
+
+  defp render_role_queue_backlog(entries) do
+    entries
+    |> List.wrap()
+    |> case do
+      [] ->
+        "- none"
+
+      items ->
+        Enum.map_join(items, "\n", fn entry ->
+          "- #{entry.role}: queued=#{entry.queued_count} workers=#{entry.worker_count} active_claims=#{entry.active_claimed_count} top_priority=#{entry.highest_priority}"
+        end)
+    end
+  end
+
+  defp render_worker_pressure(entries) do
+    entries
+    |> List.wrap()
+    |> case do
+      [] ->
+        "- none"
+
+      items ->
+        Enum.map_join(items, "\n", fn entry ->
+          "- #{entry.agent_name} (#{entry.role}): posture=#{entry.capacity_posture} open=#{entry.assigned_open_count} claims=#{entry.active_claimed_count} blocked=#{entry.blocked_count} failed=#{entry.failed_count} shared_backlog=#{entry.shared_role_queue_count}"
+        end)
+    end
   end
 
   defp render_scheduler_count(pass, key) when is_map(pass) do
@@ -1423,6 +1468,8 @@ defmodule HydraX.Report do
         active_claimed_count: snapshot.autonomy.active_claimed_count,
         remote_claimed_count: snapshot.autonomy.remote_claimed_count,
         active_roles: snapshot.autonomy.active_roles,
+        role_queue_backlog: snapshot.autonomy.role_queue_backlog,
+        worker_pressure: snapshot.autonomy.worker_pressure,
         capability_drifts: snapshot.autonomy.capability_drifts
       },
       default_agent: %{

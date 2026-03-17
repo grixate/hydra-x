@@ -493,7 +493,7 @@ defmodule HydraXWeb.AgentsLive do
                 <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
                   Recent work items
                 </div>
-                <div class="mt-2 grid gap-3 md:grid-cols-4">
+                <div class="mt-2 grid gap-3 md:grid-cols-6">
                   <article class="rounded-xl border border-white/10 bg-black/10 px-3 py-3">
                     <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
                       Pending review
@@ -518,6 +518,31 @@ defmodule HydraXWeb.AgentsLive do
                     </div>
                     <div class="mt-2 font-display text-2xl">{agent.work_queue.blocked_or_failed}</div>
                   </article>
+                  <article class="rounded-xl border border-white/10 bg-black/10 px-3 py-3">
+                    <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                      Role backlog
+                    </div>
+                    <div class="mt-2 font-display text-2xl">{agent.work_queue.role_backlog}</div>
+                  </article>
+                  <article class="rounded-xl border border-white/10 bg-black/10 px-3 py-3">
+                    <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+                      Queue posture
+                    </div>
+                    <div class="mt-2 font-display text-2xl">{agent.work_queue.capacity_posture}</div>
+                  </article>
+                </div>
+                <div class="mt-3 space-y-1 text-[11px] text-[var(--hx-mute)]">
+                  <p>
+                    role queue {agent.role_queue_backlog[:queued_count] || 0} · workers{" "}
+                    {agent.role_queue_backlog[:worker_count] || 0} · active claims{" "}
+                    {agent.role_queue_backlog[:active_claimed_count] || 0}
+                  </p>
+                  <p :if={detail = worker_pressure_detail(agent.worker_pressure)}>
+                    {detail}
+                  </p>
+                  <p :if={dispatch = agent.recent_role_dispatch}>
+                    {dispatch}
+                  </p>
                 </div>
                 <div class="mt-3 space-y-2">
                   <p
@@ -1221,9 +1246,17 @@ defmodule HydraXWeb.AgentsLive do
 
   defp agents_with_runtime do
     mcp_statuses = Runtime.mcp_statuses() |> Map.new(&{&1.id, &1})
+    autonomy_status = Runtime.autonomy_status()
+    worker_pressure = Map.new(autonomy_status.worker_pressure || [], &{&1.agent_id, &1})
+    role_queue_backlog = Map.new(autonomy_status.role_queue_backlog || [], &{&1.role, &1})
+    scheduler_status = Runtime.scheduler_status()
+    dispatch_results = List.wrap(scheduler_status.role_queue_dispatches[:results] || [])
 
     Runtime.list_agents()
     |> Enum.map(fn agent ->
+      role_backlog = Map.get(role_queue_backlog, agent.role, %{})
+      pressure = Map.get(worker_pressure, agent.id, %{})
+
       agent
       |> Map.put(:runtime, Runtime.agent_runtime_status(agent))
       |> Map.put(:capability_profile, Runtime.capability_profile(agent))
@@ -1240,7 +1273,10 @@ defmodule HydraXWeb.AgentsLive do
         Runtime.list_work_items(agent_id: agent.id, limit: 4)
         |> Enum.map(&attach_promoted_work_item_memories/1)
       )
-      |> Map.put(:work_queue, work_queue_summary(agent.id))
+      |> Map.put(:work_queue, work_queue_summary(agent.id, role_backlog, pressure))
+      |> Map.put(:role_queue_backlog, role_backlog)
+      |> Map.put(:worker_pressure, pressure)
+      |> Map.put(:recent_role_dispatch, recent_role_dispatch_summary(dispatch_results, agent.id))
       |> Map.put(:tool_policy_override, Runtime.get_agent_tool_policy(agent.id))
       |> Map.put(:effective_tool_policy, Runtime.effective_tool_policy(agent.id))
       |> Map.put(:control_policy_override, Runtime.get_agent_control_policy(agent.id))
@@ -1259,7 +1295,7 @@ defmodule HydraXWeb.AgentsLive do
     }
   end
 
-  defp work_queue_summary(agent_id) do
+  defp work_queue_summary(agent_id, role_backlog, pressure) do
     items = Runtime.list_work_items(agent_id: agent_id, limit: 100, preload: false)
 
     %{
@@ -1272,8 +1308,39 @@ defmodule HydraXWeb.AgentsLive do
           &(&1.kind == "extension" and &1.status == "completed" and
               &1.approval_stage in ["validated", "operator_approved"])
         ),
-      blocked_or_failed: Enum.count(items, &(&1.status in ["blocked", "failed"]))
+      blocked_or_failed: Enum.count(items, &(&1.status in ["blocked", "failed"])),
+      role_backlog: role_backlog[:queued_count] || 0,
+      capacity_posture: pressure[:capacity_posture] || "idle"
     }
+  end
+
+  defp worker_pressure_detail(pressure) when is_map(pressure) do
+    if map_size(pressure) == 0 do
+      nil
+    else
+      "worker pressure open #{pressure[:assigned_open_count] || 0} · claims #{pressure[:active_claimed_count] || 0} · blocked #{pressure[:blocked_count] || 0} · failed #{pressure[:failed_count] || 0}"
+    end
+  end
+
+  defp recent_role_dispatch_summary(results, agent_id) do
+    agent_results = Enum.filter(results, &((&1[:agent_id] || &1["agent_id"]) == agent_id))
+
+    case Enum.find(agent_results, fn result ->
+           action = result[:action] || result["action"]
+           action not in [nil, "idle"]
+         end) do
+      nil ->
+        if agent_results == [] do
+          nil
+        else
+          "recent role dispatch idle"
+        end
+
+      result ->
+        action = result[:action] || result["action"]
+        work_item_id = result[:work_item_id] || result["work_item_id"]
+        "recent role dispatch #{action}#{if work_item_id, do: " ##{work_item_id}", else: ""}"
+    end
   end
 
   defp work_item_latest_approval(work_item) do

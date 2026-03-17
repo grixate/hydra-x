@@ -927,7 +927,7 @@ defmodule HydraXWeb.HealthLive do
                     · expiry {event.expired_by}
                   </span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip                    {event.ip}</span>
+                  <span :if={event.ip}> · ip                      {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -1280,6 +1280,25 @@ defmodule HydraXWeb.HealthLive do
               {@autonomy_status.remote_claimed_count}
             </div>
           </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Role backlog
+            </div>
+            <div class="mt-3 font-display text-4xl">
+              {Enum.reduce(@autonomy_status.role_queue_backlog || [], 0, &(&1.queued_count + &2))}
+            </div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Saturated workers
+            </div>
+            <div class="mt-3 font-display text-4xl">
+              {Enum.count(
+                @autonomy_status.worker_pressure || [],
+                &(&1.capacity_posture == "saturated")
+              )}
+            </div>
+          </article>
         </div>
         <div class="mt-4 grid gap-3 lg:grid-cols-2">
           <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
@@ -1343,6 +1362,58 @@ defmodule HydraXWeb.HealthLive do
                   class="mt-2 space-y-1 text-[11px] text-[var(--hx-mute)]"
                 >
                   <p :for={detail <- detail_lines}>{detail}</p>
+                </div>
+              </div>
+            </div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Role queue backlog
+            </div>
+            <div class="mt-3 space-y-2">
+              <p
+                :if={(@autonomy_status.role_queue_backlog || []) == []}
+                class="text-sm text-[var(--hx-mute)]"
+              >
+                No role-queued work is waiting.
+              </p>
+              <div
+                :for={entry <- @autonomy_status.role_queue_backlog || []}
+                class="rounded-xl border border-white/10 bg-black/10 px-3 py-3"
+              >
+                <div class="flex items-center justify-between gap-3">
+                  <div class="text-sm text-[var(--hx-accent)]">{entry.role}</div>
+                  <div class="text-xs text-[var(--hx-mute)]">{entry.queued_count} queued</div>
+                </div>
+                <div class="mt-2 text-xs text-[var(--hx-mute)]">
+                  workers {entry.worker_count} · active claims {entry.active_claimed_count} · top priority {entry.highest_priority}
+                </div>
+              </div>
+            </div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Worker pressure
+            </div>
+            <div class="mt-3 space-y-2">
+              <p
+                :if={(@autonomy_status.worker_pressure || []) == []}
+                class="text-sm text-[var(--hx-mute)]"
+              >
+                No active autonomy workers yet.
+              </p>
+              <div
+                :for={entry <- @autonomy_status.worker_pressure || []}
+                class="rounded-xl border border-white/10 bg-black/10 px-3 py-3"
+              >
+                <div class="flex items-center justify-between gap-3">
+                  <div class="text-sm text-[var(--hx-accent)]">
+                    {entry.agent_name} · {entry.role}
+                  </div>
+                  <div class="text-xs text-[var(--hx-mute)]">{entry.capacity_posture}</div>
+                </div>
+                <div class="mt-2 text-xs text-[var(--hx-mute)]">
+                  open {entry.assigned_open_count} · claims {entry.active_claimed_count} · blocked {entry.blocked_count} · failed {entry.failed_count} · shared backlog {entry.shared_role_queue_count}
                 </div>
               </div>
             </div>

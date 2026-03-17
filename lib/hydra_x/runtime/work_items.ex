@@ -516,6 +516,12 @@ defmodule HydraX.Runtime.WorkItems do
     remote_claimed_count =
       Enum.count(all_work_items, &work_item_remotely_owned?/1)
 
+    role_queue_backlog =
+      build_role_queue_backlog(all_work_items, autonomy_agents)
+
+    worker_pressure =
+      build_worker_pressure(all_work_items, autonomy_agents, role_queue_backlog)
+
     capability_drifts =
       autonomy_agents
       |> Enum.map(fn agent ->
@@ -551,6 +557,8 @@ defmodule HydraX.Runtime.WorkItems do
       remote_claimed_count: remote_claimed_count,
       autonomy_agent_count: length(autonomy_agents),
       active_roles: autonomy_agents |> Enum.map(& &1.role) |> Enum.frequencies(),
+      role_queue_backlog: role_queue_backlog,
+      worker_pressure: worker_pressure,
       capability_drifts: capability_drifts,
       recent_work_items: list_work_items(limit: 6, preload: true),
       recent_approvals: list_approval_records(limit: 6)
@@ -581,6 +589,100 @@ defmodule HydraX.Runtime.WorkItems do
     ownership = get_in(work_item.metadata || %{}, ["ownership"]) || %{}
     ownership["active"] == true and ownership["owner"] not in [nil, Coordination.status().owner]
   end
+
+  defp build_role_queue_backlog(all_work_items, autonomy_agents) do
+    worker_counts =
+      autonomy_agents
+      |> Enum.map(& &1.role)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.frequencies()
+
+    claimed_counts =
+      all_work_items
+      |> Enum.filter(&work_item_ownership_active?/1)
+      |> Enum.map(& &1.assigned_role)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.frequencies()
+
+    all_work_items
+    |> Enum.filter(&role_queue_candidate?/1)
+    |> Enum.group_by(& &1.assigned_role)
+    |> Enum.map(fn {role, items} ->
+      %{
+        role: role,
+        queued_count: length(items),
+        worker_count: Map.get(worker_counts, role, 0),
+        active_claimed_count: Map.get(claimed_counts, role, 0),
+        highest_priority:
+          items
+          |> Enum.map(&(&1.priority || 0))
+          |> Enum.max(fn -> 0 end)
+      }
+    end)
+    |> Enum.sort_by(fn entry -> {-entry.queued_count, entry.role || ""} end)
+  end
+
+  defp build_worker_pressure(all_work_items, autonomy_agents, role_queue_backlog) do
+    role_queue_counts = Map.new(role_queue_backlog, &{&1.role, &1.queued_count})
+
+    autonomy_agents
+    |> Enum.map(fn agent ->
+      assigned_items =
+        Enum.filter(all_work_items, fn work_item ->
+          work_item.assigned_agent_id == agent.id and
+            work_item.status not in @terminal_work_item_statuses
+        end)
+
+      assigned_open_count = length(assigned_items)
+      active_claimed_count = Enum.count(assigned_items, &work_item_ownership_active?/1)
+      blocked_count = Enum.count(assigned_items, &(&1.status == "blocked"))
+      failed_count = Enum.count(assigned_items, &(&1.status == "failed"))
+      shared_role_queue_count = Map.get(role_queue_counts, agent.role, 0)
+
+      %{
+        agent_id: agent.id,
+        agent_name: agent.name,
+        role: agent.role,
+        assigned_open_count: assigned_open_count,
+        active_claimed_count: active_claimed_count,
+        blocked_count: blocked_count,
+        failed_count: failed_count,
+        shared_role_queue_count: shared_role_queue_count,
+        capacity_posture:
+          worker_capacity_posture(
+            assigned_open_count,
+            active_claimed_count,
+            shared_role_queue_count
+          )
+      }
+    end)
+    |> Enum.sort_by(fn entry ->
+      {worker_capacity_rank(entry.capacity_posture), -(entry.shared_role_queue_count || 0),
+       -(entry.assigned_open_count || 0), entry.agent_name || ""}
+    end)
+  end
+
+  defp worker_capacity_posture(assigned_open_count, active_claimed_count, shared_role_queue_count) do
+    cond do
+      assigned_open_count >= 4 or (active_claimed_count >= 2 and shared_role_queue_count > 0) ->
+        "saturated"
+
+      assigned_open_count >= 2 or shared_role_queue_count > 0 ->
+        "busy"
+
+      assigned_open_count == 0 and shared_role_queue_count == 0 ->
+        "idle"
+
+      true ->
+        "available"
+    end
+  end
+
+  defp worker_capacity_rank("saturated"), do: 0
+  defp worker_capacity_rank("busy"), do: 1
+  defp worker_capacity_rank("available"), do: 2
+  defp worker_capacity_rank("idle"), do: 3
+  defp worker_capacity_rank(_posture), do: 4
 
   defp owned_resumable_work_item?(%WorkItem{} = work_item, owner) do
     ownership = get_in(work_item.metadata || %{}, ["ownership"]) || %{}

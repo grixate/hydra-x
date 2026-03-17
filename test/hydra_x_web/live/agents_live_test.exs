@@ -51,6 +51,12 @@ defmodule HydraXWeb.AgentsLiveTest do
   end
 
   test "agents page shows role capability, queue posture, and recent work items", %{conn: conn} do
+    Runtime.Jobs.reset_scheduler_passes()
+
+    on_exit(fn ->
+      Runtime.Jobs.reset_scheduler_passes()
+    end)
+
     {:ok, agent} =
       Runtime.save_agent(%{
         name: "Research Agent",
@@ -159,6 +165,15 @@ defmodule HydraXWeb.AgentsLiveTest do
         }
       })
 
+    {:ok, _role_queue_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Queue operator-facing work for the shared researcher role.",
+        "assigned_role" => "researcher",
+        "status" => "planned",
+        "metadata" => %{"assignment_mode" => "role_claim"}
+      })
+
     {:ok, _delivery_brief} =
       Runtime.create_artifact(%{
         "work_item_id" => publish_item.id,
@@ -224,6 +239,23 @@ defmodule HydraXWeb.AgentsLiveTest do
         "rationale" => "Recorded for agent review history."
       })
 
+    Runtime.Jobs.record_scheduler_pass(:role_queue_dispatches, %{
+      owner: "node:agents-test",
+      processed_count: 1,
+      skipped_count: 0,
+      error_count: 0,
+      results: [
+        %{
+          agent_id: agent.id,
+          agent_name: agent.name,
+          role: agent.role,
+          work_item_id: publish_item.id,
+          status: "completed",
+          action: "delivered_publish_summary"
+        }
+      ]
+    })
+
     {:ok, _view, html} = live(conn, ~p"/agents")
 
     assert html =~ "Capability contract"
@@ -243,6 +275,11 @@ defmodule HydraXWeb.AgentsLiveTest do
 
     assert html =~
              "assignment Research Agent: exact role match, supports channel delivery, queue clear"
+
+    assert html =~ "Role backlog"
+    assert html =~ "Queue posture"
+    assert html =~ "worker pressure open"
+    assert html =~ "recent role dispatch delivered_publish_summary"
 
     assert html =~ "delivery delivered telegram"
     assert html =~ "ops-room"

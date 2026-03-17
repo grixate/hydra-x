@@ -5936,6 +5936,15 @@ defmodule HydraX.RuntimeTest do
         }
       })
 
+    {:ok, _role_queue_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Queued planner role work awaiting a concrete worker claim.",
+        "assigned_role" => "planner",
+        "status" => "planned",
+        "metadata" => %{"assignment_mode" => "role_claim"}
+      })
+
     {:ok, _job} =
       Runtime.save_scheduled_job(%{
         agent_id: agent.id,
@@ -5956,6 +5965,8 @@ defmodule HydraX.RuntimeTest do
     assert status.budget_blocked_count >= 1
     assert status.active_claimed_count >= 2
     assert status.remote_claimed_count >= 1
+    assert Enum.any?(status.role_queue_backlog, &(&1.role == "planner"))
+    assert Enum.any?(status.worker_pressure, &(&1.agent_id == agent.id))
     assert Enum.any?(status.capability_drifts, &(&1.agent_id == agent.id))
     assert Enum.any?(status.recent_work_items, &(&1.id == work_item.id))
   end
