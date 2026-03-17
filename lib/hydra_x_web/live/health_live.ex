@@ -927,7 +927,7 @@ defmodule HydraXWeb.HealthLive do
                     · expiry {event.expired_by}
                   </span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip     {event.ip}</span>
+                  <span :if={event.ip}> · ip      {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -1286,6 +1286,12 @@ defmodule HydraXWeb.HealthLive do
                 <p class="mt-2 text-xs text-[var(--hx-mute)]">
                   {autonomy_artifact_summary(item)}
                 </p>
+                <div
+                  :if={detail_lines = autonomy_publish_detail_lines(item)}
+                  class="mt-2 space-y-1 text-[11px] text-[var(--hx-mute)]"
+                >
+                  <p :for={detail <- detail_lines}>{detail}</p>
+                </div>
               </div>
             </div>
           </article>
@@ -2160,6 +2166,18 @@ defmodule HydraXWeb.HealthLive do
     end
   end
 
+  defp autonomy_publish_detail_lines(item) do
+    [
+      autonomy_publish_objective_line(item),
+      autonomy_publish_guidance_line(item)
+    ]
+    |> Enum.reject(&is_nil_or_empty/1)
+    |> case do
+      [] -> nil
+      details -> details
+    end
+  end
+
   defp autonomy_follow_up_type(item) do
     item
     |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "types"]))
@@ -2179,6 +2197,36 @@ defmodule HydraXWeb.HealthLive do
   defp publish_replan_summary(item) do
     if autonomy_follow_up_type(item) == "replan" do
       "replan queued #{autonomy_follow_up_count(item)}"
+    end
+  end
+
+  defp autonomy_publish_objective_line(item) do
+    case autonomy_publish_brief_payload(item)["publish_objective"] do
+      value when is_binary(value) and value != "" -> "objective #{value}"
+      _ -> nil
+    end
+  end
+
+  defp autonomy_publish_guidance_line(item) do
+    case autonomy_publish_brief_payload(item)["recommended_actions"] do
+      [first | _] when is_binary(first) and first != "" -> "guidance #{first}"
+      _ -> nil
+    end
+  end
+
+  defp autonomy_publish_brief_payload(item) do
+    item
+    |> Map.get(:artifacts)
+    |> case do
+      %Ecto.Association.NotLoaded{} -> []
+      entries when is_list(entries) -> entries
+      _ -> []
+    end
+    |> Enum.filter(&(&1.type == "delivery_brief"))
+    |> Enum.max_by(& &1.id, fn -> nil end)
+    |> case do
+      nil -> %{}
+      artifact -> artifact.payload || %{}
     end
   end
 

@@ -338,6 +338,21 @@ defmodule HydraXWeb.HealthLiveTest do
         }
       })
 
+    {:ok, _degraded_delivery_brief} =
+      Runtime.create_artifact(%{
+        "work_item_id" => degraded_publish.id,
+        "type" => "delivery_brief",
+        "title" => "Constrained publish brief",
+        "summary" => "Prepared degraded publish draft",
+        "payload" => %{
+          "publish_objective" =>
+            "Prepare an internal operator report for control-plane delivery until external delivery is safe again.",
+          "recommended_actions" => [
+            "Keep this brief on the control plane until stronger evidence and explicit approval restore external delivery."
+          ]
+        }
+      })
+
     {:ok, _rejected_publish_review} =
       Runtime.save_work_item(%{
         "kind" => "task",
@@ -402,6 +417,13 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "degraded delivery awaiting approval telegram"
     assert html =~ "recovery switch slack"
     assert html =~ "explicit-signal"
+
+    assert html =~
+             "objective Prepare an internal operator report for control-plane delivery until external delivery is safe again."
+
+    assert html =~
+             "guidance Keep this brief on the control plane until stronger evidence and explicit approval restore external delivery."
+
     assert html =~ "delivery internal"
     assert html =~ "replan queued 1"
   end

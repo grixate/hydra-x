@@ -666,7 +666,14 @@ defmodule HydraX.ReportTest do
         "work_item_id" => publish_item.id,
         "type" => "delivery_brief",
         "title" => "Publish-ready autonomy summary",
-        "summary" => "Prepared channel delivery brief"
+        "summary" => "Prepared channel delivery brief",
+        "payload" => %{
+          "publish_objective" =>
+            "Revise the summary and route it through telegram for ops-room publication.",
+          "recommended_actions" => [
+            "Confirm the operator-ready summary with the on-call owner before publication."
+          ]
+        }
       })
 
     {:ok, _degraded_publish_item} =
@@ -911,6 +918,12 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "publish=queued 1"
     assert File.read!(export.markdown_path) =~ "publish=replan queued 1"
     assert File.read!(export.markdown_path) =~ "publish=delivered telegram -> ops-room"
+
+    assert File.read!(export.markdown_path) =~
+             "publish_objective=Revise the summary and route it through telegram for ops-room publication."
+
+    assert File.read!(export.markdown_path) =~
+             "publish_guidance=Confirm the operator-ready summary with the on-call owner before publication."
 
     assert File.read!(export.markdown_path) =~
              "publish=delivery_draft degraded telegram -> ops-room"

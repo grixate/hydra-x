@@ -447,7 +447,7 @@ defmodule HydraX.Runtime.WorkItems do
       autonomy_agent_count: length(autonomy_agents),
       active_roles: autonomy_agents |> Enum.map(& &1.role) |> Enum.frequencies(),
       capability_drifts: capability_drifts,
-      recent_work_items: list_work_items(limit: 6, preload: false),
+      recent_work_items: list_work_items(limit: 6, preload: true),
       recent_approvals: list_approval_records(limit: 6)
     }
   end

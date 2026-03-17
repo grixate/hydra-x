@@ -603,6 +603,12 @@ defmodule HydraXWeb.AgentsLive do
                         {summary}
                       </span>
                     </div>
+                    <div
+                      :if={publish_detail_lines = work_item_publish_detail_lines(item)}
+                      class="mt-2 space-y-1 text-[11px] text-[var(--hx-mute)]"
+                    >
+                      <p :for={detail <- publish_detail_lines}>{detail}</p>
+                    </div>
                     <div :if={work_item_artifact_types(item) != []} class="mt-2 flex flex-wrap gap-2">
                       <span
                         :for={type <- work_item_artifact_types(item)}
@@ -1511,6 +1517,18 @@ defmodule HydraXWeb.AgentsLive do
     end
   end
 
+  defp work_item_publish_detail_lines(work_item) do
+    [
+      publish_objective_line(work_item),
+      publish_guidance_line(work_item)
+    ]
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> case do
+      [] -> nil
+      details -> details
+    end
+  end
+
   defp follow_up_queue_type(work_item) do
     work_item
     |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "types"]))
@@ -1551,6 +1569,36 @@ defmodule HydraXWeb.AgentsLive do
       "switch_delivery_channel" -> "recovery switch #{recovery["recommended_channel"]}#{basis}"
       "revise_and_retry_channel" -> "recovery revise+retry#{basis}"
       _ -> nil
+    end
+  end
+
+  defp publish_objective_line(work_item) do
+    case publish_brief_payload(work_item)["publish_objective"] do
+      value when is_binary(value) and value != "" -> "objective #{value}"
+      _ -> nil
+    end
+  end
+
+  defp publish_guidance_line(work_item) do
+    case publish_brief_payload(work_item)["recommended_actions"] do
+      [first | _] when is_binary(first) and first != "" -> "guidance #{first}"
+      _ -> nil
+    end
+  end
+
+  defp publish_brief_payload(work_item) do
+    work_item
+    |> Map.get(:artifacts)
+    |> case do
+      %Ecto.Association.NotLoaded{} -> []
+      entries when is_list(entries) -> entries
+      _ -> []
+    end
+    |> Enum.filter(&(&1.type == "delivery_brief"))
+    |> Enum.max_by(& &1.id, fn -> nil end)
+    |> case do
+      nil -> %{}
+      artifact -> artifact.payload || %{}
     end
   end
 

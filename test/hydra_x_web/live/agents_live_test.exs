@@ -149,7 +149,14 @@ defmodule HydraXWeb.AgentsLiveTest do
         "work_item_id" => publish_item.id,
         "type" => "delivery_brief",
         "title" => "Publish-ready summary",
-        "summary" => "Prepared operator delivery brief"
+        "summary" => "Prepared operator delivery brief",
+        "payload" => %{
+          "publish_objective" =>
+            "Revise the summary and route it through telegram for ops-room publication.",
+          "recommended_actions" => [
+            "Confirm the operator-ready summary with the on-call owner before publication."
+          ]
+        }
       })
 
     {_updated, _record} =
@@ -175,6 +182,13 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "publish follow-up queued 1"
     assert html =~ "delivery delivered telegram"
     assert html =~ "ops-room"
+
+    assert html =~
+             "objective Revise the summary and route it through telegram for ops-room publication."
+
+    assert html =~
+             "guidance Confirm the operator-ready summary with the on-call owner before publication."
+
     assert html =~ "execute_with_review"
     assert html =~ "external_delivery"
   end

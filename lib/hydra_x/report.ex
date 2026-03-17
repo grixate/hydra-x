@@ -687,6 +687,7 @@ defmodule HydraX.Report do
         end
 
       publish = render_work_item_publish_summary(item)
+      publish_details = render_work_item_publish_details(item)
 
       [
         "##{item.id}",
@@ -704,6 +705,7 @@ defmodule HydraX.Report do
         publish && "publish=#{publish}",
         item.goal
       ]
+      |> Kernel.++(publish_details)
       |> Enum.reject(&is_nil_or_empty/1)
       |> Enum.join(" ")
       |> then(&("- " <> &1))
@@ -1794,6 +1796,26 @@ defmodule HydraX.Report do
     end
   end
 
+  defp render_work_item_publish_details(item) do
+    payload = publish_brief_payload(item)
+
+    [
+      case payload["publish_objective"] do
+        value when is_binary(value) and value != "" -> "publish_objective=#{value}"
+        _ -> nil
+      end,
+      payload
+      |> Map.get("recommended_actions", [])
+      |> List.wrap()
+      |> List.first()
+      |> case do
+        value when is_binary(value) and value != "" -> "publish_guidance=#{value}"
+        _ -> nil
+      end
+    ]
+    |> Enum.reject(&is_nil_or_empty/1)
+  end
+
   defp work_item_publish_snapshot(item) do
     cond do
       get_in(item.metadata || %{}, ["task_type"]) == "publish_approval" ->
@@ -1959,6 +1981,17 @@ defmodule HydraX.Report do
           Map.get(artifact.payload || %{}, "delivery")
         end
       end) || %{}
+  end
+
+  defp publish_brief_payload(item) do
+    item.artifacts
+    |> List.wrap()
+    |> Enum.filter(&(&1.type == "delivery_brief"))
+    |> Enum.max_by(& &1.id, fn -> nil end)
+    |> case do
+      nil -> %{}
+      artifact -> artifact.payload || %{}
+    end
   end
 
   defp work_item_side_effect_class(item) do
