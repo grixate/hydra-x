@@ -89,6 +89,9 @@ defmodule Mix.Tasks.HydraX.Work do
         )
       )
 
+      artifact_delivery_decision_lines(artifact)
+      |> Enum.each(fn line -> Mix.shell().info(line) end)
+
       HydraX.Runtime.artifact_approval_records(artifact.id)
       |> Enum.each(fn record ->
         Mix.shell().info(
@@ -173,6 +176,9 @@ defmodule Mix.Tasks.HydraX.Work do
     Mix.shell().info("summary=#{artifact.summary || ""}")
     Mix.shell().info("approvals=#{length(approvals)}")
 
+    artifact_delivery_decision_lines(artifact)
+    |> Enum.each(fn line -> Mix.shell().info(line) end)
+
     Enum.each(approvals, fn record ->
       Mix.shell().info(
         Enum.join(
@@ -225,4 +231,50 @@ defmodule Mix.Tasks.HydraX.Work do
     Mix.shell().info("decision=#{record.decision}")
     Mix.shell().info("action=#{record.requested_action}")
   end
+
+  defp artifact_delivery_decision_lines(artifact) do
+    payload = artifact.payload || %{}
+
+    artifact
+    |> artifact_delivery_decision_entries()
+    |> Enum.take(2)
+    |> Enum.with_index(1)
+    |> Enum.map(fn {entry, index} ->
+      summary =
+        case entry["content"] do
+          value when is_binary(value) -> value
+          _ -> inspect(entry)
+        end
+
+      "artifact_detail\t#{artifact.id}\t#{artifact_delivery_decision_kind(payload)}_delivery_decision_#{index}\t#{summary}"
+    end)
+  end
+
+  defp artifact_delivery_decision_entries(artifact) do
+    payload = artifact.payload || %{}
+
+    case artifact_delivery_decision_kind(payload) do
+      "review" ->
+        payload
+        |> Map.get("delivery_decision_context", [])
+        |> List.wrap()
+
+      "synthesis" ->
+        payload
+        |> Map.get("delivery_decisions", [])
+        |> List.wrap()
+
+      _ ->
+        []
+    end
+  end
+
+  defp artifact_delivery_decision_kind(%{"decision_type" => "delegation_synthesis"}),
+    do: "synthesis"
+
+  defp artifact_delivery_decision_kind(%{"delivery_decision_context" => context})
+       when is_list(context) and context != [],
+       do: "review"
+
+  defp artifact_delivery_decision_kind(_payload), do: "artifact"
 end

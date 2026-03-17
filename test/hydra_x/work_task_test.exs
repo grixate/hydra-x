@@ -26,6 +26,39 @@ defmodule HydraX.WorkTaskTest do
         "summary" => "Prepared runtime patch"
       })
 
+    {:ok, _review_artifact} =
+      Runtime.create_artifact(%{
+        "work_item_id" => work_item.id,
+        "type" => "review_report",
+        "title" => "Delivery review",
+        "summary" => "Compared publish options",
+        "payload" => %{
+          "delivery_decision_context" => [
+            %{
+              "content" =>
+                "Route the revised publish through Slack because the operator rejected Telegram delivery."
+            }
+          ]
+        }
+      })
+
+    {:ok, _synthesis_artifact} =
+      Runtime.create_artifact(%{
+        "work_item_id" => work_item.id,
+        "type" => "decision_ledger",
+        "title" => "Planner synthesis",
+        "summary" => "Carried delivery decisions forward",
+        "payload" => %{
+          "decision_type" => "delegation_synthesis",
+          "delivery_decisions" => [
+            %{
+              "content" =>
+                "Keep the rerouted Slack path because it preserves operator intent while staying publish-ready."
+            }
+          ]
+        }
+      })
+
     Mix.Task.reenable("hydra_x.work")
 
     show_output =
@@ -36,6 +69,11 @@ defmodule HydraX.WorkTaskTest do
     assert show_output =~ "work_item=#{work_item.id}"
     assert show_output =~ "kind=engineering"
     assert show_output =~ "artifact\tcode_change_set"
+    assert show_output =~ "artifact_detail"
+    assert show_output =~ "review_delivery_decision_1"
+    assert show_output =~ "Route the revised publish through Slack"
+    assert show_output =~ "synthesis_delivery_decision_1"
+    assert show_output =~ "Keep the rerouted Slack path"
 
     Mix.Task.reenable("hydra_x.work")
 
@@ -114,9 +152,17 @@ defmodule HydraX.WorkTaskTest do
     {:ok, artifact} =
       Runtime.create_artifact(%{
         "work_item_id" => work_item.id,
-        "type" => "proposal",
+        "type" => "review_report",
         "title" => "Runtime proposal",
-        "summary" => "Prepared runtime proposal"
+        "summary" => "Prepared runtime proposal",
+        "payload" => %{
+          "delivery_decision_context" => [
+            %{
+              "content" =>
+                "Hold the publish brief on the control plane until the reviewer approves external delivery."
+            }
+          ]
+        }
       })
 
     Mix.Task.reenable("hydra_x.work")
@@ -145,5 +191,7 @@ defmodule HydraX.WorkTaskTest do
 
     assert show_output =~ "approvals=1"
     assert show_output =~ "publish_review_report"
+    assert show_output =~ "review_delivery_decision_1"
+    assert show_output =~ "Hold the publish brief on the control plane"
   end
 end

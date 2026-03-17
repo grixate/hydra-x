@@ -2113,6 +2113,8 @@ defmodule HydraX.Report do
   end
 
   defp json_artifact_snapshot(artifact) do
+    decision_entries = artifact_delivery_decision_entries(artifact)
+
     %{
       id: artifact.id,
       type: artifact.type,
@@ -2120,6 +2122,15 @@ defmodule HydraX.Report do
       summary: artifact.summary,
       review_status: artifact.review_status,
       payload: artifact.payload,
+      delivery_decision_kind: artifact_delivery_decision_kind(artifact),
+      delivery_decision_entries: decision_entries,
+      delivery_decision_summary:
+        decision_entries
+        |> List.first()
+        |> case do
+          %{"content" => value} when is_binary(value) and value != "" -> value
+          _ -> nil
+        end,
       approvals:
         Enum.map(Map.get(artifact, :approvals, []), fn record ->
           %{
@@ -2132,6 +2143,35 @@ defmodule HydraX.Report do
           }
         end)
     }
+  end
+
+  defp artifact_delivery_decision_entries(artifact) do
+    payload = artifact.payload || %{}
+
+    case artifact_delivery_decision_kind(artifact) do
+      "review" ->
+        payload
+        |> Map.get("delivery_decision_context", [])
+        |> List.wrap()
+
+      "synthesis" ->
+        payload
+        |> Map.get("delivery_decisions", [])
+        |> List.wrap()
+
+      _ ->
+        []
+    end
+  end
+
+  defp artifact_delivery_decision_kind(artifact) do
+    payload = artifact.payload || %{}
+
+    cond do
+      payload["decision_type"] == "delegation_synthesis" -> "synthesis"
+      List.wrap(payload["delivery_decision_context"]) != [] -> "review"
+      true -> nil
+    end
   end
 
   defp json_promoted_memory(memory) do

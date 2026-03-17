@@ -1018,6 +1018,19 @@ defmodule HydraX.ReportTest do
 
     assert File.read!(export.markdown_path) =~ "channel=slack"
     assert File.read!(export.markdown_path) =~ "Top ranked active memories"
+
+    work_items_json = File.read!(Path.join(export.bundle_dir, "work_items.json"))
+
+    assert work_items_json =~ "\"delivery_decision_kind\": \"review\""
+
+    assert work_items_json =~
+             "\"delivery_decision_summary\": \"Route the revised summary through Slack because the operator requested a channel switch.\""
+
+    assert work_items_json =~ "\"delivery_decision_kind\": \"synthesis\""
+
+    assert work_items_json =~
+             "\"delivery_decision_summary\": \"Keep the rerouted Slack plan because it preserves operator intent without reopening Telegram delivery.\""
+
     assert File.read!(export.markdown_path) =~ "ops/reporting.md"
     assert File.read!(export.markdown_path) =~ "breakdown="
     assert File.read!(export.markdown_path) =~ "Cluster Posture"
