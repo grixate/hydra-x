@@ -4379,6 +4379,121 @@ defmodule HydraX.RuntimeTest do
            end)
   end
 
+  test "save_work_item auto-resolves the lowest-pressure capable agent for a role" do
+    builder_one =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, builder_one} =
+      Runtime.save_agent(builder_one, %{
+        "role" => "builder",
+        "name" => "Builder One",
+        "slug" => "builder-one-#{System.unique_integer([:positive])}"
+      })
+
+    builder_two =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, builder_two} =
+      Runtime.save_agent(builder_two, %{
+        "role" => "builder",
+        "name" => "Builder Two",
+        "slug" => "builder-two-#{System.unique_integer([:positive])}"
+      })
+
+    {:ok, _queued_one} =
+      Runtime.save_work_item(%{
+        "kind" => "engineering",
+        "goal" => "Prepare the first queued builder patch.",
+        "assigned_agent_id" => builder_one.id,
+        "assigned_role" => "builder",
+        "status" => "planned"
+      })
+
+    {:ok, _queued_two} =
+      Runtime.save_work_item(%{
+        "kind" => "engineering",
+        "goal" => "Prepare the second queued builder patch.",
+        "assigned_agent_id" => builder_one.id,
+        "assigned_role" => "builder",
+        "status" => "planned"
+      })
+
+    {:ok, item} =
+      Runtime.save_work_item(%{
+        "kind" => "engineering",
+        "goal" => "Resolve the builder assignment from capability and queue posture.",
+        "assigned_role" => "builder"
+      })
+
+    assert item.assigned_agent_id == builder_two.id
+
+    assert get_in(item.metadata || %{}, ["assignment_resolution", "strategy"]) ==
+             "role_capability_match"
+
+    assert get_in(item.metadata || %{}, ["assignment_resolution", "resolved_agent_id"]) ==
+             builder_two.id
+
+    assert "queue clear" in get_in(item.metadata || %{}, ["assignment_resolution", "reasons"])
+  end
+
+  test "publish summary assignment prefers the operator agent that supports channel delivery" do
+    operator_report =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, _operator_report} =
+      Runtime.save_agent(operator_report, %{
+        "role" => "operator",
+        "name" => "Report Operator",
+        "slug" => "report-operator-#{System.unique_integer([:positive])}"
+      })
+
+    operator_channel =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, operator_channel} =
+      Runtime.save_agent(operator_channel, %{
+        "role" => "operator",
+        "name" => "Channel Operator",
+        "slug" => "channel-operator-#{System.unique_integer([:positive])}",
+        "capability_profile" => %{
+          "delivery_modes" => ["report", "control_plane", "channel"],
+          "side_effect_classes" => ["read_only", "external_delivery"]
+        }
+      })
+
+    {:ok, publish_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Publish the finalized summary through the channel-capable operator.",
+        "assigned_role" => "operator",
+        "metadata" => %{
+          "task_type" => "publish_summary",
+          "delivery" => %{
+            "mode" => "channel",
+            "channel" => "telegram",
+            "target" => "ops-room"
+          }
+        }
+      })
+
+    assert publish_item.assigned_agent_id == operator_channel.id
+
+    assert get_in(publish_item.metadata || %{}, ["assignment_resolution", "strategy"]) ==
+             "role_capability_match"
+
+    assert get_in(publish_item.metadata || %{}, ["assignment_resolution", "resolved_agent_name"]) ==
+             "Channel Operator"
+
+    assert "supports channel delivery" in get_in(
+             publish_item.metadata || %{},
+             ["assignment_resolution", "reasons"]
+           )
+  end
+
   test "publish summary tasks can deliver through configured channels when enabled" do
     previous = Application.get_env(:hydra_x, :telegram_deliver)
 

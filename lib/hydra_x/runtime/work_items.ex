@@ -2974,6 +2974,231 @@ defmodule HydraX.Runtime.WorkItems do
     |> Map.put_new("result_refs", work_item.result_refs || %{})
     |> Map.put_new("runtime_state", work_item.runtime_state || %{})
     |> Map.put("metadata", metadata)
+    |> maybe_resolve_assigned_agent(work_item)
+  end
+
+  defp maybe_resolve_assigned_agent(attrs, %WorkItem{} = work_item) do
+    assigned_agent_id = attrs["assigned_agent_id"] || work_item.assigned_agent_id
+
+    if is_integer(assigned_agent_id) do
+      attrs
+    else
+      case resolve_assigned_agent(attrs) do
+        nil ->
+          attrs
+
+        %{agent: agent, resolution: resolution} ->
+          attrs
+          |> Map.put("assigned_agent_id", agent.id)
+          |> put_assignment_resolution(resolution)
+      end
+    end
+  end
+
+  defp resolve_assigned_agent(attrs) when is_map(attrs) do
+    active_agents =
+      Agents.list_agents()
+      |> Enum.filter(&(&1.status == "active"))
+
+    candidates =
+      build_assignment_candidates(active_agents, attrs)
+
+    exact_role_matches =
+      Enum.filter(candidates, fn candidate ->
+        candidate.match? and candidate.agent.role == attrs["assigned_role"]
+      end)
+
+    fallback_matches =
+      Enum.filter(candidates, & &1.match?)
+
+    cond do
+      exact_role_matches != [] ->
+        assignment_choice(exact_role_matches, "role_capability_match")
+
+      fallback_matches != [] ->
+        assignment_choice(fallback_matches, "capability_fallback")
+
+      true ->
+        nil
+    end
+  end
+
+  defp build_assignment_candidates([], _attrs), do: []
+
+  defp build_assignment_candidates(agents, attrs) do
+    pending_counts = pending_assignment_counts(agents)
+
+    Enum.map(agents, fn agent ->
+      build_assignment_candidate(agent, attrs, Map.get(pending_counts, agent.id, 0))
+    end)
+  end
+
+  defp build_assignment_candidate(agent, attrs, pending_count) do
+    profile = capability_profile(agent)
+    required_artifact_types = required_assignment_artifact_types(attrs)
+    required_delivery_modes = required_assignment_delivery_modes(attrs)
+    side_effect_class = required_assignment_side_effect_class(attrs)
+    autonomy_level = attrs["autonomy_level"]
+    role_match = agent.role == attrs["assigned_role"]
+    autonomy_allowed = Autonomy.autonomy_level_allowed?(profile, autonomy_level)
+    side_effect_allowed = Autonomy.side_effect_allowed?(profile, side_effect_class)
+    artifact_match = capability_supports_artifacts?(profile, required_artifact_types)
+    delivery_match = capability_supports_delivery_modes?(profile, required_delivery_modes)
+
+    match? = autonomy_allowed and side_effect_allowed and artifact_match and delivery_match
+
+    score =
+      if match? do
+        0.0
+        |> maybe_add_score(role_match, 4.0)
+        |> maybe_add_score(autonomy_allowed, 2.5)
+        |> maybe_add_score(side_effect_allowed, 2.5)
+        |> maybe_add_score(artifact_match, 2.0)
+        |> maybe_add_score(delivery_match, 2.0)
+        |> maybe_add_score(agent.is_default, 0.5)
+        |> Kernel.-(min(pending_count, 12) * 0.25)
+      else
+        -1.0
+      end
+
+    %{
+      agent: agent,
+      match?: match?,
+      score: score,
+      pending_count: pending_count,
+      role_match: role_match,
+      reasons:
+        assignment_reasons(
+          agent,
+          role_match,
+          side_effect_class,
+          required_delivery_modes,
+          required_artifact_types,
+          pending_count
+        )
+    }
+  end
+
+  defp assignment_choice(candidates, strategy) do
+    candidate =
+      candidates
+      |> Enum.sort_by(fn candidate ->
+        {-candidate.score, candidate.pending_count, not candidate.agent.is_default,
+         candidate.agent.name}
+      end)
+      |> List.first()
+
+    if candidate do
+      %{
+        agent: candidate.agent,
+        resolution: %{
+          "strategy" => strategy,
+          "resolved_agent_id" => candidate.agent.id,
+          "resolved_agent_name" => candidate.agent.name,
+          "resolved_agent_slug" => candidate.agent.slug,
+          "resolved_role" => candidate.agent.role,
+          "score" => Float.round(candidate.score, 2),
+          "pending_work_items" => candidate.pending_count,
+          "reasons" => candidate.reasons
+        }
+      }
+    end
+  end
+
+  defp pending_assignment_counts(agents) do
+    agent_ids =
+      agents
+      |> Enum.map(& &1.id)
+      |> Enum.reject(&is_nil/1)
+
+    if agent_ids == [] do
+      %{}
+    else
+      WorkItem
+      |> where(
+        [work_item],
+        work_item.assigned_agent_id in ^agent_ids and
+          work_item.status not in ^@terminal_work_item_statuses
+      )
+      |> group_by([work_item], work_item.assigned_agent_id)
+      |> select([work_item], {work_item.assigned_agent_id, count(work_item.id)})
+      |> Repo.all()
+      |> Map.new()
+    end
+  end
+
+  defp required_assignment_artifact_types(attrs) do
+    attrs
+    |> get_in(["required_outputs", "artifact_types"])
+    |> List.wrap()
+    |> Enum.reject(&(&1 in [nil, ""]))
+  end
+
+  defp required_assignment_delivery_modes(attrs) do
+    metadata_delivery = get_in(attrs, ["metadata", "delivery"]) || %{}
+    deliverables = attrs["deliverables"] || %{}
+
+    [
+      metadata_delivery["mode"],
+      deliverables["mode"],
+      if(
+        present_text?(metadata_delivery["channel"]) or present_text?(deliverables["channel"]),
+        do: "channel"
+      )
+    ]
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> Enum.uniq()
+  end
+
+  defp required_assignment_side_effect_class(attrs) do
+    get_in(attrs, ["metadata", "side_effect_class"]) ||
+      side_effect_class_for_kind_and_metadata(attrs["kind"], attrs["metadata"])
+  end
+
+  defp capability_supports_artifacts?(profile, required_artifact_types) do
+    required_artifact_types == [] or
+      MapSet.subset?(
+        MapSet.new(required_artifact_types),
+        MapSet.new(List.wrap(profile["artifact_types"]))
+      )
+  end
+
+  defp capability_supports_delivery_modes?(profile, required_delivery_modes) do
+    required_delivery_modes == [] or
+      MapSet.subset?(
+        MapSet.new(required_delivery_modes),
+        MapSet.new(List.wrap(profile["delivery_modes"]))
+      )
+  end
+
+  defp assignment_reasons(
+         agent,
+         role_match,
+         side_effect_class,
+         required_delivery_modes,
+         required_artifact_types,
+         pending_count
+       ) do
+    [
+      role_match && "exact role match",
+      side_effect_class && "supports #{side_effect_class}",
+      required_delivery_modes != [] &&
+        "supports #{Enum.join(required_delivery_modes, "/")} delivery",
+      required_artifact_types != [] &&
+        "produces #{Enum.join(required_artifact_types, ", ")}",
+      pending_count == 0 && "queue clear",
+      pending_count > 0 && "queue #{pending_count}",
+      agent.is_default && "default agent"
+    ]
+    |> Enum.reject(&(&1 in [false, nil, ""]))
+  end
+
+  defp maybe_add_score(score, true, value), do: score + value
+  defp maybe_add_score(score, _condition, _value), do: score
+
+  defp put_assignment_resolution(attrs, resolution) do
+    metadata = attrs["metadata"] || %{}
+    Map.put(attrs, "metadata", Map.put(metadata, "assignment_resolution", resolution))
   end
 
   defp default_execution_mode("planner"), do: "delegate"

@@ -658,6 +658,12 @@ defmodule HydraX.ReportTest do
         "metadata" => %{
           "task_type" => "publish_summary",
           "delivery" => %{"mode" => "channel", "channel" => "telegram", "target" => "ops-room"},
+          "assignment_resolution" => %{
+            "strategy" => "role_capability_match",
+            "resolved_agent_name" => "Report Agent",
+            "resolved_agent_slug" => "report-agent",
+            "reasons" => ["exact role match", "supports channel delivery", "queue clear"]
+          },
           "follow_up_context" => %{
             "delivery_decisions" => [
               %{
@@ -971,6 +977,7 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "publish=queued 1"
     assert File.read!(export.markdown_path) =~ "publish=replan queued 1"
     assert File.read!(export.markdown_path) =~ "publish=delivered telegram -> ops-room"
+    assert File.read!(export.markdown_path) =~ "assignment=report-agent:role_capability_match"
 
     assert File.read!(export.markdown_path) =~
              "publish_objective=Revise the summary and route it through telegram for ops-room publication."
@@ -1032,6 +1039,8 @@ defmodule HydraX.ReportTest do
 
     assert work_items_json =~ "\"delivery_decision_kind\": \"review\""
     assert work_items_json =~ "\"delivery_decision_snapshot\":"
+    assert work_items_json =~ "\"assignment_resolution\":"
+    assert work_items_json =~ "\"resolved_agent_slug\": \"report-agent\""
 
     assert work_items_json =~
              "\"delivery_decision_summary\": \"Route the revised summary through Slack because the operator requested a channel switch.\""

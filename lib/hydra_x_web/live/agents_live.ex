@@ -547,6 +547,9 @@ defmodule HydraXWeb.AgentsLive do
                       <span :if={summary = work_item_publish_summary(item)}>
                         · {summary}
                       </span>
+                      <span :if={summary = work_item_assignment_summary(item)}>
+                        · {summary}
+                      </span>
                     </div>
                     <div :if={work_item_actionable?(item)} class="mt-3 flex flex-wrap gap-2">
                       <button
@@ -589,6 +592,12 @@ defmodule HydraXWeb.AgentsLive do
                       </span>
                       <span class="rounded-full border border-white/10 px-3 py-1">
                         effect {work_item_side_effect_class(item)}
+                      </span>
+                      <span
+                        :if={summary = work_item_assignment_summary(item)}
+                        class="rounded-full border border-violet-400/20 bg-violet-400/10 px-3 py-1 text-violet-200"
+                      >
+                        {summary}
                       </span>
                       <span
                         :if={label = work_item_policy_failure_label(item)}
@@ -1519,6 +1528,7 @@ defmodule HydraXWeb.AgentsLive do
 
   defp work_item_publish_detail_lines(work_item) do
     [
+      work_item_assignment_detail_line(work_item),
       publish_objective_line(work_item),
       publish_prior_decision_line(work_item),
       publish_decision_comparison_line(work_item),
@@ -1534,6 +1544,38 @@ defmodule HydraXWeb.AgentsLive do
       details -> details
     end
   end
+
+  defp work_item_assignment_summary(work_item) do
+    resolution = get_in(work_item.metadata || %{}, ["assignment_resolution"]) || %{}
+
+    case {resolution["resolved_agent_name"], resolution["strategy"]} do
+      {name, strategy} when is_binary(name) and is_binary(strategy) ->
+        "assigned #{name} via #{humanize_assignment_strategy(strategy)}"
+
+      _ ->
+        nil
+    end
+  end
+
+  defp work_item_assignment_detail_line(work_item) do
+    resolution = get_in(work_item.metadata || %{}, ["assignment_resolution"]) || %{}
+
+    case {resolution["resolved_agent_name"], resolution["reasons"]} do
+      {name, reasons} when is_binary(name) and is_list(reasons) and reasons != [] ->
+        "assignment #{name}: #{Enum.join(reasons, ", ")}"
+
+      {name, _reasons} when is_binary(name) ->
+        "assignment #{name}"
+
+      _ ->
+        nil
+    end
+  end
+
+  defp humanize_assignment_strategy("role_capability_match"), do: "role capability match"
+  defp humanize_assignment_strategy("capability_fallback"), do: "capability fallback"
+  defp humanize_assignment_strategy(strategy) when is_binary(strategy), do: strategy
+  defp humanize_assignment_strategy(_strategy), do: "assignment"
 
   defp follow_up_queue_type(work_item) do
     work_item

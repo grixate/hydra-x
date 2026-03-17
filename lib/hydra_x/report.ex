@@ -688,6 +688,7 @@ defmodule HydraX.Report do
 
       publish = render_work_item_publish_summary(item)
       publish_details = render_work_item_publish_details(item)
+      assignment = render_work_item_assignment(item)
 
       [
         "##{item.id}",
@@ -702,6 +703,7 @@ defmodule HydraX.Report do
           "enablement=#{item.result_refs["extension_enablement_status"]}",
         artifacts != "" && "artifacts=#{artifacts}",
         promoted_memories != "" && "promoted=#{promoted_memories}",
+        assignment && "assignment=#{assignment}",
         publish && "publish=#{publish}",
         item.goal
       ]
@@ -715,6 +717,21 @@ defmodule HydraX.Report do
   defp render_conversation_attachments(conversation) do
     count = conversation_attachment_count(conversation)
     if count > 0, do: " · attachments=#{count}", else: ""
+  end
+
+  defp render_work_item_assignment(item) do
+    resolution = get_in(item.metadata || %{}, ["assignment_resolution"]) || %{}
+
+    case {resolution["resolved_agent_slug"], resolution["strategy"]} do
+      {slug, strategy} when is_binary(slug) and is_binary(strategy) ->
+        "#{slug}:#{strategy}"
+
+      {slug, _strategy} when is_binary(slug) ->
+        slug
+
+      _ ->
+        nil
+    end
   end
 
   defp render_conversation_execution(conversation) do

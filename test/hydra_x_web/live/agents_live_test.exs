@@ -141,6 +141,12 @@ defmodule HydraXWeb.AgentsLiveTest do
         "metadata" => %{
           "task_type" => "publish_summary",
           "delivery" => %{"mode" => "channel", "channel" => "telegram", "target" => "ops-room"},
+          "assignment_resolution" => %{
+            "strategy" => "role_capability_match",
+            "resolved_agent_name" => "Research Agent",
+            "resolved_agent_slug" => "research-agent",
+            "reasons" => ["exact role match", "supports channel delivery", "queue clear"]
+          },
           "follow_up_context" => %{
             "delivery_decisions" => [
               %{
@@ -233,6 +239,11 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "patch_bundle"
     assert html =~ publish_parent.goal
     assert html =~ "publish follow-up queued 1"
+    assert html =~ "assigned Research Agent via role capability match"
+
+    assert html =~
+             "assignment Research Agent: exact role match, supports channel delivery, queue clear"
+
     assert html =~ "delivery delivered telegram"
     assert html =~ "ops-room"
 
