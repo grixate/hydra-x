@@ -255,6 +255,14 @@ defmodule HydraX.ReportTest do
       results: []
     })
 
+    Runtime.Jobs.record_scheduler_pass(:work_item_replays, %{
+      owner: "node:report",
+      resumed_count: 4,
+      skipped_count: 1,
+      error_count: 0,
+      results: []
+    })
+
     Runtime.Jobs.record_scheduler_pass(:ownership_handoffs, %{
       owner: "node:report",
       resumed_count: 2,
@@ -274,6 +282,7 @@ defmodule HydraX.ReportTest do
     snapshot = Report.snapshot()
 
     assert snapshot.scheduler.pending_ingress.processed_count == 1
+    assert snapshot.scheduler.work_item_replays.resumed_count == 4
     assert snapshot.scheduler.ownership_handoffs.resumed_count == 2
     assert snapshot.scheduler.deferred_deliveries.delivered_count == 3
   end
@@ -1178,6 +1187,7 @@ defmodule HydraX.ReportTest do
     assert File.read!(Path.join(export.bundle_dir, "memory.json")) =~ "\"score_breakdown\""
     assert File.read!(Path.join(export.bundle_dir, "memory.json")) =~ "\"ops/reporting.md\""
     assert File.read!(export.markdown_path) =~ "Ingress replay:"
+    assert File.read!(export.markdown_path) =~ "Work item replay:"
     assert File.read!(export.markdown_path) =~ "Ownership replay:"
     assert File.read!(export.markdown_path) =~ "Deferred delivery replay:"
     assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~ "\"channel_state\""
@@ -1193,6 +1203,7 @@ defmodule HydraX.ReportTest do
     assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~ "\"stream_capture\""
     assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~ "\"retry_state\""
     assert File.read!(export.json_path) =~ "\"pending_ingress\""
+    assert File.read!(export.json_path) =~ "\"work_item_replays\""
     assert File.read!(export.json_path) =~ "\"ownership_handoffs\""
     assert File.read!(export.json_path) =~ "\"deferred_deliveries\""
 

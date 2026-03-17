@@ -333,13 +333,65 @@ defmodule HydraX.Runtime.WorkItems do
     end
   end
 
+  def list_owned_resumable_work_items(opts \\ []) do
+    limit = Keyword.get(opts, :limit, 50)
+    owner = Coordination.status().owner
+
+    WorkItem
+    |> where([work_item], work_item.status in ["claimed", "running", "blocked", "replayed"])
+    |> order_by([work_item], desc: work_item.priority, asc: work_item.inserted_at)
+    |> limit(^max(limit * 3, limit))
+    |> Repo.all()
+    |> Enum.filter(&owned_resumable_work_item?(&1, owner))
+    |> Enum.take(limit)
+    |> Enum.map(&get_work_item!(&1.id))
+  end
+
+  def resume_owned_work_items(opts \\ []) do
+    owner = Coordination.status().owner
+    limit = Keyword.get(opts, :limit, 50)
+
+    list_owned_resumable_work_items(limit: limit)
+    |> Enum.reduce(resume_work_item_summary(owner), fn work_item, acc ->
+      case replay_claim_work_item(work_item) do
+        {:ok, claimed} ->
+          agent = replay_agent_for_work_item(claimed)
+
+          case agent do
+            %AgentProfile{} = replay_agent ->
+              case run_autonomy_cycle(
+                     replay_agent.id,
+                     Keyword.put(opts, :work_item_id, claimed.id)
+                   ) do
+                {:ok, summary} ->
+                  accumulate_resumed_work_item(acc, claimed, summary)
+
+                {:error, reason} ->
+                  accumulate_resume_work_item_error(acc, claimed, reason)
+              end
+
+            nil ->
+              accumulate_skipped_work_item(acc, claimed, "missing_agent")
+          end
+
+        {:error, {:taken, lease}} ->
+          _ = note_remote_work_item_ownership(work_item, lease, "claimed_remote")
+          accumulate_skipped_work_item(acc, work_item, "lease_owned_elsewhere")
+
+        {:error, reason} ->
+          accumulate_resume_work_item_error(acc, work_item, reason)
+      end
+    end)
+  end
+
   def run_autonomy_cycle(agent_id, opts \\ []) when is_integer(agent_id) do
     agent = Agents.get_agent!(agent_id)
 
     if agent.status != "active" do
       {:ok, %{agent: agent, status: "skipped", processed_count: 0, reason: "agent_inactive"}}
     else
-      with {:idle, nil} <- maybe_finalize_blocked_parent(agent, opts),
+      with {:idle, nil} <- maybe_resume_specific_work_item(agent, opts),
+           {:idle, nil} <- maybe_finalize_blocked_parent(agent, opts),
            {:idle, nil} <- maybe_run_next_work_item(agent, opts) do
         {:ok, %{agent: agent, status: "idle", processed_count: 0, artifacts: []}}
       else
@@ -504,6 +556,54 @@ defmodule HydraX.Runtime.WorkItems do
     ownership["active"] == true and ownership["owner"] not in [nil, Coordination.status().owner]
   end
 
+  defp owned_resumable_work_item?(%WorkItem{} = work_item, owner) do
+    ownership = get_in(work_item.metadata || %{}, ["ownership"]) || %{}
+
+    case ownership["owner"] do
+      ^owner ->
+        ownership["active"] == true
+
+      nil ->
+        false
+
+      _other ->
+        ownership["active"] == true or stale_or_missing_work_item_lease?(work_item)
+    end
+  end
+
+  defp stale_or_missing_work_item_lease?(%WorkItem{} = work_item) do
+    case Coordination.active_lease(lease_name(work_item.id)) do
+      nil -> true
+      _lease -> false
+    end
+  end
+
+  defp maybe_resume_specific_work_item(_agent, opts) when not is_list(opts), do: {:idle, nil}
+
+  defp maybe_resume_specific_work_item(agent, opts) do
+    case Keyword.get(opts, :work_item_id) do
+      nil ->
+        {:idle, nil}
+
+      work_item_id ->
+        work_item = get_work_item!(work_item_id)
+
+        cond do
+          not work_item_assigned_to_agent?(work_item, agent) ->
+            {:idle, nil}
+
+          work_item.status == "blocked" and blocked_parent_ready?(work_item) ->
+            finalize_blocked_parent(agent, work_item)
+
+          work_item.status in ["claimed", "running", "replayed"] ->
+            resume_claimed_work_item(agent, work_item, opts)
+
+          true ->
+            {:idle, nil}
+        end
+    end
+  end
+
   defp maybe_finalize_blocked_parent(agent, _opts) do
     blocked_parent =
       WorkItem
@@ -522,118 +622,7 @@ defmodule HydraX.Runtime.WorkItems do
         {:idle, nil}
 
       %WorkItem{} = work_item ->
-        case claim_work_item(work_item, metadata: %{"phase" => "finalize"}) do
-          {:ok, claimed} ->
-            children =
-              list_work_items(
-                parent_work_item_id: claimed.id,
-                statuses: @terminal_work_item_statuses,
-                limit: 10
-              )
-
-            artifact_ids =
-              children
-              |> Enum.flat_map(fn child ->
-                child.result_refs
-                |> Map.get("artifact_ids", [])
-                |> List.wrap()
-              end)
-
-            supporting_memories = finalized_child_findings(children)
-            constraint_findings = constrained_child_findings(children)
-
-            inherited_delivery_decisions =
-              List.wrap(
-                get_in(claimed.metadata || %{}, ["follow_up_context", "delivery_decisions"])
-              )
-
-            delivery_decisions =
-              merge_supporting_findings(
-                delivery_decision_findings(supporting_memories) ++ inherited_delivery_decisions
-              )
-
-            delivery_decision_snapshot =
-              build_delivery_decision_snapshot(
-                delivery_decisions,
-                inherited_delivery_decisions,
-                decision_basis: "planner_synthesis",
-                decision_scope: "planner"
-              )
-
-            {:ok, summary_artifact} =
-              create_artifact(%{
-                "work_item_id" => claimed.id,
-                "type" => "decision_ledger",
-                "title" => "Delegation synthesis",
-                "summary" => delegation_summary_line(claimed, children, supporting_memories),
-                "body" => delegation_summary_body(claimed, children, supporting_memories),
-                "payload" => %{
-                  "decision_type" => "delegation_synthesis",
-                  "summary_source" => "planner",
-                  "child_work_item_ids" => Enum.map(children, & &1.id),
-                  "result_artifact_ids" => artifact_ids,
-                  "promoted_findings" => supporting_memories,
-                  "constraint_findings" => constraint_findings,
-                  "delivery_decisions" => delivery_decisions,
-                  "delivery_decision_snapshot" => delivery_decision_snapshot
-                },
-                "provenance" => %{
-                  "source" => "autonomy",
-                  "phase" => "finalize"
-                },
-                "confidence" => 0.72
-              })
-
-            {:ok, updated} =
-              save_work_item(
-                claimed,
-                finalize_parent_attrs(
-                  claimed,
-                  children,
-                  summary_artifact,
-                  artifact_ids,
-                  supporting_memories,
-                  constraint_findings
-                )
-              )
-
-            {:ok, updated, follow_up_work_item} =
-              case maybe_enqueue_replan_follow_up(
-                     updated,
-                     summary_artifact,
-                     supporting_memories,
-                     constraint_findings
-                   ) do
-                {:ok, replan_parent, %WorkItem{} = replan_item} ->
-                  {:ok, replan_parent, replan_item}
-
-                {:ok, replan_parent, nil} ->
-                  maybe_enqueue_publish_follow_up(
-                    replan_parent,
-                    summary_artifact,
-                    supporting_memories
-                  )
-              end
-
-            {:processed,
-             %{
-               status: "completed",
-               processed_count: 1,
-               work_item: updated,
-               artifacts: [summary_artifact],
-               action: "finalized_blocked_parent",
-               follow_up_work_item: follow_up_work_item
-             }}
-            |> finalize_claimed_summary(claimed)
-
-          {:error, {:taken, lease}} ->
-            note_remote_work_item_ownership(work_item, lease, "claimed_remote")
-            {:idle, nil}
-
-          {:error, reason} ->
-            {:processed,
-             %{status: "failed", processed_count: 0, action: "finalize_failed", error: reason}}
-        end
+        finalize_blocked_parent(agent, work_item)
     end
   end
 
@@ -671,6 +660,243 @@ defmodule HydraX.Runtime.WorkItems do
              %{status: "failed", processed_count: 0, action: "claim_failed", error: reason}}
         end
     end
+  end
+
+  defp finalize_blocked_parent(_agent, %WorkItem{} = work_item) do
+    case claim_work_item(work_item, metadata: %{"phase" => "finalize"}) do
+      {:ok, claimed} ->
+        do_finalize_blocked_parent(claimed)
+
+      {:error, {:taken, lease}} ->
+        note_remote_work_item_ownership(work_item, lease, "claimed_remote")
+        {:idle, nil}
+
+      {:error, reason} ->
+        {:processed,
+         %{status: "failed", processed_count: 0, action: "finalize_failed", error: reason}}
+    end
+  end
+
+  defp do_finalize_blocked_parent(%WorkItem{} = claimed) do
+    children =
+      list_work_items(
+        parent_work_item_id: claimed.id,
+        statuses: @terminal_work_item_statuses,
+        limit: 10
+      )
+
+    artifact_ids =
+      children
+      |> Enum.flat_map(fn child ->
+        child.result_refs
+        |> Map.get("artifact_ids", [])
+        |> List.wrap()
+      end)
+
+    supporting_memories = finalized_child_findings(children)
+    constraint_findings = constrained_child_findings(children)
+
+    inherited_delivery_decisions =
+      List.wrap(get_in(claimed.metadata || %{}, ["follow_up_context", "delivery_decisions"]))
+
+    delivery_decisions =
+      merge_supporting_findings(
+        delivery_decision_findings(supporting_memories) ++ inherited_delivery_decisions
+      )
+
+    delivery_decision_snapshot =
+      build_delivery_decision_snapshot(
+        delivery_decisions,
+        inherited_delivery_decisions,
+        decision_basis: "planner_synthesis",
+        decision_scope: "planner"
+      )
+
+    {:ok, summary_artifact} =
+      create_artifact(%{
+        "work_item_id" => claimed.id,
+        "type" => "decision_ledger",
+        "title" => "Delegation synthesis",
+        "summary" => delegation_summary_line(claimed, children, supporting_memories),
+        "body" => delegation_summary_body(claimed, children, supporting_memories),
+        "payload" => %{
+          "decision_type" => "delegation_synthesis",
+          "summary_source" => "planner",
+          "child_work_item_ids" => Enum.map(children, & &1.id),
+          "result_artifact_ids" => artifact_ids,
+          "promoted_findings" => supporting_memories,
+          "constraint_findings" => constraint_findings,
+          "delivery_decisions" => delivery_decisions,
+          "delivery_decision_snapshot" => delivery_decision_snapshot
+        },
+        "provenance" => %{
+          "source" => "autonomy",
+          "phase" => "finalize"
+        },
+        "confidence" => 0.72
+      })
+
+    {:ok, updated} =
+      save_work_item(
+        claimed,
+        finalize_parent_attrs(
+          claimed,
+          children,
+          summary_artifact,
+          artifact_ids,
+          supporting_memories,
+          constraint_findings
+        )
+      )
+
+    {:ok, updated, follow_up_work_item} =
+      case maybe_enqueue_replan_follow_up(
+             updated,
+             summary_artifact,
+             supporting_memories,
+             constraint_findings
+           ) do
+        {:ok, replan_parent, %WorkItem{} = replan_item} ->
+          {:ok, replan_parent, replan_item}
+
+        {:ok, replan_parent, nil} ->
+          maybe_enqueue_publish_follow_up(
+            replan_parent,
+            summary_artifact,
+            supporting_memories
+          )
+      end
+
+    {:processed,
+     %{
+       status: "completed",
+       processed_count: 1,
+       work_item: updated,
+       artifacts: [summary_artifact],
+       action: "finalized_blocked_parent",
+       follow_up_work_item: follow_up_work_item
+     }}
+    |> finalize_claimed_summary(claimed)
+  end
+
+  defp resume_claimed_work_item(agent, %WorkItem{} = work_item, opts) do
+    {:ok, resumed} =
+      save_work_item(work_item, %{
+        "metadata" =>
+          put_work_item_ownership(
+            work_item.metadata,
+            claimed_work_item_ownership(work_item.id, "replayed")
+          ),
+        "runtime_state" =>
+          append_history(work_item.runtime_state, "replayed", %{
+            "replayed_at" => DateTime.utc_now(),
+            "reason" => "owned_work_item_replay",
+            "job_id" => Keyword.get(opts, :job_id)
+          })
+      })
+
+    case authorize_work_item(agent, resumed) do
+      :ok ->
+        process_work_item(agent, resumed, opts)
+        |> finalize_claimed_summary(resumed)
+
+      {:error, failure} ->
+        block_work_item_for_policy(resumed, failure)
+        |> finalize_claimed_summary(resumed)
+    end
+  end
+
+  defp work_item_assigned_to_agent?(%WorkItem{} = work_item, %AgentProfile{} = agent) do
+    work_item.assigned_agent_id == agent.id or work_item.assigned_role == agent.role
+  end
+
+  defp replay_claim_work_item(%WorkItem{} = work_item) do
+    metadata = %{
+      "phase" => "replay",
+      "work_item_id" => work_item.id,
+      "assigned_role" => work_item.assigned_role
+    }
+
+    with {:ok, _lease} <-
+           Coordination.claim_lease(lease_name(work_item.id),
+             ttl_seconds: @claim_ttl_seconds,
+             metadata: metadata
+           ) do
+      ownership = claimed_work_item_ownership(work_item.id, "replayed")
+
+      save_work_item(work_item, %{
+        "metadata" => put_work_item_ownership(work_item.metadata, ownership)
+      })
+    end
+  end
+
+  defp replay_agent_for_work_item(%WorkItem{} = work_item) do
+    cond do
+      is_integer(work_item.assigned_agent_id) ->
+        Agents.get_agent!(work_item.assigned_agent_id)
+
+      is_binary(work_item.assigned_role) ->
+        Agents.list_agents()
+        |> Enum.find(&(&1.status == "active" and &1.role == work_item.assigned_role))
+
+      true ->
+        nil
+    end
+  end
+
+  defp resume_work_item_summary(owner) do
+    %{
+      owner: owner,
+      resumed_count: 0,
+      skipped_count: 0,
+      error_count: 0,
+      results: []
+    }
+  end
+
+  defp accumulate_resumed_work_item(acc, %WorkItem{} = work_item, summary) do
+    result = %{
+      work_item_id: work_item.id,
+      assigned_agent_id: work_item.assigned_agent_id,
+      status: summary.status,
+      action: summary[:action] || "replayed"
+    }
+
+    %{
+      acc
+      | resumed_count: acc.resumed_count + 1,
+        results: [result | acc.results]
+    }
+  end
+
+  defp accumulate_skipped_work_item(acc, %WorkItem{} = work_item, reason) do
+    result = %{
+      work_item_id: work_item.id,
+      assigned_agent_id: work_item.assigned_agent_id,
+      status: "skipped",
+      reason: to_string(reason)
+    }
+
+    %{
+      acc
+      | skipped_count: acc.skipped_count + 1,
+        results: [result | acc.results]
+    }
+  end
+
+  defp accumulate_resume_work_item_error(acc, %WorkItem{} = work_item, reason) do
+    result = %{
+      work_item_id: work_item.id,
+      assigned_agent_id: work_item.assigned_agent_id,
+      status: "error",
+      reason: inspect(reason)
+    }
+
+    %{
+      acc
+      | error_count: acc.error_count + 1,
+        results: [result | acc.results]
+    }
   end
 
   defp process_work_item(agent, %WorkItem{execution_mode: "delegate"} = work_item, _opts) do

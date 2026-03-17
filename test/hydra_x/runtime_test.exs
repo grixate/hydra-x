@@ -6023,6 +6023,100 @@ defmodule HydraX.RuntimeTest do
     assert active_lease.owner == "node:remote-work"
   end
 
+  test "owned work item replay resumes locally owned claimed work items" do
+    agent =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, agent} = Runtime.save_agent(agent, %{"role" => "researcher"})
+
+    {:ok, work_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Replay a locally owned claimed work item.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "researcher",
+        "status" => "claimed",
+        "metadata" => %{
+          "ownership" => %{
+            "owner" => Runtime.coordination_status().owner,
+            "stage" => "claimed",
+            "active" => true
+          }
+        }
+      })
+
+    summary = Runtime.resume_owned_work_items(limit: 10)
+
+    assert summary.resumed_count == 1
+    assert summary.skipped_count == 0
+
+    assert Enum.any?(
+             summary.results,
+             &(&1.work_item_id == work_item.id and &1.action == "completed_fallback")
+           )
+
+    refreshed = Runtime.get_work_item!(work_item.id)
+    ownership = get_in(refreshed.metadata || %{}, ["ownership"])
+
+    assert refreshed.status == "completed"
+    assert ownership["stage"] == "completed"
+    assert ownership["active"] == false
+    assert Runtime.active_lease("work_item:#{work_item.id}") == nil
+  end
+
+  test "owned work item replay skips work items with an active remote lease" do
+    agent =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, agent} = Runtime.save_agent(agent, %{"role" => "researcher"})
+
+    {:ok, work_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Do not replay while another node still owns the lease.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "researcher",
+        "status" => "claimed",
+        "metadata" => %{
+          "ownership" => %{
+            "owner" => "node:remote-replay",
+            "stage" => "claimed_remote",
+            "active" => true
+          }
+        }
+      })
+
+    assert {:ok, _lease} =
+             Runtime.claim_lease("work_item:#{work_item.id}",
+               owner: "node:remote-replay",
+               ttl_seconds: 60
+             )
+
+    on_exit(fn ->
+      Runtime.release_lease("work_item:#{work_item.id}", owner: "node:remote-replay")
+    end)
+
+    summary = Runtime.resume_owned_work_items(limit: 10)
+
+    assert summary.resumed_count == 0
+    assert summary.skipped_count == 1
+
+    assert Enum.any?(
+             summary.results,
+             &(&1.work_item_id == work_item.id and &1.reason == "lease_owned_elsewhere")
+           )
+
+    refreshed = Runtime.get_work_item!(work_item.id)
+    ownership = get_in(refreshed.metadata || %{}, ["ownership"])
+
+    assert refreshed.status == "claimed"
+    assert ownership["owner"] == "node:remote-replay"
+    assert ownership["stage"] == "claimed_remote"
+    assert ownership["active"] == true
+  end
+
   test "autonomy cycle blocks work items that exceed the agent autonomy ceiling" do
     agent =
       create_agent()

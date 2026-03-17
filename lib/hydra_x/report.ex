@@ -195,6 +195,7 @@ defmodule HydraX.Report do
     - Coordination: #{render_scheduler_coordination(snapshot.scheduler.coordination)}
     - Skip reasons: #{render_skip_reason_counts(snapshot.scheduler.skipped_reason_counts)}
     - Ingress replay: #{render_scheduler_pass(snapshot.scheduler.pending_ingress, "processed_count", "processed")}
+    - Work item replay: #{render_scheduler_pass(snapshot.scheduler.work_item_replays, "resumed_count", "resumed")}
     - Ownership replay: #{render_scheduler_pass(snapshot.scheduler.ownership_handoffs, "resumed_count", "resumed")}
     - Deferred delivery replay: #{render_scheduler_pass(snapshot.scheduler.deferred_deliveries, "delivered_count", "delivered")}
 
@@ -258,6 +259,7 @@ defmodule HydraX.Report do
       lease_owned_skips: status.lease_owned_skips,
       coordination: status.coordination,
       pending_ingress: status.pending_ingress,
+      work_item_replays: status.work_item_replays,
       ownership_handoffs: status.ownership_handoffs,
       deferred_deliveries: status.deferred_deliveries
     }
@@ -1373,6 +1375,7 @@ defmodule HydraX.Report do
         lease_owned_skips: Enum.map(snapshot.scheduler.lease_owned_skips, &json_job_run/1),
         coordination: snapshot.scheduler.coordination,
         pending_ingress: snapshot.scheduler.pending_ingress,
+        work_item_replays: snapshot.scheduler.work_item_replays,
         ownership_handoffs: snapshot.scheduler.ownership_handoffs,
         deferred_deliveries: snapshot.scheduler.deferred_deliveries
       },

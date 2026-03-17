@@ -927,7 +927,7 @@ defmodule HydraXWeb.HealthLive do
                     · expiry {event.expired_by}
                   </span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip              {event.ip}</span>
+                  <span :if={event.ip}> · ip                {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -1355,7 +1355,8 @@ defmodule HydraXWeb.HealthLive do
         <h2 class="mt-3 font-display text-4xl">Heartbeat and job execution</h2>
         <p class="mt-3 text-sm text-[var(--hx-mute)]">
           coordination {scheduler_coordination_label(@scheduler_status.coordination)} · ingress{" "}
-          {scheduler_pass_label(@scheduler_status.pending_ingress, "processed_count")} · handoffs{" "}
+          {scheduler_pass_label(@scheduler_status.pending_ingress, "processed_count")} · work items{" "}
+          {scheduler_pass_label(@scheduler_status.work_item_replays, "resumed_count")} · handoffs{" "}
           {scheduler_pass_label(@scheduler_status.ownership_handoffs, "resumed_count")} · deliveries{" "}
           {scheduler_pass_label(@scheduler_status.deferred_deliveries, "delivered_count")}
         </p>
@@ -1393,7 +1394,7 @@ defmodule HydraXWeb.HealthLive do
             <div class="mt-3 font-display text-4xl">{length(@scheduler_status.skipped_runs)}</div>
           </article>
         </div>
-        <div class="mt-4 grid gap-3 lg:grid-cols-3">
+        <div class="mt-4 grid gap-3 lg:grid-cols-4">
           <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
             <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
               Ingress replay
@@ -1404,6 +1405,14 @@ defmodule HydraXWeb.HealthLive do
                 "processed_count",
                 "processed"
               )}
+            </p>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Work item replay
+            </div>
+            <p class="mt-3 text-sm text-[var(--hx-mute)]">
+              {scheduler_pass_detail(@scheduler_status.work_item_replays, "resumed_count", "resumed")}
             </p>
           </article>
           <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">

@@ -206,6 +206,10 @@ defmodule HydraX.Runtime do
   defdelegate reject_artifact!(id, attrs), to: HydraX.Runtime.WorkItems
   defdelegate claim_work_item(work_item), to: HydraX.Runtime.WorkItems
   defdelegate claim_work_item(work_item, opts), to: HydraX.Runtime.WorkItems
+  defdelegate list_owned_resumable_work_items(), to: HydraX.Runtime.WorkItems
+  defdelegate list_owned_resumable_work_items(opts), to: HydraX.Runtime.WorkItems
+  defdelegate resume_owned_work_items(), to: HydraX.Runtime.WorkItems
+  defdelegate resume_owned_work_items(opts), to: HydraX.Runtime.WorkItems
   defdelegate cancel_work_item!(id), to: HydraX.Runtime.WorkItems
   defdelegate run_autonomy_cycle(agent_id), to: HydraX.Runtime.WorkItems
   defdelegate run_autonomy_cycle(agent_id, opts), to: HydraX.Runtime.WorkItems

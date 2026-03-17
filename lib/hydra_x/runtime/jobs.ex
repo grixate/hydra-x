@@ -331,6 +331,8 @@ defmodule HydraX.Runtime.Jobs do
       coordination: HydraX.Runtime.coordination_status(),
       pending_ingress:
         Map.get(passes, :pending_ingress, scheduler_count_snapshot("processed_count")),
+      work_item_replays:
+        Map.get(passes, :work_item_replays, scheduler_count_snapshot("resumed_count")),
       ownership_handoffs:
         Map.get(passes, :ownership_handoffs, scheduler_count_snapshot("resumed_count")),
       deferred_deliveries:
@@ -339,7 +341,12 @@ defmodule HydraX.Runtime.Jobs do
   end
 
   def record_scheduler_pass(kind, summary)
-      when kind in [:pending_ingress, :ownership_handoffs, :deferred_deliveries] and
+      when kind in [
+             :pending_ingress,
+             :work_item_replays,
+             :ownership_handoffs,
+             :deferred_deliveries
+           ] and
              is_map(summary) do
     passes =
       scheduler_pass_snapshots()
