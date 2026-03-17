@@ -1459,7 +1459,10 @@ defmodule HydraXWeb.AgentsLive do
               )
 
             "skipped" ->
-              "delivery skipped"
+              if(delivery_result["reason"] == "internal_report_recovery",
+                do: "delivery internal",
+                else: "delivery skipped"
+              )
 
             _ ->
               if work_item.status == "completed" and "delivery_brief" in artifact_types do

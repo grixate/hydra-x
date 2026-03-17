@@ -373,11 +373,11 @@ defmodule HydraXWeb.HealthLiveTest do
           "follow_up_work_item_ids" => [8_301],
           "follow_up_summary" => %{"count" => 1, "types" => ["replan"]},
           "delivery" => %{
-            "status" => "rejected",
+            "status" => "skipped",
+            "mode" => "report",
             "degraded" => true,
-            "channel" => "telegram",
-            "target" => "ops-room",
-            "reason" => "operator_rejected_delivery"
+            "target" => "control-plane",
+            "reason" => "internal_report_recovery"
           }
         },
         "metadata" => %{
@@ -395,8 +395,8 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "delivery degraded draft telegram"
     assert html =~ publish_review.goal
     assert html =~ "degraded delivery awaiting approval telegram"
+    assert html =~ "delivery internal"
     assert html =~ "replan queued 1"
-    assert html =~ "degraded delivery rejected telegram"
   end
 
   test "health page shows the unified effective policy surface", %{conn: conn} do

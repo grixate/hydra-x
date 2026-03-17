@@ -1839,7 +1839,10 @@ defmodule HydraX.Report do
                 "delivery_draft"
 
               "skipped" ->
-                "delivery_skipped"
+                if(delivery_result["reason"] == "internal_report_recovery",
+                  do: "delivery_internal",
+                  else: "delivery_skipped"
+                )
 
               _ ->
                 if(

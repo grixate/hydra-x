@@ -771,11 +771,11 @@ defmodule HydraX.ReportTest do
           "follow_up_work_item_ids" => [8_401],
           "follow_up_summary" => %{"count" => 1, "types" => ["replan"]},
           "delivery" => %{
-            "status" => "rejected",
+            "status" => "skipped",
+            "mode" => "report",
             "degraded" => true,
-            "channel" => "telegram",
-            "target" => "ops-room",
-            "reason" => "operator_rejected_delivery"
+            "target" => "control-plane",
+            "reason" => "internal_report_recovery"
           }
         },
         "metadata" => %{
@@ -918,8 +918,8 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~
              "publish=degraded_delivery_rejected telegram -> ops-room"
 
-    assert File.read!(export.markdown_path) =~
-             "publish=delivery_rejected degraded replan queued 1 telegram -> ops-room"
+    assert File.read!(export.markdown_path) =~ "publish=delivery_internal"
+    assert File.read!(export.markdown_path) =~ "control-plane"
 
     assert File.read!(export.markdown_path) =~ "level=fully_automatic"
     assert File.read!(export.markdown_path) =~ "effect=external_delivery"

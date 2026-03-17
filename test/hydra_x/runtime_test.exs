@@ -4600,6 +4600,106 @@ defmodule HydraX.RuntimeTest do
     assert delivery_brief.payload["delivery"]["status"] == "delivered"
   end
 
+  test "publish summary tasks fall back to internal reports when recovery requires it" do
+    previous = Application.get_env(:hydra_x, :telegram_deliver)
+
+    Application.put_env(:hydra_x, :telegram_deliver, fn payload ->
+      send(self(), {:unexpected_internal_report_delivery, payload})
+      {:ok, %{provider_message_id: 1_212}}
+    end)
+
+    on_exit(fn ->
+      if previous do
+        Application.put_env(:hydra_x, :telegram_deliver, previous)
+      else
+        Application.delete_env(:hydra_x, :telegram_deliver)
+      end
+    end)
+
+    operator =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, operator} = Runtime.save_agent(operator, %{"role" => "operator"})
+
+    {:ok, parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Prepare a safer internal summary after delivery rejection.",
+        "assigned_agent_id" => operator.id,
+        "assigned_role" => "operator",
+        "status" => "completed",
+        "approval_stage" => "validated"
+      })
+
+    {:ok, summary_artifact} =
+      Runtime.create_artifact(%{
+        "work_item_id" => parent.id,
+        "type" => "decision_ledger",
+        "title" => "Recovery synthesis",
+        "summary" => "Share this only as an internal report",
+        "body" => "Keep this summary in the control plane until the publication path is revised."
+      })
+
+    {:ok, publish_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Prepare an internal-only recovery brief for operators.",
+        "assigned_agent_id" => operator.id,
+        "assigned_role" => "operator",
+        "status" => "planned",
+        "approval_stage" => "validated",
+        "parent_work_item_id" => parent.id,
+        "metadata" => %{
+          "task_type" => "publish_summary",
+          "summary_artifact_id" => summary_artifact.id,
+          "delivery" => %{
+            "enabled" => true,
+            "mode" => "channel",
+            "channel" => "telegram",
+            "target" => "9001"
+          },
+          "follow_up_context" => %{
+            "needs_replan" => true,
+            "constraint_strategy" => "Avoid external delivery until the summary is revised.",
+            "delivery_recovery" => %{
+              "strategy" => "internal_report_fallback",
+              "recommended_delivery_mode" => "report",
+              "recommended_target" => "control-plane",
+              "recommended_action" =>
+                "Prepare an internal report until the revised summary is explicitly approved."
+            },
+            "promoted_findings" => [
+              %{
+                "type" => "Decision",
+                "content" => "Keep the summary in the control plane for now."
+              }
+            ]
+          }
+        }
+      })
+
+    assert {:ok, summary} = Runtime.run_autonomy_cycle(operator.id)
+    assert summary.action == "prepared_delivery_brief"
+    refute_receive {:unexpected_internal_report_delivery, _payload}, 200
+
+    publish_item = Runtime.get_work_item!(publish_item.id)
+    assert publish_item.result_refs["delivery"]["status"] == "skipped"
+    assert publish_item.result_refs["delivery"]["reason"] == "internal_report_recovery"
+    assert publish_item.result_refs["delivery"]["mode"] == "report"
+    assert publish_item.result_refs["delivery"]["target"] == "control-plane"
+    assert publish_item.result_refs["degraded"] == true
+
+    [delivery_brief] = Runtime.work_item_artifacts(publish_item.id)
+    assert delivery_brief.review_status == "proposed"
+    assert delivery_brief.payload["delivery"]["status"] == "skipped"
+    assert delivery_brief.payload["delivery"]["reason"] == "internal_report_recovery"
+    assert delivery_brief.payload["delivery_mode"] == "report"
+    assert delivery_brief.payload["delivery_channel"] == nil
+    assert delivery_brief.payload["delivery_target"] == "control-plane"
+    assert delivery_brief.payload["delivery_recovery"]["strategy"] == "internal_report_fallback"
+  end
+
   test "rejecting degraded publish approval closes delivery without sending" do
     previous = Application.get_env(:hydra_x, :telegram_deliver)
 
@@ -4723,6 +4823,17 @@ defmodule HydraX.RuntimeTest do
     assert replan_work_item.metadata["publish_work_item_id"] == publish_item.id
     assert replan_work_item.metadata["publish_review_work_item_id"] == approval_item.id
     assert replan_work_item.metadata["constraint_strategy"] =~ "avoid external delivery"
+
+    assert replan_work_item.metadata["delivery_recovery"]["strategy"] ==
+             "internal_report_fallback"
+
+    assert get_in(replan_work_item.metadata || %{}, [
+             "follow_up_context",
+             "delivery_recovery",
+             "strategy"
+           ]) ==
+             "internal_report_fallback"
+
     assert replan_work_item.result_refs == %{}
     assert rejected_review.result_refs["linked_follow_up_work_item_id"] == replan_work_item.id
 

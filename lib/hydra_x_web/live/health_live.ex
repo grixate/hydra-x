@@ -927,7 +927,7 @@ defmodule HydraXWeb.HealthLive do
                     · expiry {event.expired_by}
                   </span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip  {event.ip}</span>
+                  <span :if={event.ip}> · ip   {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -2114,7 +2114,10 @@ defmodule HydraXWeb.HealthLive do
               )
 
             "skipped" ->
-              "delivery skipped"
+              if(delivery_result["reason"] == "internal_report_recovery",
+                do: "delivery internal",
+                else: "delivery skipped"
+              )
 
             _ ->
               if(delivery_result["degraded"], do: "publish degraded", else: "publish")

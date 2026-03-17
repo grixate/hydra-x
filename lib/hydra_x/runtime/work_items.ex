@@ -1625,13 +1625,21 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp build_delivery_brief(agent, work_item, summary_artifact, follow_up_context, delivery) do
-    delivery_mode = delivery["mode"] || "report"
-    delivery_channel = delivery["channel"]
-    delivery_target = delivery["target"]
     summary_payload = (summary_artifact && summary_artifact.payload) || %{}
     follow_up_metadata = get_in(work_item.metadata || %{}, ["follow_up_context"]) || %{}
     findings = Enum.take(follow_up_context, 4)
     degraded? = degraded_delivery_brief?(follow_up_metadata, summary_payload, findings)
+
+    delivery_recovery =
+      follow_up_metadata["delivery_recovery"] ||
+        summary_payload["delivery_recovery"] ||
+        get_in(work_item.metadata || %{}, ["delivery_recovery"]) ||
+        %{}
+
+    effective_delivery = resolved_delivery_config(delivery, delivery_recovery)
+    delivery_mode = effective_delivery["mode"] || "report"
+    delivery_channel = effective_delivery["channel"]
+    delivery_target = effective_delivery["target"]
 
     constraint_strategy =
       follow_up_metadata["constraint_strategy"] ||
@@ -1656,6 +1664,7 @@ defmodule HydraX.Runtime.WorkItems do
         Delivery channel: #{delivery_channel || "report"}
         Delivery target: #{delivery_target || "control plane"}
         Delivery posture: #{if(degraded?, do: "degraded", else: "standard")}
+        Delivery recovery: #{delivery_recovery["strategy"] || "none"}
         Constraint strategy: #{constraint_strategy || "none"}
 
         Summary artifact:
@@ -1675,6 +1684,7 @@ defmodule HydraX.Runtime.WorkItems do
         Delivery channel: #{delivery_channel || "report"}
         Delivery target: #{delivery_target || "control plane"}
         Delivery posture: #{if(degraded?, do: "degraded", else: "standard")}
+        Delivery recovery: #{delivery_recovery["strategy"] || "none"}
         Constraint strategy: #{constraint_strategy || "none"}
 
         Summary ready for publication:
@@ -1694,6 +1704,7 @@ defmodule HydraX.Runtime.WorkItems do
       "delivery_target" => delivery_target,
       "degraded" => degraded?,
       "constraint_strategy" => constraint_strategy,
+      "delivery_recovery" => delivery_recovery,
       "delivery" => %{
         "enabled" => Map.get(delivery, "enabled", false),
         "mode" => delivery_mode,
@@ -1705,6 +1716,7 @@ defmodule HydraX.Runtime.WorkItems do
       "key_findings" => findings,
       "recommended_actions" =>
         [
+          delivery_recovery["recommended_action"],
           if(
             degraded?,
             do: "Review the degraded publish-ready summary before any external delivery.",
@@ -1728,11 +1740,21 @@ defmodule HydraX.Runtime.WorkItems do
     enabled? = Map.get(delivery, "enabled", false)
     channel = delivery["channel"]
     target = delivery["target"]
+    delivery_recovery = payload["delivery_recovery"] || %{}
 
     result =
       cond do
         enabled? != true ->
           %{"status" => "draft", "degraded" => payload["degraded"] == true}
+
+        internal_report_recovery?(delivery_recovery) ->
+          %{
+            "status" => "skipped",
+            "mode" => "report",
+            "target" => delivery_recovery["recommended_target"] || "control-plane",
+            "degraded" => payload["degraded"] == true,
+            "reason" => "internal_report_recovery"
+          }
 
         payload["degraded"] == true ->
           %{
@@ -3457,6 +3479,9 @@ defmodule HydraX.Runtime.WorkItems do
     follow_up_context = get_in(publish_item.metadata || %{}, ["follow_up_context"]) || %{}
     rejection_finding = rejected_publish_constraint_finding(publish_item, rejection_record)
 
+    delivery_recovery =
+      rejected_publish_delivery_recovery(publish_item, review_item, rejection_record)
+
     constraint_findings =
       merge_supporting_findings(
         List.wrap(follow_up_context["constraint_findings"]) ++ [rejection_finding]
@@ -3497,6 +3522,7 @@ defmodule HydraX.Runtime.WorkItems do
           "delivery_brief_artifact_id" => delivery_brief.id,
           "publish_work_item_id" => publish_item.id,
           "publish_review_work_item_id" => review_item.id,
+          "delivery_recovery" => delivery_recovery,
           "constraint_findings" => constraint_findings,
           "constraint_strategy" => constraint_strategy,
           "follow_up_context" =>
@@ -3505,7 +3531,8 @@ defmodule HydraX.Runtime.WorkItems do
               supporting_memories,
               delivery_brief,
               constraint_findings,
-              constraint_strategy
+              constraint_strategy,
+              delivery_recovery
             )
         }
       })
@@ -3610,6 +3637,30 @@ defmodule HydraX.Runtime.WorkItems do
       "source_artifact_type" => "delivery_review",
       "reasons" => ["constraint_backpressure"],
       "policy_failure_type" => "delivery_rejected"
+    }
+  end
+
+  defp rejected_publish_delivery_recovery(
+         %WorkItem{} = publish_item,
+         %WorkItem{} = review_item,
+         rejection_record
+       ) do
+    delivery =
+      review_item.metadata["delivery"] ||
+        get_in(publish_item.metadata || %{}, ["delivery"]) ||
+        %{}
+
+    %{
+      "strategy" => "internal_report_fallback",
+      "reason" => "operator_rejected_delivery",
+      "rationale" => rejection_record.rationale,
+      "recommended_delivery_mode" => "report",
+      "recommended_target" => "control-plane",
+      "previous_mode" => delivery["mode"] || "channel",
+      "previous_channel" => delivery["channel"],
+      "previous_target" => delivery["target"],
+      "recommended_action" =>
+        "Prepare an internal report until the summary is revised and explicitly approved for external delivery."
     }
   end
 
@@ -3976,9 +4027,45 @@ defmodule HydraX.Runtime.WorkItems do
   defp degraded_delivery_brief?(follow_up_metadata, summary_payload, findings) do
     Map.get(follow_up_metadata || %{}, "needs_replan") == true or
       present_text?(Map.get(follow_up_metadata || %{}, "constraint_strategy")) or
+      present_text?(get_in(follow_up_metadata || %{}, ["delivery_recovery", "strategy"])) or
       present_text?(summary_payload["constraint_strategy"]) or
+      present_text?(get_in(summary_payload || %{}, ["delivery_recovery", "strategy"])) or
       List.wrap(summary_payload["constraint_findings"]) != [] or
       Enum.any?(List.wrap(findings), &((&1["type"] || &1[:type]) == "Constraint"))
+  end
+
+  defp resolved_delivery_config(delivery, delivery_recovery) do
+    mode =
+      delivery_recovery["recommended_delivery_mode"] ||
+        delivery["mode"] ||
+        "report"
+
+    channel =
+      if mode == "channel" do
+        delivery_recovery["recommended_channel"] || delivery["channel"]
+      end
+
+    target =
+      cond do
+        mode == "channel" ->
+          delivery_recovery["recommended_target"] || delivery["target"]
+
+        present_text?(delivery_recovery["recommended_target"]) ->
+          delivery_recovery["recommended_target"]
+
+        true ->
+          "control-plane"
+      end
+
+    %{"mode" => mode, "channel" => channel, "target" => target}
+  end
+
+  defp internal_report_recovery?(delivery_recovery) do
+    strategy = delivery_recovery["strategy"]
+    recommended_mode = delivery_recovery["recommended_delivery_mode"]
+
+    strategy in ["internal_report_fallback", "report_only_recovery"] or
+      (present_text?(recommended_mode) and recommended_mode != "channel")
   end
 
   defp delegated_constraint_strategy(delegated_context) do
@@ -4316,7 +4403,8 @@ defmodule HydraX.Runtime.WorkItems do
          supporting_memories,
          summary_artifact,
          constraint_findings \\ [],
-         constraint_strategy \\ nil
+         constraint_strategy \\ nil,
+         delivery_recovery \\ nil
        ) do
     %{
       "query" => parent.goal,
@@ -4327,6 +4415,37 @@ defmodule HydraX.Runtime.WorkItems do
       "constraint_strategy" => constraint_strategy,
       "needs_replan" => constraint_findings != []
     }
+    |> maybe_put_delivery_recovery(
+      delivery_recovery || derived_delivery_recovery(parent, constraint_findings)
+    )
+  end
+
+  defp maybe_put_delivery_recovery(follow_up_context, recovery)
+       when is_map(recovery) and map_size(recovery) > 0 do
+    Map.put(follow_up_context, "delivery_recovery", recovery)
+  end
+
+  defp maybe_put_delivery_recovery(follow_up_context, _recovery), do: follow_up_context
+
+  defp derived_delivery_recovery(parent, constraint_findings) do
+    if Enum.any?(constraint_findings, &(&1["summary_reason"] == "delivery_rejected")) do
+      delivery =
+        get_in(parent.deliverables || %{}, ["delivery"]) ||
+          get_in(parent.metadata || %{}, ["delivery"]) ||
+          %{}
+
+      %{
+        "strategy" => "internal_report_fallback",
+        "reason" => "operator_rejected_delivery",
+        "recommended_delivery_mode" => "report",
+        "recommended_target" => "control-plane",
+        "previous_mode" => delivery["mode"] || "channel",
+        "previous_channel" => delivery["channel"],
+        "previous_target" => delivery["target"],
+        "recommended_action" =>
+          "Prepare an internal report until the publish path is revised and validated."
+      }
+    end
   end
 
   defp append_follow_up_result_refs(result_refs, %WorkItem{} = follow_up_work_item, type) do
