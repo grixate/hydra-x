@@ -1420,7 +1420,8 @@ defmodule HydraXWeb.AgentsLive do
         [
           prefix,
           delivery["channel"] || delivery["mode"] || "report",
-          delivery["target"] && "-> #{delivery["target"]}"
+          delivery["target"] && "-> #{delivery["target"]}",
+          publish_recovery_summary(work_item)
         ]
         |> Enum.reject(&(&1 in [nil, ""]))
         |> Enum.join(" ")
@@ -1472,7 +1473,13 @@ defmodule HydraXWeb.AgentsLive do
               end
           end
 
-        [prefix, channel, target && "-> #{target}", publish_replan_summary(work_item)]
+        [
+          prefix,
+          channel,
+          target && "-> #{target}",
+          publish_recovery_summary(work_item),
+          publish_replan_summary(work_item)
+        ]
         |> Enum.reject(&(&1 in [nil, ""]))
         |> Enum.join(" ")
 
@@ -1533,6 +1540,35 @@ defmodule HydraXWeb.AgentsLive do
     if follow_up_queue_type(work_item) == "replan" do
       "replan queued #{follow_up_queue_count(work_item)}"
     end
+  end
+
+  defp publish_recovery_summary(work_item) do
+    recovery = publish_recovery_snapshot(work_item)
+
+    case recovery["strategy"] do
+      "internal_report_fallback" -> "recovery internal-report"
+      "switch_delivery_channel" -> "recovery switch #{recovery["recommended_channel"]}"
+      "revise_and_retry_channel" -> "recovery revise+retry"
+      _ -> nil
+    end
+  end
+
+  defp publish_recovery_snapshot(work_item) do
+    artifacts =
+      case Map.get(work_item, :artifacts) do
+        %Ecto.Association.NotLoaded{} -> []
+        entries when is_list(entries) -> entries
+        _ -> []
+      end
+
+    get_in(work_item.result_refs || %{}, ["delivery", "recovery"]) ||
+      get_in(work_item.metadata || %{}, ["delivery_recovery"]) ||
+      get_in(work_item.metadata || %{}, ["follow_up_context", "delivery_recovery"]) ||
+      Enum.find_value(artifacts, fn artifact ->
+        if artifact.type == "delivery_brief" do
+          Map.get(artifact.payload || %{}, "delivery_recovery")
+        end
+      end) || %{}
   end
 
   defp degraded_work_item?(work_item) do

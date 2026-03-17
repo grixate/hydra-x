@@ -727,7 +727,11 @@ defmodule HydraX.ReportTest do
         "metadata" => %{
           "task_type" => "publish_approval",
           "degraded_execution" => true,
-          "delivery" => %{"mode" => "channel", "channel" => "telegram", "target" => "ops-room"}
+          "delivery" => %{"mode" => "channel", "channel" => "telegram", "target" => "ops-room"},
+          "delivery_recovery" => %{
+            "strategy" => "switch_delivery_channel",
+            "recommended_channel" => "slack"
+          }
         }
       })
 
@@ -914,6 +918,8 @@ defmodule HydraX.ReportTest do
 
     assert File.read!(export.markdown_path) =~
              "publish=degraded_delivery_awaiting_approval telegram -> ops-room"
+
+    assert File.read!(export.markdown_path) =~ "recovery_switch_slack"
 
     assert File.read!(export.markdown_path) =~
              "publish=degraded_delivery_rejected telegram -> ops-room"

@@ -1764,7 +1764,7 @@ defmodule HydraX.Report do
         nil
 
       %{type: "publish_approval", status: status, channel: channel, target: target} ->
-        [status, channel || "report", target && "-> #{target}"]
+        [status, channel || "report", target && "-> #{target}", publish_recovery_summary(item)]
         |> Enum.reject(&is_nil_or_empty/1)
         |> Enum.join(" ")
 
@@ -1772,6 +1772,7 @@ defmodule HydraX.Report do
         [
           status,
           snapshot_degraded_suffix(work_item_publish_snapshot(item)),
+          publish_recovery_summary(item),
           publish_replan_summary(item),
           channel || "report",
           target && "-> #{target}"
@@ -1907,6 +1908,35 @@ defmodule HydraX.Report do
         _ -> nil
       end
     end
+  end
+
+  defp publish_recovery_summary(item) do
+    recovery = publish_recovery_snapshot(item)
+
+    case recovery["strategy"] do
+      "internal_report_fallback" -> "recovery_internal_report"
+      "switch_delivery_channel" -> "recovery_switch_#{recovery["recommended_channel"]}"
+      "revise_and_retry_channel" -> "recovery_revise_retry"
+      _ -> nil
+    end
+  end
+
+  defp publish_recovery_snapshot(item) do
+    artifacts =
+      case Map.get(item, :artifacts) do
+        %Ecto.Association.NotLoaded{} -> []
+        entries when is_list(entries) -> entries
+        _ -> []
+      end
+
+    get_in(item.result_refs || %{}, ["delivery", "recovery"]) ||
+      get_in(item.metadata || %{}, ["delivery_recovery"]) ||
+      get_in(item.metadata || %{}, ["follow_up_context", "delivery_recovery"]) ||
+      Enum.find_value(artifacts, fn artifact ->
+        if artifact.type == "delivery_brief" do
+          Map.get(artifact.payload || %{}, "delivery_recovery")
+        end
+      end) || %{}
   end
 
   defp snapshot_degraded_suffix(%{degraded: true}), do: "degraded"

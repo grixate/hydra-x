@@ -927,7 +927,7 @@ defmodule HydraXWeb.HealthLive do
                     · expiry {event.expired_by}
                   </span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip   {event.ip}</span>
+                  <span :if={event.ip}> · ip    {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -2076,7 +2076,8 @@ defmodule HydraXWeb.HealthLive do
         [
           prefix,
           delivery["channel"] || delivery["mode"] || "report",
-          delivery["target"] && "-> #{delivery["target"]}"
+          delivery["target"] && "-> #{delivery["target"]}",
+          publish_recovery_summary(item)
         ]
         |> Enum.reject(&is_nil_or_empty/1)
         |> Enum.join(" ")
@@ -2123,7 +2124,13 @@ defmodule HydraXWeb.HealthLive do
               if(delivery_result["degraded"], do: "publish degraded", else: "publish")
           end
 
-        [prefix, channel, target && "-> #{target}", publish_replan_summary(item)]
+        [
+          prefix,
+          channel,
+          target && "-> #{target}",
+          publish_recovery_summary(item),
+          publish_replan_summary(item)
+        ]
         |> Enum.reject(&is_nil_or_empty/1)
         |> Enum.join(" ")
 
@@ -2173,6 +2180,35 @@ defmodule HydraXWeb.HealthLive do
     if autonomy_follow_up_type(item) == "replan" do
       "replan queued #{autonomy_follow_up_count(item)}"
     end
+  end
+
+  defp publish_recovery_summary(item) do
+    recovery = publish_recovery_snapshot(item)
+
+    case recovery["strategy"] do
+      "internal_report_fallback" -> "recovery internal-report"
+      "switch_delivery_channel" -> "recovery switch #{recovery["recommended_channel"]}"
+      "revise_and_retry_channel" -> "recovery revise+retry"
+      _ -> nil
+    end
+  end
+
+  defp publish_recovery_snapshot(item) do
+    artifacts =
+      case Map.get(item, :artifacts) do
+        %Ecto.Association.NotLoaded{} -> []
+        entries when is_list(entries) -> entries
+        _ -> []
+      end
+
+    get_in(item.result_refs || %{}, ["delivery", "recovery"]) ||
+      get_in(item.metadata || %{}, ["delivery_recovery"]) ||
+      get_in(item.metadata || %{}, ["follow_up_context", "delivery_recovery"]) ||
+      Enum.find_value(artifacts, fn artifact ->
+        if artifact.type == "delivery_brief" do
+          Map.get(artifact.payload || %{}, "delivery_recovery")
+        end
+      end) || %{}
   end
 
   defp autonomy_side_effect_class(item) do

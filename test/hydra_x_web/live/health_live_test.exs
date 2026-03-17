@@ -329,7 +329,11 @@ defmodule HydraXWeb.HealthLiveTest do
         "metadata" => %{
           "task_type" => "publish_approval",
           "degraded_execution" => true,
-          "delivery" => %{"mode" => "channel", "channel" => "telegram", "target" => "ops-room"}
+          "delivery" => %{"mode" => "channel", "channel" => "telegram", "target" => "ops-room"},
+          "delivery_recovery" => %{
+            "strategy" => "switch_delivery_channel",
+            "recommended_channel" => "slack"
+          }
         }
       })
 
@@ -395,6 +399,7 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "delivery degraded draft telegram"
     assert html =~ publish_review.goal
     assert html =~ "degraded delivery awaiting approval telegram"
+    assert html =~ "recovery switch slack"
     assert html =~ "delivery internal"
     assert html =~ "replan queued 1"
   end

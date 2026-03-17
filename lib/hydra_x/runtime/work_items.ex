@@ -1774,6 +1774,7 @@ defmodule HydraX.Runtime.WorkItems do
         true ->
           execute_publish_delivery(agent, channel, target, payload["body"])
       end
+      |> maybe_put_delivery_recovery_result(delivery_recovery)
 
     maybe_record_work_item_budget_usage(agent, work_item, "autonomy_delivery", 0, 0)
     result
@@ -1785,11 +1786,17 @@ defmodule HydraX.Runtime.WorkItems do
          delivery,
          payload
        ) do
+    review_delivery = payload["delivery"] || delivery || %{}
+    delivery_recovery = payload["delivery_recovery"] || %{}
+
     cond do
       payload["degraded"] != true ->
         {:ok, publish_item, nil}
 
-      Map.get(delivery || %{}, "enabled", false) != true ->
+      Map.get(review_delivery || %{}, "enabled", false) != true ->
+        {:ok, publish_item, nil}
+
+      internal_report_recovery?(delivery_recovery) ->
         {:ok, publish_item, nil}
 
       true ->
@@ -1797,7 +1804,7 @@ defmodule HydraX.Runtime.WorkItems do
           save_work_item(%{
             "kind" => "task",
             "goal" =>
-              "Approve degraded delivery for #{Map.get(delivery || %{}, "channel", "report")} #{Map.get(delivery || %{}, "target", "control-plane")}",
+              "Approve degraded delivery for #{Map.get(review_delivery || %{}, "channel", Map.get(review_delivery || %{}, "mode", "report"))} #{Map.get(review_delivery || %{}, "target", "control-plane")}",
             "status" => "completed",
             "execution_mode" => "execute",
             "assigned_agent_id" => publish_item.assigned_agent_id,
@@ -1814,7 +1821,8 @@ defmodule HydraX.Runtime.WorkItems do
               "task_type" => "publish_approval",
               "publish_work_item_id" => publish_item.id,
               "delivery_brief_artifact_id" => delivery_brief.id,
-              "delivery" => delivery || %{},
+              "delivery" => review_delivery,
+              "delivery_recovery" => delivery_recovery,
               "degraded_execution" => true,
               "requested_action" => "publish_review_report",
               "follow_up_context" => get_in(publish_item.metadata || %{}, ["follow_up_context"])
@@ -3314,7 +3322,16 @@ defmodule HydraX.Runtime.WorkItems do
   defp complete_publish_review!(%WorkItem{} = review_item, approval_record) do
     publish_item = get_work_item!(review_item.metadata["publish_work_item_id"])
     delivery_brief = get_artifact!(review_item.metadata["delivery_brief_artifact_id"])
-    delivery = review_item.metadata["delivery"] || %{}
+
+    delivery =
+      Map.get(delivery_brief.payload || %{}, "delivery") || review_item.metadata["delivery"] ||
+        %{}
+
+    delivery_recovery =
+      Map.get(delivery_brief.payload || %{}, "delivery_recovery") ||
+        review_item.metadata["delivery_recovery"] ||
+        %{}
+
     agent_id = review_item.assigned_agent_id || publish_item.assigned_agent_id
     agent = Agents.get_agent!(agent_id)
 
@@ -3325,6 +3342,7 @@ defmodule HydraX.Runtime.WorkItems do
         delivery["target"],
         delivery_brief.body
       )
+      |> maybe_put_delivery_recovery_result(delivery_recovery)
 
     {:ok, updated_publish_item} =
       save_work_item(publish_item, %{
@@ -3650,18 +3668,81 @@ defmodule HydraX.Runtime.WorkItems do
         get_in(publish_item.metadata || %{}, ["delivery"]) ||
         %{}
 
-    %{
-      "strategy" => "internal_report_fallback",
-      "reason" => "operator_rejected_delivery",
-      "rationale" => rejection_record.rationale,
-      "recommended_delivery_mode" => "report",
-      "recommended_target" => "control-plane",
-      "previous_mode" => delivery["mode"] || "channel",
-      "previous_channel" => delivery["channel"],
-      "previous_target" => delivery["target"],
-      "recommended_action" =>
-        "Prepare an internal report until the summary is revised and explicitly approved for external delivery."
-    }
+    rationale = rejection_record.rationale || ""
+    channel_switch = rejected_publish_recovery_channel(rationale)
+
+    cond do
+      rejected_publish_internal_report?(rationale) ->
+        %{
+          "strategy" => "internal_report_fallback",
+          "reason" => "operator_rejected_delivery",
+          "rationale" => rationale,
+          "recommended_delivery_mode" => "report",
+          "recommended_target" => "control-plane",
+          "previous_mode" => delivery["mode"] || "channel",
+          "previous_channel" => delivery["channel"],
+          "previous_target" => delivery["target"],
+          "recommended_action" =>
+            "Prepare an internal report until the summary is revised and explicitly approved for external delivery."
+        }
+
+      present_text?(channel_switch) ->
+        %{
+          "strategy" => "switch_delivery_channel",
+          "reason" => "operator_requested_channel_switch",
+          "rationale" => rationale,
+          "recommended_delivery_mode" => "channel",
+          "recommended_channel" => channel_switch,
+          "recommended_target" => delivery["target"],
+          "previous_mode" => delivery["mode"] || "channel",
+          "previous_channel" => delivery["channel"],
+          "previous_target" => delivery["target"],
+          "recommended_action" =>
+            "Revise the summary and reroute it through #{channel_switch} before requesting delivery approval again."
+        }
+
+      true ->
+        %{
+          "strategy" => "revise_and_retry_channel",
+          "reason" => "operator_requested_revision",
+          "rationale" => rationale,
+          "recommended_delivery_mode" => "channel",
+          "recommended_channel" => delivery["channel"],
+          "recommended_target" => delivery["target"],
+          "previous_mode" => delivery["mode"] || "channel",
+          "previous_channel" => delivery["channel"],
+          "previous_target" => delivery["target"],
+          "recommended_action" =>
+            "Revise the summary, strengthen the supporting evidence, and retry the same delivery path only after explicit approval."
+        }
+    end
+  end
+
+  defp rejected_publish_internal_report?(rationale) do
+    rationale =
+      rationale
+      |> to_string()
+      |> String.downcase()
+
+    Enum.any?(
+      ["internal", "control plane", "control-plane", "report"],
+      &String.contains?(rationale, &1)
+    )
+  end
+
+  defp rejected_publish_recovery_channel(rationale) do
+    rationale =
+      rationale
+      |> to_string()
+      |> String.downcase()
+
+    cond do
+      String.contains?(rationale, "slack") -> "slack"
+      String.contains?(rationale, "discord") -> "discord"
+      String.contains?(rationale, "telegram") -> "telegram"
+      String.contains?(rationale, "webchat") -> "webchat"
+      true -> nil
+    end
   end
 
   defp maybe_put_follow_up_work_item_id(result_refs, %WorkItem{} = follow_up_work_item) do
@@ -4067,6 +4148,13 @@ defmodule HydraX.Runtime.WorkItems do
     strategy in ["internal_report_fallback", "report_only_recovery"] or
       (present_text?(recommended_mode) and recommended_mode != "channel")
   end
+
+  defp maybe_put_delivery_recovery_result(result, delivery_recovery)
+       when is_map(delivery_recovery) and map_size(delivery_recovery) > 0 do
+    Map.put(result, "recovery", delivery_recovery)
+  end
+
+  defp maybe_put_delivery_recovery_result(result, _delivery_recovery), do: result
 
   defp delegated_constraint_strategy(delegated_context) do
     delegated_context

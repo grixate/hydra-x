@@ -4700,6 +4700,145 @@ defmodule HydraX.RuntimeTest do
     assert delivery_brief.payload["delivery_recovery"]["strategy"] == "internal_report_fallback"
   end
 
+  test "degraded publish approvals honor switched recovery channels" do
+    previous_telegram = Application.get_env(:hydra_x, :telegram_deliver)
+    previous_slack = Application.get_env(:hydra_x, :slack_deliver)
+
+    Application.put_env(:hydra_x, :telegram_deliver, fn payload ->
+      send(self(), {:unexpected_recovery_telegram_delivery, payload})
+      {:ok, %{provider_message_id: 1_313}}
+    end)
+
+    Application.put_env(:hydra_x, :slack_deliver, fn payload ->
+      send(self(), {:recovery_slack_delivery, payload})
+      {:ok, %{provider_message_id: "slack-recovery-1"}}
+    end)
+
+    on_exit(fn ->
+      if previous_telegram do
+        Application.put_env(:hydra_x, :telegram_deliver, previous_telegram)
+      else
+        Application.delete_env(:hydra_x, :telegram_deliver)
+      end
+
+      if previous_slack do
+        Application.put_env(:hydra_x, :slack_deliver, previous_slack)
+      else
+        Application.delete_env(:hydra_x, :slack_deliver)
+      end
+    end)
+
+    operator =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, operator} = Runtime.save_agent(operator, %{"role" => "operator"})
+
+    {:ok, _telegram} =
+      Runtime.save_telegram_config(%{
+        bot_token: "test-token",
+        bot_username: "hydrax_bot",
+        enabled: true,
+        default_agent_id: operator.id
+      })
+
+    {:ok, _slack} =
+      Runtime.save_slack_config(%{
+        bot_token: "slack-test-token",
+        signing_secret: "slack-signing-secret",
+        enabled: true,
+        default_agent_id: operator.id
+      })
+
+    {:ok, parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Prepare a revised publish summary for Slack delivery.",
+        "assigned_agent_id" => operator.id,
+        "assigned_role" => "operator",
+        "status" => "completed",
+        "approval_stage" => "validated"
+      })
+
+    {:ok, summary_artifact} =
+      Runtime.create_artifact(%{
+        "work_item_id" => parent.id,
+        "type" => "decision_ledger",
+        "title" => "Slack recovery synthesis",
+        "summary" => "Revise and reroute the summary through Slack",
+        "body" => "Deliver this revised summary through Slack once the operator approves it."
+      })
+
+    {:ok, publish_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Prepare a degraded publish-ready summary for Slack recovery.",
+        "assigned_agent_id" => operator.id,
+        "assigned_role" => "operator",
+        "status" => "planned",
+        "approval_stage" => "validated",
+        "parent_work_item_id" => parent.id,
+        "metadata" => %{
+          "task_type" => "publish_summary",
+          "summary_artifact_id" => summary_artifact.id,
+          "delivery" => %{
+            "enabled" => true,
+            "mode" => "channel",
+            "channel" => "telegram",
+            "target" => "ops-room"
+          },
+          "follow_up_context" => %{
+            "needs_replan" => true,
+            "constraint_strategy" => "Revise the summary before retrying delivery.",
+            "delivery_recovery" => %{
+              "strategy" => "switch_delivery_channel",
+              "recommended_delivery_mode" => "channel",
+              "recommended_channel" => "slack",
+              "recommended_target" => "ops-room",
+              "recommended_action" =>
+                "Revise the summary and reroute it through Slack before requesting approval."
+            },
+            "promoted_findings" => [
+              %{
+                "type" => "Decision",
+                "content" => "Slack is the safer publication channel for this revision."
+              }
+            ]
+          }
+        }
+      })
+
+    assert {:ok, summary} = Runtime.run_autonomy_cycle(operator.id)
+    assert summary.action == "prepared_delivery_brief"
+    refute_receive {:unexpected_recovery_telegram_delivery, _payload}, 200
+
+    publish_item = Runtime.get_work_item!(publish_item.id)
+    [approval_item_id] = publish_item.result_refs["follow_up_work_item_ids"]
+    approval_item = Runtime.get_work_item!(approval_item_id)
+    assert approval_item.metadata["delivery"]["channel"] == "slack"
+    assert approval_item.metadata["delivery_recovery"]["strategy"] == "switch_delivery_channel"
+
+    [delivery_brief] = Runtime.work_item_artifacts(publish_item.id)
+    assert delivery_brief.payload["delivery"]["channel"] == "slack"
+    assert delivery_brief.payload["delivery_recovery"]["strategy"] == "switch_delivery_channel"
+
+    {approved_review, _record} =
+      Runtime.approve_work_item!(approval_item.id, %{
+        "requested_action" => "publish_review_report",
+        "rationale" => "Operator approved the Slack recovery path."
+      })
+
+    assert approved_review.result_refs["delivery"]["status"] == "delivered"
+    assert approved_review.result_refs["delivery"]["channel"] == "slack"
+
+    assert approved_review.result_refs["delivery"]["recovery"]["strategy"] ==
+             "switch_delivery_channel"
+
+    assert_receive {:recovery_slack_delivery, %{channel: "ops-room", text: content}}
+    assert content =~ "Slack"
+    refute_receive {:unexpected_recovery_telegram_delivery, _payload}, 200
+  end
+
   test "rejecting degraded publish approval closes delivery without sending" do
     previous = Application.get_env(:hydra_x, :telegram_deliver)
 
@@ -4825,14 +4964,14 @@ defmodule HydraX.RuntimeTest do
     assert replan_work_item.metadata["constraint_strategy"] =~ "avoid external delivery"
 
     assert replan_work_item.metadata["delivery_recovery"]["strategy"] ==
-             "internal_report_fallback"
+             "revise_and_retry_channel"
 
     assert get_in(replan_work_item.metadata || %{}, [
              "follow_up_context",
              "delivery_recovery",
              "strategy"
            ]) ==
-             "internal_report_fallback"
+             "revise_and_retry_channel"
 
     assert replan_work_item.result_refs == %{}
     assert rejected_review.result_refs["linked_follow_up_work_item_id"] == replan_work_item.id
@@ -4843,6 +4982,92 @@ defmodule HydraX.RuntimeTest do
 
     assert delivery_brief.review_status == "rejected"
     assert delivery_brief.payload["delivery"]["status"] == "rejected"
+  end
+
+  test "rejected degraded publish recovery can request a channel switch" do
+    operator =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, operator} = Runtime.save_agent(operator, %{"role" => "operator"})
+
+    {:ok, parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Reject the degraded Telegram publish path and reroute it.",
+        "assigned_agent_id" => operator.id,
+        "assigned_role" => "operator",
+        "status" => "completed",
+        "approval_stage" => "validated"
+      })
+
+    {:ok, summary_artifact} =
+      Runtime.create_artifact(%{
+        "work_item_id" => parent.id,
+        "type" => "decision_ledger",
+        "title" => "Switch channel synthesis",
+        "summary" => "Move delivery away from Telegram",
+        "body" => "Revise the summary and send it through Slack instead."
+      })
+
+    {:ok, publish_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Prepare a degraded publish-ready summary for rerouting.",
+        "assigned_agent_id" => operator.id,
+        "assigned_role" => "operator",
+        "status" => "planned",
+        "approval_stage" => "validated",
+        "parent_work_item_id" => parent.id,
+        "metadata" => %{
+          "task_type" => "publish_summary",
+          "summary_artifact_id" => summary_artifact.id,
+          "delivery" => %{
+            "enabled" => true,
+            "mode" => "channel",
+            "channel" => "telegram",
+            "target" => "ops-room"
+          },
+          "follow_up_context" => %{
+            "needs_replan" => true,
+            "constraint_strategy" => "Revise the summary before rerouting it.",
+            "promoted_findings" => [
+              %{
+                "type" => "Decision",
+                "content" => "Revise this summary and send it through Slack instead."
+              }
+            ]
+          }
+        }
+      })
+
+    assert {:ok, _summary} = Runtime.run_autonomy_cycle(operator.id)
+
+    publish_item = Runtime.get_work_item!(publish_item.id)
+    [approval_item_id] = publish_item.result_refs["follow_up_work_item_ids"]
+    approval_item = Runtime.get_work_item!(approval_item_id)
+
+    {rejected_review, _record} =
+      Runtime.reject_work_item!(approval_item.id, %{
+        "requested_action" => "publish_review_report",
+        "rationale" => "Revise it and send it through Slack instead."
+      })
+
+    publish_item = Runtime.get_work_item!(publish_item.id)
+
+    [replan_work_item_id] =
+      publish_item.result_refs["follow_up_work_item_ids"]
+      |> List.wrap()
+      |> Enum.reject(&(&1 == approval_item_id))
+
+    replan_work_item = Runtime.get_work_item!(replan_work_item_id)
+    assert rejected_review.result_refs["linked_follow_up_work_item_id"] == replan_work_item.id
+
+    assert replan_work_item.metadata["delivery_recovery"]["strategy"] ==
+             "switch_delivery_channel"
+
+    assert replan_work_item.metadata["delivery_recovery"]["recommended_channel"] == "slack"
+    assert replan_work_item.metadata["delivery_recovery"]["previous_channel"] == "telegram"
   end
 
   test "approving a research work item promotes memories from report artifacts" do
