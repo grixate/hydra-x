@@ -1798,18 +1798,21 @@ defmodule HydraX.Report do
 
   defp render_work_item_publish_details(item) do
     payload = publish_brief_payload(item)
+    decision_snapshot = publish_decision_snapshot(item)
+    prior_summary = decision_snapshot["prior_summary"] || publish_prior_decision_content(item)
 
     [
       case payload["publish_objective"] do
         value when is_binary(value) and value != "" -> "publish_objective=#{value}"
         _ -> nil
       end,
-      case publish_prior_decisions(item) do
-        [%{"content" => value} | _] when is_binary(value) and value != "" ->
-          "publish_prior_decision=#{value}"
-
-        _ ->
-          nil
+      case prior_summary do
+        value when is_binary(value) and value != "" -> "publish_prior_decision=#{value}"
+        _ -> nil
+      end,
+      case decision_snapshot["comparison_summary"] do
+        value when is_binary(value) and value != "" -> "publish_decision_comparison=#{value}"
+        _ -> nil
       end,
       case latest_review_delivery_decision(item) do
         %{"content" => value} when is_binary(value) and value != "" ->
@@ -2026,9 +2029,15 @@ defmodule HydraX.Report do
     end
   end
 
-  defp publish_prior_decisions(item) do
-    get_in(item.metadata || %{}, ["follow_up_context", "delivery_decisions"])
-    |> List.wrap()
+  defp publish_decision_snapshot(item) do
+    publish_brief_payload(item)["delivery_decision_snapshot"] || %{}
+  end
+
+  defp publish_prior_decision_content(item) do
+    case get_in(item.metadata || %{}, ["follow_up_context", "delivery_decisions"]) do
+      [%{"content" => value} | _] when is_binary(value) and value != "" -> value
+      _ -> nil
+    end
   end
 
   defp latest_review_delivery_decision(item) do

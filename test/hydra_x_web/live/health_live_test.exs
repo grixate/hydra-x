@@ -392,6 +392,11 @@ defmodule HydraXWeb.HealthLiveTest do
             "Prepare an internal operator report for control-plane delivery until external delivery is safe again.",
           "destination_rationale" =>
             "Selected report -> control-plane using low confidence safeguard (internal-only fallback) at confidence 0.52 with requires_review posture.",
+          "delivery_decision_snapshot" => %{
+            "prior_summary" =>
+              "Keep the previous publish path on the control plane until stronger evidence is available.",
+            "comparison_summary" => "Retained the prior delivery guidance."
+          },
           "decision_confidence" => 0.52,
           "confidence_posture" => "requires_review",
           "recommended_actions" => [
@@ -470,6 +475,9 @@ defmodule HydraXWeb.HealthLiveTest do
 
     assert html =~
              "prior decision Keep the previous publish path on the control plane until stronger evidence is available."
+
+    assert html =~
+             "decision comparison Retained the prior delivery guidance."
 
     assert html =~
              "review decision Keep the report internal until the revised summary clears operator review for external publication."

@@ -927,7 +927,7 @@ defmodule HydraXWeb.HealthLive do
                     · expiry {event.expired_by}
                   </span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip         {event.ip}</span>
+                  <span :if={event.ip}> · ip          {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -2170,6 +2170,7 @@ defmodule HydraXWeb.HealthLive do
     [
       autonomy_publish_objective_line(item),
       autonomy_publish_prior_decision_line(item),
+      autonomy_publish_decision_comparison_line(item),
       autonomy_review_decision_line(item),
       autonomy_synthesis_decision_line(item),
       autonomy_publish_rationale_line(item),
@@ -2227,9 +2228,20 @@ defmodule HydraXWeb.HealthLive do
   end
 
   defp autonomy_publish_prior_decision_line(item) do
-    case autonomy_publish_prior_decisions(item) do
-      [%{"content" => value} | _] when is_binary(value) and value != "" ->
+    case autonomy_publish_decision_snapshot(item)["prior_summary"] ||
+           autonomy_publish_prior_decision_content(item) do
+      value when is_binary(value) and value != "" ->
         "prior decision #{value}"
+
+      _ ->
+        nil
+    end
+  end
+
+  defp autonomy_publish_decision_comparison_line(item) do
+    case autonomy_publish_decision_snapshot(item)["comparison_summary"] do
+      value when is_binary(value) and value != "" ->
+        "decision comparison #{value}"
 
       _ ->
         nil
@@ -2287,6 +2299,17 @@ defmodule HydraXWeb.HealthLive do
   defp autonomy_publish_prior_decisions(item) do
     get_in(item.metadata || %{}, ["follow_up_context", "delivery_decisions"])
     |> List.wrap()
+  end
+
+  defp autonomy_publish_prior_decision_content(item) do
+    case autonomy_publish_prior_decisions(item) do
+      [%{"content" => value} | _] when is_binary(value) and value != "" -> value
+      _ -> nil
+    end
+  end
+
+  defp autonomy_publish_decision_snapshot(item) do
+    autonomy_publish_brief_payload(item)["delivery_decision_snapshot"] || %{}
   end
 
   defp autonomy_latest_review_delivery_decision(item) do

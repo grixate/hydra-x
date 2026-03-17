@@ -1729,6 +1729,33 @@ defmodule HydraX.Runtime.WorkItems do
         delivery_destination
       )
 
+    prior_delivery_decisions =
+      merge_supporting_findings(
+        delivery_decision_memories(findings) ++
+          List.wrap(follow_up_metadata["delivery_decisions"])
+      )
+
+    current_delivery_decisions =
+      merge_supporting_findings([
+        %{
+          "type" => "DeliveryDecision",
+          "content" => destination_rationale,
+          "source_artifact_type" => "delivery_brief"
+        },
+        %{
+          "type" => "DeliveryDecision",
+          "content" => publish_objective,
+          "source_artifact_type" => "delivery_brief"
+        }
+      ])
+
+    delivery_decision_snapshot =
+      build_delivery_decision_snapshot(current_delivery_decisions, prior_delivery_decisions,
+        decision_basis: delivery_recovery["decision_basis"] || "publish_delivery",
+        decision_scope: "publish"
+      )
+      |> maybe_put_publish_prior_summary(delivery_recovery, delivery)
+
     constraint_strategy =
       follow_up_metadata["constraint_strategy"] ||
         summary_payload["constraint_strategy"] ||
@@ -1805,6 +1832,7 @@ defmodule HydraX.Runtime.WorkItems do
       "destination_rationale" => destination_rationale,
       "decision_confidence" => decision_confidence,
       "confidence_posture" => confidence_posture,
+      "delivery_decision_snapshot" => delivery_decision_snapshot,
       "constraint_strategy" => constraint_strategy,
       "delivery_recovery" => delivery_recovery,
       "delivery" => %{
@@ -2073,6 +2101,7 @@ defmodule HydraX.Runtime.WorkItems do
                 "decision_confidence" => payload["decision_confidence"],
                 "confidence_posture" => payload["confidence_posture"]
               },
+              "delivery_decision_snapshot" => payload["delivery_decision_snapshot"] || %{},
               "delivery_recovery" => delivery_recovery,
               "degraded_execution" => true,
               "requested_action" => "publish_review_report",
@@ -3680,6 +3709,11 @@ defmodule HydraX.Runtime.WorkItems do
             "confidence_posture" =>
               get_in(review_item.metadata || %{}, ["delivery_decision", "confidence_posture"])
           })
+          |> Map.update(
+            "delivery_decision_snapshot",
+            %{},
+            &Map.put(&1, "review_decision", "approved")
+          )
       })
       |> Repo.update()
 
@@ -3768,6 +3802,11 @@ defmodule HydraX.Runtime.WorkItems do
             "confidence_posture" =>
               get_in(review_item.metadata || %{}, ["delivery_decision", "confidence_posture"])
           })
+          |> Map.update(
+            "delivery_decision_snapshot",
+            %{},
+            &Map.put(&1, "review_decision", "rejected")
+          )
       })
       |> Repo.update()
 
@@ -4643,6 +4682,72 @@ defmodule HydraX.Runtime.WorkItems do
     |> Enum.reject(fn {_key, value} -> value in [nil, ""] end)
     |> Map.new()
   end
+
+  defp maybe_put_publish_prior_summary(snapshot, delivery_recovery, delivery) do
+    fallback =
+      publish_prior_summary_from_recovery(delivery_recovery) ||
+        publish_prior_summary_from_delivery(delivery)
+
+    case {snapshot["prior_summary"], fallback} do
+      {nil, value} when is_binary(value) and value != "" ->
+        Map.put(snapshot, "prior_summary", value)
+
+      _ ->
+        snapshot
+    end
+  end
+
+  defp publish_prior_summary_from_recovery(delivery_recovery) when is_map(delivery_recovery) do
+    previous_mode = delivery_recovery["previous_mode"]
+    previous_channel = delivery_recovery["previous_channel"]
+    previous_target = delivery_recovery["previous_target"]
+
+    cond do
+      is_binary(previous_channel) and previous_channel != "" and is_binary(previous_target) and
+          previous_target != "" ->
+        "Previous delivery path: #{previous_channel} -> #{previous_target}"
+
+      is_binary(previous_channel) and previous_channel != "" ->
+        "Previous delivery path: #{previous_channel}"
+
+      is_binary(previous_mode) and previous_mode != "" and is_binary(previous_target) and
+          previous_target != "" ->
+        "Previous delivery path: #{previous_mode} -> #{previous_target}"
+
+      is_binary(previous_mode) and previous_mode != "" ->
+        "Previous delivery path: #{previous_mode}"
+
+      true ->
+        nil
+    end
+  end
+
+  defp publish_prior_summary_from_recovery(_delivery_recovery), do: nil
+
+  defp publish_prior_summary_from_delivery(delivery) when is_map(delivery) do
+    mode = delivery["mode"]
+    channel = delivery["channel"]
+    target = delivery["target"]
+
+    cond do
+      is_binary(channel) and channel != "" and is_binary(target) and target != "" ->
+        "Previous delivery path: #{channel} -> #{target}"
+
+      is_binary(channel) and channel != "" ->
+        "Previous delivery path: #{channel}"
+
+      is_binary(mode) and mode != "" and is_binary(target) and target != "" ->
+        "Previous delivery path: #{mode} -> #{target}"
+
+      is_binary(mode) and mode != "" ->
+        "Previous delivery path: #{mode}"
+
+      true ->
+        nil
+    end
+  end
+
+  defp publish_prior_summary_from_delivery(_delivery), do: nil
 
   defp delivery_decision_summary(%{"content" => value}) when is_binary(value) and value != "",
     do: value

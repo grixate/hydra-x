@@ -4698,12 +4698,17 @@ defmodule HydraX.RuntimeTest do
     assert delivery_brief.payload["delivery_channel"] == nil
     assert delivery_brief.payload["delivery_target"] == "control-plane"
     assert delivery_brief.payload["delivery_recovery"]["strategy"] == "internal_report_fallback"
+    assert delivery_brief.payload["delivery_decision_snapshot"]["decision_scope"] == "publish"
     assert delivery_brief.payload["delivery_heading"] == "Internal operator report"
     assert delivery_brief.payload["publish_objective"] =~ "internal operator report"
     assert delivery_brief.payload["delivery_destination"] == "report -> control-plane"
     assert delivery_brief.payload["confidence_posture"] == "requires_review"
     assert is_float(delivery_brief.payload["decision_confidence"])
     assert delivery_brief.payload["destination_rationale"] =~ "control-plane"
+
+    assert delivery_brief.payload["delivery_decision_snapshot"]["current_summary"] =~
+             "control-plane"
+
     assert delivery_brief.body =~ "Delivery confidence:"
     assert delivery_brief.body =~ "Destination rationale:"
     assert delivery_brief.body =~ "Delivery objective: Prepare an internal operator report"
@@ -4831,6 +4836,7 @@ defmodule HydraX.RuntimeTest do
     assert approval_item.metadata["delivery"]["channel"] == "slack"
     assert approval_item.metadata["delivery_recovery"]["strategy"] == "switch_delivery_channel"
     assert approval_item.metadata["delivery_decision"]["destination"] == "slack -> ops-room"
+    assert approval_item.metadata["delivery_decision_snapshot"]["decision_scope"] == "publish"
 
     assert approval_item.metadata["delivery_decision"]["destination_rationale"] =~
              "rerouted delivery"
@@ -4842,6 +4848,14 @@ defmodule HydraX.RuntimeTest do
     assert delivery_brief.payload["publish_objective"] =~ "through slack"
     assert delivery_brief.payload["delivery_destination"] == "slack -> ops-room"
     assert delivery_brief.payload["destination_rationale"] =~ "rerouted delivery"
+    assert delivery_brief.payload["delivery_decision_snapshot"]["prior_summary"] =~ "telegram"
+
+    assert delivery_brief.payload["delivery_decision_snapshot"]["comparison_summary"] in [
+             "Established delivery guidance for this artifact.",
+             "Retained the prior delivery guidance.",
+             "Shifted delivery guidance from the prior path to the current recommendation."
+           ]
+
     assert delivery_brief.payload["confidence_posture"] in ["requires_review", "cautious"]
 
     assert delivery_brief.body =~

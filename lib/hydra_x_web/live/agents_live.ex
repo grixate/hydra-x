@@ -1521,6 +1521,7 @@ defmodule HydraXWeb.AgentsLive do
     [
       publish_objective_line(work_item),
       publish_prior_decision_line(work_item),
+      publish_decision_comparison_line(work_item),
       publish_review_decision_line(work_item),
       publish_synthesis_decision_line(work_item),
       publish_rationale_line(work_item),
@@ -1599,9 +1600,20 @@ defmodule HydraXWeb.AgentsLive do
   end
 
   defp publish_prior_decision_line(work_item) do
-    case publish_prior_decisions(work_item) do
-      [%{"content" => value} | _] when is_binary(value) and value != "" ->
+    case publish_decision_snapshot(work_item)["prior_summary"] ||
+           publish_prior_decision_content(work_item) do
+      value when is_binary(value) and value != "" ->
         "prior decision #{value}"
+
+      _ ->
+        nil
+    end
+  end
+
+  defp publish_decision_comparison_line(work_item) do
+    case publish_decision_snapshot(work_item)["comparison_summary"] do
+      value when is_binary(value) and value != "" ->
+        "decision comparison #{value}"
 
       _ ->
         nil
@@ -1659,6 +1671,17 @@ defmodule HydraXWeb.AgentsLive do
   defp publish_prior_decisions(work_item) do
     get_in(work_item.metadata || %{}, ["follow_up_context", "delivery_decisions"])
     |> List.wrap()
+  end
+
+  defp publish_prior_decision_content(work_item) do
+    case publish_prior_decisions(work_item) do
+      [%{"content" => value} | _] when is_binary(value) and value != "" -> value
+      _ -> nil
+    end
+  end
+
+  defp publish_decision_snapshot(work_item) do
+    publish_brief_payload(work_item)["delivery_decision_snapshot"] || %{}
   end
 
   defp latest_review_delivery_decision(work_item) do

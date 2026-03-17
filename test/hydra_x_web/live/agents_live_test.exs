@@ -164,6 +164,12 @@ defmodule HydraXWeb.AgentsLiveTest do
             "Revise the summary and route it through telegram for ops-room publication.",
           "destination_rationale" =>
             "Selected telegram -> ops-room using current publish policy at confidence 0.78 with ready posture.",
+          "delivery_decision_snapshot" => %{
+            "prior_summary" =>
+              "Keep the previous publish path on the control plane until the summary is revised.",
+            "comparison_summary" =>
+              "Shifted delivery guidance from the prior path to the current recommendation."
+          },
           "decision_confidence" => 0.78,
           "confidence_posture" => "ready",
           "recommended_actions" => [
@@ -235,6 +241,9 @@ defmodule HydraXWeb.AgentsLiveTest do
 
     assert html =~
              "prior decision Keep the previous publish path on the control plane until the summary is revised."
+
+    assert html =~
+             "decision comparison Shifted delivery guidance from the prior path to the current recommendation."
 
     assert html =~
              "review decision Route the revised summary through Slack because the operator requested a channel switch."
