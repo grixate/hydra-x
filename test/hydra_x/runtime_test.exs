@@ -4700,6 +4700,12 @@ defmodule HydraX.RuntimeTest do
     assert delivery_brief.payload["delivery_recovery"]["strategy"] == "internal_report_fallback"
     assert delivery_brief.payload["delivery_heading"] == "Internal operator report"
     assert delivery_brief.payload["publish_objective"] =~ "internal operator report"
+    assert delivery_brief.payload["delivery_destination"] == "report -> control-plane"
+    assert delivery_brief.payload["confidence_posture"] == "requires_review"
+    assert is_float(delivery_brief.payload["decision_confidence"])
+    assert delivery_brief.payload["destination_rationale"] =~ "control-plane"
+    assert delivery_brief.body =~ "Delivery confidence:"
+    assert delivery_brief.body =~ "Destination rationale:"
     assert delivery_brief.body =~ "Delivery objective: Prepare an internal operator report"
 
     assert Enum.any?(delivery_brief.payload["recommended_actions"] || [], fn action ->
@@ -4824,12 +4830,19 @@ defmodule HydraX.RuntimeTest do
     approval_item = Runtime.get_work_item!(approval_item_id)
     assert approval_item.metadata["delivery"]["channel"] == "slack"
     assert approval_item.metadata["delivery_recovery"]["strategy"] == "switch_delivery_channel"
+    assert approval_item.metadata["delivery_decision"]["destination"] == "slack -> ops-room"
+
+    assert approval_item.metadata["delivery_decision"]["destination_rationale"] =~
+             "rerouted delivery"
 
     [delivery_brief] = Runtime.work_item_artifacts(publish_item.id)
     assert delivery_brief.payload["delivery"]["channel"] == "slack"
     assert delivery_brief.payload["delivery_recovery"]["strategy"] == "switch_delivery_channel"
     assert delivery_brief.payload["delivery_heading"] == "Revised summary for rerouted delivery"
     assert delivery_brief.payload["publish_objective"] =~ "through slack"
+    assert delivery_brief.payload["delivery_destination"] == "slack -> ops-room"
+    assert delivery_brief.payload["destination_rationale"] =~ "rerouted delivery"
+    assert delivery_brief.payload["confidence_posture"] in ["requires_review", "cautious"]
 
     assert delivery_brief.body =~
              "Delivery objective: Revise the summary and route it through slack"
@@ -4849,6 +4862,16 @@ defmodule HydraX.RuntimeTest do
 
     assert approved_review.result_refs["delivery"]["recovery"]["strategy"] ==
              "switch_delivery_channel"
+
+    [approved_delivery_brief] =
+      Runtime.work_item_artifacts(publish_item.id)
+      |> Enum.filter(&(&1.type == "delivery_brief"))
+
+    assert approved_delivery_brief.payload["review_outcome"]["decision"] == "approved"
+    assert approved_delivery_brief.payload["review_outcome"]["delivery_status"] == "delivered"
+
+    assert approved_delivery_brief.payload["review_outcome"]["destination_rationale"] =~
+             "rerouted delivery"
 
     assert_receive {:recovery_slack_delivery, %{channel: "ops-room", text: content}}
     assert content =~ "Slack"
@@ -4943,6 +4966,7 @@ defmodule HydraX.RuntimeTest do
     publish_item = Runtime.get_work_item!(publish_item.id)
     [approval_item_id] = publish_item.result_refs["follow_up_work_item_ids"]
     approval_item = Runtime.get_work_item!(approval_item_id)
+    assert approval_item.metadata["delivery_decision"]["confidence_posture"] == "requires_review"
 
     {rejected_review, record} =
       Runtime.reject_work_item!(approval_item.id, %{
@@ -4998,6 +5022,9 @@ defmodule HydraX.RuntimeTest do
 
     assert delivery_brief.review_status == "rejected"
     assert delivery_brief.payload["delivery"]["status"] == "rejected"
+    assert delivery_brief.payload["review_outcome"]["decision"] == "rejected"
+    assert delivery_brief.payload["review_outcome"]["delivery_status"] == "rejected"
+    assert delivery_brief.payload["review_outcome"]["confidence_posture"] == "requires_review"
   end
 
   test "rejected degraded publish recovery can request a channel switch" do
@@ -5278,6 +5305,8 @@ defmodule HydraX.RuntimeTest do
              "Revised summary for rerouted delivery"
 
     assert next_delivery_brief.payload["publish_objective"] =~ "through slack"
+    assert next_delivery_brief.payload["destination_rationale"] =~ "explicit channel signal"
+    assert next_delivery_brief.payload["confidence_posture"] in ["requires_review", "cautious"]
 
     assert next_delivery_brief.body =~
              "Delivery objective: Revise the summary and route it through slack"
@@ -5457,6 +5486,9 @@ defmodule HydraX.RuntimeTest do
              "Revised summary for retry delivery"
 
     assert retry_delivery_brief.payload["publish_objective"] =~ "retry delivery through telegram"
+    assert retry_delivery_brief.payload["destination_rationale"] =~ "revised confident summary"
+    assert retry_delivery_brief.payload["decision_confidence"] >= 0.6
+    assert retry_delivery_brief.payload["confidence_posture"] in ["requires_review", "cautious"]
 
     assert Enum.any?(retry_delivery_brief.payload["recommended_actions"] || [], fn action ->
              action =~ "retry brief"

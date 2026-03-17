@@ -1520,6 +1520,8 @@ defmodule HydraXWeb.AgentsLive do
   defp work_item_publish_detail_lines(work_item) do
     [
       publish_objective_line(work_item),
+      publish_rationale_line(work_item),
+      publish_confidence_line(work_item),
       publish_guidance_line(work_item)
     ]
     |> Enum.reject(&(&1 in [nil, ""]))
@@ -1583,6 +1585,25 @@ defmodule HydraXWeb.AgentsLive do
     case publish_brief_payload(work_item)["recommended_actions"] do
       [first | _] when is_binary(first) and first != "" -> "guidance #{first}"
       _ -> nil
+    end
+  end
+
+  defp publish_rationale_line(work_item) do
+    case publish_brief_payload(work_item)["destination_rationale"] do
+      value when is_binary(value) and value != "" -> "rationale #{value}"
+      _ -> nil
+    end
+  end
+
+  defp publish_confidence_line(work_item) do
+    payload = publish_brief_payload(work_item)
+
+    case {payload["decision_confidence"], payload["confidence_posture"]} do
+      {value, posture} when (is_float(value) or is_integer(value)) and is_binary(posture) ->
+        "confidence #{Float.round(value * 1.0, 2)} (#{posture})"
+
+      _ ->
+        nil
     end
   end
 

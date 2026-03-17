@@ -1652,6 +1652,22 @@ defmodule HydraX.Runtime.WorkItems do
 
     delivery_heading = delivery_recovery_heading(delivery_recovery)
 
+    decision_confidence =
+      delivery_decision_confidence(delivery_recovery, summary_payload, summary_artifact)
+
+    confidence_posture = delivery_confidence_posture(decision_confidence, degraded?)
+
+    delivery_destination =
+      delivery_destination_label(delivery_mode, delivery_channel, delivery_target)
+
+    destination_rationale =
+      delivery_destination_rationale(
+        delivery_recovery,
+        decision_confidence,
+        confidence_posture,
+        delivery_destination
+      )
+
     constraint_strategy =
       follow_up_metadata["constraint_strategy"] ||
         summary_payload["constraint_strategy"] ||
@@ -1676,6 +1692,9 @@ defmodule HydraX.Runtime.WorkItems do
         Delivery target: #{delivery_target || "control plane"}
         Delivery posture: #{if(degraded?, do: "degraded", else: "standard")}
         Delivery recovery: #{delivery_recovery["strategy"] || "none"}
+        Delivery destination: #{delivery_destination}
+        Delivery confidence: #{Float.round(decision_confidence, 2)} (#{confidence_posture})
+        Destination rationale: #{destination_rationale}
         Constraint strategy: #{constraint_strategy || "none"}
         Delivery objective: #{publish_objective}
 
@@ -1697,6 +1716,9 @@ defmodule HydraX.Runtime.WorkItems do
         Delivery target: #{delivery_target || "control plane"}
         Delivery posture: #{if(degraded?, do: "degraded", else: "standard")}
         Delivery recovery: #{delivery_recovery["strategy"] || "none"}
+        Delivery destination: #{delivery_destination}
+        Delivery confidence: #{Float.round(decision_confidence, 2)} (#{confidence_posture})
+        Destination rationale: #{destination_rationale}
         Constraint strategy: #{constraint_strategy || "none"}
         Delivery objective: #{publish_objective}
 
@@ -1718,6 +1740,10 @@ defmodule HydraX.Runtime.WorkItems do
       "degraded" => degraded?,
       "publish_objective" => publish_objective,
       "delivery_heading" => delivery_heading,
+      "delivery_destination" => delivery_destination,
+      "destination_rationale" => destination_rationale,
+      "decision_confidence" => decision_confidence,
+      "confidence_posture" => confidence_posture,
       "constraint_strategy" => constraint_strategy,
       "delivery_recovery" => delivery_recovery,
       "delivery" => %{
@@ -1733,6 +1759,7 @@ defmodule HydraX.Runtime.WorkItems do
         [
           delivery_recovery["recommended_action"],
           delivery_recovery_guidance(delivery_recovery, degraded?),
+          confidence_posture_guidance(confidence_posture, degraded?),
           delivery_target &&
             "Deliver to #{delivery_target} via #{delivery_channel || delivery_mode} once the chosen recovery path is approved."
         ]
@@ -1745,6 +1772,92 @@ defmodule HydraX.Runtime.WorkItems do
         )
     }
   end
+
+  defp delivery_decision_confidence(delivery_recovery, summary_payload, summary_artifact) do
+    cond do
+      is_float(delivery_recovery["decision_confidence"]) ->
+        delivery_recovery["decision_confidence"]
+
+      is_integer(delivery_recovery["decision_confidence"]) ->
+        delivery_recovery["decision_confidence"] * 1.0
+
+      is_float(summary_payload["confidence"]) ->
+        summary_payload["confidence"]
+
+      is_integer(summary_payload["confidence"]) ->
+        summary_payload["confidence"] * 1.0
+
+      match?(%Artifact{}, summary_artifact) and is_float(summary_artifact.confidence) ->
+        summary_artifact.confidence
+
+      match?(%Artifact{}, summary_artifact) and is_integer(summary_artifact.confidence) ->
+        summary_artifact.confidence * 1.0
+
+      true ->
+        0.68
+    end
+    |> Float.round(3)
+  end
+
+  defp delivery_confidence_posture(confidence, degraded?) when confidence < 0.6 or degraded?,
+    do: "requires_review"
+
+  defp delivery_confidence_posture(confidence, _degraded?) when confidence < 0.75,
+    do: "cautious"
+
+  defp delivery_confidence_posture(_confidence, _degraded?), do: "ready"
+
+  defp delivery_destination_label("channel", channel, target)
+       when is_binary(channel) and channel != "" do
+    if present_text?(target), do: "#{channel} -> #{target}", else: channel
+  end
+
+  defp delivery_destination_label(mode, _channel, target) when is_binary(mode) do
+    if present_text?(target), do: "#{mode} -> #{target}", else: mode
+  end
+
+  defp delivery_destination_label(_mode, _channel, target) do
+    target || "report"
+  end
+
+  defp delivery_destination_rationale(
+         delivery_recovery,
+         decision_confidence,
+         confidence_posture,
+         destination
+       ) do
+    basis =
+      case delivery_recovery["decision_basis"] do
+        "explicit_channel_signal" -> "explicit channel signal"
+        "low_confidence" -> "low confidence safeguard"
+        "revised_confident_summary" -> "revised confident summary"
+        nil -> "current publish policy"
+        value -> String.replace(value, "_", " ")
+      end
+
+    strategy_note =
+      case delivery_recovery["strategy"] do
+        "switch_delivery_channel" -> "rerouted delivery"
+        "internal_report_fallback" -> "internal-only fallback"
+        "revise_and_retry_channel" -> "revised retry path"
+        _ -> "default delivery path"
+      end
+
+    "Selected #{destination} using #{basis} (#{strategy_note}) at confidence #{Float.round(decision_confidence, 2)} with #{confidence_posture} posture."
+  end
+
+  defp confidence_posture_guidance("requires_review", true),
+    do: "Keep the degraded brief under explicit operator review before any external delivery."
+
+  defp confidence_posture_guidance("requires_review", _degraded?),
+    do: "Keep this brief under explicit operator review before any delivery attempt."
+
+  defp confidence_posture_guidance("cautious", _degraded?),
+    do: "Use a cautious review pass and confirm the destination rationale before publishing."
+
+  defp confidence_posture_guidance("ready", _degraded?),
+    do:
+      "The delivery path is ready for the next approval step with the current destination rationale."
 
   defp delivery_recovery_objective(
          work_item,
@@ -1893,6 +2006,12 @@ defmodule HydraX.Runtime.WorkItems do
               "publish_work_item_id" => publish_item.id,
               "delivery_brief_artifact_id" => delivery_brief.id,
               "delivery" => review_delivery,
+              "delivery_decision" => %{
+                "destination" => payload["delivery_destination"],
+                "destination_rationale" => payload["destination_rationale"],
+                "decision_confidence" => payload["decision_confidence"],
+                "confidence_posture" => payload["confidence_posture"]
+              },
               "delivery_recovery" => delivery_recovery,
               "degraded_execution" => true,
               "requested_action" => "publish_review_report",
@@ -3453,7 +3572,19 @@ defmodule HydraX.Runtime.WorkItems do
     {:ok, updated_brief} =
       updated_brief
       |> Artifact.changeset(%{
-        "payload" => Map.put(updated_brief.payload || %{}, "delivery", delivery_result)
+        "payload" =>
+          (updated_brief.payload || %{})
+          |> Map.put("delivery", delivery_result)
+          |> Map.put("review_outcome", %{
+            "decision" => "approved",
+            "delivery_status" => delivery_result["status"],
+            "review_work_item_id" => review_item.id,
+            "approval_record_id" => approval_record.id,
+            "destination_rationale" =>
+              get_in(review_item.metadata || %{}, ["delivery_decision", "destination_rationale"]),
+            "confidence_posture" =>
+              get_in(review_item.metadata || %{}, ["delivery_decision", "confidence_posture"])
+          })
       })
       |> Repo.update()
 
@@ -3529,7 +3660,19 @@ defmodule HydraX.Runtime.WorkItems do
     {:ok, updated_brief} =
       updated_brief
       |> Artifact.changeset(%{
-        "payload" => Map.put(updated_brief.payload || %{}, "delivery", rejection_result)
+        "payload" =>
+          (updated_brief.payload || %{})
+          |> Map.put("delivery", rejection_result)
+          |> Map.put("review_outcome", %{
+            "decision" => "rejected",
+            "delivery_status" => rejection_result["status"],
+            "review_work_item_id" => review_item.id,
+            "approval_record_id" => rejection_record.id,
+            "destination_rationale" =>
+              get_in(review_item.metadata || %{}, ["delivery_decision", "destination_rationale"]),
+            "confidence_posture" =>
+              get_in(review_item.metadata || %{}, ["delivery_decision", "confidence_posture"])
+          })
       })
       |> Repo.update()
 

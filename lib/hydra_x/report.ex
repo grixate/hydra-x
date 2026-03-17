@@ -1804,6 +1804,17 @@ defmodule HydraX.Report do
         value when is_binary(value) and value != "" -> "publish_objective=#{value}"
         _ -> nil
       end,
+      case payload["destination_rationale"] do
+        value when is_binary(value) and value != "" -> "publish_rationale=#{value}"
+        _ -> nil
+      end,
+      case {payload["decision_confidence"], payload["confidence_posture"]} do
+        {value, posture} when (is_float(value) or is_integer(value)) and is_binary(posture) ->
+          "publish_confidence=#{Float.round(value * 1.0, 2)}:#{posture}"
+
+        _ ->
+          nil
+      end,
       payload
       |> Map.get("recommended_actions", [])
       |> List.wrap()

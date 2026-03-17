@@ -347,6 +347,10 @@ defmodule HydraXWeb.HealthLiveTest do
         "payload" => %{
           "publish_objective" =>
             "Prepare an internal operator report for control-plane delivery until external delivery is safe again.",
+          "destination_rationale" =>
+            "Selected report -> control-plane using low confidence safeguard (internal-only fallback) at confidence 0.52 with requires_review posture.",
+          "decision_confidence" => 0.52,
+          "confidence_posture" => "requires_review",
           "recommended_actions" => [
             "Keep this brief on the control plane until stronger evidence and explicit approval restore external delivery."
           ]
@@ -420,6 +424,13 @@ defmodule HydraXWeb.HealthLiveTest do
 
     assert html =~
              "objective Prepare an internal operator report for control-plane delivery until external delivery is safe again."
+
+    assert html =~
+             "rationale Selected report"
+
+    assert html =~ "confidence 0.52 (requires_review)"
+    assert html =~ "low confidence safeguard"
+    assert html =~ "internal-only fallback"
 
     assert html =~
              "guidance Keep this brief on the control plane until stronger evidence and explicit approval restore external delivery."

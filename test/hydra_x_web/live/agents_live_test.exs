@@ -153,6 +153,10 @@ defmodule HydraXWeb.AgentsLiveTest do
         "payload" => %{
           "publish_objective" =>
             "Revise the summary and route it through telegram for ops-room publication.",
+          "destination_rationale" =>
+            "Selected telegram -> ops-room using current publish policy at confidence 0.78 with ready posture.",
+          "decision_confidence" => 0.78,
+          "confidence_posture" => "ready",
           "recommended_actions" => [
             "Confirm the operator-ready summary with the on-call owner before publication."
           ]
@@ -185,6 +189,12 @@ defmodule HydraXWeb.AgentsLiveTest do
 
     assert html =~
              "objective Revise the summary and route it through telegram for ops-room publication."
+
+    assert html =~
+             "rationale Selected telegram"
+
+    assert html =~ "confidence 0.78 (ready)"
+    assert html =~ "current publish policy"
 
     assert html =~
              "guidance Confirm the operator-ready summary with the on-call owner before publication."

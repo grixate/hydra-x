@@ -927,7 +927,7 @@ defmodule HydraXWeb.HealthLive do
                     · expiry {event.expired_by}
                   </span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip      {event.ip}</span>
+                  <span :if={event.ip}> · ip       {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -2169,6 +2169,8 @@ defmodule HydraXWeb.HealthLive do
   defp autonomy_publish_detail_lines(item) do
     [
       autonomy_publish_objective_line(item),
+      autonomy_publish_rationale_line(item),
+      autonomy_publish_confidence_line(item),
       autonomy_publish_guidance_line(item)
     ]
     |> Enum.reject(&is_nil_or_empty/1)
@@ -2211,6 +2213,25 @@ defmodule HydraXWeb.HealthLive do
     case autonomy_publish_brief_payload(item)["recommended_actions"] do
       [first | _] when is_binary(first) and first != "" -> "guidance #{first}"
       _ -> nil
+    end
+  end
+
+  defp autonomy_publish_rationale_line(item) do
+    case autonomy_publish_brief_payload(item)["destination_rationale"] do
+      value when is_binary(value) and value != "" -> "rationale #{value}"
+      _ -> nil
+    end
+  end
+
+  defp autonomy_publish_confidence_line(item) do
+    payload = autonomy_publish_brief_payload(item)
+
+    case {payload["decision_confidence"], payload["confidence_posture"]} do
+      {value, posture} when (is_float(value) or is_integer(value)) and is_binary(posture) ->
+        "confidence #{Float.round(value * 1.0, 2)} (#{posture})"
+
+      _ ->
+        nil
     end
   end
 

@@ -670,6 +670,10 @@ defmodule HydraX.ReportTest do
         "payload" => %{
           "publish_objective" =>
             "Revise the summary and route it through telegram for ops-room publication.",
+          "destination_rationale" =>
+            "Selected telegram -> ops-room using current publish policy at confidence 0.78 with ready posture.",
+          "decision_confidence" => 0.78,
+          "confidence_posture" => "ready",
           "recommended_actions" => [
             "Confirm the operator-ready summary with the on-call owner before publication."
           ]
@@ -921,6 +925,11 @@ defmodule HydraX.ReportTest do
 
     assert File.read!(export.markdown_path) =~
              "publish_objective=Revise the summary and route it through telegram for ops-room publication."
+
+    assert File.read!(export.markdown_path) =~
+             "publish_rationale=Selected telegram -> ops-room using current publish policy at confidence 0.78 with ready posture."
+
+    assert File.read!(export.markdown_path) =~ "publish_confidence=0.78:ready"
 
     assert File.read!(export.markdown_path) =~
              "publish_guidance=Confirm the operator-ready summary with the on-call owner before publication."
