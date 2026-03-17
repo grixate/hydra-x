@@ -265,6 +265,7 @@ defmodule Mix.Tasks.HydraX.Work do
 
   defp artifact_delivery_decision_entries(artifact) do
     payload = artifact.payload || %{}
+    decision_snapshot = payload["delivery_decision_snapshot"] || %{}
 
     case artifact_delivery_decision_kind(payload) do
       "review" ->
@@ -277,10 +278,24 @@ defmodule Mix.Tasks.HydraX.Work do
         |> Map.get("delivery_decisions", [])
         |> List.wrap()
 
+      "publish" ->
+        case decision_snapshot["current_summary"] do
+          value when is_binary(value) and value != "" ->
+            [%{"content" => value}]
+
+          _ ->
+            []
+        end
+
       _ ->
         []
     end
   end
+
+  defp artifact_delivery_decision_kind(%{
+         "delivery_decision_snapshot" => %{"decision_scope" => "publish"}
+       }),
+       do: "publish"
 
   defp artifact_delivery_decision_kind(%{"decision_type" => "delegation_synthesis"}),
     do: "synthesis"

@@ -69,6 +69,24 @@ defmodule HydraX.WorkTaskTest do
         }
       })
 
+    {:ok, _publish_artifact} =
+      Runtime.create_artifact(%{
+        "work_item_id" => work_item.id,
+        "type" => "delivery_brief",
+        "title" => "Publish brief",
+        "summary" => "Prepared rerouted publish brief",
+        "payload" => %{
+          "delivery_decision_snapshot" => %{
+            "decision_scope" => "publish",
+            "current_summary" =>
+              "Selected slack -> ops-room using rerouted delivery guidance at confidence 0.74.",
+            "prior_summary" => "Previous delivery path: telegram -> ops-room",
+            "comparison_summary" =>
+              "Shifted delivery guidance from the prior path to the current recommendation."
+          }
+        }
+      })
+
     Mix.Task.reenable("hydra_x.work")
 
     show_output =
@@ -84,6 +102,8 @@ defmodule HydraX.WorkTaskTest do
     assert show_output =~ "Route the revised publish through Slack"
     assert show_output =~ "synthesis_delivery_decision_1"
     assert show_output =~ "Keep the rerouted Slack path"
+    assert show_output =~ "publish_delivery_decision_1"
+    assert show_output =~ "Selected slack -> ops-room using rerouted delivery guidance"
     assert show_output =~ "decision_comparison"
 
     Mix.Task.reenable("hydra_x.work")

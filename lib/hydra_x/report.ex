@@ -2157,6 +2157,7 @@ defmodule HydraX.Report do
 
   defp artifact_delivery_decision_entries(artifact) do
     payload = artifact.payload || %{}
+    decision_snapshot = payload["delivery_decision_snapshot"] || %{}
 
     case artifact_delivery_decision_kind(artifact) do
       "review" ->
@@ -2169,6 +2170,15 @@ defmodule HydraX.Report do
         |> Map.get("delivery_decisions", [])
         |> List.wrap()
 
+      "publish" ->
+        case decision_snapshot["current_summary"] do
+          value when is_binary(value) and value != "" ->
+            [%{"content" => value}]
+
+          _ ->
+            []
+        end
+
       _ ->
         []
     end
@@ -2178,9 +2188,17 @@ defmodule HydraX.Report do
     payload = artifact.payload || %{}
 
     cond do
-      payload["decision_type"] == "delegation_synthesis" -> "synthesis"
-      List.wrap(payload["delivery_decision_context"]) != [] -> "review"
-      true -> nil
+      get_in(payload, ["delivery_decision_snapshot", "decision_scope"]) == "publish" ->
+        "publish"
+
+      payload["decision_type"] == "delegation_synthesis" ->
+        "synthesis"
+
+      List.wrap(payload["delivery_decision_context"]) != [] ->
+        "review"
+
+      true ->
+        nil
     end
   end
 
