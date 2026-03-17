@@ -5253,6 +5253,14 @@ defmodule HydraX.RuntimeTest do
     assert replan_work_item.deliverables["target"] == "ops-room"
     assert replan_work_item.deliverables["delivery"]["channel"] == "slack"
 
+    assert Enum.any?(
+             get_in(replan_work_item.metadata || %{}, ["follow_up_context", "delivery_decisions"]) ||
+               [],
+             fn finding ->
+               finding["content"] =~ "telegram" or finding["content"] =~ "ops-room"
+             end
+           )
+
     assert {:ok, planner_summary} = Runtime.run_autonomy_cycle(planner.id)
     assert planner_summary.action == "delegated"
 
@@ -5261,6 +5269,21 @@ defmodule HydraX.RuntimeTest do
 
     assert {:ok, reviewer_summary} = Runtime.run_autonomy_cycle(reviewer.id)
     assert reviewer_summary.action == "review_completed"
+
+    review_item =
+      Runtime.list_work_items(limit: 20)
+      |> Enum.find(&(&1.kind == "review" and &1.assigned_role == "reviewer"))
+
+    review_artifacts = Runtime.work_item_artifacts(review_item.id)
+    review_report = Enum.find(review_artifacts, &(&1.type == "review_report"))
+    review_decision = Enum.find(review_artifacts, &(&1.type == "decision_ledger"))
+
+    assert review_report.body =~ "Delivery decision context:"
+    assert review_report.body =~ "telegram"
+
+    assert Enum.any?(review_decision.payload["delivery_decision_context"] || [], fn finding ->
+             finding["content"] =~ "telegram" or finding["content"] =~ "ops-room"
+           end)
 
     assert {:ok, researcher_finalize_summary} = Runtime.run_autonomy_cycle(researcher.id)
     assert researcher_finalize_summary.action == "finalized_blocked_parent"
@@ -5287,6 +5310,12 @@ defmodule HydraX.RuntimeTest do
 
     assert get_in(publish_follow_up.metadata || %{}, ["delivery_recovery", "decision_basis"]) ==
              "explicit_channel_signal"
+
+    replan_artifacts = Runtime.work_item_artifacts(replan_work_item.id)
+    replan_synthesis = Enum.find(replan_artifacts, &(&1.type == "decision_ledger"))
+
+    assert replan_synthesis.body =~ "Delivery decisions shaping this synthesis:"
+    assert replan_synthesis.body =~ "Slack"
 
     assert {:ok, operator_summary} = Runtime.run_autonomy_cycle(operator.id)
     assert operator_summary.action == "prepared_delivery_brief"
@@ -5464,6 +5493,14 @@ defmodule HydraX.RuntimeTest do
 
     assert get_in(publish_follow_up.metadata || %{}, ["delivery_recovery", "decision_basis"]) ==
              "revised_confident_summary"
+
+    assert Enum.any?(
+             get_in(publish_follow_up.metadata || %{}, ["follow_up_context", "delivery_decisions"]) ||
+               [],
+             fn finding ->
+               finding["content"] =~ "control plane" or finding["content"] =~ "telegram"
+             end
+           )
 
     assert {:ok, operator_summary} = Runtime.run_autonomy_cycle(operator.id)
     assert operator_summary.action == "prepared_delivery_brief"

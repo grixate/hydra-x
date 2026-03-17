@@ -1494,6 +1494,21 @@ defmodule HydraX.Runtime.WorkItems do
     delegated_context = delegated_context_memories(target || work_item)
     delegated_context_block = render_delegated_context_block(delegated_context)
 
+    delivery_decisions =
+      merge_supporting_findings(
+        delivery_decision_memories(delegated_context) ++
+          List.wrap(get_in(target.metadata || %{}, ["follow_up_context", "delivery_decisions"])) ++
+          List.wrap(
+            get_in(work_item.metadata || %{}, ["follow_up_context", "delivery_decisions"])
+          )
+      )
+
+    delivery_decision_block =
+      delivery_decisions
+      |> Enum.map_join("\n", fn memory ->
+        "- #{memory["content"]}"
+      end)
+
     findings =
       review_findings(
         changed_files,
@@ -1533,12 +1548,14 @@ defmodule HydraX.Runtime.WorkItems do
         Validation commands: #{if(test_commands == [], do: "none", else: Enum.join(test_commands, ", "))}
         Source artifact: #{source_artifact && "#{source_artifact.type} ##{source_artifact.id}"}
         Delegated context: #{if(delegated_context_block == "", do: "none", else: delegated_context_block)}
+        Delivery decision context: #{if(delivery_decision_block == "", do: "none", else: "\n" <> delivery_decision_block)}
         """
         |> String.trim(),
       "decision" => decision,
       "findings" => findings,
       "target_goal" => target && target.goal,
       "delegated_context" => delegated_context,
+      "delivery_decision_context" => delivery_decisions,
       "recommended_actions" =>
         review_recommended_actions(decision, target && target.kind, delegated_context),
       "memory_origin_role" => "reviewer",
@@ -1591,6 +1608,7 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp build_review_decision_ledger(_work_item, target, review_payload) do
     delegated_context = review_payload["delegated_context"] || []
+    delivery_decision_context = review_payload["delivery_decision_context"] || []
 
     %{
       "summary" => review_payload["summary"],
@@ -1604,6 +1622,9 @@ defmodule HydraX.Runtime.WorkItems do
         Recommended actions:
         #{Enum.map_join(review_payload["recommended_actions"] || [], "\n", &"- #{&1}")}
 
+        Delivery decisions considered:
+        #{Enum.map_join(delivery_decision_context, "\n", fn memory -> "- #{memory["content"]}" end)}
+
         Delegated context:
         #{Enum.map_join(delegated_context, "\n", fn memory -> "- #{memory["type"]}: #{memory["content"]}" end)}
         """
@@ -1614,8 +1635,9 @@ defmodule HydraX.Runtime.WorkItems do
       "summary_source" => "review",
       "recommended_actions" => review_payload["recommended_actions"] || [],
       "open_questions" => [],
+      "delivery_decision_context" => delivery_decision_context,
       "claims" =>
-        delegated_context
+        (delivery_decision_context ++ delegated_context)
         |> Enum.take(2)
         |> Enum.map(& &1["content"]),
       "confidence" => review_payload["confidence"],
@@ -2419,8 +2441,15 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp delegation_summary_body(parent, children, supporting_memories) do
+    delivery_decisions = delivery_decision_findings(supporting_memories)
+
+    findings_without_delivery =
+      supporting_memories
+      |> List.wrap()
+      |> Enum.reject(&delivery_decision_finding?/1)
+
     findings_block =
-      case supporting_memories do
+      case findings_without_delivery do
         [] ->
           "No promoted findings were available from completed delegated work."
 
@@ -2450,6 +2479,22 @@ defmodule HydraX.Runtime.WorkItems do
           end)
       end
 
+    delivery_decisions_block =
+      case delivery_decisions do
+        [] ->
+          "No prior delivery decisions were elevated into this synthesis."
+
+        entries ->
+          Enum.map_join(entries, "\n", fn finding ->
+            source =
+              [finding["source_role"], finding["source_artifact_type"]]
+              |> Enum.reject(&(&1 in [nil, ""]))
+              |> Enum.join(" · ")
+
+            "- ##{finding["source_work_item_id"]} #{finding["content"]}#{if(source == "", do: "", else: " [#{source}]")}"
+          end)
+      end
+
     """
     Parent goal: #{parent.goal}
 
@@ -2458,6 +2503,9 @@ defmodule HydraX.Runtime.WorkItems do
 
     Promoted findings shaping this synthesis:
     #{findings_block}
+
+    Delivery decisions shaping this synthesis:
+    #{delivery_decisions_block}
     """
     |> String.trim()
   end
@@ -2631,13 +2679,15 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp finalized_follow_up_entries(%WorkItem{} = work_item) do
-    work_item.metadata
-    |> case do
-      metadata when is_map(metadata) -> Map.get(metadata, "follow_up_context", %{})
-      _ -> %{}
-    end
-    |> Map.get("promoted_findings", [])
-    |> List.wrap()
+    follow_up_context =
+      work_item.metadata
+      |> case do
+        metadata when is_map(metadata) -> Map.get(metadata, "follow_up_context", %{})
+        _ -> %{}
+      end
+
+    List.wrap(follow_up_context["promoted_findings"]) ++
+      List.wrap(follow_up_context["delivery_decisions"])
   end
 
   defp planner_follow_up_snapshot(entry, work_item, goal) when is_map(entry) do
@@ -2668,6 +2718,7 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp delegation_override_context(%WorkItem{} = work_item) do
     metadata = work_item.metadata || %{}
+    follow_up_context = Map.get(metadata, "follow_up_context", %{})
 
     constraint_findings =
       metadata
@@ -2696,7 +2747,12 @@ defmodule HydraX.Runtime.WorkItems do
           []
       end
 
-    constraint_findings ++ strategy
+    delivery_decisions =
+      follow_up_context
+      |> Map.get("delivery_decisions", [])
+      |> List.wrap()
+
+    constraint_findings ++ strategy ++ delivery_decisions
   end
 
   defp constraint_context_snapshot(entry, work_item) when is_map(entry) do
@@ -4447,7 +4503,10 @@ defmodule HydraX.Runtime.WorkItems do
         finalized_child_finding(child, artifact, "Goal", action, score, source_role)
       end)
 
-    summary_finding ++ claim_findings ++ action_findings
+    delivery_findings =
+      delivery_artifact_findings(child, artifact, payload, score, source_role)
+
+    summary_finding ++ claim_findings ++ action_findings ++ delivery_findings
   end
 
   defp finalized_child_finding(child, artifact, type, content, score, source_role) do
@@ -4466,9 +4525,70 @@ defmodule HydraX.Runtime.WorkItems do
     }
   end
 
+  defp delivery_artifact_findings(child, artifact, payload, score, source_role) do
+    if artifact.type == "delivery_brief" do
+      [
+        payload["publish_objective"] &&
+          finalized_child_finding(
+            child,
+            artifact,
+            "DeliveryDecision",
+            payload["publish_objective"],
+            score,
+            source_role
+          ),
+        payload["destination_rationale"] &&
+          finalized_child_finding(
+            child,
+            artifact,
+            "DeliveryDecision",
+            payload["destination_rationale"],
+            score,
+            source_role
+          ),
+        get_in(payload || %{}, ["review_outcome", "decision"]) &&
+          finalized_child_finding(
+            child,
+            artifact,
+            "DeliveryReview",
+            "Delivery review #{get_in(payload || %{}, ["review_outcome", "decision"])} with #{get_in(payload || %{}, ["review_outcome", "confidence_posture"]) || "unknown"} posture.",
+            score,
+            source_role
+          )
+      ]
+      |> Enum.reject(&is_nil/1)
+    else
+      []
+    end
+  end
+
+  defp delivery_decision_findings(findings) do
+    findings
+    |> List.wrap()
+    |> Enum.filter(&delivery_decision_finding?/1)
+  end
+
+  defp delivery_decision_finding?(%{"type" => type})
+       when type in ["DeliveryDecision", "DeliveryReview"],
+       do: true
+
+  defp delivery_decision_finding?(%{"source_artifact_type" => "delivery_brief"}), do: true
+  defp delivery_decision_finding?(_finding), do: false
+
+  defp delivery_decision_memories(memories) do
+    memories
+    |> List.wrap()
+    |> Enum.filter(fn memory ->
+      memory["source_artifact_type"] == "delivery_brief" or
+        memory["type"] in ["DeliveryDecision", "DeliveryReview"]
+    end)
+    |> Enum.take(3)
+  end
+
   defp inferred_artifact_finding_type("decision_ledger"), do: "Decision"
   defp inferred_artifact_finding_type("review_report"), do: "Decision"
   defp inferred_artifact_finding_type("research_report"), do: "Finding"
+  defp inferred_artifact_finding_type("delivery_brief"), do: "DeliveryDecision"
   defp inferred_artifact_finding_type(_artifact_type), do: "Finding"
 
   defp artifact_memory_blueprint(type, content, slot, importance, payload, metadata) do
@@ -4753,6 +4873,13 @@ defmodule HydraX.Runtime.WorkItems do
          constraint_strategy \\ nil,
          delivery_recovery \\ nil
        ) do
+    contextual_memories =
+      merge_supporting_findings(
+        List.wrap(supporting_memories) ++
+          List.wrap(get_in(parent.metadata || %{}, ["follow_up_context", "delivery_decisions"])) ++
+          follow_up_summary_artifact_findings(parent, summary_artifact)
+      )
+
     base_recovery =
       delivery_recovery || inherited_delivery_recovery(parent) ||
         derived_delivery_recovery(parent, constraint_findings)
@@ -4761,7 +4888,8 @@ defmodule HydraX.Runtime.WorkItems do
       "query" => parent.goal,
       "captured_at" => DateTime.utc_now(),
       "summary_artifact_id" => summary_artifact.id,
-      "promoted_findings" => Enum.take(supporting_memories, 5),
+      "promoted_findings" => Enum.take(contextual_memories, 5),
+      "delivery_decisions" => Enum.take(delivery_decision_findings(contextual_memories), 3),
       "constraint_findings" => Enum.take(constraint_findings, 5),
       "constraint_strategy" => constraint_strategy,
       "needs_replan" => constraint_findings != []
@@ -4770,11 +4898,56 @@ defmodule HydraX.Runtime.WorkItems do
       refine_delivery_recovery(
         parent,
         summary_artifact,
-        supporting_memories,
+        contextual_memories,
         constraint_findings,
         base_recovery
       )
     )
+  end
+
+  defp follow_up_summary_artifact_findings(_parent, nil), do: []
+
+  defp follow_up_summary_artifact_findings(parent, %Artifact{} = artifact) do
+    payload = artifact.payload || %{}
+
+    if artifact.type == "delivery_brief" do
+      score = artifact.confidence || 0.0
+      source_role = payload["memory_origin_role"] || parent.assigned_role
+
+      [
+        payload["publish_objective"] &&
+          %{
+            "memory_id" => nil,
+            "type" => "DeliveryDecision",
+            "content" => payload["publish_objective"],
+            "score" => score,
+            "summary_reason" => "delivery_brief",
+            "source_work_item_id" => parent.id,
+            "source_goal" => parent.goal,
+            "source_kind" => parent.kind,
+            "source_role" => source_role,
+            "source_artifact_type" => artifact.type,
+            "reasons" => ["summary artifact delivery decision"]
+          },
+        payload["destination_rationale"] &&
+          %{
+            "memory_id" => nil,
+            "type" => "DeliveryDecision",
+            "content" => payload["destination_rationale"],
+            "score" => score,
+            "summary_reason" => "delivery_brief",
+            "source_work_item_id" => parent.id,
+            "source_goal" => parent.goal,
+            "source_kind" => parent.kind,
+            "source_role" => source_role,
+            "source_artifact_type" => artifact.type,
+            "reasons" => ["summary artifact delivery rationale"]
+          }
+      ]
+      |> Enum.reject(&is_nil/1)
+    else
+      []
+    end
   end
 
   defp maybe_put_delivery_recovery(follow_up_context, recovery)
