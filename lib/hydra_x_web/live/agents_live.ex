@@ -1520,6 +1520,7 @@ defmodule HydraXWeb.AgentsLive do
   defp work_item_publish_detail_lines(work_item) do
     [
       publish_objective_line(work_item),
+      publish_prior_decision_line(work_item),
       publish_rationale_line(work_item),
       publish_confidence_line(work_item),
       publish_guidance_line(work_item)
@@ -1595,6 +1596,16 @@ defmodule HydraXWeb.AgentsLive do
     end
   end
 
+  defp publish_prior_decision_line(work_item) do
+    case publish_prior_decisions(work_item) do
+      [%{"content" => value} | _] when is_binary(value) and value != "" ->
+        "prior decision #{value}"
+
+      _ ->
+        nil
+    end
+  end
+
   defp publish_confidence_line(work_item) do
     payload = publish_brief_payload(work_item)
 
@@ -1621,6 +1632,11 @@ defmodule HydraXWeb.AgentsLive do
       nil -> %{}
       artifact -> artifact.payload || %{}
     end
+  end
+
+  defp publish_prior_decisions(work_item) do
+    get_in(work_item.metadata || %{}, ["follow_up_context", "delivery_decisions"])
+    |> List.wrap()
   end
 
   defp publish_recovery_basis_label(recovery) do

@@ -312,7 +312,16 @@ defmodule HydraXWeb.HealthLiveTest do
         "metadata" => %{
           "task_type" => "publish_summary",
           "degraded_execution" => true,
-          "delivery" => %{"mode" => "channel", "channel" => "telegram", "target" => "ops-room"}
+          "delivery" => %{"mode" => "channel", "channel" => "telegram", "target" => "ops-room"},
+          "follow_up_context" => %{
+            "delivery_decisions" => [
+              %{
+                "type" => "DeliveryDecision",
+                "content" =>
+                  "Keep the previous publish path on the control plane until stronger evidence is available."
+              }
+            ]
+          }
         }
       })
 
@@ -424,6 +433,9 @@ defmodule HydraXWeb.HealthLiveTest do
 
     assert html =~
              "objective Prepare an internal operator report for control-plane delivery until external delivery is safe again."
+
+    assert html =~
+             "prior decision Keep the previous publish path on the control plane until stronger evidence is available."
 
     assert html =~
              "rationale Selected report"

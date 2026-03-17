@@ -140,7 +140,16 @@ defmodule HydraXWeb.AgentsLiveTest do
         },
         "metadata" => %{
           "task_type" => "publish_summary",
-          "delivery" => %{"mode" => "channel", "channel" => "telegram", "target" => "ops-room"}
+          "delivery" => %{"mode" => "channel", "channel" => "telegram", "target" => "ops-room"},
+          "follow_up_context" => %{
+            "delivery_decisions" => [
+              %{
+                "type" => "DeliveryDecision",
+                "content" =>
+                  "Keep the previous publish path on the control plane until the summary is revised."
+              }
+            ]
+          }
         }
       })
 
@@ -189,6 +198,9 @@ defmodule HydraXWeb.AgentsLiveTest do
 
     assert html =~
              "objective Revise the summary and route it through telegram for ops-room publication."
+
+    assert html =~
+             "prior decision Keep the previous publish path on the control plane until the summary is revised."
 
     assert html =~
              "rationale Selected telegram"

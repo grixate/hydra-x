@@ -657,7 +657,16 @@ defmodule HydraX.ReportTest do
         },
         "metadata" => %{
           "task_type" => "publish_summary",
-          "delivery" => %{"mode" => "channel", "channel" => "telegram", "target" => "ops-room"}
+          "delivery" => %{"mode" => "channel", "channel" => "telegram", "target" => "ops-room"},
+          "follow_up_context" => %{
+            "delivery_decisions" => [
+              %{
+                "type" => "DeliveryDecision",
+                "content" =>
+                  "Keep the previous publish path on the control plane until the summary is revised."
+              }
+            ]
+          }
         }
       })
 
@@ -925,6 +934,9 @@ defmodule HydraX.ReportTest do
 
     assert File.read!(export.markdown_path) =~
              "publish_objective=Revise the summary and route it through telegram for ops-room publication."
+
+    assert File.read!(export.markdown_path) =~
+             "publish_prior_decision=Keep the previous publish path on the control plane until the summary is revised."
 
     assert File.read!(export.markdown_path) =~
              "publish_rationale=Selected telegram -> ops-room using current publish policy at confidence 0.78 with ready posture."

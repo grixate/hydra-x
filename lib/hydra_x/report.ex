@@ -1804,6 +1804,13 @@ defmodule HydraX.Report do
         value when is_binary(value) and value != "" -> "publish_objective=#{value}"
         _ -> nil
       end,
+      case publish_prior_decisions(item) do
+        [%{"content" => value} | _] when is_binary(value) and value != "" ->
+          "publish_prior_decision=#{value}"
+
+        _ ->
+          nil
+      end,
       case payload["destination_rationale"] do
         value when is_binary(value) and value != "" -> "publish_rationale=#{value}"
         _ -> nil
@@ -2003,6 +2010,11 @@ defmodule HydraX.Report do
       nil -> %{}
       artifact -> artifact.payload || %{}
     end
+  end
+
+  defp publish_prior_decisions(item) do
+    get_in(item.metadata || %{}, ["follow_up_context", "delivery_decisions"])
+    |> List.wrap()
   end
 
   defp work_item_side_effect_class(item) do

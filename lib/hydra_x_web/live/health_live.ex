@@ -927,7 +927,7 @@ defmodule HydraXWeb.HealthLive do
                     · expiry {event.expired_by}
                   </span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip       {event.ip}</span>
+                  <span :if={event.ip}> · ip        {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -2169,6 +2169,7 @@ defmodule HydraXWeb.HealthLive do
   defp autonomy_publish_detail_lines(item) do
     [
       autonomy_publish_objective_line(item),
+      autonomy_publish_prior_decision_line(item),
       autonomy_publish_rationale_line(item),
       autonomy_publish_confidence_line(item),
       autonomy_publish_guidance_line(item)
@@ -2223,6 +2224,16 @@ defmodule HydraXWeb.HealthLive do
     end
   end
 
+  defp autonomy_publish_prior_decision_line(item) do
+    case autonomy_publish_prior_decisions(item) do
+      [%{"content" => value} | _] when is_binary(value) and value != "" ->
+        "prior decision #{value}"
+
+      _ ->
+        nil
+    end
+  end
+
   defp autonomy_publish_confidence_line(item) do
     payload = autonomy_publish_brief_payload(item)
 
@@ -2249,6 +2260,11 @@ defmodule HydraXWeb.HealthLive do
       nil -> %{}
       artifact -> artifact.payload || %{}
     end
+  end
+
+  defp autonomy_publish_prior_decisions(item) do
+    get_in(item.metadata || %{}, ["follow_up_context", "delivery_decisions"])
+    |> List.wrap()
   end
 
   defp publish_recovery_summary(item) do
