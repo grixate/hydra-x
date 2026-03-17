@@ -345,6 +345,8 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   def autonomy_status do
+    all_work_items = list_work_items(limit: 500, preload: false)
+
     counts =
       WorkItem
       |> group_by([work_item], work_item.status)
@@ -409,12 +411,22 @@ defmodule HydraX.Runtime.WorkItems do
       |> Enum.filter(&(Map.get(capability_profile(&1), "max_autonomy_level") != "observe"))
 
     unsafe_request_count =
-      list_work_items(limit: 500, preload: false)
-      |> Enum.count(&(not is_nil(get_in(&1.result_refs || %{}, ["policy_failure", "type"]))))
+      Enum.count(
+        all_work_items,
+        &(not is_nil(get_in(&1.result_refs || %{}, ["policy_failure", "type"])))
+      )
 
     budget_blocked_count =
-      list_work_items(limit: 500, preload: false)
-      |> Enum.count(&budget_policy_failure?(&1.result_refs || %{}))
+      Enum.count(all_work_items, &budget_policy_failure?(&1.result_refs || %{}))
+
+    auto_assigned_count =
+      Enum.count(all_work_items, &assignment_resolved?(&1))
+
+    capability_fallback_count =
+      Enum.count(all_work_items, &(assignment_strategy(&1) == "capability_fallback"))
+
+    role_only_open_count =
+      Enum.count(all_work_items, &role_only_assignment?(&1))
 
     capability_drifts =
       autonomy_agents
@@ -444,6 +456,9 @@ defmodule HydraX.Runtime.WorkItems do
       active_autonomy_job_count: active_autonomy_job_count,
       unsafe_request_count: unsafe_request_count,
       budget_blocked_count: budget_blocked_count,
+      auto_assigned_count: auto_assigned_count,
+      capability_fallback_count: capability_fallback_count,
+      role_only_open_count: role_only_open_count,
       autonomy_agent_count: length(autonomy_agents),
       active_roles: autonomy_agents |> Enum.map(& &1.role) |> Enum.frequencies(),
       capability_drifts: capability_drifts,
@@ -454,6 +469,18 @@ defmodule HydraX.Runtime.WorkItems do
 
   def capability_profile(%AgentProfile{} = agent) do
     Autonomy.ensure_capability_profile(agent.role, agent.capability_profile || %{})
+  end
+
+  defp assignment_resolved?(%WorkItem{} = work_item) do
+    is_map(get_in(work_item.metadata || %{}, ["assignment_resolution"]))
+  end
+
+  defp assignment_strategy(%WorkItem{} = work_item) do
+    get_in(work_item.metadata || %{}, ["assignment_resolution", "strategy"])
+  end
+
+  defp role_only_assignment?(%WorkItem{} = work_item) do
+    work_item.status not in @terminal_work_item_statuses and is_nil(work_item.assigned_agent_id)
   end
 
   defp maybe_finalize_blocked_parent(agent, _opts) do

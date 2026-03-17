@@ -214,7 +214,7 @@ defmodule HydraX.Report do
     #{render_conversations(snapshot.conversations)}
 
     ## Autonomous Work Items
-    - active_jobs=#{snapshot.autonomy.active_autonomy_job_count} unsafe_requests=#{snapshot.autonomy.unsafe_request_count} budget_blocked=#{snapshot.autonomy.budget_blocked_count} capability_drift=#{length(snapshot.autonomy.capability_drifts)}
+    - active_jobs=#{snapshot.autonomy.active_autonomy_job_count} unsafe_requests=#{snapshot.autonomy.unsafe_request_count} budget_blocked=#{snapshot.autonomy.budget_blocked_count} auto_assigned=#{snapshot.autonomy.auto_assigned_count} fallback_assigned=#{snapshot.autonomy.capability_fallback_count} role_only_open=#{snapshot.autonomy.role_only_open_count} capability_drift=#{length(snapshot.autonomy.capability_drifts)}
     #{render_work_items(snapshot.work_items)}
 
     ## Observability
@@ -1390,6 +1390,9 @@ defmodule HydraX.Report do
         active_autonomy_job_count: snapshot.autonomy.active_autonomy_job_count,
         unsafe_request_count: snapshot.autonomy.unsafe_request_count,
         budget_blocked_count: snapshot.autonomy.budget_blocked_count,
+        auto_assigned_count: snapshot.autonomy.auto_assigned_count,
+        capability_fallback_count: snapshot.autonomy.capability_fallback_count,
+        role_only_open_count: snapshot.autonomy.role_only_open_count,
         active_roles: snapshot.autonomy.active_roles,
         capability_drifts: snapshot.autonomy.capability_drifts
       },

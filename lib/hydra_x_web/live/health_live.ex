@@ -927,7 +927,7 @@ defmodule HydraXWeb.HealthLive do
                     · expiry {event.expired_by}
                   </span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip          {event.ip}</span>
+                  <span :if={event.ip}> · ip            {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -1240,6 +1240,30 @@ defmodule HydraXWeb.HealthLive do
               {length(@autonomy_status.capability_drifts)}
             </div>
           </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Auto-assigned
+            </div>
+            <div class="mt-3 font-display text-4xl">
+              {@autonomy_status.auto_assigned_count}
+            </div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Fallback assigned
+            </div>
+            <div class="mt-3 font-display text-4xl">
+              {@autonomy_status.capability_fallback_count}
+            </div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Role-only open
+            </div>
+            <div class="mt-3 font-display text-4xl">
+              {@autonomy_status.role_only_open_count}
+            </div>
+          </article>
         </div>
         <div class="mt-4 grid gap-3 lg:grid-cols-2">
           <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
@@ -1286,6 +1310,12 @@ defmodule HydraXWeb.HealthLive do
                 <p class="mt-2 text-xs text-[var(--hx-mute)]">
                   {autonomy_artifact_summary(item)}
                 </p>
+                <div
+                  :if={assignment = autonomy_assignment_detail(item)}
+                  class="mt-2 text-[11px] text-[var(--hx-mute)]"
+                >
+                  {assignment}
+                </div>
                 <div
                   :if={detail_lines = autonomy_publish_detail_lines(item)}
                   class="mt-2 space-y-1 text-[11px] text-[var(--hx-mute)]"
@@ -2057,12 +2087,45 @@ defmodule HydraXWeb.HealthLive do
       "artifacts #{artifact_count}",
       "level #{item.autonomy_level}",
       "effect #{autonomy_side_effect_class(item)}",
+      autonomy_assignment_summary(item),
       autonomy_policy_failure_summary(item),
       autonomy_publish_summary(item)
     ]
     |> Enum.reject(&is_nil_or_empty/1)
     |> Enum.join(" · ")
   end
+
+  defp autonomy_assignment_summary(item) do
+    resolution = get_in(item.metadata || %{}, ["assignment_resolution"]) || %{}
+
+    cond do
+      is_binary(resolution["resolved_agent_name"]) and is_binary(resolution["strategy"]) ->
+        "assigned #{resolution["resolved_agent_name"]} via #{assignment_strategy_label(resolution["strategy"])}"
+
+      item.status not in ["completed", "failed", "canceled"] and is_nil(item.assigned_agent_id) ->
+        "role-only assignment"
+
+      true ->
+        nil
+    end
+  end
+
+  defp autonomy_assignment_detail(item) do
+    resolution = get_in(item.metadata || %{}, ["assignment_resolution"]) || %{}
+
+    case {resolution["resolved_agent_name"], resolution["reasons"]} do
+      {name, reasons} when is_binary(name) and is_list(reasons) and reasons != [] ->
+        "assignment #{name}: #{Enum.join(reasons, ", ")}"
+
+      _ ->
+        nil
+    end
+  end
+
+  defp assignment_strategy_label("role_capability_match"), do: "role capability match"
+  defp assignment_strategy_label("capability_fallback"), do: "capability fallback"
+  defp assignment_strategy_label(strategy) when is_binary(strategy), do: strategy
+  defp assignment_strategy_label(_strategy), do: "assignment"
 
   defp autonomy_publish_summary(item) do
     cond do

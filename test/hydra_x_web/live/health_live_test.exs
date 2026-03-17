@@ -176,8 +176,22 @@ defmodule HydraXWeb.HealthLiveTest do
         },
         "metadata" => %{
           "task_type" => "publish_summary",
-          "delivery" => %{"mode" => "channel", "channel" => "telegram", "target" => "ops-room"}
+          "delivery" => %{"mode" => "channel", "channel" => "telegram", "target" => "ops-room"},
+          "assignment_resolution" => %{
+            "strategy" => "capability_fallback",
+            "resolved_agent_name" => agent.name,
+            "resolved_agent_slug" => agent.slug,
+            "reasons" => ["supports channel delivery", "queue clear"]
+          }
         }
+      })
+
+    {:ok, _role_only_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Await a concrete operator assignment.",
+        "assigned_role" => "operator",
+        "status" => "planned"
       })
 
     {:ok, _unsafe_item} =
@@ -239,6 +253,9 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "Unsafe requests"
     assert html =~ "Budget blocked"
     assert html =~ "Capability drift"
+    assert html =~ "Auto-assigned"
+    assert html =~ "Fallback assigned"
+    assert html =~ "Role-only open"
     assert html =~ "Operator confirmed the rollout."
     assert html =~ "Prepare autonomous research rollout."
     assert html =~ extension_item.goal
@@ -246,8 +263,9 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "publish queued 1"
     assert html =~ "delivered telegram"
     assert html =~ "ops-room"
+    assert html =~ "assigned Hydra Prime via capability fallback"
+    assert html =~ "assignment Hydra Prime: supports channel delivery, queue clear"
     assert html =~ "blocked autonomy fully_automatic"
-    assert html =~ "budget tokens exhausted"
   end
 
   test "health page shows replan follow-up posture", %{conn: conn} do

@@ -780,6 +780,31 @@ defmodule HydraX.ReportTest do
         }
       })
 
+    {:ok, _fallback_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Route the publish work through a fallback-capable operator.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "operator",
+        "status" => "planned",
+        "metadata" => %{
+          "assignment_resolution" => %{
+            "strategy" => "capability_fallback",
+            "resolved_agent_name" => "Report Agent",
+            "resolved_agent_slug" => "report-agent",
+            "reasons" => ["supports channel delivery", "queue clear"]
+          }
+        }
+      })
+
+    {:ok, _role_only_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Await a concrete autonomy assignment.",
+        "assigned_role" => "operator",
+        "status" => "planned"
+      })
+
     {:ok, _publish_review_item} =
       Runtime.save_work_item(%{
         "kind" => "task",
@@ -969,7 +994,12 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "Channel Failure Summary"
     assert File.read!(export.markdown_path) =~ "Active streaming deliveries"
     assert File.read!(export.markdown_path) =~ "Autonomous Work Items"
+
     assert File.read!(export.markdown_path) =~ "active_jobs=1 unsafe_requests=2 budget_blocked=1"
+    assert File.read!(export.markdown_path) =~ "auto_assigned="
+    assert File.read!(export.markdown_path) =~ "fallback_assigned="
+    assert File.read!(export.markdown_path) =~ "role_only_open="
+
     assert File.read!(export.markdown_path) =~ "approval=approved/enable_extension"
     assert File.read!(export.markdown_path) =~ "enablement=approved_not_enabled"
     assert File.read!(export.markdown_path) =~ "patch_bundle:approved/approved"
@@ -1090,6 +1120,9 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.json_path) =~ "\"active_autonomy_job_count\": 1"
     assert File.read!(export.json_path) =~ "\"unsafe_request_count\": 2"
     assert File.read!(export.json_path) =~ "\"budget_blocked_count\": 1"
+    assert File.read!(export.json_path) =~ "\"auto_assigned_count\":"
+    assert File.read!(export.json_path) =~ "\"capability_fallback_count\":"
+    assert File.read!(export.json_path) =~ "\"role_only_open_count\":"
 
     assert File.read!(Path.join(export.bundle_dir, "agents.json")) =~
              "\"skill_requirement_count\""
