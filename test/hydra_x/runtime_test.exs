@@ -6125,6 +6125,57 @@ defmodule HydraX.RuntimeTest do
     assert ownership["active"] == true
   end
 
+  test "role queue dispatch processes delegated child work through active workers" do
+    planner =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, planner} = Runtime.save_agent(planner, %{"role" => "planner"})
+
+    researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, researcher} = Runtime.save_agent(researcher, %{"role" => "researcher"})
+
+    {:ok, parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Route delegated research through the worker role queue.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "execution_mode" => "delegate",
+        "priority" => 8
+      })
+
+    assert {:ok, planner_summary} = Runtime.run_autonomy_cycle(planner.id)
+    assert planner_summary.action == "delegated"
+
+    parent = Runtime.get_work_item!(parent.id)
+    [child_id] = parent.result_refs["child_work_item_ids"]
+    child = Runtime.get_work_item!(child_id)
+
+    assert is_nil(child.assigned_agent_id)
+    assert child.metadata["assignment_mode"] == "role_claim"
+
+    summary = Runtime.process_role_queued_work(limit: 10)
+
+    assert summary.processed_count >= 1
+
+    assert Enum.any?(summary.results, fn result ->
+             result[:agent_id] == researcher.id and result[:work_item_id] == child.id and
+               result[:action] == "researched"
+           end)
+
+    child = Runtime.get_work_item!(child.id)
+    assert child.status == "completed"
+    assert child.assigned_agent_id == researcher.id
+    assert get_in(child.metadata || %{}, ["assignment_resolution", "strategy"]) == "worker_claim"
+
+    scheduler_status = Runtime.scheduler_status()
+    assert scheduler_status.role_queue_dispatches.processed_count >= 1
+  end
+
   test "autonomy cycle blocks work items that exceed the agent autonomy ceiling" do
     agent =
       create_agent()

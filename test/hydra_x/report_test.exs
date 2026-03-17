@@ -255,6 +255,14 @@ defmodule HydraX.ReportTest do
       results: []
     })
 
+    Runtime.Jobs.record_scheduler_pass(:role_queue_dispatches, %{
+      owner: "node:report",
+      processed_count: 3,
+      skipped_count: 1,
+      error_count: 0,
+      results: []
+    })
+
     Runtime.Jobs.record_scheduler_pass(:work_item_replays, %{
       owner: "node:report",
       resumed_count: 4,
@@ -282,6 +290,7 @@ defmodule HydraX.ReportTest do
     snapshot = Report.snapshot()
 
     assert snapshot.scheduler.pending_ingress.processed_count == 1
+    assert snapshot.scheduler.role_queue_dispatches.processed_count == 3
     assert snapshot.scheduler.work_item_replays.resumed_count == 4
     assert snapshot.scheduler.ownership_handoffs.resumed_count == 2
     assert snapshot.scheduler.deferred_deliveries.delivered_count == 3
@@ -1203,6 +1212,7 @@ defmodule HydraX.ReportTest do
     assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~ "\"stream_capture\""
     assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~ "\"retry_state\""
     assert File.read!(export.json_path) =~ "\"pending_ingress\""
+    assert File.read!(export.json_path) =~ "\"role_queue_dispatches\""
     assert File.read!(export.json_path) =~ "\"work_item_replays\""
     assert File.read!(export.json_path) =~ "\"ownership_handoffs\""
     assert File.read!(export.json_path) =~ "\"deferred_deliveries\""

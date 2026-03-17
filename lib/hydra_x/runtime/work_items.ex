@@ -357,37 +357,58 @@ defmodule HydraX.Runtime.WorkItems do
     owner = Coordination.status().owner
     limit = Keyword.get(opts, :limit, 50)
 
-    list_owned_resumable_work_items(limit: limit)
-    |> Enum.reduce(resume_work_item_summary(owner), fn work_item, acc ->
-      case replay_claim_work_item(work_item) do
-        {:ok, claimed} ->
-          agent = replay_agent_for_work_item(claimed)
+    summary =
+      list_owned_resumable_work_items(limit: limit)
+      |> Enum.reduce(resume_work_item_summary(owner), fn work_item, acc ->
+        case replay_claim_work_item(work_item) do
+          {:ok, claimed} ->
+            agent = replay_agent_for_work_item(claimed)
 
-          case agent do
-            %AgentProfile{} = replay_agent ->
-              case run_autonomy_cycle(
-                     replay_agent.id,
-                     Keyword.put(opts, :work_item_id, claimed.id)
-                   ) do
-                {:ok, summary} ->
-                  accumulate_resumed_work_item(acc, claimed, summary)
+            case agent do
+              %AgentProfile{} = replay_agent ->
+                case run_autonomy_cycle(
+                       replay_agent.id,
+                       Keyword.put(opts, :work_item_id, claimed.id)
+                     ) do
+                  {:ok, summary} ->
+                    accumulate_resumed_work_item(acc, claimed, summary)
 
-                {:error, reason} ->
-                  accumulate_resume_work_item_error(acc, claimed, reason)
-              end
+                  {:error, reason} ->
+                    accumulate_resume_work_item_error(acc, claimed, reason)
+                end
 
-            nil ->
-              accumulate_skipped_work_item(acc, claimed, "missing_agent")
-          end
+              nil ->
+                accumulate_skipped_work_item(acc, claimed, "missing_agent")
+            end
 
-        {:error, {:taken, lease}} ->
-          _ = note_remote_work_item_ownership(work_item, lease, "claimed_remote")
-          accumulate_skipped_work_item(acc, work_item, "lease_owned_elsewhere")
+          {:error, {:taken, lease}} ->
+            _ = note_remote_work_item_ownership(work_item, lease, "claimed_remote")
+            accumulate_skipped_work_item(acc, work_item, "lease_owned_elsewhere")
 
-        {:error, reason} ->
-          accumulate_resume_work_item_error(acc, work_item, reason)
-      end
-    end)
+          {:error, reason} ->
+            accumulate_resume_work_item_error(acc, work_item, reason)
+        end
+      end)
+
+    _ = HydraX.Runtime.Jobs.record_scheduler_pass(:work_item_replays, summary)
+    summary
+  end
+
+  def process_role_queued_work(opts \\ []) do
+    owner = Coordination.status().owner
+    limit = Keyword.get(opts, :limit, 50)
+
+    summary =
+      dispatchable_agents()
+      |> drain_role_queued_work(
+        Keyword.put(opts, :scheduler_pass, "role_queue_dispatch"),
+        role_queue_dispatch_summary(owner),
+        limit,
+        0
+      )
+
+    _ = HydraX.Runtime.Jobs.record_scheduler_pass(:role_queue_dispatches, summary)
+    summary
   end
 
   def run_autonomy_cycle(agent_id, opts \\ []) when is_integer(agent_id) do
@@ -848,6 +869,113 @@ defmodule HydraX.Runtime.WorkItems do
       true ->
         nil
     end
+  end
+
+  defp dispatchable_agents do
+    Agents.list_agents()
+    |> Enum.filter(&(&1.status == "active"))
+    |> Enum.sort_by(&{&1.role || "", &1.name || "", &1.id})
+  end
+
+  defp drain_role_queued_work([], _opts, summary, _limit, _round), do: summary
+
+  defp drain_role_queued_work(_agents, _opts, summary, limit, _round)
+       when summary.processed_count >= limit,
+       do: summary
+
+  defp drain_role_queued_work(_agents, _opts, summary, limit, round)
+       when round >= max(limit, 1),
+       do: summary
+
+  defp drain_role_queued_work(agents, opts, summary, limit, round) do
+    {updated_summary, progressed?} =
+      Enum.reduce_while(agents, {summary, false}, fn agent, {acc, progressed?} ->
+        if acc.processed_count >= limit do
+          {:halt, {acc, progressed?}}
+        else
+          case run_autonomy_cycle(agent.id, opts) do
+            {:ok, %{status: "idle"}} ->
+              {:cont, {accumulate_role_queue_skip(acc, agent), progressed?}}
+
+            {:ok, result} ->
+              {:cont, {accumulate_role_queue_result(acc, agent, result), true}}
+
+            {:error, reason} ->
+              {:cont, {accumulate_role_queue_error(acc, agent, reason), progressed?}}
+          end
+        end
+      end)
+
+    if progressed? do
+      drain_role_queued_work(agents, opts, updated_summary, limit, round + 1)
+    else
+      updated_summary
+    end
+  end
+
+  defp role_queue_dispatch_summary(owner) do
+    %{
+      owner: owner,
+      processed_count: 0,
+      skipped_count: 0,
+      error_count: 0,
+      rounds: 0,
+      results: []
+    }
+  end
+
+  defp accumulate_role_queue_result(acc, %AgentProfile{} = agent, result) do
+    work_item = result[:work_item]
+
+    entry = %{
+      agent_id: agent.id,
+      agent_name: agent.name,
+      role: agent.role,
+      work_item_id: work_item && work_item.id,
+      status: result[:status] || "processed",
+      action: result[:action] || "processed"
+    }
+
+    %{
+      acc
+      | processed_count: acc.processed_count + max(result[:processed_count] || 1, 1),
+        rounds: acc.rounds + 1,
+        results: [entry | acc.results]
+    }
+  end
+
+  defp accumulate_role_queue_skip(acc, %AgentProfile{} = agent) do
+    %{
+      acc
+      | skipped_count: acc.skipped_count + 1,
+        results: [
+          %{
+            agent_id: agent.id,
+            agent_name: agent.name,
+            role: agent.role,
+            status: "idle",
+            action: "idle"
+          }
+          | acc.results
+        ]
+    }
+  end
+
+  defp accumulate_role_queue_error(acc, %AgentProfile{} = agent, reason) do
+    %{
+      acc
+      | error_count: acc.error_count + 1,
+        results: [
+          %{
+            agent_id: agent.id,
+            agent_name: agent.name,
+            role: agent.role,
+            status: "error",
+            reason: inspect(reason)
+          }
+          | acc.results
+        ]
+    }
   end
 
   defp resume_work_item_summary(owner) do
