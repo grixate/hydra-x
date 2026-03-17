@@ -3903,15 +3903,23 @@ defmodule HydraX.RuntimeTest do
     [child_id] = parent.result_refs["child_work_item_ids"]
 
     child = Runtime.get_work_item!(child_id)
+    assert is_nil(child.assigned_agent_id)
     assert child.assigned_role == "researcher"
     assert child.parent_work_item_id == parent.id
+    assert child.metadata["assignment_mode"] == "role_claim"
+    assert child.metadata["claim_scope"] == "role_pool"
 
     assert {:ok, researcher_summary} = Runtime.run_autonomy_cycle(researcher.id)
     assert researcher_summary.action == "researched"
 
     child = Runtime.get_work_item!(child.id)
+    assert child.assigned_agent_id == researcher.id
     assert child.status == "completed"
     assert length(child.result_refs["artifact_ids"]) == 3
+    assert get_in(child.metadata || %{}, ["assignment_resolution", "strategy"]) == "worker_claim"
+
+    assert get_in(child.metadata || %{}, ["assignment_resolution", "resolved_agent_id"]) ==
+             researcher.id
 
     artifacts = Runtime.work_item_artifacts(child.id)
     report = Enum.find(artifacts, &(&1.type == "research_report"))

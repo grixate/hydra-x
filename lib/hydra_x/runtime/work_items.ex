@@ -308,6 +308,7 @@ defmodule HydraX.Runtime.WorkItems do
 
   def claim_work_item(%WorkItem{} = work_item, opts \\ []) do
     metadata = Map.new(Keyword.get(opts, :metadata, %{}))
+    agent = Keyword.get(opts, :agent)
 
     with {:ok, _lease} <-
            Coordination.claim_lease(lease_name(work_item.id),
@@ -319,17 +320,22 @@ defmodule HydraX.Runtime.WorkItems do
                })
            ) do
       ownership = claimed_work_item_ownership(work_item.id, "claimed")
+      {assigned_agent_id, work_item_metadata} = claimed_work_item_assignment(work_item, agent)
 
-      save_work_item(work_item, %{
-        "status" => "claimed",
-        "metadata" => put_work_item_ownership(work_item.metadata, ownership),
-        "runtime_state" =>
-          append_history(work_item.runtime_state, "claimed", %{
-            "claimed_at" => DateTime.utc_now(),
-            "lease_name" => lease_name(work_item.id),
-            "lease_owner" => ownership["owner"]
-          })
-      })
+      claim_attrs =
+        %{
+          "status" => "claimed",
+          "metadata" => put_work_item_ownership(work_item_metadata, ownership),
+          "runtime_state" =>
+            append_history(work_item.runtime_state, "claimed", %{
+              "claimed_at" => DateTime.utc_now(),
+              "lease_name" => lease_name(work_item.id),
+              "lease_owner" => ownership["owner"]
+            })
+        }
+        |> maybe_put_claimed_agent_id(assigned_agent_id)
+
+      save_work_item(work_item, claim_attrs)
     end
   end
 
@@ -639,7 +645,7 @@ defmodule HydraX.Runtime.WorkItems do
         {:idle, nil}
 
       %WorkItem{} = work_item ->
-        case claim_work_item(work_item, metadata: %{"phase" => "run"}) do
+        case claim_work_item(work_item, agent: agent, metadata: %{"phase" => "run"}) do
           {:ok, claimed} ->
             case authorize_work_item(agent, claimed) do
               :ok ->
@@ -931,6 +937,8 @@ defmodule HydraX.Runtime.WorkItems do
         "required_outputs" => work_item.required_outputs,
         "metadata" =>
           %{
+            "assignment_mode" => "role_claim",
+            "claim_scope" => "role_pool",
             "delegated_from_role" => agent.role,
             "delegated_from_work_item_id" => work_item.id
           }
@@ -3305,20 +3313,79 @@ defmodule HydraX.Runtime.WorkItems do
   defp maybe_resolve_assigned_agent(attrs, %WorkItem{} = work_item) do
     assigned_agent_id = attrs["assigned_agent_id"] || work_item.assigned_agent_id
 
-    if is_integer(assigned_agent_id) do
-      attrs
-    else
-      case resolve_assigned_agent(attrs) do
-        nil ->
-          attrs
+    cond do
+      is_integer(assigned_agent_id) ->
+        attrs
 
-        %{agent: agent, resolution: resolution} ->
-          attrs
-          |> Map.put("assigned_agent_id", agent.id)
-          |> put_assignment_resolution(resolution)
-      end
+      assignment_deferred_to_worker_pool?(attrs, work_item) ->
+        attrs
+
+      true ->
+        case resolve_assigned_agent(attrs) do
+          nil ->
+            attrs
+
+          %{agent: agent, resolution: resolution} ->
+            attrs
+            |> Map.put("assigned_agent_id", agent.id)
+            |> put_assignment_resolution(resolution)
+        end
     end
   end
+
+  defp assignment_deferred_to_worker_pool?(attrs, %WorkItem{} = work_item) do
+    metadata = attrs["metadata"] || work_item.metadata || %{}
+
+    metadata["assignment_mode"] == "role_claim" and
+      is_nil(attrs["assigned_agent_id"] || work_item.assigned_agent_id)
+  end
+
+  defp claimed_work_item_assignment(%WorkItem{} = work_item, %AgentProfile{} = agent) do
+    if worker_pool_claimable?(work_item, agent) do
+      resolution = worker_claim_resolution(agent, work_item)
+
+      {agent.id, put_assignment_resolution_metadata(work_item.metadata, resolution)}
+    else
+      {nil, work_item.metadata || %{}}
+    end
+  end
+
+  defp claimed_work_item_assignment(%WorkItem{} = work_item, _agent) do
+    {nil, work_item.metadata || %{}}
+  end
+
+  defp worker_pool_claimable?(%WorkItem{} = work_item, %AgentProfile{} = agent) do
+    metadata = work_item.metadata || %{}
+
+    metadata["assignment_mode"] == "role_claim" and
+      is_nil(work_item.assigned_agent_id) and
+      work_item.status in ["planned", "replayed"] and
+      is_binary(work_item.assigned_role) and
+      work_item.assigned_role == agent.role
+  end
+
+  defp worker_claim_resolution(%AgentProfile{} = agent, %WorkItem{} = work_item) do
+    %{
+      "strategy" => "worker_claim",
+      "resolved_agent_id" => agent.id,
+      "resolved_agent_name" => agent.name,
+      "resolved_agent_slug" => agent.slug,
+      "resolved_role" => agent.role,
+      "score" => nil,
+      "pending_work_items" => nil,
+      "claim_scope" => get_in(work_item.metadata || %{}, ["claim_scope"]) || "role_pool",
+      "reasons" => ["claimed from role pool", "lease acquired"]
+    }
+  end
+
+  defp put_assignment_resolution_metadata(metadata, resolution) do
+    Map.put(metadata || %{}, "assignment_resolution", resolution)
+  end
+
+  defp maybe_put_claimed_agent_id(attrs, nil), do: attrs
+
+  defp maybe_put_claimed_agent_id(attrs, assigned_agent_id),
+    do: Map.put(attrs, "assigned_agent_id", assigned_agent_id)
 
   defp resolve_assigned_agent(attrs) when is_map(attrs) do
     active_agents =
