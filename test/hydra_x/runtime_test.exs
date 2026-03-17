@@ -4971,7 +4971,7 @@ defmodule HydraX.RuntimeTest do
              "delivery_recovery",
              "strategy"
            ]) ==
-             "revise_and_retry_channel"
+             "internal_report_fallback"
 
     assert replan_work_item.result_refs == %{}
     assert rejected_review.result_refs["linked_follow_up_work_item_id"] == replan_work_item.id
@@ -5240,6 +5240,9 @@ defmodule HydraX.RuntimeTest do
     assert get_in(publish_follow_up.metadata || %{}, ["delivery_recovery", "strategy"]) ==
              "switch_delivery_channel"
 
+    assert get_in(publish_follow_up.metadata || %{}, ["delivery_recovery", "decision_basis"]) ==
+             "explicit_channel_signal"
+
     assert {:ok, operator_summary} = Runtime.run_autonomy_cycle(operator.id)
     assert operator_summary.action == "prepared_delivery_brief"
     refute_receive {:unexpected_replan_telegram_delivery, _payload}, 200
@@ -5250,7 +5253,7 @@ defmodule HydraX.RuntimeTest do
     assert next_approval_item.metadata["delivery"]["channel"] == "slack"
   end
 
-  test "rejected publish replan carries internal recovery into the next publish task" do
+  test "rejected publish replan can upgrade inherited internal recovery into revise-and-retry" do
     previous = Application.get_env(:hydra_x, :telegram_deliver)
 
     Application.put_env(:hydra_x, :telegram_deliver, fn payload ->
@@ -5392,21 +5395,27 @@ defmodule HydraX.RuntimeTest do
 
     publish_follow_up = Runtime.get_work_item!(publish_follow_up_id)
     assert publish_follow_up.metadata["task_type"] == "publish_summary"
-    assert get_in(publish_follow_up.metadata || %{}, ["delivery", "mode"]) == "report"
-    assert get_in(publish_follow_up.metadata || %{}, ["delivery", "target"]) == "control-plane"
+    assert get_in(publish_follow_up.metadata || %{}, ["delivery", "mode"]) == "channel"
+    assert get_in(publish_follow_up.metadata || %{}, ["delivery", "target"]) == "9001"
 
     assert get_in(publish_follow_up.metadata || %{}, ["delivery_recovery", "strategy"]) ==
-             "internal_report_fallback"
+             "revise_and_retry_channel"
+
+    assert get_in(publish_follow_up.metadata || %{}, ["delivery_recovery", "decision_basis"]) ==
+             "revised_confident_summary"
 
     assert {:ok, operator_summary} = Runtime.run_autonomy_cycle(operator.id)
     assert operator_summary.action == "prepared_delivery_brief"
     refute_receive {:unexpected_internal_replan_delivery, _payload}, 200
 
     publish_follow_up = Runtime.get_work_item!(publish_follow_up.id)
-    assert publish_follow_up.result_refs["delivery"]["status"] == "skipped"
-    assert publish_follow_up.result_refs["delivery"]["reason"] == "internal_report_recovery"
-    assert publish_follow_up.result_refs["delivery"]["target"] == "control-plane"
-    assert publish_follow_up.result_refs["follow_up_work_item_ids"] in [nil, []]
+    assert publish_follow_up.result_refs["delivery"]["status"] == "draft"
+
+    assert publish_follow_up.result_refs["delivery"]["reason"] ==
+             "degraded_confidence_requires_review"
+
+    assert publish_follow_up.result_refs["delivery"]["target"] == "9001"
+    assert length(List.wrap(publish_follow_up.result_refs["follow_up_work_item_ids"])) == 1
   end
 
   test "approving a research work item promotes memories from report artifacts" do

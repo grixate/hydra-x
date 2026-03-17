@@ -332,7 +332,8 @@ defmodule HydraXWeb.HealthLiveTest do
           "delivery" => %{"mode" => "channel", "channel" => "telegram", "target" => "ops-room"},
           "delivery_recovery" => %{
             "strategy" => "switch_delivery_channel",
-            "recommended_channel" => "slack"
+            "recommended_channel" => "slack",
+            "decision_basis" => "explicit_channel_signal"
           }
         }
       })
@@ -400,6 +401,7 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ publish_review.goal
     assert html =~ "degraded delivery awaiting approval telegram"
     assert html =~ "recovery switch slack"
+    assert html =~ "explicit-signal"
     assert html =~ "delivery internal"
     assert html =~ "replan queued 1"
   end

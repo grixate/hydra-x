@@ -1544,12 +1544,22 @@ defmodule HydraXWeb.AgentsLive do
 
   defp publish_recovery_summary(work_item) do
     recovery = publish_recovery_snapshot(work_item)
+    basis = publish_recovery_basis_label(recovery)
 
     case recovery["strategy"] do
-      "internal_report_fallback" -> "recovery internal-report"
-      "switch_delivery_channel" -> "recovery switch #{recovery["recommended_channel"]}"
-      "revise_and_retry_channel" -> "recovery revise+retry"
+      "internal_report_fallback" -> "recovery internal-report#{basis}"
+      "switch_delivery_channel" -> "recovery switch #{recovery["recommended_channel"]}#{basis}"
+      "revise_and_retry_channel" -> "recovery revise+retry#{basis}"
       _ -> nil
+    end
+  end
+
+  defp publish_recovery_basis_label(recovery) do
+    case recovery["decision_basis"] do
+      "explicit_channel_signal" -> " explicit-signal"
+      "low_confidence" -> " low-confidence"
+      "revised_confident_summary" -> " confident-summary"
+      _ -> ""
     end
   end
 

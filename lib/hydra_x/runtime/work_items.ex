@@ -4511,6 +4511,10 @@ defmodule HydraX.Runtime.WorkItems do
          constraint_strategy \\ nil,
          delivery_recovery \\ nil
        ) do
+    base_recovery =
+      delivery_recovery || inherited_delivery_recovery(parent) ||
+        derived_delivery_recovery(parent, constraint_findings)
+
     %{
       "query" => parent.goal,
       "captured_at" => DateTime.utc_now(),
@@ -4521,8 +4525,13 @@ defmodule HydraX.Runtime.WorkItems do
       "needs_replan" => constraint_findings != []
     }
     |> maybe_put_delivery_recovery(
-      delivery_recovery || inherited_delivery_recovery(parent) ||
-        derived_delivery_recovery(parent, constraint_findings)
+      refine_delivery_recovery(
+        parent,
+        summary_artifact,
+        supporting_memories,
+        constraint_findings,
+        base_recovery
+      )
     )
   end
 
@@ -4536,6 +4545,91 @@ defmodule HydraX.Runtime.WorkItems do
   defp inherited_delivery_recovery(%WorkItem{} = parent) do
     get_in(parent.metadata || %{}, ["delivery_recovery"]) ||
       get_in(parent.metadata || %{}, ["follow_up_context", "delivery_recovery"])
+  end
+
+  defp refine_delivery_recovery(
+         _parent,
+         _summary_artifact,
+         _supporting_memories,
+         _constraint_findings,
+         nil
+       ),
+       do: nil
+
+  defp refine_delivery_recovery(
+         _parent,
+         summary_artifact,
+         supporting_memories,
+         constraint_findings,
+         delivery_recovery
+       )
+       when is_map(delivery_recovery) and map_size(delivery_recovery) > 0 do
+    confidence = publish_recovery_confidence(summary_artifact, supporting_memories)
+
+    recommended_channel =
+      publish_recovery_channel_signal(summary_artifact, supporting_memories, delivery_recovery)
+
+    previous_mode =
+      delivery_recovery["previous_mode"] || delivery_recovery["recommended_delivery_mode"] ||
+        "channel"
+
+    previous_channel =
+      delivery_recovery["previous_channel"] || delivery_recovery["recommended_channel"]
+
+    previous_target =
+      delivery_recovery["previous_target"] || delivery_recovery["recommended_target"]
+
+    cond do
+      present_text?(recommended_channel) and recommended_channel != previous_channel ->
+        %{
+          "strategy" => "switch_delivery_channel",
+          "reason" => delivery_recovery["reason"] || "planner_refined_recovery",
+          "rationale" => delivery_recovery["rationale"],
+          "recommended_delivery_mode" => "channel",
+          "recommended_channel" => recommended_channel,
+          "recommended_target" => delivery_recovery["recommended_target"] || previous_target,
+          "previous_mode" => previous_mode,
+          "previous_channel" => previous_channel,
+          "previous_target" => previous_target,
+          "recommended_action" =>
+            "Revise the summary and reroute it through #{recommended_channel} before requesting delivery approval again.",
+          "decision_basis" => "explicit_channel_signal",
+          "decision_confidence" => confidence
+        }
+
+      confidence < 0.6 or constraint_findings != [] ->
+        %{
+          "strategy" => "internal_report_fallback",
+          "reason" => delivery_recovery["reason"] || "planner_refined_recovery",
+          "rationale" => delivery_recovery["rationale"],
+          "recommended_delivery_mode" => "report",
+          "recommended_target" => "control-plane",
+          "previous_mode" => previous_mode,
+          "previous_channel" => previous_channel,
+          "previous_target" => previous_target,
+          "recommended_action" =>
+            "Keep the publish path internal until the revised summary has stronger confidence and explicit approval for external delivery.",
+          "decision_basis" => "low_confidence",
+          "decision_confidence" => confidence
+        }
+
+      true ->
+        %{
+          "strategy" => "revise_and_retry_channel",
+          "reason" => delivery_recovery["reason"] || "planner_refined_recovery",
+          "rationale" => delivery_recovery["rationale"],
+          "recommended_delivery_mode" => previous_mode,
+          "recommended_channel" => previous_channel,
+          "recommended_target" => previous_target,
+          "previous_mode" => previous_mode,
+          "previous_channel" => previous_channel,
+          "previous_target" => previous_target,
+          "recommended_action" =>
+            "Revise the summary and retry the delivery path once the updated brief is approved.",
+          "decision_basis" => "revised_confident_summary",
+          "decision_confidence" => confidence
+        }
+    end
   end
 
   defp apply_delivery_recovery_to_deliverables(deliverables, delivery_recovery) do
@@ -4557,6 +4651,71 @@ defmodule HydraX.Runtime.WorkItems do
     |> Map.put("target", resolved_delivery["target"])
     |> Map.put("delivery", resolved_delivery)
   end
+
+  defp publish_recovery_confidence(summary_artifact, supporting_memories) do
+    artifact_confidence =
+      cond do
+        match?(%Artifact{}, summary_artifact) and is_float(summary_artifact.confidence) ->
+          summary_artifact.confidence
+
+        match?(%Artifact{}, summary_artifact) and is_integer(summary_artifact.confidence) ->
+          summary_artifact.confidence * 1.0
+
+        true ->
+          0.0
+      end
+
+    evidence_confidence =
+      supporting_memories
+      |> List.wrap()
+      |> Enum.map(fn memory ->
+        case memory["score"] do
+          value when is_float(value) -> value
+          value when is_integer(value) -> value * 1.0
+          _ -> 0.0
+        end
+      end)
+      |> case do
+        [] -> artifact_confidence
+        scores -> Enum.sum(scores) / length(scores)
+      end
+
+    if artifact_confidence > 0.0 do
+      Float.round(artifact_confidence * 0.7 + evidence_confidence * 0.3, 3)
+    else
+      Float.round(evidence_confidence, 3)
+    end
+  end
+
+  defp publish_recovery_channel_signal(summary_artifact, supporting_memories, delivery_recovery) do
+    inherited_channel = delivery_recovery["recommended_channel"]
+
+    if present_text?(inherited_channel) do
+      inherited_channel
+    else
+      texts =
+        [
+          summary_artifact && summary_artifact.summary,
+          summary_artifact && summary_artifact.body
+        ] ++ Enum.map(List.wrap(supporting_memories), & &1["content"])
+
+      Enum.find_value(texts, &channel_signal_from_text/1)
+    end
+  end
+
+  defp channel_signal_from_text(text) when is_binary(text) do
+    normalized = String.downcase(text)
+
+    cond do
+      String.contains?(normalized, "slack") -> "slack"
+      String.contains?(normalized, "discord") -> "discord"
+      String.contains?(normalized, "telegram") -> "telegram"
+      String.contains?(normalized, "webchat") -> "webchat"
+      true -> nil
+    end
+  end
+
+  defp channel_signal_from_text(_text), do: nil
 
   defp derived_delivery_recovery(parent, constraint_findings) do
     if Enum.any?(constraint_findings, &(&1["summary_reason"] == "delivery_rejected")) do

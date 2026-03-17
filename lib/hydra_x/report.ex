@@ -1912,12 +1912,22 @@ defmodule HydraX.Report do
 
   defp publish_recovery_summary(item) do
     recovery = publish_recovery_snapshot(item)
+    basis = publish_recovery_basis_label(recovery)
 
     case recovery["strategy"] do
-      "internal_report_fallback" -> "recovery_internal_report"
-      "switch_delivery_channel" -> "recovery_switch_#{recovery["recommended_channel"]}"
-      "revise_and_retry_channel" -> "recovery_revise_retry"
+      "internal_report_fallback" -> "recovery_internal_report#{basis}"
+      "switch_delivery_channel" -> "recovery_switch_#{recovery["recommended_channel"]}#{basis}"
+      "revise_and_retry_channel" -> "recovery_revise_retry#{basis}"
       _ -> nil
+    end
+  end
+
+  defp publish_recovery_basis_label(recovery) do
+    case recovery["decision_basis"] do
+      "explicit_channel_signal" -> "_explicit_signal"
+      "low_confidence" -> "_low_confidence"
+      "revised_confident_summary" -> "_confident_summary"
+      _ -> ""
     end
   end
 
