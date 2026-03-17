@@ -5316,6 +5316,12 @@ defmodule HydraX.RuntimeTest do
 
     assert replan_synthesis.body =~ "Delivery decisions shaping this synthesis:"
     assert replan_synthesis.body =~ "Slack"
+    assert replan_synthesis.payload["decision_type"] == "delegation_synthesis"
+    assert replan_synthesis.payload["summary_source"] == "planner"
+
+    assert Enum.any?(replan_synthesis.payload["delivery_decisions"] || [], fn finding ->
+             finding["content"] =~ "Slack" or finding["content"] =~ "telegram"
+           end)
 
     assert {:ok, operator_summary} = Runtime.run_autonomy_cycle(operator.id)
     assert operator_summary.action == "prepared_delivery_brief"

@@ -494,6 +494,14 @@ defmodule HydraX.Runtime.WorkItems do
             supporting_memories = finalized_child_findings(children)
             constraint_findings = constrained_child_findings(children)
 
+            delivery_decisions =
+              merge_supporting_findings(
+                delivery_decision_findings(supporting_memories) ++
+                  List.wrap(
+                    get_in(claimed.metadata || %{}, ["follow_up_context", "delivery_decisions"])
+                  )
+              )
+
             {:ok, summary_artifact} =
               create_artifact(%{
                 "work_item_id" => claimed.id,
@@ -502,10 +510,13 @@ defmodule HydraX.Runtime.WorkItems do
                 "summary" => delegation_summary_line(claimed, children, supporting_memories),
                 "body" => delegation_summary_body(claimed, children, supporting_memories),
                 "payload" => %{
+                  "decision_type" => "delegation_synthesis",
+                  "summary_source" => "planner",
                   "child_work_item_ids" => Enum.map(children, & &1.id),
                   "result_artifact_ids" => artifact_ids,
                   "promoted_findings" => supporting_memories,
-                  "constraint_findings" => constraint_findings
+                  "constraint_findings" => constraint_findings,
+                  "delivery_decisions" => delivery_decisions
                 },
                 "provenance" => %{
                   "source" => "autonomy",

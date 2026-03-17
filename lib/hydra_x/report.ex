@@ -1811,6 +1811,20 @@ defmodule HydraX.Report do
         _ ->
           nil
       end,
+      case latest_review_delivery_decision(item) do
+        %{"content" => value} when is_binary(value) and value != "" ->
+          "review_delivery_decision=#{value}"
+
+        _ ->
+          nil
+      end,
+      case latest_synthesis_delivery_decision(item) do
+        %{"content" => value} when is_binary(value) and value != "" ->
+          "synthesis_delivery_decision=#{value}"
+
+        _ ->
+          nil
+      end,
       case payload["destination_rationale"] do
         value when is_binary(value) and value != "" -> "publish_rationale=#{value}"
         _ -> nil
@@ -2016,6 +2030,44 @@ defmodule HydraX.Report do
     get_in(item.metadata || %{}, ["follow_up_context", "delivery_decisions"])
     |> List.wrap()
   end
+
+  defp latest_review_delivery_decision(item) do
+    item
+    |> work_item_artifacts()
+    |> Enum.filter(&(&1.type == "review_report"))
+    |> Enum.sort_by(& &1.id, :desc)
+    |> Enum.find_value(fn artifact ->
+      artifact.payload
+      |> Kernel.||(%{})
+      |> Map.get("delivery_decision_context", [])
+      |> List.wrap()
+      |> Enum.find(&delivery_decision_entry?/1)
+    end)
+  end
+
+  defp latest_synthesis_delivery_decision(item) do
+    item
+    |> work_item_artifacts()
+    |> Enum.filter(
+      &(&1.type == "decision_ledger" and
+          get_in(&1.payload || %{}, ["decision_type"]) == "delegation_synthesis")
+    )
+    |> Enum.sort_by(& &1.id, :desc)
+    |> Enum.find_value(fn artifact ->
+      artifact.payload
+      |> Kernel.||(%{})
+      |> Map.get("delivery_decisions", [])
+      |> List.wrap()
+      |> Enum.find(&delivery_decision_entry?/1)
+    end)
+  end
+
+  defp work_item_artifacts(item), do: List.wrap(item.artifacts)
+
+  defp delivery_decision_entry?(%{"content" => value}) when is_binary(value) and value != "",
+    do: true
+
+  defp delivery_decision_entry?(_entry), do: false
 
   defp work_item_side_effect_class(item) do
     get_in(item.metadata || %{}, ["side_effect_class"]) || "read_only"

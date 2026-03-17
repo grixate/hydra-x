@@ -325,6 +325,40 @@ defmodule HydraXWeb.HealthLiveTest do
         }
       })
 
+    {:ok, _review_report} =
+      Runtime.create_artifact(%{
+        "work_item_id" => degraded_publish.id,
+        "type" => "review_report",
+        "title" => "Delivery review context",
+        "summary" => "Reviewer compared external and internal delivery.",
+        "payload" => %{
+          "delivery_decision_context" => [
+            %{
+              "content" =>
+                "Keep the report internal until the revised summary clears operator review for external publication."
+            }
+          ]
+        }
+      })
+
+    {:ok, _synthesis_ledger} =
+      Runtime.create_artifact(%{
+        "work_item_id" => degraded_publish.id,
+        "type" => "decision_ledger",
+        "title" => "Planner delivery synthesis",
+        "summary" => "Planner retained the internal fallback.",
+        "payload" => %{
+          "decision_type" => "delegation_synthesis",
+          "summary_source" => "planner",
+          "delivery_decisions" => [
+            %{
+              "content" =>
+                "Retain the control-plane fallback because confidence is still too low for Telegram delivery."
+            }
+          ]
+        }
+      })
+
     {:ok, publish_review} =
       Runtime.save_work_item(%{
         "kind" => "task",
@@ -436,6 +470,12 @@ defmodule HydraXWeb.HealthLiveTest do
 
     assert html =~
              "prior decision Keep the previous publish path on the control plane until stronger evidence is available."
+
+    assert html =~
+             "review decision Keep the report internal until the revised summary clears operator review for external publication."
+
+    assert html =~
+             "synthesis decision Retain the control-plane fallback because confidence is still too low for Telegram delivery."
 
     assert html =~
              "rationale Selected report"

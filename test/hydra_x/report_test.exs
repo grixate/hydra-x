@@ -689,6 +689,40 @@ defmodule HydraX.ReportTest do
         }
       })
 
+    {:ok, _review_report} =
+      Runtime.create_artifact(%{
+        "work_item_id" => publish_item.id,
+        "type" => "review_report",
+        "title" => "Delivery review context",
+        "summary" => "Reviewer compared the publish options.",
+        "payload" => %{
+          "delivery_decision_context" => [
+            %{
+              "content" =>
+                "Route the revised summary through Slack because the operator requested a channel switch."
+            }
+          ]
+        }
+      })
+
+    {:ok, _synthesis_ledger} =
+      Runtime.create_artifact(%{
+        "work_item_id" => publish_item.id,
+        "type" => "decision_ledger",
+        "title" => "Planner delivery synthesis",
+        "summary" => "Planner compared delivery paths.",
+        "payload" => %{
+          "decision_type" => "delegation_synthesis",
+          "summary_source" => "planner",
+          "delivery_decisions" => [
+            %{
+              "content" =>
+                "Keep the rerouted Slack plan because it preserves operator intent without reopening Telegram delivery."
+            }
+          ]
+        }
+      })
+
     {:ok, _degraded_publish_item} =
       Runtime.save_work_item(%{
         "kind" => "task",
@@ -937,6 +971,12 @@ defmodule HydraX.ReportTest do
 
     assert File.read!(export.markdown_path) =~
              "publish_prior_decision=Keep the previous publish path on the control plane until the summary is revised."
+
+    assert File.read!(export.markdown_path) =~
+             "review_delivery_decision=Route the revised summary through Slack because the operator requested a channel switch."
+
+    assert File.read!(export.markdown_path) =~
+             "synthesis_delivery_decision=Keep the rerouted Slack plan because it preserves operator intent without reopening Telegram delivery."
 
     assert File.read!(export.markdown_path) =~
              "publish_rationale=Selected telegram -> ops-room using current publish policy at confidence 0.78 with ready posture."

@@ -927,7 +927,7 @@ defmodule HydraXWeb.HealthLive do
                     · expiry {event.expired_by}
                   </span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip        {event.ip}</span>
+                  <span :if={event.ip}> · ip         {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -2170,6 +2170,8 @@ defmodule HydraXWeb.HealthLive do
     [
       autonomy_publish_objective_line(item),
       autonomy_publish_prior_decision_line(item),
+      autonomy_review_decision_line(item),
+      autonomy_synthesis_decision_line(item),
       autonomy_publish_rationale_line(item),
       autonomy_publish_confidence_line(item),
       autonomy_publish_guidance_line(item)
@@ -2246,6 +2248,26 @@ defmodule HydraXWeb.HealthLive do
     end
   end
 
+  defp autonomy_review_decision_line(item) do
+    case autonomy_latest_review_delivery_decision(item) do
+      %{"content" => value} when is_binary(value) and value != "" ->
+        "review decision #{value}"
+
+      _ ->
+        nil
+    end
+  end
+
+  defp autonomy_synthesis_decision_line(item) do
+    case autonomy_latest_synthesis_delivery_decision(item) do
+      %{"content" => value} when is_binary(value) and value != "" ->
+        "synthesis decision #{value}"
+
+      _ ->
+        nil
+    end
+  end
+
   defp autonomy_publish_brief_payload(item) do
     item
     |> Map.get(:artifacts)
@@ -2266,6 +2288,51 @@ defmodule HydraXWeb.HealthLive do
     get_in(item.metadata || %{}, ["follow_up_context", "delivery_decisions"])
     |> List.wrap()
   end
+
+  defp autonomy_latest_review_delivery_decision(item) do
+    item
+    |> autonomy_work_item_artifacts()
+    |> Enum.filter(&(&1.type == "review_report"))
+    |> Enum.sort_by(& &1.id, :desc)
+    |> Enum.find_value(fn artifact ->
+      artifact.payload
+      |> Kernel.||(%{})
+      |> Map.get("delivery_decision_context", [])
+      |> List.wrap()
+      |> Enum.find(&autonomy_delivery_decision_entry?/1)
+    end)
+  end
+
+  defp autonomy_latest_synthesis_delivery_decision(item) do
+    item
+    |> autonomy_work_item_artifacts()
+    |> Enum.filter(
+      &(&1.type == "decision_ledger" and
+          get_in(&1.payload || %{}, ["decision_type"]) == "delegation_synthesis")
+    )
+    |> Enum.sort_by(& &1.id, :desc)
+    |> Enum.find_value(fn artifact ->
+      artifact.payload
+      |> Kernel.||(%{})
+      |> Map.get("delivery_decisions", [])
+      |> List.wrap()
+      |> Enum.find(&autonomy_delivery_decision_entry?/1)
+    end)
+  end
+
+  defp autonomy_work_item_artifacts(item) do
+    case Map.get(item, :artifacts) do
+      %Ecto.Association.NotLoaded{} -> []
+      entries when is_list(entries) -> entries
+      _ -> []
+    end
+  end
+
+  defp autonomy_delivery_decision_entry?(%{"content" => value})
+       when is_binary(value) and value != "",
+       do: true
+
+  defp autonomy_delivery_decision_entry?(_entry), do: false
 
   defp publish_recovery_summary(item) do
     recovery = publish_recovery_snapshot(item)
