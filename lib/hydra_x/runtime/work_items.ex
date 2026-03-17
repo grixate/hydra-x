@@ -623,11 +623,16 @@ defmodule HydraX.Runtime.WorkItems do
   defp process_work_item(agent, %WorkItem{execution_mode: "delegate"} = work_item, _opts) do
     child_role = work_item.metadata["delegate_role"] || Autonomy.role_for_kind(work_item.kind)
     child_goal = work_item.metadata["delegate_goal"] || work_item.goal
+    override_context = delegation_override_context(work_item)
+
+    delegation_limit =
+      if Enum.any?(override_context, &delivery_decision_finding?/1), do: 5, else: 3
 
     delegation_context =
       merge_delegation_context(
         delegation_context_snapshot(agent.id, child_goal),
-        delegation_override_context(work_item)
+        override_context,
+        delegation_limit
       )
 
     {:ok, child} =
@@ -2845,7 +2850,7 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp constraint_context_snapshot(_entry, _work_item), do: nil
 
-  defp merge_delegation_context(base_context, extra_context, limit \\ 3) do
+  defp merge_delegation_context(base_context, extra_context, limit) do
     (List.wrap(base_context) ++ List.wrap(extra_context))
     |> Enum.uniq_by(fn memory ->
       {memory["source_work_item_id"], memory["source_artifact_type"], memory["type"],
@@ -4605,6 +4610,8 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp delivery_artifact_findings(child, artifact, payload, score, source_role) do
     if artifact.type == "delivery_brief" do
+      decision_snapshot = payload["delivery_decision_snapshot"] || %{}
+
       [
         payload["publish_objective"] &&
           finalized_child_finding(
@@ -4621,6 +4628,24 @@ defmodule HydraX.Runtime.WorkItems do
             artifact,
             "DeliveryDecision",
             payload["destination_rationale"],
+            score,
+            source_role
+          ),
+        decision_snapshot["prior_summary"] &&
+          finalized_child_finding(
+            child,
+            artifact,
+            "DeliveryDecision",
+            decision_snapshot["prior_summary"],
+            score,
+            source_role
+          ),
+        decision_snapshot["comparison_summary"] &&
+          finalized_child_finding(
+            child,
+            artifact,
+            "DeliveryDecision",
+            decision_snapshot["comparison_summary"],
             score,
             source_role
           ),
@@ -5098,6 +5123,7 @@ defmodule HydraX.Runtime.WorkItems do
     if artifact.type == "delivery_brief" do
       score = artifact.confidence || 0.0
       source_role = payload["memory_origin_role"] || parent.assigned_role
+      decision_snapshot = payload["delivery_decision_snapshot"] || %{}
 
       [
         payload["publish_objective"] &&
@@ -5127,6 +5153,34 @@ defmodule HydraX.Runtime.WorkItems do
             "source_role" => source_role,
             "source_artifact_type" => artifact.type,
             "reasons" => ["summary artifact delivery rationale"]
+          },
+        decision_snapshot["prior_summary"] &&
+          %{
+            "memory_id" => nil,
+            "type" => "DeliveryDecision",
+            "content" => decision_snapshot["prior_summary"],
+            "score" => score,
+            "summary_reason" => "delivery_brief",
+            "source_work_item_id" => parent.id,
+            "source_goal" => parent.goal,
+            "source_kind" => parent.kind,
+            "source_role" => source_role,
+            "source_artifact_type" => artifact.type,
+            "reasons" => ["summary artifact prior delivery decision"]
+          },
+        decision_snapshot["comparison_summary"] &&
+          %{
+            "memory_id" => nil,
+            "type" => "DeliveryDecision",
+            "content" => decision_snapshot["comparison_summary"],
+            "score" => score,
+            "summary_reason" => "delivery_brief",
+            "source_work_item_id" => parent.id,
+            "source_goal" => parent.goal,
+            "source_kind" => parent.kind,
+            "source_role" => source_role,
+            "source_artifact_type" => artifact.type,
+            "reasons" => ["summary artifact delivery decision comparison"]
           }
       ]
       |> Enum.reject(&is_nil/1)

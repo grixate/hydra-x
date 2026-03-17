@@ -5275,6 +5275,24 @@ defmodule HydraX.RuntimeTest do
              end
            )
 
+    assert Enum.any?(
+             get_in(replan_work_item.metadata || %{}, ["follow_up_context", "delivery_decisions"]) ||
+               [],
+             fn finding ->
+               finding["reasons"] == ["summary artifact delivery decision comparison"] and
+                 finding["content"] == "Established delivery guidance for this artifact."
+             end
+           )
+
+    assert Enum.any?(
+             get_in(replan_work_item.metadata || %{}, ["follow_up_context", "delivery_decisions"]) ||
+               [],
+             fn finding ->
+               finding["reasons"] == ["summary artifact prior delivery decision"] and
+                 finding["content"] =~ "Previous delivery path: telegram"
+             end
+           )
+
     assert {:ok, planner_summary} = Runtime.run_autonomy_cycle(planner.id)
     assert planner_summary.action == "delegated"
 
@@ -5295,7 +5313,13 @@ defmodule HydraX.RuntimeTest do
     assert review_report.body =~ "Delivery decision context:"
     assert review_report.body =~ "telegram"
     assert review_report.body =~ "Delivery decision comparison:"
-    assert review_report.payload["delivery_decision_snapshot"]["current_summary"] =~ "telegram"
+    assert review_report.payload["delivery_decision_snapshot"]["decision_scope"] == "review"
+
+    assert review_report.payload["delivery_decision_snapshot"]["current_summary"] ==
+             "Established delivery guidance for this artifact."
+
+    assert review_report.payload["delivery_decision_snapshot"]["comparison_summary"] ==
+             "Established delivery guidance for this artifact."
 
     assert Enum.any?(review_decision.payload["delivery_decision_context"] || [], fn finding ->
              finding["content"] =~ "telegram" or finding["content"] =~ "ops-room"
@@ -5340,7 +5364,9 @@ defmodule HydraX.RuntimeTest do
     assert replan_synthesis.body =~ "Slack"
     assert replan_synthesis.payload["decision_type"] == "delegation_synthesis"
     assert replan_synthesis.payload["summary_source"] == "planner"
-    assert replan_synthesis.payload["delivery_decision_snapshot"]["prior_summary"] =~ "telegram"
+
+    assert replan_synthesis.payload["delivery_decision_snapshot"]["current_summary"] ==
+             "Established delivery guidance for this artifact."
 
     assert replan_synthesis.payload["delivery_decision_snapshot"]["comparison_summary"] in [
              "Established delivery guidance for this artifact.",
@@ -5534,6 +5560,24 @@ defmodule HydraX.RuntimeTest do
                [],
              fn finding ->
                finding["content"] =~ "control plane" or finding["content"] =~ "telegram"
+             end
+           )
+
+    assert Enum.any?(
+             get_in(publish_follow_up.metadata || %{}, ["follow_up_context", "delivery_decisions"]) ||
+               [],
+             fn finding ->
+               finding["reasons"] == ["summary artifact delivery decision comparison"] and
+                 finding["content"] == "Established delivery guidance for this artifact."
+             end
+           )
+
+    assert Enum.any?(
+             get_in(publish_follow_up.metadata || %{}, ["follow_up_context", "delivery_decisions"]) ||
+               [],
+             fn finding ->
+               finding["reasons"] == ["summary artifact prior delivery decision"] and
+                 finding["content"] =~ "Previous delivery path: telegram"
              end
            )
 
