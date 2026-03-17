@@ -5070,6 +5070,345 @@ defmodule HydraX.RuntimeTest do
     assert replan_work_item.metadata["delivery_recovery"]["previous_channel"] == "telegram"
   end
 
+  test "rejected publish replan carries switched delivery into the next publish task" do
+    previous_telegram = Application.get_env(:hydra_x, :telegram_deliver)
+    previous_slack = Application.get_env(:hydra_x, :slack_deliver)
+
+    Application.put_env(:hydra_x, :telegram_deliver, fn payload ->
+      send(self(), {:unexpected_replan_telegram_delivery, payload})
+      {:ok, %{provider_message_id: 2_101}}
+    end)
+
+    Application.put_env(:hydra_x, :slack_deliver, fn payload ->
+      send(self(), {:replan_switch_slack_delivery, payload})
+      {:ok, %{provider_message_id: "slack-replan-1"}}
+    end)
+
+    on_exit(fn ->
+      if previous_telegram do
+        Application.put_env(:hydra_x, :telegram_deliver, previous_telegram)
+      else
+        Application.delete_env(:hydra_x, :telegram_deliver)
+      end
+
+      if previous_slack do
+        Application.put_env(:hydra_x, :slack_deliver, previous_slack)
+      else
+        Application.delete_env(:hydra_x, :slack_deliver)
+      end
+    end)
+
+    planner =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, planner} = Runtime.save_agent(planner, %{"role" => "planner"})
+
+    researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, researcher} = Runtime.save_agent(researcher, %{"role" => "researcher"})
+
+    reviewer =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, reviewer} = Runtime.save_agent(reviewer, %{"role" => "reviewer"})
+
+    operator =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, operator} = Runtime.save_agent(operator, %{"role" => "operator"})
+
+    {:ok, _slack} =
+      Runtime.save_slack_config(%{
+        app_token: "xapp-replan",
+        bot_token: "xoxb-replan",
+        signing_secret: "replan-secret",
+        enabled: true,
+        default_agent_id: operator.id
+      })
+
+    {:ok, parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Rework the rejected publish path for autonomous findings.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "status" => "completed",
+        "approval_stage" => "validated",
+        "deliverables" => %{
+          "publish_summary" => true,
+          "assigned_role" => "operator",
+          "assigned_agent_id" => operator.id,
+          "enabled" => true,
+          "mode" => "channel",
+          "channel" => "telegram",
+          "target" => "ops-room"
+        }
+      })
+
+    {:ok, summary_artifact} =
+      Runtime.create_artifact(%{
+        "work_item_id" => parent.id,
+        "type" => "decision_ledger",
+        "title" => "Rejected publish synthesis",
+        "summary" => "Revise and reroute the publish path",
+        "body" => "Send the revised summary through Slack after a stronger review pass."
+      })
+
+    {:ok, publish_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Prepare the rejected publish summary for recovery.",
+        "assigned_agent_id" => operator.id,
+        "assigned_role" => "operator",
+        "status" => "planned",
+        "approval_stage" => "validated",
+        "parent_work_item_id" => parent.id,
+        "metadata" => %{
+          "task_type" => "publish_summary",
+          "summary_artifact_id" => summary_artifact.id,
+          "delivery" => %{
+            "enabled" => true,
+            "mode" => "channel",
+            "channel" => "telegram",
+            "target" => "ops-room"
+          },
+          "follow_up_context" => %{
+            "needs_replan" => true,
+            "constraint_strategy" => "Revise the summary before rerouting it.",
+            "promoted_findings" => [
+              %{
+                "type" => "Decision",
+                "content" => "Slack is the better recovery path for this publication."
+              }
+            ]
+          }
+        }
+      })
+
+    assert {:ok, _publish_summary} = Runtime.run_autonomy_cycle(operator.id)
+
+    publish_item = Runtime.get_work_item!(publish_item.id)
+    [approval_item_id] = publish_item.result_refs["follow_up_work_item_ids"]
+    approval_item = Runtime.get_work_item!(approval_item_id)
+
+    {rejected_review, _record} =
+      Runtime.reject_work_item!(approval_item.id, %{
+        "requested_action" => "publish_review_report",
+        "rationale" => "Revise it and send it through Slack instead."
+      })
+
+    replan_work_item =
+      rejected_review.result_refs["linked_follow_up_work_item_id"]
+      |> Runtime.get_work_item!()
+
+    assert replan_work_item.deliverables["channel"] == "slack"
+    assert replan_work_item.deliverables["target"] == "ops-room"
+    assert replan_work_item.deliverables["delivery"]["channel"] == "slack"
+
+    assert {:ok, planner_summary} = Runtime.run_autonomy_cycle(planner.id)
+    assert planner_summary.action == "delegated"
+
+    assert {:ok, researcher_summary} = Runtime.run_autonomy_cycle(researcher.id)
+    assert researcher_summary.action == "research_review_requested"
+
+    assert {:ok, reviewer_summary} = Runtime.run_autonomy_cycle(reviewer.id)
+    assert reviewer_summary.action == "review_completed"
+
+    assert {:ok, researcher_finalize_summary} = Runtime.run_autonomy_cycle(researcher.id)
+    assert researcher_finalize_summary.action == "finalized_blocked_parent"
+
+    assert {:ok, finalize_summary} = Runtime.run_autonomy_cycle(planner.id)
+    assert finalize_summary.action == "finalized_blocked_parent"
+
+    replan_work_item = Runtime.get_work_item!(replan_work_item.id)
+
+    [publish_follow_up_id] =
+      replan_work_item.result_refs["follow_up_work_item_ids"]
+      |> List.wrap()
+      |> Enum.reject(&(&1 == rejected_review.id))
+
+    publish_follow_up = Runtime.get_work_item!(publish_follow_up_id)
+    assert publish_follow_up.metadata["task_type"] == "publish_summary"
+    assert get_in(publish_follow_up.metadata || %{}, ["delivery", "channel"]) == "slack"
+    assert get_in(publish_follow_up.metadata || %{}, ["delivery", "target"]) == "ops-room"
+
+    assert get_in(publish_follow_up.metadata || %{}, ["delivery_recovery", "strategy"]) ==
+             "switch_delivery_channel"
+
+    assert {:ok, operator_summary} = Runtime.run_autonomy_cycle(operator.id)
+    assert operator_summary.action == "prepared_delivery_brief"
+    refute_receive {:unexpected_replan_telegram_delivery, _payload}, 200
+
+    publish_follow_up = Runtime.get_work_item!(publish_follow_up.id)
+    [next_approval_item_id] = publish_follow_up.result_refs["follow_up_work_item_ids"]
+    next_approval_item = Runtime.get_work_item!(next_approval_item_id)
+    assert next_approval_item.metadata["delivery"]["channel"] == "slack"
+  end
+
+  test "rejected publish replan carries internal recovery into the next publish task" do
+    previous = Application.get_env(:hydra_x, :telegram_deliver)
+
+    Application.put_env(:hydra_x, :telegram_deliver, fn payload ->
+      send(self(), {:unexpected_internal_replan_delivery, payload})
+      {:ok, %{provider_message_id: 2_102}}
+    end)
+
+    on_exit(fn ->
+      if previous do
+        Application.put_env(:hydra_x, :telegram_deliver, previous)
+      else
+        Application.delete_env(:hydra_x, :telegram_deliver)
+      end
+    end)
+
+    planner =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, planner} = Runtime.save_agent(planner, %{"role" => "planner"})
+
+    researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, researcher} = Runtime.save_agent(researcher, %{"role" => "researcher"})
+
+    reviewer =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, reviewer} = Runtime.save_agent(reviewer, %{"role" => "reviewer"})
+
+    operator =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, operator} = Runtime.save_agent(operator, %{"role" => "operator"})
+
+    {:ok, parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Keep the rejected publish recovery on the control plane.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "status" => "completed",
+        "approval_stage" => "validated",
+        "deliverables" => %{
+          "publish_summary" => true,
+          "assigned_role" => "operator",
+          "assigned_agent_id" => operator.id,
+          "enabled" => true,
+          "mode" => "channel",
+          "channel" => "telegram",
+          "target" => "9001"
+        }
+      })
+
+    {:ok, summary_artifact} =
+      Runtime.create_artifact(%{
+        "work_item_id" => parent.id,
+        "type" => "decision_ledger",
+        "title" => "Internal recovery synthesis",
+        "summary" => "Keep the revised summary on the control plane",
+        "body" => "Do not publish externally until the evidence base is stronger."
+      })
+
+    {:ok, publish_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Prepare the constrained publish summary for internal recovery.",
+        "assigned_agent_id" => operator.id,
+        "assigned_role" => "operator",
+        "status" => "planned",
+        "approval_stage" => "validated",
+        "parent_work_item_id" => parent.id,
+        "metadata" => %{
+          "task_type" => "publish_summary",
+          "summary_artifact_id" => summary_artifact.id,
+          "delivery" => %{
+            "enabled" => true,
+            "mode" => "channel",
+            "channel" => "telegram",
+            "target" => "9001"
+          },
+          "follow_up_context" => %{
+            "needs_replan" => true,
+            "constraint_strategy" => "Keep the delivery internal until stronger evidence exists.",
+            "promoted_findings" => [
+              %{
+                "type" => "Constraint",
+                "content" => "Deliver this only to the control plane until it is revised."
+              }
+            ]
+          }
+        }
+      })
+
+    assert {:ok, _publish_summary} = Runtime.run_autonomy_cycle(operator.id)
+
+    publish_item = Runtime.get_work_item!(publish_item.id)
+    [approval_item_id] = publish_item.result_refs["follow_up_work_item_ids"]
+    approval_item = Runtime.get_work_item!(approval_item_id)
+
+    {rejected_review, _record} =
+      Runtime.reject_work_item!(approval_item.id, %{
+        "requested_action" => "publish_review_report",
+        "rationale" => "Keep this on the control plane until the evidence improves."
+      })
+
+    replan_work_item =
+      rejected_review.result_refs["linked_follow_up_work_item_id"]
+      |> Runtime.get_work_item!()
+
+    assert replan_work_item.deliverables["mode"] == "report"
+    assert replan_work_item.deliverables["target"] == "control-plane"
+
+    assert {:ok, planner_summary} = Runtime.run_autonomy_cycle(planner.id)
+    assert planner_summary.action == "delegated"
+
+    assert {:ok, researcher_summary} = Runtime.run_autonomy_cycle(researcher.id)
+    assert researcher_summary.action == "research_review_requested"
+
+    assert {:ok, reviewer_summary} = Runtime.run_autonomy_cycle(reviewer.id)
+    assert reviewer_summary.action == "review_completed"
+
+    assert {:ok, researcher_finalize_summary} = Runtime.run_autonomy_cycle(researcher.id)
+    assert researcher_finalize_summary.action == "finalized_blocked_parent"
+
+    assert {:ok, finalize_summary} = Runtime.run_autonomy_cycle(planner.id)
+    assert finalize_summary.action == "finalized_blocked_parent"
+
+    replan_work_item = Runtime.get_work_item!(replan_work_item.id)
+
+    [publish_follow_up_id] =
+      replan_work_item.result_refs["follow_up_work_item_ids"]
+      |> List.wrap()
+      |> Enum.reject(&(&1 == rejected_review.id))
+
+    publish_follow_up = Runtime.get_work_item!(publish_follow_up_id)
+    assert publish_follow_up.metadata["task_type"] == "publish_summary"
+    assert get_in(publish_follow_up.metadata || %{}, ["delivery", "mode"]) == "report"
+    assert get_in(publish_follow_up.metadata || %{}, ["delivery", "target"]) == "control-plane"
+
+    assert get_in(publish_follow_up.metadata || %{}, ["delivery_recovery", "strategy"]) ==
+             "internal_report_fallback"
+
+    assert {:ok, operator_summary} = Runtime.run_autonomy_cycle(operator.id)
+    assert operator_summary.action == "prepared_delivery_brief"
+    refute_receive {:unexpected_internal_replan_delivery, _payload}, 200
+
+    publish_follow_up = Runtime.get_work_item!(publish_follow_up.id)
+    assert publish_follow_up.result_refs["delivery"]["status"] == "skipped"
+    assert publish_follow_up.result_refs["delivery"]["reason"] == "internal_report_recovery"
+    assert publish_follow_up.result_refs["delivery"]["target"] == "control-plane"
+    assert publish_follow_up.result_refs["follow_up_work_item_ids"] in [nil, []]
+  end
+
   test "approving a research work item promotes memories from report artifacts" do
     researcher =
       create_agent()

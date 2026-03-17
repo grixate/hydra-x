@@ -3515,6 +3515,9 @@ defmodule HydraX.Runtime.WorkItems do
      deliverables, required_outputs, review_required, budget} =
       rejected_publish_follow_up_defaults(publish_item)
 
+    follow_up_deliverables =
+      apply_delivery_recovery_to_deliverables(deliverables, delivery_recovery)
+
     {:ok, follow_up_work_item} =
       save_work_item(%{
         "kind" => work_kind,
@@ -3528,7 +3531,7 @@ defmodule HydraX.Runtime.WorkItems do
         "priority" => max(publish_item.priority, 1),
         "autonomy_level" => publish_item.autonomy_level,
         "approval_stage" => approval_stage,
-        "deliverables" => deliverables,
+        "deliverables" => follow_up_deliverables,
         "budget" => budget,
         "required_outputs" => required_outputs,
         "review_required" => review_required,
@@ -4336,8 +4339,14 @@ defmodule HydraX.Runtime.WorkItems do
     deliverables = parent.deliverables || %{}
 
     if parent.assigned_role == "planner" and deliverables["publish_summary"] == true do
+      follow_up_context = build_follow_up_context(parent, supporting_memories, summary_artifact)
+      delivery_recovery = follow_up_context["delivery_recovery"] || %{}
+
+      resolved_deliverables =
+        apply_delivery_recovery_to_deliverables(deliverables, delivery_recovery)
+
       goal =
-        deliverables["goal"] ||
+        resolved_deliverables["goal"] ||
           "Publish the finalized summary for #{parent.goal}"
 
       {:ok, follow_up_work_item} =
@@ -4346,27 +4355,27 @@ defmodule HydraX.Runtime.WorkItems do
           "goal" => goal,
           "status" => "planned",
           "execution_mode" => "execute",
-          "assigned_role" => deliverables["assigned_role"] || "operator",
-          "assigned_agent_id" => deliverables["assigned_agent_id"],
+          "assigned_role" => resolved_deliverables["assigned_role"] || "operator",
+          "assigned_agent_id" => resolved_deliverables["assigned_agent_id"],
           "delegated_by_agent_id" => parent.assigned_agent_id || parent.delegated_by_agent_id,
           "parent_work_item_id" => parent.id,
           "priority" => max(parent.priority - 1, 0),
           "autonomy_level" => parent.autonomy_level,
           "approval_stage" => "validated",
-          "deliverables" => deliverables,
+          "deliverables" => resolved_deliverables,
           "input_artifact_refs" => %{"summary_artifact_id" => summary_artifact.id},
           "required_outputs" => %{"artifact_types" => ["delivery_brief"]},
           "metadata" => %{
             "task_type" => "publish_summary",
             "summary_artifact_id" => summary_artifact.id,
             "delivery" => %{
-              "enabled" => deliverables["enabled"] == true,
-              "mode" => deliverables["mode"] || "report",
-              "channel" => deliverables["channel"],
-              "target" => deliverables["target"]
+              "enabled" => resolved_deliverables["enabled"] == true,
+              "mode" => resolved_deliverables["mode"] || "report",
+              "channel" => resolved_deliverables["channel"],
+              "target" => resolved_deliverables["target"]
             },
-            "follow_up_context" =>
-              build_follow_up_context(parent, supporting_memories, summary_artifact)
+            "delivery_recovery" => delivery_recovery,
+            "follow_up_context" => follow_up_context
           }
         })
 
@@ -4391,6 +4400,20 @@ defmodule HydraX.Runtime.WorkItems do
     if parent.assigned_role == "planner" and constraint_findings != [] do
       constraint_strategy = derive_constraint_strategy(constraint_findings)
 
+      follow_up_context =
+        build_follow_up_context(
+          parent,
+          supporting_memories,
+          summary_artifact,
+          constraint_findings,
+          constraint_strategy
+        )
+
+      delivery_recovery = follow_up_context["delivery_recovery"] || %{}
+
+      resolved_deliverables =
+        apply_delivery_recovery_to_deliverables(parent.deliverables, delivery_recovery)
+
       {:ok, follow_up_work_item} =
         save_work_item(%{
           "kind" => parent.kind,
@@ -4404,7 +4427,7 @@ defmodule HydraX.Runtime.WorkItems do
           "priority" => max(parent.priority - 1, 0),
           "autonomy_level" => parent.autonomy_level,
           "approval_stage" => parent.approval_stage,
-          "deliverables" => parent.deliverables,
+          "deliverables" => resolved_deliverables,
           "input_artifact_refs" => %{"summary_artifact_id" => summary_artifact.id},
           "required_outputs" => parent.required_outputs,
           "review_required" => parent.review_required,
@@ -4414,14 +4437,8 @@ defmodule HydraX.Runtime.WorkItems do
             "summary_artifact_id" => summary_artifact.id,
             "constraint_findings" => Enum.take(constraint_findings, 5),
             "constraint_strategy" => constraint_strategy,
-            "follow_up_context" =>
-              build_follow_up_context(
-                parent,
-                supporting_memories,
-                summary_artifact,
-                constraint_findings,
-                constraint_strategy
-              )
+            "delivery_recovery" => delivery_recovery,
+            "follow_up_context" => follow_up_context
           }
         })
 
@@ -4504,7 +4521,8 @@ defmodule HydraX.Runtime.WorkItems do
       "needs_replan" => constraint_findings != []
     }
     |> maybe_put_delivery_recovery(
-      delivery_recovery || derived_delivery_recovery(parent, constraint_findings)
+      delivery_recovery || inherited_delivery_recovery(parent) ||
+        derived_delivery_recovery(parent, constraint_findings)
     )
   end
 
@@ -4514,6 +4532,31 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp maybe_put_delivery_recovery(follow_up_context, _recovery), do: follow_up_context
+
+  defp inherited_delivery_recovery(%WorkItem{} = parent) do
+    get_in(parent.metadata || %{}, ["delivery_recovery"]) ||
+      get_in(parent.metadata || %{}, ["follow_up_context", "delivery_recovery"])
+  end
+
+  defp apply_delivery_recovery_to_deliverables(deliverables, delivery_recovery) do
+    deliverables = Helpers.normalize_string_keys(deliverables || %{})
+
+    base_delivery = %{
+      "enabled" => Map.get(deliverables, "enabled", false),
+      "mode" => Map.get(deliverables, "mode", "report"),
+      "channel" => Map.get(deliverables, "channel"),
+      "target" => Map.get(deliverables, "target")
+    }
+
+    resolved_delivery = resolved_delivery_config(base_delivery, delivery_recovery || %{})
+
+    deliverables
+    |> Map.put("enabled", Map.get(resolved_delivery, "enabled", base_delivery["enabled"]))
+    |> Map.put("mode", resolved_delivery["mode"] || base_delivery["mode"])
+    |> Map.put("channel", resolved_delivery["channel"])
+    |> Map.put("target", resolved_delivery["target"])
+    |> Map.put("delivery", resolved_delivery)
+  end
 
   defp derived_delivery_recovery(parent, constraint_findings) do
     if Enum.any?(constraint_findings, &(&1["summary_reason"] == "delivery_rejected")) do
