@@ -214,7 +214,7 @@ defmodule HydraX.Report do
     #{render_conversations(snapshot.conversations)}
 
     ## Autonomous Work Items
-    - active_jobs=#{snapshot.autonomy.active_autonomy_job_count} unsafe_requests=#{snapshot.autonomy.unsafe_request_count} budget_blocked=#{snapshot.autonomy.budget_blocked_count} auto_assigned=#{snapshot.autonomy.auto_assigned_count} fallback_assigned=#{snapshot.autonomy.capability_fallback_count} role_only_open=#{snapshot.autonomy.role_only_open_count} capability_drift=#{length(snapshot.autonomy.capability_drifts)}
+    - active_jobs=#{snapshot.autonomy.active_autonomy_job_count} unsafe_requests=#{snapshot.autonomy.unsafe_request_count} budget_blocked=#{snapshot.autonomy.budget_blocked_count} auto_assigned=#{snapshot.autonomy.auto_assigned_count} fallback_assigned=#{snapshot.autonomy.capability_fallback_count} role_only_open=#{snapshot.autonomy.role_only_open_count} active_claimed=#{snapshot.autonomy.active_claimed_count} remote_claimed=#{snapshot.autonomy.remote_claimed_count} capability_drift=#{length(snapshot.autonomy.capability_drifts)}
     #{render_work_items(snapshot.work_items)}
 
     ## Observability
@@ -689,6 +689,7 @@ defmodule HydraX.Report do
       publish = render_work_item_publish_summary(item)
       publish_details = render_work_item_publish_details(item)
       assignment = render_work_item_assignment(item)
+      ownership = render_work_item_ownership(item)
 
       [
         "##{item.id}",
@@ -704,6 +705,7 @@ defmodule HydraX.Report do
         artifacts != "" && "artifacts=#{artifacts}",
         promoted_memories != "" && "promoted=#{promoted_memories}",
         assignment && "assignment=#{assignment}",
+        ownership && "ownership=#{ownership}",
         publish && "publish=#{publish}",
         item.goal
       ]
@@ -728,6 +730,25 @@ defmodule HydraX.Report do
 
       {slug, _strategy} when is_binary(slug) ->
         slug
+
+      _ ->
+        nil
+    end
+  end
+
+  defp render_work_item_ownership(item) do
+    ownership = get_in(item.metadata || %{}, ["ownership"]) || %{}
+
+    case {ownership["owner"], ownership["stage"]} do
+      {owner, stage} when is_binary(owner) and is_binary(stage) ->
+        release_marker = if ownership["active"] == false, do: "released"
+
+        [owner, stage, release_marker]
+        |> Enum.filter(&is_binary/1)
+        |> Enum.join(":")
+
+      {owner, _stage} when is_binary(owner) ->
+        owner
 
       _ ->
         nil
@@ -1393,6 +1414,8 @@ defmodule HydraX.Report do
         auto_assigned_count: snapshot.autonomy.auto_assigned_count,
         capability_fallback_count: snapshot.autonomy.capability_fallback_count,
         role_only_open_count: snapshot.autonomy.role_only_open_count,
+        active_claimed_count: snapshot.autonomy.active_claimed_count,
+        remote_claimed_count: snapshot.autonomy.remote_claimed_count,
         active_roles: snapshot.autonomy.active_roles,
         capability_drifts: snapshot.autonomy.capability_drifts
       },
@@ -1719,6 +1742,8 @@ defmodule HydraX.Report do
       priority: item.priority,
       result_refs: item.result_refs,
       metadata: item.metadata,
+      ownership: get_in(item.metadata || %{}, ["ownership"]),
+      ownership_summary: render_work_item_ownership(item),
       publish_follow_up: work_item_publish_snapshot(item),
       inserted_at: item.inserted_at,
       updated_at: item.updated_at,

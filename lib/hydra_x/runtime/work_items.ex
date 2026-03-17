@@ -318,12 +318,16 @@ defmodule HydraX.Runtime.WorkItems do
                  "assigned_role" => work_item.assigned_role
                })
            ) do
+      ownership = claimed_work_item_ownership(work_item.id, "claimed")
+
       save_work_item(work_item, %{
         "status" => "claimed",
+        "metadata" => put_work_item_ownership(work_item.metadata, ownership),
         "runtime_state" =>
           append_history(work_item.runtime_state, "claimed", %{
             "claimed_at" => DateTime.utc_now(),
-            "lease_name" => lease_name(work_item.id)
+            "lease_name" => lease_name(work_item.id),
+            "lease_owner" => ownership["owner"]
           })
       })
     end
@@ -428,6 +432,12 @@ defmodule HydraX.Runtime.WorkItems do
     role_only_open_count =
       Enum.count(all_work_items, &role_only_assignment?(&1))
 
+    active_claimed_count =
+      Enum.count(all_work_items, &work_item_ownership_active?/1)
+
+    remote_claimed_count =
+      Enum.count(all_work_items, &work_item_remotely_owned?/1)
+
     capability_drifts =
       autonomy_agents
       |> Enum.map(fn agent ->
@@ -459,6 +469,8 @@ defmodule HydraX.Runtime.WorkItems do
       auto_assigned_count: auto_assigned_count,
       capability_fallback_count: capability_fallback_count,
       role_only_open_count: role_only_open_count,
+      active_claimed_count: active_claimed_count,
+      remote_claimed_count: remote_claimed_count,
       autonomy_agent_count: length(autonomy_agents),
       active_roles: autonomy_agents |> Enum.map(& &1.role) |> Enum.frequencies(),
       capability_drifts: capability_drifts,
@@ -481,6 +493,15 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp role_only_assignment?(%WorkItem{} = work_item) do
     work_item.status not in @terminal_work_item_statuses and is_nil(work_item.assigned_agent_id)
+  end
+
+  defp work_item_ownership_active?(%WorkItem{} = work_item) do
+    get_in(work_item.metadata || %{}, ["ownership", "active"]) == true
+  end
+
+  defp work_item_remotely_owned?(%WorkItem{} = work_item) do
+    ownership = get_in(work_item.metadata || %{}, ["ownership"]) || %{}
+    ownership["active"] == true and ownership["owner"] not in [nil, Coordination.status().owner]
   end
 
   defp maybe_finalize_blocked_parent(agent, _opts) do
@@ -603,8 +624,10 @@ defmodule HydraX.Runtime.WorkItems do
                action: "finalized_blocked_parent",
                follow_up_work_item: follow_up_work_item
              }}
+            |> finalize_claimed_summary(claimed)
 
-          {:error, {:taken, _lease}} ->
+          {:error, {:taken, lease}} ->
+            note_remote_work_item_ownership(work_item, lease, "claimed_remote")
             {:idle, nil}
 
           {:error, reason} ->
@@ -632,12 +655,15 @@ defmodule HydraX.Runtime.WorkItems do
             case authorize_work_item(agent, claimed) do
               :ok ->
                 process_work_item(agent, claimed, opts)
+                |> finalize_claimed_summary(claimed)
 
               {:error, failure} ->
                 block_work_item_for_policy(claimed, failure)
+                |> finalize_claimed_summary(claimed)
             end
 
-          {:error, {:taken, _lease}} ->
+          {:error, {:taken, lease}} ->
+            note_remote_work_item_ownership(work_item, lease, "claimed_remote")
             {:idle, nil}
 
           {:error, reason} ->
@@ -986,6 +1012,52 @@ defmodule HydraX.Runtime.WorkItems do
        artifacts: [artifact],
        action: "completed_fallback"
      }}
+  end
+
+  defp finalize_claimed_summary({:processed, summary}, %WorkItem{} = claimed) do
+    case release_claimed_work_item(summary[:work_item], claimed) do
+      {:ok, %WorkItem{} = updated_work_item} ->
+        {:processed, Map.put(summary, :work_item, updated_work_item)}
+
+      _ ->
+        {:processed, summary}
+    end
+  end
+
+  defp finalize_claimed_summary(result, _claimed), do: result
+
+  defp release_claimed_work_item(nil, _claimed), do: :ok
+
+  defp release_claimed_work_item(%WorkItem{} = work_item, %WorkItem{} = claimed) do
+    ownership =
+      claimed.metadata
+      |> get_in(["ownership"])
+      |> case do
+        map when is_map(map) -> map
+        _ -> claimed_work_item_ownership(claimed.id, claimed.status || "claimed")
+      end
+
+    owner = ownership["owner"] || Coordination.status().owner
+
+    _ = Coordination.release_lease(lease_name(claimed.id), owner: owner)
+
+    updated_ownership =
+      ownership
+      |> Map.put("stage", work_item.status)
+      |> Map.put("active", false)
+      |> Map.put("released_at", DateTime.utc_now())
+
+    save_work_item(work_item, %{
+      "metadata" => put_work_item_ownership(work_item.metadata, updated_ownership)
+    })
+  end
+
+  defp note_remote_work_item_ownership(%WorkItem{} = work_item, lease, stage) do
+    ownership = remote_work_item_ownership(lease, stage)
+
+    save_work_item(work_item, %{
+      "metadata" => put_work_item_ownership(work_item.metadata, ownership)
+    })
   end
 
   defp build_research_report(agent, work_item, evidence) do
@@ -3535,6 +3607,32 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp lease_name(work_item_id), do: "work_item:#{work_item_id}"
+
+  defp claimed_work_item_ownership(work_item_id, stage) do
+    %{
+      "mode" => Coordination.coordination_mode(),
+      "lease_name" => lease_name(work_item_id),
+      "owner" => Coordination.status().owner,
+      "stage" => stage,
+      "active" => true,
+      "claimed_at" => DateTime.utc_now()
+    }
+  end
+
+  defp remote_work_item_ownership(lease, stage) do
+    %{
+      "mode" => Coordination.coordination_mode(),
+      "lease_name" => lease.name,
+      "owner" => lease.owner,
+      "stage" => stage,
+      "active" => true,
+      "claimed_at" => lease.updated_at || lease.inserted_at
+    }
+  end
+
+  defp put_work_item_ownership(metadata, ownership) do
+    Map.put(metadata || %{}, "ownership", ownership)
+  end
 
   defp side_effect_class_for_work_item(%WorkItem{metadata: metadata, kind: kind}) do
     side_effect_class_for_kind_and_metadata(kind, metadata || %{})

@@ -927,7 +927,7 @@ defmodule HydraXWeb.HealthLive do
                     · expiry {event.expired_by}
                   </span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip            {event.ip}</span>
+                  <span :if={event.ip}> · ip              {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -1264,6 +1264,22 @@ defmodule HydraXWeb.HealthLive do
               {@autonomy_status.role_only_open_count}
             </div>
           </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Active claims
+            </div>
+            <div class="mt-3 font-display text-4xl">
+              {@autonomy_status.active_claimed_count}
+            </div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Remote claims
+            </div>
+            <div class="mt-3 font-display text-4xl">
+              {@autonomy_status.remote_claimed_count}
+            </div>
+          </article>
         </div>
         <div class="mt-4 grid gap-3 lg:grid-cols-2">
           <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
@@ -1315,6 +1331,12 @@ defmodule HydraXWeb.HealthLive do
                   class="mt-2 text-[11px] text-[var(--hx-mute)]"
                 >
                   {assignment}
+                </div>
+                <div
+                  :if={ownership = autonomy_ownership_detail(item)}
+                  class="mt-2 text-[11px] text-[var(--hx-mute)]"
+                >
+                  {ownership}
                 </div>
                 <div
                   :if={detail_lines = autonomy_publish_detail_lines(item)}
@@ -2088,6 +2110,7 @@ defmodule HydraXWeb.HealthLive do
       "level #{item.autonomy_level}",
       "effect #{autonomy_side_effect_class(item)}",
       autonomy_assignment_summary(item),
+      autonomy_ownership_summary(item),
       autonomy_policy_failure_summary(item),
       autonomy_publish_summary(item)
     ]
@@ -2116,6 +2139,33 @@ defmodule HydraXWeb.HealthLive do
     case {resolution["resolved_agent_name"], resolution["reasons"]} do
       {name, reasons} when is_binary(name) and is_list(reasons) and reasons != [] ->
         "assignment #{name}: #{Enum.join(reasons, ", ")}"
+
+      _ ->
+        nil
+    end
+  end
+
+  defp autonomy_ownership_summary(item) do
+    ownership = get_in(item.metadata || %{}, ["ownership"]) || %{}
+
+    cond do
+      ownership["active"] == true and is_binary(ownership["owner"]) ->
+        "owned #{ownership["owner"]}"
+
+      ownership["active"] == false and is_binary(ownership["owner"]) ->
+        "released #{ownership["owner"]}"
+
+      true ->
+        nil
+    end
+  end
+
+  defp autonomy_ownership_detail(item) do
+    ownership = get_in(item.metadata || %{}, ["ownership"]) || %{}
+
+    case {ownership["owner"], ownership["stage"]} do
+      {owner, stage} when is_binary(owner) and is_binary(stage) ->
+        "ownership #{owner} · #{stage}"
 
       _ ->
         nil

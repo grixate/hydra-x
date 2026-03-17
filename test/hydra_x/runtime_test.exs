@@ -5865,6 +5865,38 @@ defmodule HydraX.RuntimeTest do
         "status" => "planned"
       })
 
+    {:ok, _claimed_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Tracked local claimed work item.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "planner",
+        "status" => "claimed",
+        "metadata" => %{
+          "ownership" => %{
+            "owner" => Runtime.coordination_status().owner,
+            "stage" => "claimed",
+            "active" => true
+          }
+        }
+      })
+
+    {:ok, _remote_claimed_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Tracked remote claimed work item.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "planner",
+        "status" => "claimed",
+        "metadata" => %{
+          "ownership" => %{
+            "owner" => "node:remote-status",
+            "stage" => "claimed_remote",
+            "active" => true
+          }
+        }
+      })
+
     {:ok, _unsafe_item} =
       Runtime.save_work_item(%{
         "kind" => "task",
@@ -5914,8 +5946,81 @@ defmodule HydraX.RuntimeTest do
     assert status.active_autonomy_job_count >= 1
     assert status.unsafe_request_count >= 1
     assert status.budget_blocked_count >= 1
+    assert status.active_claimed_count >= 2
+    assert status.remote_claimed_count >= 1
     assert Enum.any?(status.capability_drifts, &(&1.agent_id == agent.id))
     assert Enum.any?(status.recent_work_items, &(&1.id == work_item.id))
+  end
+
+  test "autonomy cycle releases local work item ownership after completion" do
+    agent =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, agent} = Runtime.save_agent(agent, %{"role" => "researcher"})
+
+    {:ok, work_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Complete a locally claimed autonomy task.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "researcher",
+        "status" => "planned"
+      })
+
+    assert {:ok, summary} = Runtime.run_autonomy_cycle(agent.id)
+    assert summary.action == "completed_fallback"
+
+    refreshed = Runtime.get_work_item!(work_item.id)
+    ownership = get_in(refreshed.metadata || %{}, ["ownership"])
+
+    assert refreshed.status == "completed"
+    assert ownership["owner"] == Runtime.coordination_status().owner
+    assert ownership["stage"] == "completed"
+    assert ownership["active"] == false
+    assert ownership["released_at"]
+    assert Runtime.active_lease("work_item:#{work_item.id}") == nil
+  end
+
+  test "autonomy cycle records remote ownership when another node already holds the work item lease" do
+    agent =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, agent} = Runtime.save_agent(agent, %{"role" => "researcher"})
+
+    {:ok, work_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Skip local execution when another node already owns the work item.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "researcher",
+        "status" => "planned"
+      })
+
+    assert {:ok, _lease} =
+             Runtime.claim_lease("work_item:#{work_item.id}",
+               owner: "node:remote-work",
+               ttl_seconds: 60
+             )
+
+    on_exit(fn ->
+      Runtime.release_lease("work_item:#{work_item.id}", owner: "node:remote-work")
+    end)
+
+    assert {:ok, summary} = Runtime.run_autonomy_cycle(agent.id)
+    assert summary.status == "idle"
+    assert summary.processed_count == 0
+
+    refreshed = Runtime.get_work_item!(work_item.id)
+    ownership = get_in(refreshed.metadata || %{}, ["ownership"])
+    active_lease = Runtime.active_lease("work_item:#{work_item.id}")
+
+    assert refreshed.status == "planned"
+    assert ownership["owner"] == "node:remote-work"
+    assert ownership["stage"] == "claimed_remote"
+    assert ownership["active"] == true
+    assert active_lease.owner == "node:remote-work"
   end
 
   test "autonomy cycle blocks work items that exceed the agent autonomy ceiling" do

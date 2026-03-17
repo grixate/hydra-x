@@ -353,6 +353,7 @@ defmodule HydraX.ReportTest do
     on_exit(fn -> File.rm_rf(output_root) end)
 
     agent = Runtime.ensure_default_agent!()
+    local_owner = Runtime.coordination_status().owner
     previous_request_fn = Application.get_env(:hydra_x, :mcp_http_request_fn)
 
     Application.put_env(:hydra_x, :mcp_http_request_fn, fn opts ->
@@ -805,6 +806,40 @@ defmodule HydraX.ReportTest do
         "status" => "planned"
       })
 
+    {:ok, _released_owned_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Include released local ownership in report exports.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "operator",
+        "status" => "completed",
+        "priority" => 100,
+        "metadata" => %{
+          "ownership" => %{
+            "owner" => local_owner,
+            "stage" => "completed",
+            "active" => false
+          }
+        }
+      })
+
+    {:ok, _remote_owned_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Include remote ownership in report exports.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "operator",
+        "status" => "claimed",
+        "priority" => 99,
+        "metadata" => %{
+          "ownership" => %{
+            "owner" => "node:report-remote",
+            "stage" => "claimed_remote",
+            "active" => true
+          }
+        }
+      })
+
     {:ok, _publish_review_item} =
       Runtime.save_work_item(%{
         "kind" => "task",
@@ -999,6 +1034,8 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "auto_assigned="
     assert File.read!(export.markdown_path) =~ "fallback_assigned="
     assert File.read!(export.markdown_path) =~ "role_only_open="
+    assert File.read!(export.markdown_path) =~ "active_claimed=1"
+    assert File.read!(export.markdown_path) =~ "remote_claimed=1"
 
     assert File.read!(export.markdown_path) =~ "approval=approved/enable_extension"
     assert File.read!(export.markdown_path) =~ "enablement=approved_not_enabled"
@@ -1008,6 +1045,8 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "publish=replan queued 1"
     assert File.read!(export.markdown_path) =~ "publish=delivered telegram -> ops-room"
     assert File.read!(export.markdown_path) =~ "assignment=report-agent:role_capability_match"
+    assert File.read!(export.markdown_path) =~ "ownership=#{local_owner}:completed:released"
+    assert File.read!(export.markdown_path) =~ "ownership=node:report-remote:claimed_remote"
 
     assert File.read!(export.markdown_path) =~
              "publish_objective=Revise the summary and route it through telegram for ops-room publication."
@@ -1123,6 +1162,8 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.json_path) =~ "\"auto_assigned_count\":"
     assert File.read!(export.json_path) =~ "\"capability_fallback_count\":"
     assert File.read!(export.json_path) =~ "\"role_only_open_count\":"
+    assert File.read!(export.json_path) =~ "\"active_claimed_count\": 1"
+    assert File.read!(export.json_path) =~ "\"remote_claimed_count\": 1"
 
     assert File.read!(Path.join(export.bundle_dir, "agents.json")) =~
              "\"skill_requirement_count\""
@@ -1172,6 +1213,10 @@ defmodule HydraX.ReportTest do
              "\"provider_message_id\": \"report-91\""
 
     assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~ "\"delivery\": {"
+    assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~ "\"ownership_summary\""
+
+    assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~
+             "\"node:report-remote:claimed_remote\""
 
     assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~ "\"artifact_derived\""
     assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~ "\"approvals\""

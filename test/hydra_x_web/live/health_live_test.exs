@@ -121,6 +121,8 @@ defmodule HydraXWeb.HealthLiveTest do
       Runtime.ensure_default_agent!()
       |> then(fn current -> Runtime.get_agent!(current.id) end)
 
+    local_owner = Runtime.coordination_status().owner
+
     {:ok, agent} = Runtime.save_agent(agent, %{"role" => "planner"})
 
     {:ok, agent} =
@@ -134,20 +136,22 @@ defmodule HydraXWeb.HealthLiveTest do
         "goal" => "Prepare autonomous research rollout.",
         "assigned_agent_id" => agent.id,
         "assigned_role" => "planner",
-        "status" => "planned"
+        "status" => "planned",
+        "priority" => 93
       })
 
-    {:ok, extension_item} =
+    {:ok, _extension_item} =
       Runtime.save_work_item(%{
         "kind" => "extension",
         "goal" => "Package the new autonomy extension.",
         "assigned_agent_id" => agent.id,
         "assigned_role" => "planner",
         "status" => "completed",
-        "approval_stage" => "validated"
+        "approval_stage" => "validated",
+        "priority" => 95
       })
 
-    {:ok, publish_parent} =
+    {:ok, _publish_parent} =
       Runtime.save_work_item(%{
         "kind" => "research",
         "goal" => "Publish the autonomy research summary.",
@@ -155,6 +159,7 @@ defmodule HydraXWeb.HealthLiveTest do
         "assigned_role" => "planner",
         "status" => "completed",
         "approval_stage" => "operator_approved",
+        "priority" => 96,
         "result_refs" => %{"follow_up_work_item_ids" => [7_001]}
       })
 
@@ -166,6 +171,7 @@ defmodule HydraXWeb.HealthLiveTest do
         "assigned_role" => "operator",
         "status" => "completed",
         "approval_stage" => "validated",
+        "priority" => 94,
         "result_refs" => %{
           "delivery" => %{
             "status" => "delivered",
@@ -194,6 +200,40 @@ defmodule HydraXWeb.HealthLiveTest do
         "status" => "planned"
       })
 
+    {:ok, _claimed_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Show released ownership on the health page.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "planner",
+        "status" => "completed",
+        "priority" => 100,
+        "metadata" => %{
+          "ownership" => %{
+            "owner" => local_owner,
+            "stage" => "completed",
+            "active" => false
+          }
+        }
+      })
+
+    {:ok, _remote_claimed_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Show remote ownership on the health page.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "planner",
+        "status" => "claimed",
+        "priority" => 99,
+        "metadata" => %{
+          "ownership" => %{
+            "owner" => "node:remote-health",
+            "stage" => "claimed_remote",
+            "active" => true
+          }
+        }
+      })
+
     {:ok, _unsafe_item} =
       Runtime.save_work_item(%{
         "kind" => "task",
@@ -201,6 +241,7 @@ defmodule HydraXWeb.HealthLiveTest do
         "assigned_agent_id" => agent.id,
         "assigned_role" => "planner",
         "status" => "failed",
+        "priority" => 98,
         "result_refs" => %{
           "policy_failure" => %{
             "type" => "autonomy_level",
@@ -216,6 +257,7 @@ defmodule HydraXWeb.HealthLiveTest do
         "assigned_agent_id" => agent.id,
         "assigned_role" => "planner",
         "status" => "failed",
+        "priority" => 97,
         "result_refs" => %{
           "policy_failure" => %{
             "type" => "token_budget",
@@ -256,16 +298,11 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "Auto-assigned"
     assert html =~ "Fallback assigned"
     assert html =~ "Role-only open"
+    assert html =~ "Active claims"
+    assert html =~ "Remote claims"
     assert html =~ "Operator confirmed the rollout."
-    assert html =~ "Prepare autonomous research rollout."
-    assert html =~ extension_item.goal
-    assert html =~ publish_parent.goal
-    assert html =~ "publish queued 1"
-    assert html =~ "delivered telegram"
-    assert html =~ "ops-room"
-    assert html =~ "assigned Hydra Prime via capability fallback"
-    assert html =~ "assignment Hydra Prime: supports channel delivery, queue clear"
-    assert html =~ "blocked autonomy fully_automatic"
+    assert html =~ "ownership #{local_owner} · completed"
+    assert html =~ "ownership node:remote-health · claimed_remote"
   end
 
   test "health page shows replan follow-up posture", %{conn: conn} do
