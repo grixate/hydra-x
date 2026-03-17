@@ -6176,6 +6176,86 @@ defmodule HydraX.RuntimeTest do
     assert scheduler_status.role_queue_dispatches.processed_count >= 1
   end
 
+  test "role queue dispatch prefers the lowest-pressure capable worker for delegated work" do
+    planner =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, planner} =
+      Runtime.save_agent(planner, %{
+        "role" => "planner",
+        "name" => "Planner Dispatch",
+        "slug" => "planner-dispatch-#{System.unique_integer([:positive])}"
+      })
+
+    busy_researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, busy_researcher} =
+      Runtime.save_agent(busy_researcher, %{
+        "role" => "researcher",
+        "name" => "Researcher Busy",
+        "slug" => "researcher-busy-#{System.unique_integer([:positive])}"
+      })
+
+    ready_researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, ready_researcher} =
+      Runtime.save_agent(ready_researcher, %{
+        "role" => "researcher",
+        "name" => "Researcher Ready",
+        "slug" => "researcher-ready-#{System.unique_integer([:positive])}"
+      })
+
+    {:ok, _queued_one} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Keep the busy researcher occupied.",
+        "assigned_agent_id" => busy_researcher.id,
+        "assigned_role" => "researcher",
+        "status" => "planned"
+      })
+
+    {:ok, _queued_two} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Hold another slot on the busy researcher queue.",
+        "assigned_agent_id" => busy_researcher.id,
+        "assigned_role" => "researcher",
+        "status" => "planned"
+      })
+
+    {:ok, parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Choose the clearest researcher queue for this delegated summary.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "execution_mode" => "delegate",
+        "priority" => 9
+      })
+
+    assert {:ok, planner_summary} = Runtime.run_autonomy_cycle(planner.id)
+    assert planner_summary.action == "delegated"
+
+    parent = Runtime.get_work_item!(parent.id)
+    [child_id] = parent.result_refs["child_work_item_ids"]
+
+    summary = Runtime.process_role_queued_work(limit: 10)
+
+    assert Enum.any?(summary.results, fn result ->
+             result[:agent_id] == ready_researcher.id and result[:work_item_id] == child_id and
+               result[:action] == "researched"
+           end)
+
+    child = Runtime.get_work_item!(child_id)
+    assert child.assigned_agent_id == ready_researcher.id
+    assert get_in(child.metadata || %{}, ["assignment_resolution", "strategy"]) == "worker_claim"
+  end
+
   test "autonomy cycle blocks work items that exceed the agent autonomy ceiling" do
     agent =
       create_agent()

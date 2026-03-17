@@ -399,8 +399,7 @@ defmodule HydraX.Runtime.WorkItems do
     limit = Keyword.get(opts, :limit, 50)
 
     summary =
-      dispatchable_agents()
-      |> drain_role_queued_work(
+      drain_role_queued_work(
         Keyword.put(opts, :scheduler_pass, "role_queue_dispatch"),
         role_queue_dispatch_summary(owner),
         limit,
@@ -871,45 +870,100 @@ defmodule HydraX.Runtime.WorkItems do
     end
   end
 
-  defp dispatchable_agents do
-    Agents.list_agents()
-    |> Enum.filter(&(&1.status == "active"))
-    |> Enum.sort_by(&{&1.role || "", &1.name || "", &1.id})
+  defp dispatchable_agents(limit) do
+    active_agents =
+      Agents.list_agents()
+      |> Enum.filter(&(&1.status == "active"))
+      |> Enum.sort_by(&{&1.role || "", &1.name || "", &1.id})
+
+    priority_by_agent_id =
+      role_queue_dispatch_plan(limit)
+      |> Enum.with_index()
+      |> Map.new()
+
+    Enum.sort_by(active_agents, fn agent ->
+      {Map.get(priority_by_agent_id, agent.id, 9_999), agent.role || "", agent.name || "",
+       agent.id}
+    end)
   end
 
-  defp drain_role_queued_work([], _opts, summary, _limit, _round), do: summary
+  defp role_queue_dispatch_plan(limit) do
+    role_queue_dispatch_candidates(limit)
+    |> Enum.map(fn work_item ->
+      work_item
+      |> role_queue_dispatch_attrs()
+      |> resolve_assigned_agent()
+      |> case do
+        %{agent: %AgentProfile{id: id}} -> id
+        _ -> nil
+      end
+    end)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
 
-  defp drain_role_queued_work(_agents, _opts, summary, limit, _round)
+  defp role_queue_dispatch_candidates(limit) do
+    list_work_items(limit: max(limit * 3, limit), preload: false)
+    |> Enum.filter(&role_queue_candidate?/1)
+    |> Enum.take(limit)
+  end
+
+  defp role_queue_candidate?(%WorkItem{} = work_item) do
+    metadata = work_item.metadata || %{}
+
+    work_item.status in ["planned", "replayed"] and
+      is_nil(work_item.assigned_agent_id) and
+      metadata["assignment_mode"] == "role_claim"
+  end
+
+  defp role_queue_dispatch_attrs(%WorkItem{} = work_item) do
+    %{
+      "assigned_role" => work_item.assigned_role,
+      "kind" => work_item.kind,
+      "autonomy_level" => work_item.autonomy_level,
+      "required_outputs" => work_item.required_outputs || %{},
+      "deliverables" => work_item.deliverables || %{},
+      "metadata" => work_item.metadata || %{}
+    }
+  end
+
+  defp drain_role_queued_work(_opts, summary, limit, _round)
        when summary.processed_count >= limit,
        do: summary
 
-  defp drain_role_queued_work(_agents, _opts, summary, limit, round)
+  defp drain_role_queued_work(_opts, summary, limit, round)
        when round >= max(limit, 1),
        do: summary
 
-  defp drain_role_queued_work(agents, opts, summary, limit, round) do
-    {updated_summary, progressed?} =
-      Enum.reduce_while(agents, {summary, false}, fn agent, {acc, progressed?} ->
-        if acc.processed_count >= limit do
-          {:halt, {acc, progressed?}}
-        else
-          case run_autonomy_cycle(agent.id, opts) do
-            {:ok, %{status: "idle"}} ->
-              {:cont, {accumulate_role_queue_skip(acc, agent), progressed?}}
+  defp drain_role_queued_work(opts, summary, limit, round) do
+    agents = dispatchable_agents(limit)
 
-            {:ok, result} ->
-              {:cont, {accumulate_role_queue_result(acc, agent, result), true}}
-
-            {:error, reason} ->
-              {:cont, {accumulate_role_queue_error(acc, agent, reason), progressed?}}
-          end
-        end
-      end)
-
-    if progressed? do
-      drain_role_queued_work(agents, opts, updated_summary, limit, round + 1)
+    if agents == [] do
+      summary
     else
-      updated_summary
+      {updated_summary, progressed?} =
+        Enum.reduce_while(agents, {summary, false}, fn agent, {acc, progressed?} ->
+          if acc.processed_count >= limit do
+            {:halt, {acc, progressed?}}
+          else
+            case run_autonomy_cycle(agent.id, opts) do
+              {:ok, %{status: "idle"}} ->
+                {:cont, {accumulate_role_queue_skip(acc, agent), progressed?}}
+
+              {:ok, result} ->
+                {:cont, {accumulate_role_queue_result(acc, agent, result), true}}
+
+              {:error, reason} ->
+                {:cont, {accumulate_role_queue_error(acc, agent, reason), progressed?}}
+            end
+          end
+        end)
+
+      if progressed? do
+        drain_role_queued_work(opts, updated_summary, limit, round + 1)
+      else
+        updated_summary
+      end
     end
   end
 
