@@ -6806,6 +6806,52 @@ defmodule HydraX.RuntimeTest do
     assert ownership["active"] == false
   end
 
+  test "stale claim cleanup expires stale ownership metadata" do
+    agent =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, agent} =
+      Runtime.save_agent(agent, %{
+        "role" => "researcher",
+        "name" => "Researcher Stale Cleanup",
+        "slug" => "researcher-stale-cleanup-#{System.unique_integer([:positive])}"
+      })
+
+    {:ok, work_item} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Expire this stale claimed work item before replay.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "researcher",
+        "status" => "claimed",
+        "metadata" => %{
+          "ownership" => %{
+            "owner" => Runtime.coordination_status().owner,
+            "stage" => "claimed",
+            "active" => true
+          }
+        }
+      })
+
+    summary = Runtime.cleanup_stale_work_item_claims(limit: 10)
+
+    assert summary.expired_count == 1
+    assert summary.skipped_count == 0
+
+    assert Enum.any?(summary.results, fn result ->
+             result[:work_item_id] == work_item.id and result[:action] == "expired_claim"
+           end)
+
+    refreshed = Runtime.get_work_item!(work_item.id)
+    ownership = get_in(refreshed.metadata || %{}, ["ownership"])
+
+    assert ownership["owner"] == Runtime.coordination_status().owner
+    assert ownership["stage"] == "expired"
+    assert ownership["active"] == false
+    assert ownership["expired_at"]
+  end
+
   test "same-role workers do not claim work that is specifically assigned to another active worker" do
     assigned_researcher =
       create_agent()

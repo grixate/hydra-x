@@ -195,6 +195,7 @@ defmodule HydraX.Report do
     - Coordination: #{render_scheduler_coordination(snapshot.scheduler.coordination)}
     - Skip reasons: #{render_skip_reason_counts(snapshot.scheduler.skipped_reason_counts)}
     - Ingress replay: #{render_scheduler_pass(snapshot.scheduler.pending_ingress, "processed_count", "processed")}
+    - Stale claim cleanup: #{render_scheduler_pass(snapshot.scheduler.stale_work_item_claims, "expired_count", "expired")}
     - Assignment recovery: #{render_assignment_recovery_pass(snapshot.scheduler.assignment_recoveries)}
     - Role queue dispatch: #{render_role_queue_dispatch_pass(snapshot.scheduler.role_queue_dispatches)}
     - Work item replay: #{render_scheduler_pass(snapshot.scheduler.work_item_replays, "resumed_count", "resumed")}
@@ -266,6 +267,7 @@ defmodule HydraX.Report do
       lease_owned_skips: status.lease_owned_skips,
       coordination: status.coordination,
       pending_ingress: status.pending_ingress,
+      stale_work_item_claims: status.stale_work_item_claims,
       assignment_recoveries: status.assignment_recoveries,
       role_queue_dispatches: status.role_queue_dispatches,
       work_item_replays: status.work_item_replays,
@@ -1446,6 +1448,7 @@ defmodule HydraX.Report do
         lease_owned_skips: Enum.map(snapshot.scheduler.lease_owned_skips, &json_job_run/1),
         coordination: snapshot.scheduler.coordination,
         pending_ingress: snapshot.scheduler.pending_ingress,
+        stale_work_item_claims: snapshot.scheduler.stale_work_item_claims,
         assignment_recoveries: snapshot.scheduler.assignment_recoveries,
         role_queue_dispatches: snapshot.scheduler.role_queue_dispatches,
         work_item_replays: snapshot.scheduler.work_item_replays,

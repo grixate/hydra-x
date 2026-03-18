@@ -210,6 +210,8 @@ defmodule HydraX.Runtime do
   defdelegate list_owned_resumable_work_items(opts), to: HydraX.Runtime.WorkItems
   defdelegate process_role_queued_work(), to: HydraX.Runtime.WorkItems
   defdelegate process_role_queued_work(opts), to: HydraX.Runtime.WorkItems
+  defdelegate cleanup_stale_work_item_claims(), to: HydraX.Runtime.WorkItems
+  defdelegate cleanup_stale_work_item_claims(opts), to: HydraX.Runtime.WorkItems
   defdelegate recover_orphaned_work_assignments(), to: HydraX.Runtime.WorkItems
   defdelegate recover_orphaned_work_assignments(opts), to: HydraX.Runtime.WorkItems
   defdelegate resume_owned_work_items(), to: HydraX.Runtime.WorkItems

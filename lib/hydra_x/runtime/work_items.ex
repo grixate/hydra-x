@@ -392,6 +392,37 @@ defmodule HydraX.Runtime.WorkItems do
     summary
   end
 
+  def cleanup_stale_work_item_claims(opts \\ []) do
+    owner = Coordination.status().owner
+    limit = Keyword.get(opts, :limit, 50)
+
+    summary =
+      list_stale_claimed_work_items(limit: limit)
+      |> Enum.reduce(stale_claim_cleanup_summary(owner), fn work_item, acc ->
+        refreshed = get_work_item!(work_item.id)
+
+        cond do
+          stale_work_item_ownership?(refreshed) ->
+            case expire_stale_work_item_ownership(refreshed) do
+              {:ok, expired_work_item} ->
+                accumulate_stale_claim_cleanup(acc, expired_work_item)
+
+              {:error, reason} ->
+                accumulate_stale_claim_cleanup_error(acc, refreshed, reason)
+            end
+
+          work_item_ownership_active?(refreshed) ->
+            accumulate_stale_claim_cleanup_skip(acc, refreshed, "lease_restored")
+
+          true ->
+            accumulate_stale_claim_cleanup_skip(acc, refreshed, "already_cleared")
+        end
+      end)
+
+    _ = HydraX.Runtime.Jobs.record_scheduler_pass(:stale_work_item_claims, summary)
+    summary
+  end
+
   def recover_orphaned_work_assignments(opts \\ []) do
     owner = Coordination.status().owner
     limit = Keyword.get(opts, :limit, 50)
@@ -1202,6 +1233,22 @@ defmodule HydraX.Runtime.WorkItems do
     |> Enum.map(&get_work_item!(&1.id))
   end
 
+  defp list_stale_claimed_work_items(opts) do
+    limit = Keyword.get(opts, :limit, 50)
+
+    WorkItem
+    |> where(
+      [work_item],
+      work_item.status in ["planned", "claimed", "running", "blocked", "replayed"]
+    )
+    |> order_by([work_item], desc: work_item.priority, asc: work_item.inserted_at)
+    |> limit(^max(limit * 3, limit))
+    |> Repo.all()
+    |> Enum.filter(&stale_work_item_ownership?/1)
+    |> Enum.take(limit)
+    |> Enum.map(&get_work_item!(&1.id))
+  end
+
   defp orphaned_work_assignment?(%WorkItem{} = work_item) do
     is_integer(work_item.assigned_agent_id) and
       not work_item_ownership_active?(work_item) and
@@ -1242,6 +1289,27 @@ defmodule HydraX.Runtime.WorkItems do
       _ ->
         {:error, :missing_agent}
     end
+  end
+
+  defp expire_stale_work_item_ownership(%WorkItem{} = work_item) do
+    ownership =
+      work_item.metadata
+      |> put_work_item_ownership(
+        Map.merge(claimed_work_item_ownership(work_item.id, "expired"), %{
+          "active" => false,
+          "expired_at" => DateTime.utc_now()
+        })
+      )
+
+    save_work_item(work_item, %{
+      "metadata" => ownership,
+      "runtime_state" =>
+        append_history(work_item.runtime_state, work_item.status || "planned", %{
+          "expired_at" => DateTime.utc_now(),
+          "reason" => "stale_claim_cleanup",
+          "lease_name" => lease_name(work_item.id)
+        })
+    })
   end
 
   defp dispatchable_agents(limit) do
@@ -1361,6 +1429,16 @@ defmodule HydraX.Runtime.WorkItems do
     }
   end
 
+  defp stale_claim_cleanup_summary(owner) do
+    %{
+      owner: owner,
+      expired_count: 0,
+      skipped_count: 0,
+      error_count: 0,
+      results: []
+    }
+  end
+
   defp reassignment_summary(owner) do
     %{
       owner: owner,
@@ -1370,6 +1448,51 @@ defmodule HydraX.Runtime.WorkItems do
       skipped_count: 0,
       error_count: 0,
       results: []
+    }
+  end
+
+  defp accumulate_stale_claim_cleanup(acc, %WorkItem{} = work_item) do
+    entry = %{
+      work_item_id: work_item.id,
+      assigned_agent_id: work_item.assigned_agent_id,
+      status: work_item.status,
+      action: "expired_claim"
+    }
+
+    %{
+      acc
+      | expired_count: acc.expired_count + 1,
+        results: [entry | acc.results]
+    }
+  end
+
+  defp accumulate_stale_claim_cleanup_skip(acc, %WorkItem{} = work_item, reason) do
+    entry = %{
+      work_item_id: work_item.id,
+      assigned_agent_id: work_item.assigned_agent_id,
+      status: work_item.status,
+      reason: to_string(reason)
+    }
+
+    %{
+      acc
+      | skipped_count: acc.skipped_count + 1,
+        results: [entry | acc.results]
+    }
+  end
+
+  defp accumulate_stale_claim_cleanup_error(acc, %WorkItem{} = work_item, reason) do
+    entry = %{
+      work_item_id: work_item.id,
+      assigned_agent_id: work_item.assigned_agent_id,
+      status: "error",
+      error: inspect(reason)
+    }
+
+    %{
+      acc
+      | error_count: acc.error_count + 1,
+        results: [entry | acc.results]
     }
   end
 

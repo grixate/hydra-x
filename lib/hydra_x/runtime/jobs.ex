@@ -331,6 +331,8 @@ defmodule HydraX.Runtime.Jobs do
       coordination: HydraX.Runtime.coordination_status(),
       pending_ingress:
         Map.get(passes, :pending_ingress, scheduler_count_snapshot("processed_count")),
+      stale_work_item_claims:
+        Map.get(passes, :stale_work_item_claims, scheduler_count_snapshot("expired_count")),
       assignment_recoveries:
         Map.get(passes, :assignment_recoveries, scheduler_count_snapshot("recovered_count")),
       role_queue_dispatches:
@@ -347,6 +349,7 @@ defmodule HydraX.Runtime.Jobs do
   def record_scheduler_pass(kind, summary)
       when kind in [
              :pending_ingress,
+             :stale_work_item_claims,
              :assignment_recoveries,
              :role_queue_dispatches,
              :work_item_replays,

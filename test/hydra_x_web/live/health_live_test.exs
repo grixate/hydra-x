@@ -89,6 +89,14 @@ defmodule HydraXWeb.HealthLiveTest do
       results: []
     })
 
+    Runtime.Jobs.record_scheduler_pass(:stale_work_item_claims, %{
+      owner: "node:test",
+      expired_count: 3,
+      skipped_count: 1,
+      error_count: 0,
+      results: []
+    })
+
     Runtime.Jobs.record_scheduler_pass(:assignment_recoveries, %{
       owner: "node:test",
       recovered_count: 1,
@@ -133,11 +141,14 @@ defmodule HydraXWeb.HealthLiveTest do
       results: []
     })
 
+    assert Runtime.scheduler_status().stale_work_item_claims.expired_count == 3
+
     {:ok, _view, html} = live(conn, ~p"/health")
 
     assert html =~ "node:test"
     assert html =~ "Ingress replay"
     assert html =~ "processed 2"
+    assert html =~ "Stale claim cleanup"
     assert html =~ "Assignment recovery"
     assert html =~ "Role queue dispatch"
     assert html =~ "processed 6"
