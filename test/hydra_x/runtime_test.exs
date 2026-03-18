@@ -4274,6 +4274,108 @@ defmodule HydraX.RuntimeTest do
     assert synthesis.payload["delegation_batch"]["completed_count"] == 2
   end
 
+  test "planner expands a bounded delegation batch as child slots free up" do
+    planner =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, planner} = Runtime.save_agent(planner, %{"role" => "planner"})
+
+    researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, researcher} = Runtime.save_agent(researcher, %{"role" => "researcher"})
+
+    operator =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, operator} = Runtime.save_agent(operator, %{"role" => "operator"})
+
+    {:ok, parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Coordinate a bounded batch for operator-facing autonomy research.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "execution_mode" => "delegate",
+        "priority" => 8,
+        "metadata" => %{
+          "delegate_batch_concurrency" => 2,
+          "delegate_batch" => [
+            %{
+              "goal" => "Assess report export evidence requirements.",
+              "role" => "researcher"
+            },
+            %{
+              "goal" => "Assess operator-facing review requirements.",
+              "role" => "researcher"
+            },
+            %{
+              "goal" => "Prepare an operator-ready fallback note.",
+              "role" => "operator",
+              "kind" => "task"
+            }
+          ]
+        }
+      })
+
+    assert {:ok, planner_summary} = Runtime.run_autonomy_cycle(planner.id)
+    assert planner_summary.action == "delegated"
+    assert length(planner_summary.delegated_work_items) == 2
+
+    parent = Runtime.get_work_item!(parent.id)
+    initial_batch = Runtime.delegation_batch_snapshot(parent)
+    assert initial_batch["expected_count"] == 3
+    assert initial_batch["batch_concurrency"] == 2
+    assert initial_batch["active_count"] == 2
+    assert initial_batch["pending_count"] == 1
+    assert initial_batch["terminal_count"] == 0
+
+    assert {:ok, researcher_summary} = Runtime.run_autonomy_cycle(researcher.id)
+    assert researcher_summary.action == "researched"
+
+    refreshed_parent = Runtime.get_work_item!(parent.id)
+    mid_batch = Runtime.delegation_batch_snapshot(refreshed_parent)
+    assert mid_batch["active_count"] == 1
+    assert mid_batch["pending_count"] == 1
+    assert mid_batch["terminal_count"] == 1
+
+    assert {:ok, expansion_summary} = Runtime.run_autonomy_cycle(planner.id)
+    assert expansion_summary.action == "delegated_batch_expanded"
+    assert length(expansion_summary.delegated_work_items) == 1
+
+    expanded_parent = Runtime.get_work_item!(parent.id)
+    expanded_batch = Runtime.delegation_batch_snapshot(expanded_parent)
+    assert expanded_batch["active_count"] == 2
+    assert expanded_batch["pending_count"] == 0
+    assert expanded_batch["terminal_count"] == 1
+    assert length(expanded_parent.result_refs["child_work_item_ids"]) == 3
+
+    assert {:ok, second_researcher_summary} = Runtime.run_autonomy_cycle(researcher.id)
+    assert second_researcher_summary.action == "researched"
+
+    assert {:ok, operator_summary} = Runtime.run_autonomy_cycle(operator.id)
+    assert operator_summary.action == "completed_fallback"
+
+    completed_parent = Runtime.get_work_item!(parent.id)
+    completed_batch = Runtime.delegation_batch_snapshot(completed_parent)
+    assert completed_batch["active_count"] == 0
+    assert completed_batch["terminal_count"] == 3
+    assert completed_batch["completed_count"] == 3
+
+    assert {:ok, finalize_summary} = Runtime.run_autonomy_cycle(planner.id)
+    assert finalize_summary.action == "finalized_blocked_parent"
+
+    finalized_parent = Runtime.get_work_item!(parent.id)
+
+    assert get_in(finalized_parent.metadata || %{}, ["delegation_batch", "batch_concurrency"]) ==
+             2
+
+    assert get_in(finalized_parent.metadata || %{}, ["delegation_batch", "completed_count"]) == 3
+  end
+
   test "research work items create a decision ledger and promote approved memories" do
     researcher =
       create_agent()

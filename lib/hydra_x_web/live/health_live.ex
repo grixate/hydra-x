@@ -927,7 +927,7 @@ defmodule HydraXWeb.HealthLive do
                     · expiry {event.expired_by}
                   </span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip                                  {event.ip}</span>
+                  <span :if={event.ip}> · ip                                   {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -2377,7 +2377,14 @@ defmodule HydraXWeb.HealthLive do
   defp autonomy_delegation_summary(item) do
     case Runtime.delegation_batch_snapshot(item) do
       %{"expected_count" => expected_count} = snapshot ->
-        "delegation batch #{expected_count} · active #{snapshot["active_count"] || 0} · terminal #{snapshot["terminal_count"] || 0}"
+        [
+          "delegation batch #{expected_count}",
+          "active #{snapshot["active_count"] || 0}",
+          autonomy_delegation_pending_summary(snapshot),
+          "terminal #{snapshot["terminal_count"] || 0}"
+        ]
+        |> Enum.reject(&is_nil_or_empty/1)
+        |> Enum.join(" · ")
 
       _ ->
         nil
@@ -2388,7 +2395,7 @@ defmodule HydraXWeb.HealthLive do
     case Runtime.delegation_batch_snapshot(item) do
       %{} = snapshot ->
         [
-          "delegation #{snapshot["mode"]} · completed #{snapshot["completed_count"] || 0} · failed #{snapshot["failed_count"] || 0} · canceled #{snapshot["canceled_count"] || 0}",
+          "delegation #{snapshot["mode"]} · concurrency #{snapshot["batch_concurrency"] || 1} · completed #{snapshot["completed_count"] || 0} · failed #{snapshot["failed_count"] || 0} · canceled #{snapshot["canceled_count"] || 0}",
           autonomy_delegation_roles_line(snapshot)
         ]
         |> Enum.reject(&is_nil_or_empty/1)
@@ -2407,6 +2414,13 @@ defmodule HydraXWeb.HealthLive do
   end
 
   defp autonomy_delegation_roles_line(_snapshot), do: nil
+
+  defp autonomy_delegation_pending_summary(%{"pending_count" => count})
+       when is_integer(count) and count > 0 do
+    "pending #{count}"
+  end
+
+  defp autonomy_delegation_pending_summary(_snapshot), do: nil
 
   defp assignment_strategy_label("role_capability_match"), do: "role capability match"
   defp assignment_strategy_label("capability_fallback"), do: "capability fallback"

@@ -820,7 +820,14 @@ defmodule HydraX.Report do
   defp render_work_item_delegation_summary(item) do
     case Runtime.delegation_batch_snapshot(item) do
       %{"expected_count" => expected_count} = snapshot ->
-        "#{snapshot["mode"]}:#{expected_count}:active=#{snapshot["active_count"] || 0}:terminal=#{snapshot["terminal_count"] || 0}"
+        [
+          "#{snapshot["mode"]}:#{expected_count}",
+          "active=#{snapshot["active_count"] || 0}",
+          report_delegation_pending_summary(snapshot),
+          "terminal=#{snapshot["terminal_count"] || 0}"
+        ]
+        |> Enum.reject(&(&1 in [nil, ""]))
+        |> Enum.join(":")
 
       _ ->
         nil
@@ -832,6 +839,7 @@ defmodule HydraX.Report do
       %{} = snapshot ->
         [
           delegation_roles_detail(snapshot),
+          "delegation_concurrency=#{snapshot["batch_concurrency"] || 1}",
           "delegation_completed=#{snapshot["completed_count"] || 0}",
           "delegation_failed=#{snapshot["failed_count"] || 0}",
           "delegation_canceled=#{snapshot["canceled_count"] || 0}"
@@ -848,6 +856,13 @@ defmodule HydraX.Report do
   end
 
   defp delegation_roles_detail(_snapshot), do: nil
+
+  defp report_delegation_pending_summary(%{"pending_count" => count})
+       when is_integer(count) and count > 0 do
+    "pending=#{count}"
+  end
+
+  defp report_delegation_pending_summary(_snapshot), do: nil
 
   defp render_work_item_ownership(item) do
     ownership = get_in(item.metadata || %{}, ["ownership"]) || %{}
