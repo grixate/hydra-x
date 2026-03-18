@@ -536,7 +536,8 @@ defmodule HydraXWeb.AgentsLive do
                     role queue {agent.role_queue_backlog[:queued_count] || 0} · workers{" "}
                     {agent.role_queue_backlog[:worker_count] || 0} · active claims{" "}
                     {agent.role_queue_backlog[:active_claimed_count] || 0} · stale claims{" "}
-                    {agent.role_queue_backlog[:stale_claimed_count] || 0}
+                    {agent.role_queue_backlog[:stale_claimed_count] || 0} · deferred{" "}
+                    {agent.role_queue_backlog[:deferred_count] || 0}
                   </p>
                   <p :if={(agent.work_queue[:orphaned_role_assignments] || 0) > 0}>
                     orphaned role {agent.work_queue[:orphaned_role_assignments]}

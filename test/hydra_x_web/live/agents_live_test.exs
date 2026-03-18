@@ -194,7 +194,13 @@ defmodule HydraXWeb.AgentsLiveTest do
         "goal" => "Queue operator-facing work for the shared researcher role.",
         "assigned_role" => "researcher",
         "status" => "planned",
-        "metadata" => %{"assignment_mode" => "role_claim"}
+        "metadata" => %{
+          "assignment_mode" => "role_claim",
+          "role_queue_dispatch" => %{
+            "reason" => "worker_saturated",
+            "deferred_until" => "2099-03-18T10:15:00Z"
+          }
+        }
       })
 
     {:ok, _delivery_brief} =

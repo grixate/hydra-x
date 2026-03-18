@@ -729,13 +729,35 @@ defmodule HydraX.Runtime.WorkItems do
       |> Enum.reject(&is_nil/1)
       |> Enum.frequencies()
 
-    all_work_items
-    |> Enum.filter(&role_queue_candidate?/1)
-    |> Enum.group_by(& &1.assigned_role)
-    |> Enum.map(fn {role, items} ->
+    queued_by_role =
+      all_work_items
+      |> Enum.filter(&role_queue_candidate?/1)
+      |> Enum.group_by(& &1.assigned_role)
+
+    deferred_by_role =
+      all_work_items
+      |> Enum.filter(fn work_item ->
+        metadata = work_item.metadata || %{}
+
+        work_item.status in ["planned", "replayed"] and
+          is_nil(work_item.assigned_agent_id) and
+          metadata["assignment_mode"] == "role_claim" and
+          role_queue_dispatch_deferred?(work_item)
+      end)
+      |> Enum.group_by(& &1.assigned_role)
+
+    Map.keys(queued_by_role)
+    |> Kernel.++(Map.keys(deferred_by_role))
+    |> Enum.uniq()
+    |> Enum.map(fn role ->
+      queued_items = Map.get(queued_by_role, role, [])
+      deferred_items = Map.get(deferred_by_role, role, [])
+      items = queued_items ++ deferred_items
+
       %{
         role: role,
-        queued_count: length(items),
+        queued_count: length(queued_items),
+        deferred_count: length(deferred_items),
         worker_count: Map.get(worker_counts, role, 0),
         active_claimed_count: Map.get(claimed_counts, role, 0),
         stale_claimed_count: Map.get(stale_claimed_counts, role, 0),

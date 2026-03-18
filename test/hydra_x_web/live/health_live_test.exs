@@ -356,6 +356,22 @@ defmodule HydraXWeb.HealthLiveTest do
         }
       })
 
+    {:ok, _deferred_role_queue_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Keep deferred role-queued work visible in the health backlog.",
+        "assigned_role" => "planner",
+        "status" => "planned",
+        "priority" => 92,
+        "metadata" => %{
+          "assignment_mode" => "role_claim",
+          "role_queue_dispatch" => %{
+            "reason" => "worker_saturated",
+            "deferred_until" => "2099-03-18T10:20:00Z"
+          }
+        }
+      })
+
     {:ok, _job} =
       Runtime.save_scheduled_job(%{
         agent_id: agent.id,
@@ -393,6 +409,7 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "Orphaned assignments"
     assert html =~ "Role backlog"
     assert html =~ "Saturated workers"
+    assert html =~ "0 queued · 1 deferred"
     assert html =~ "Role queue backlog"
     assert html =~ "Worker pressure"
     assert html =~ "queued"

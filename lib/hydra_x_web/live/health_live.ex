@@ -927,7 +927,7 @@ defmodule HydraXWeb.HealthLive do
                     · expiry {event.expired_by}
                   </span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip                               {event.ip}</span>
+                  <span :if={event.ip}> · ip                                {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -1405,7 +1405,9 @@ defmodule HydraXWeb.HealthLive do
               >
                 <div class="flex items-center justify-between gap-3">
                   <div class="text-sm text-[var(--hx-accent)]">{entry.role}</div>
-                  <div class="text-xs text-[var(--hx-mute)]">{entry.queued_count} queued</div>
+                  <div class="text-xs text-[var(--hx-mute)]">
+                    {entry.queued_count} queued · {entry.deferred_count || 0} deferred
+                  </div>
                 </div>
                 <div class="mt-2 text-xs text-[var(--hx-mute)]">
                   workers {entry.worker_count} · active claims {entry.active_claimed_count} · stale claims {entry.stale_claimed_count} · top priority {entry.highest_priority}

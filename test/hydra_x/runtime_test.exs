@@ -6799,7 +6799,11 @@ defmodule HydraX.RuntimeTest do
     assert dispatch["reason"] == "worker_saturated"
     assert dispatch["deferred_until"]
 
-    refute Enum.any?(Runtime.autonomy_status().role_queue_backlog, &(&1.role == "researcher"))
+    backlog_entry =
+      Enum.find(Runtime.autonomy_status().role_queue_backlog, &(&1.role == "researcher"))
+
+    assert backlog_entry.queued_count == 0
+    assert backlog_entry.deferred_count == 1
 
     second_summary = Runtime.process_role_queued_work(limit: 10)
 
@@ -6860,7 +6864,11 @@ defmodule HydraX.RuntimeTest do
     assert dispatch["lease_owner"] == "node:remote-role-queue"
     assert dispatch["deferred_until"]
 
-    refute Enum.any?(Runtime.autonomy_status().role_queue_backlog, &(&1.role == "researcher"))
+    backlog_entry =
+      Enum.find(Runtime.autonomy_status().role_queue_backlog, &(&1.role == "researcher"))
+
+    assert backlog_entry.queued_count == 0
+    assert backlog_entry.deferred_count == 1
 
     second_summary = Runtime.process_role_queued_work(limit: 10)
 

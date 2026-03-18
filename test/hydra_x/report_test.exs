@@ -1054,6 +1054,22 @@ defmodule HydraX.ReportTest do
         }
       })
 
+    {:ok, _deferred_role_queue_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Keep deferred role queue work visible in report exports.",
+        "assigned_role" => "planner",
+        "status" => "planned",
+        "priority" => 96,
+        "metadata" => %{
+          "assignment_mode" => "role_claim",
+          "role_queue_dispatch" => %{
+            "reason" => "worker_saturated",
+            "deferred_until" => "2099-03-18T10:20:00Z"
+          }
+        }
+      })
+
     {:ok, _replan_parent} =
       Runtime.save_work_item(%{
         "kind" => "research",
@@ -1122,6 +1138,7 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "auto_assigned="
     assert File.read!(export.markdown_path) =~ "fallback_assigned="
     assert File.read!(export.markdown_path) =~ "role_only_open="
+    assert File.read!(export.markdown_path) =~ "planner:0/deferred=1"
     assert File.read!(export.markdown_path) =~ "active_claimed=1"
     assert File.read!(export.markdown_path) =~ "stale_claimed=1"
     assert File.read!(export.markdown_path) =~ "remote_claimed="
@@ -1253,6 +1270,7 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.json_path) =~ "\"capability_fallback_count\":"
     assert File.read!(export.json_path) =~ "\"role_only_open_count\":"
     assert File.read!(export.json_path) =~ "\"role_queue_backlog\":"
+    assert File.read!(export.json_path) =~ "\"deferred_count\": 1"
     assert File.read!(export.json_path) =~ "\"worker_pressure\":"
     assert File.read!(export.json_path) =~ "\"active_claimed_count\": 1"
     assert File.read!(export.json_path) =~ "\"stale_claimed_count\": 1"

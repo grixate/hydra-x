@@ -321,7 +321,7 @@ defmodule HydraX.Report do
     entries
     |> List.wrap()
     |> Enum.map_join(", ", fn entry ->
-      "#{entry.role}:#{entry.queued_count}"
+      "#{entry.role}:#{entry.queued_count}/deferred=#{entry.deferred_count || 0}"
     end)
     |> case do
       "" -> "none"
@@ -338,7 +338,7 @@ defmodule HydraX.Report do
 
       items ->
         Enum.map_join(items, "\n", fn entry ->
-          "- #{entry.role}: queued=#{entry.queued_count} workers=#{entry.worker_count} active_claims=#{entry.active_claimed_count} stale_claims=#{entry.stale_claimed_count} top_priority=#{entry.highest_priority}"
+          "- #{entry.role}: queued=#{entry.queued_count} deferred=#{entry.deferred_count || 0} workers=#{entry.worker_count} active_claims=#{entry.active_claimed_count} stale_claims=#{entry.stale_claimed_count} top_priority=#{entry.highest_priority}"
         end)
     end
   end
