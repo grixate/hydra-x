@@ -927,7 +927,7 @@ defmodule HydraXWeb.HealthLive do
                     · expiry {event.expired_by}
                   </span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip                              {event.ip}</span>
+                  <span :if={event.ip}> · ip                               {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -1372,6 +1372,12 @@ defmodule HydraXWeb.HealthLive do
                   class="mt-2 text-[11px] text-[var(--hx-mute)]"
                 >
                   {ownership}
+                </div>
+                <div
+                  :if={recovery = autonomy_assignment_recovery_detail(item)}
+                  class="mt-2 text-[11px] text-[var(--hx-mute)]"
+                >
+                  {recovery}
                 </div>
                 <div
                   :if={detail_lines = autonomy_publish_detail_lines(item)}
@@ -2313,6 +2319,43 @@ defmodule HydraXWeb.HealthLive do
         nil
     end
   end
+
+  defp autonomy_assignment_recovery_detail(item) do
+    recovery = get_in(item.metadata || %{}, ["assignment_recovery"]) || %{}
+
+    case {recovery["queue_reason"], recovery["deferred_until"]} do
+      {"worker_saturated", deferred_until} when is_binary(deferred_until) ->
+        "assignment recovery queued: worker saturated · #{autonomy_recovery_deferred_label(deferred_until)}"
+
+      {"worker_saturated", %DateTime{} = deferred_until} ->
+        "assignment recovery queued: worker saturated · #{autonomy_recovery_deferred_label(deferred_until)}"
+
+      {reason, deferred_until} when is_binary(reason) ->
+        "assignment recovery queued: #{reason} · #{autonomy_recovery_deferred_label(deferred_until)}"
+
+      {"worker_saturated", _value} ->
+        "assignment recovery queued: worker saturated"
+
+      {reason, _value} when is_binary(reason) ->
+        "assignment recovery queued: #{reason}"
+
+      _ ->
+        nil
+    end
+  end
+
+  defp autonomy_recovery_deferred_label(%DateTime{} = value) do
+    "cooldown until #{Calendar.strftime(value, "%Y-%m-%d %H:%M:%S UTC")}"
+  end
+
+  defp autonomy_recovery_deferred_label(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} -> autonomy_recovery_deferred_label(datetime)
+      _ -> "cooldown until #{value}"
+    end
+  end
+
+  defp autonomy_recovery_deferred_label(_value), do: "cooldown active"
 
   defp assignment_strategy_label("role_capability_match"), do: "role capability match"
   defp assignment_strategy_label("capability_fallback"), do: "capability fallback"

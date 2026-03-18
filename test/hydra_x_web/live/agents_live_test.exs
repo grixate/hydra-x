@@ -408,7 +408,8 @@ defmodule HydraXWeb.AgentsLiveTest do
           status: "planned",
           action: "reassigned_queued",
           capacity_posture: "saturated",
-          queue_reason: "worker_saturated"
+          queue_reason: "worker_saturated",
+          deferred_until: "2026-03-18T10:15:00Z"
         }
       ]
     })
@@ -417,6 +418,7 @@ defmodule HydraXWeb.AgentsLiveTest do
 
     assert html =~ "recent assignment recovery queued #7777"
     assert html =~ "worker saturated (saturated)"
+    assert html =~ "cooldown until 2026-03-18 10:15:00 UTC"
   end
 
   test "agents page shows saturated role dispatch skips", %{conn: conn} do

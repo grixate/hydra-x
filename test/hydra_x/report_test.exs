@@ -1037,6 +1037,23 @@ defmodule HydraX.ReportTest do
         }
       })
 
+    {:ok, _queued_recovery_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Keep queued recovery visible in report exports.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "operator",
+        "status" => "planned",
+        "priority" => 97,
+        "metadata" => %{
+          "assignment_recovery" => %{
+            "queue_reason" => "worker_saturated",
+            "queued_at" => "2026-03-18T10:00:00Z",
+            "deferred_until" => "2026-03-18T10:15:00Z"
+          }
+        }
+      })
+
     {:ok, _replan_parent} =
       Runtime.save_work_item(%{
         "kind" => "research",
@@ -1164,6 +1181,7 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "effect=external_delivery"
     assert File.read!(export.markdown_path) =~ "policy=autonomy_fully_automatic"
     assert File.read!(export.markdown_path) =~ "policy=budget_tokens"
+    assert File.read!(export.markdown_path) =~ "recovery=worker_saturated:2026-03-18 10:15:00 UTC"
     assert File.read!(export.markdown_path) =~ "Treat approved research findings as live"
     assert File.read!(export.markdown_path) =~ "updates Slack thread"
     assert File.read!(export.markdown_path) =~ "stream_msg=slack-stream-1"
@@ -1297,6 +1315,12 @@ defmodule HydraX.ReportTest do
 
     assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~ "\"delivery\": {"
     assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~ "\"ownership_summary\""
+
+    assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~
+             "\"assignment_recovery\""
+
+    assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~
+             "\"assignment_recovery_summary\": \"worker_saturated:2026-03-18 10:15:00 UTC\""
 
     assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~
              "\"node:report-remote:claimed_remote\""

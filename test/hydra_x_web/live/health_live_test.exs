@@ -339,6 +339,23 @@ defmodule HydraXWeb.HealthLiveTest do
         }
       })
 
+    {:ok, _queued_recovery_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Hold queued reassignment under recovery cooldown.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "planner",
+        "status" => "planned",
+        "priority" => 100,
+        "metadata" => %{
+          "assignment_recovery" => %{
+            "queue_reason" => "worker_saturated",
+            "queued_at" => "2026-03-18T10:00:00Z",
+            "deferred_until" => "2026-03-18T10:15:00Z"
+          }
+        }
+      })
+
     {:ok, _job} =
       Runtime.save_scheduled_job(%{
         agent_id: agent.id,
@@ -381,6 +398,8 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "queued"
     assert html =~ "shared backlog"
     assert html =~ "stale 1"
+    assert html =~ "assignment recovery queued: worker saturated"
+    assert html =~ "cooldown until 2026-03-18 10:15:00 UTC"
     assert html =~ "Operator confirmed the rollout."
     assert html =~ "ownership #{local_owner} · completed"
     assert html =~ "ownership node:remote-health · claimed_remote"

@@ -1415,13 +1415,23 @@ defmodule HydraXWeb.AgentsLive do
         work_item_id = result[:work_item_id] || result["work_item_id"]
         posture = result[:capacity_posture] || result["capacity_posture"]
         queue_reason = result[:queue_reason] || result["queue_reason"]
+        deferred_until = result[:deferred_until] || result["deferred_until"]
 
         detail =
-          case {queue_reason, posture} do
-            {"worker_saturated", posture} when is_binary(posture) ->
+          case {queue_reason, posture, recovery_deferred_label(deferred_until)} do
+            {"worker_saturated", posture, cooldown}
+            when is_binary(posture) and is_binary(cooldown) ->
+              " · worker saturated (#{posture}) · #{cooldown}"
+
+            {"worker_saturated", posture, _cooldown} when is_binary(posture) ->
               " · worker saturated (#{posture})"
 
-            {_, posture}
+            {_, posture, cooldown}
+            when is_binary(posture) and is_binary(cooldown) and
+                   action in ["reassigned_queued", "reassigned_executed"] ->
+              " · #{posture} · #{cooldown}"
+
+            {_, posture, _cooldown}
             when is_binary(posture) and action in ["reassigned_queued", "reassigned_executed"] ->
               " · #{posture}"
 
@@ -1466,6 +1476,21 @@ defmodule HydraXWeb.AgentsLive do
         "recent stale cleanup #{action}#{if work_item_id, do: " ##{work_item_id}", else: ""}#{detail}"
     end
   end
+
+  defp recovery_deferred_label(nil), do: nil
+
+  defp recovery_deferred_label(%DateTime{} = value) do
+    "cooldown until #{Calendar.strftime(value, "%Y-%m-%d %H:%M:%S UTC")}"
+  end
+
+  defp recovery_deferred_label(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} -> recovery_deferred_label(datetime)
+      _ -> "cooldown until #{value}"
+    end
+  end
+
+  defp recovery_deferred_label(_value), do: nil
 
   defp work_item_latest_approval(work_item) do
     work_item.approval_records

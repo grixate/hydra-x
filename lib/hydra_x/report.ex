@@ -764,6 +764,7 @@ defmodule HydraX.Report do
       publish = render_work_item_publish_summary(item)
       publish_details = render_work_item_publish_details(item)
       assignment = render_work_item_assignment(item)
+      assignment_recovery = render_work_item_assignment_recovery(item)
       ownership = render_work_item_ownership(item)
 
       [
@@ -780,6 +781,7 @@ defmodule HydraX.Report do
         artifacts != "" && "artifacts=#{artifacts}",
         promoted_memories != "" && "promoted=#{promoted_memories}",
         assignment && "assignment=#{assignment}",
+        assignment_recovery && "recovery=#{assignment_recovery}",
         ownership && "ownership=#{ownership}",
         publish && "publish=#{publish}",
         item.goal
@@ -824,6 +826,27 @@ defmodule HydraX.Report do
 
       {owner, _stage} when is_binary(owner) ->
         owner
+
+      _ ->
+        nil
+    end
+  end
+
+  defp render_work_item_assignment_recovery(item) do
+    recovery = get_in(item.metadata || %{}, ["assignment_recovery"]) || %{}
+
+    case {recovery["queue_reason"], recovery["deferred_until"]} do
+      {"worker_saturated", deferred_until} when not is_nil(deferred_until) ->
+        "worker_saturated:#{format_datetime(deferred_until)}"
+
+      {reason, deferred_until} when is_binary(reason) and not is_nil(deferred_until) ->
+        "#{reason}:#{format_datetime(deferred_until)}"
+
+      {"worker_saturated", _value} ->
+        "worker_saturated"
+
+      {reason, _value} when is_binary(reason) ->
+        reason
 
       _ ->
         nil
@@ -1825,6 +1848,8 @@ defmodule HydraX.Report do
       priority: item.priority,
       result_refs: item.result_refs,
       metadata: item.metadata,
+      assignment_recovery: get_in(item.metadata || %{}, ["assignment_recovery"]),
+      assignment_recovery_summary: render_work_item_assignment_recovery(item),
       ownership: get_in(item.metadata || %{}, ["ownership"]),
       ownership_summary: render_work_item_ownership(item),
       publish_follow_up: work_item_publish_snapshot(item),
