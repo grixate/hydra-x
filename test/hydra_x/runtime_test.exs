@@ -5976,7 +5976,7 @@ defmodule HydraX.RuntimeTest do
         "status" => "planned"
       })
 
-    {:ok, _claimed_item} =
+    {:ok, claimed_item} =
       Runtime.save_work_item(%{
         "kind" => "task",
         "goal" => "Tracked local claimed work item.",
@@ -5991,6 +5991,18 @@ defmodule HydraX.RuntimeTest do
           }
         }
       })
+
+    assert {:ok, _lease} =
+             Runtime.claim_lease("work_item:#{claimed_item.id}",
+               owner: Runtime.coordination_status().owner,
+               ttl_seconds: 60
+             )
+
+    on_exit(fn ->
+      Runtime.release_lease("work_item:#{claimed_item.id}",
+        owner: Runtime.coordination_status().owner
+      )
+    end)
 
     {:ok, remote_claimed_item} =
       Runtime.save_work_item(%{
@@ -6017,6 +6029,22 @@ defmodule HydraX.RuntimeTest do
     on_exit(fn ->
       Runtime.release_lease("work_item:#{remote_claimed_item.id}", owner: "node:remote-status")
     end)
+
+    {:ok, _stale_claimed_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Tracked stale claimed work item.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "planner",
+        "status" => "claimed",
+        "metadata" => %{
+          "ownership" => %{
+            "owner" => Runtime.coordination_status().owner,
+            "stage" => "claimed",
+            "active" => true
+          }
+        }
+      })
 
     {:ok, _unsafe_item} =
       Runtime.save_work_item(%{
@@ -6076,10 +6104,16 @@ defmodule HydraX.RuntimeTest do
     assert status.active_autonomy_job_count >= 1
     assert status.unsafe_request_count >= 1
     assert status.budget_blocked_count >= 1
-    assert status.active_claimed_count >= 2
-    assert status.remote_claimed_count >= 1
+    assert status.active_claimed_count == 2
+    assert status.stale_claimed_count >= 1
+    assert status.remote_claimed_count == 1
     assert Enum.any?(status.role_queue_backlog, &(&1.role == "planner"))
-    assert Enum.any?(status.worker_pressure, &(&1.agent_id == agent.id))
+
+    assert Enum.any?(
+             status.worker_pressure,
+             &(&1.agent_id == agent.id and &1.stale_claimed_count >= 1)
+           )
+
     assert Enum.any?(status.capability_drifts, &(&1.agent_id == agent.id))
     assert Enum.any?(status.recent_work_items, &(&1.id == work_item.id))
   end

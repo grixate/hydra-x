@@ -927,7 +927,7 @@ defmodule HydraXWeb.HealthLive do
                     · expiry {event.expired_by}
                   </span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip                            {event.ip}</span>
+                  <span :if={event.ip}> · ip                             {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -1274,6 +1274,14 @@ defmodule HydraXWeb.HealthLive do
           </article>
           <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
             <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Stale claims
+            </div>
+            <div class="mt-3 font-display text-4xl">
+              {@autonomy_status.stale_claimed_count}
+            </div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
               Remote claims
             </div>
             <div class="mt-3 font-display text-4xl">
@@ -1394,7 +1402,7 @@ defmodule HydraXWeb.HealthLive do
                   <div class="text-xs text-[var(--hx-mute)]">{entry.queued_count} queued</div>
                 </div>
                 <div class="mt-2 text-xs text-[var(--hx-mute)]">
-                  workers {entry.worker_count} · active claims {entry.active_claimed_count} · top priority {entry.highest_priority}
+                  workers {entry.worker_count} · active claims {entry.active_claimed_count} · stale claims {entry.stale_claimed_count} · top priority {entry.highest_priority}
                 </div>
               </div>
             </div>
@@ -1421,7 +1429,7 @@ defmodule HydraXWeb.HealthLive do
                   <div class="text-xs text-[var(--hx-mute)]">{entry.capacity_posture}</div>
                 </div>
                 <div class="mt-2 text-xs text-[var(--hx-mute)]">
-                  open {entry.assigned_open_count} · claims {entry.active_claimed_count} · blocked {entry.blocked_count} · failed {entry.failed_count} · shared backlog {entry.shared_role_queue_count}
+                  open {entry.assigned_open_count} · claims {entry.active_claimed_count} · stale {entry.stale_claimed_count} · blocked {entry.blocked_count} · failed {entry.failed_count} · shared backlog {entry.shared_role_queue_count}
                 </div>
               </div>
             </div>

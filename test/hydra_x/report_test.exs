@@ -858,7 +858,7 @@ defmodule HydraX.ReportTest do
         }
       })
 
-    {:ok, _remote_owned_item} =
+    {:ok, remote_owned_item} =
       Runtime.save_work_item(%{
         "kind" => "task",
         "goal" => "Include remote ownership in report exports.",
@@ -870,6 +870,33 @@ defmodule HydraX.ReportTest do
           "ownership" => %{
             "owner" => "node:report-remote",
             "stage" => "claimed_remote",
+            "active" => true
+          }
+        }
+      })
+
+    assert {:ok, _lease} =
+             Runtime.claim_lease("work_item:#{remote_owned_item.id}",
+               owner: "node:report-remote",
+               ttl_seconds: 60
+             )
+
+    on_exit(fn ->
+      Runtime.release_lease("work_item:#{remote_owned_item.id}", owner: "node:report-remote")
+    end)
+
+    {:ok, _stale_owned_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Include stale ownership in report exports.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "operator",
+        "status" => "claimed",
+        "priority" => 98,
+        "metadata" => %{
+          "ownership" => %{
+            "owner" => local_owner,
+            "stage" => "claimed",
             "active" => true
           }
         }
@@ -1070,6 +1097,7 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "fallback_assigned="
     assert File.read!(export.markdown_path) =~ "role_only_open="
     assert File.read!(export.markdown_path) =~ "active_claimed=1"
+    assert File.read!(export.markdown_path) =~ "stale_claimed=1"
     assert File.read!(export.markdown_path) =~ "remote_claimed="
 
     assert File.read!(export.markdown_path) =~ "approval=approved/enable_extension"
@@ -1200,6 +1228,7 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.json_path) =~ "\"role_queue_backlog\":"
     assert File.read!(export.json_path) =~ "\"worker_pressure\":"
     assert File.read!(export.json_path) =~ "\"active_claimed_count\": 1"
+    assert File.read!(export.json_path) =~ "\"stale_claimed_count\": 1"
     assert File.read!(export.json_path) =~ "\"remote_claimed_count\":"
     assert File.read!(export.json_path) =~ "\"orphaned_assignment_count\":"
 

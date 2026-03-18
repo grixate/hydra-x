@@ -251,7 +251,7 @@ defmodule HydraXWeb.HealthLiveTest do
         }
       })
 
-    {:ok, _remote_claimed_item} =
+    {:ok, remote_claimed_item} =
       Runtime.save_work_item(%{
         "kind" => "task",
         "goal" => "Show remote ownership on the health page.",
@@ -263,6 +263,33 @@ defmodule HydraXWeb.HealthLiveTest do
           "ownership" => %{
             "owner" => "node:remote-health",
             "stage" => "claimed_remote",
+            "active" => true
+          }
+        }
+      })
+
+    assert {:ok, _lease} =
+             Runtime.claim_lease("work_item:#{remote_claimed_item.id}",
+               owner: "node:remote-health",
+               ttl_seconds: 60
+             )
+
+    on_exit(fn ->
+      Runtime.release_lease("work_item:#{remote_claimed_item.id}", owner: "node:remote-health")
+    end)
+
+    {:ok, _stale_claimed_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Show stale ownership pressure on the health page.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "planner",
+        "status" => "claimed",
+        "priority" => 96,
+        "metadata" => %{
+          "ownership" => %{
+            "owner" => local_owner,
+            "stage" => "claimed",
             "active" => true
           }
         }
@@ -333,6 +360,7 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "Fallback assigned"
     assert html =~ "Role-only open"
     assert html =~ "Active claims"
+    assert html =~ "Stale claims"
     assert html =~ "Remote claims"
     assert html =~ "Orphaned assignments"
     assert html =~ "Role backlog"
@@ -341,6 +369,7 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "Worker pressure"
     assert html =~ "queued"
     assert html =~ "shared backlog"
+    assert html =~ "stale 1"
     assert html =~ "Operator confirmed the rollout."
     assert html =~ "ownership #{local_owner} · completed"
     assert html =~ "ownership node:remote-health · claimed_remote"

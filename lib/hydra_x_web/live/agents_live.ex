@@ -535,7 +535,8 @@ defmodule HydraXWeb.AgentsLive do
                   <p>
                     role queue {agent.role_queue_backlog[:queued_count] || 0} · workers{" "}
                     {agent.role_queue_backlog[:worker_count] || 0} · active claims{" "}
-                    {agent.role_queue_backlog[:active_claimed_count] || 0}
+                    {agent.role_queue_backlog[:active_claimed_count] || 0} · stale claims{" "}
+                    {agent.role_queue_backlog[:stale_claimed_count] || 0}
                   </p>
                   <p :if={(agent.work_queue[:orphaned_role_assignments] || 0) > 0}>
                     orphaned role {agent.work_queue[:orphaned_role_assignments]}
@@ -1354,7 +1355,7 @@ defmodule HydraXWeb.AgentsLive do
     if map_size(pressure) == 0 do
       nil
     else
-      "worker pressure open #{pressure[:assigned_open_count] || 0} · claims #{pressure[:active_claimed_count] || 0} · blocked #{pressure[:blocked_count] || 0} · failed #{pressure[:failed_count] || 0}"
+      "worker pressure open #{pressure[:assigned_open_count] || 0} · claims #{pressure[:active_claimed_count] || 0} · stale #{pressure[:stale_claimed_count] || 0} · blocked #{pressure[:blocked_count] || 0} · failed #{pressure[:failed_count] || 0}"
     end
   end
 

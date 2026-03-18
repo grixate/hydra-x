@@ -217,7 +217,7 @@ defmodule HydraX.Report do
     #{render_conversations(snapshot.conversations)}
 
     ## Autonomous Work Items
-    - active_jobs=#{snapshot.autonomy.active_autonomy_job_count} unsafe_requests=#{snapshot.autonomy.unsafe_request_count} budget_blocked=#{snapshot.autonomy.budget_blocked_count} auto_assigned=#{snapshot.autonomy.auto_assigned_count} fallback_assigned=#{snapshot.autonomy.capability_fallback_count} role_only_open=#{snapshot.autonomy.role_only_open_count} active_claimed=#{snapshot.autonomy.active_claimed_count} remote_claimed=#{snapshot.autonomy.remote_claimed_count} orphaned_assignments=#{snapshot.autonomy.orphaned_assignment_count} role_backlog=#{render_role_queue_backlog_summary(snapshot.autonomy.role_queue_backlog)} saturated_workers=#{Enum.count(snapshot.autonomy.worker_pressure, &(&1.capacity_posture == "saturated"))} capability_drift=#{length(snapshot.autonomy.capability_drifts)}
+    - active_jobs=#{snapshot.autonomy.active_autonomy_job_count} unsafe_requests=#{snapshot.autonomy.unsafe_request_count} budget_blocked=#{snapshot.autonomy.budget_blocked_count} auto_assigned=#{snapshot.autonomy.auto_assigned_count} fallback_assigned=#{snapshot.autonomy.capability_fallback_count} role_only_open=#{snapshot.autonomy.role_only_open_count} active_claimed=#{snapshot.autonomy.active_claimed_count} stale_claimed=#{snapshot.autonomy.stale_claimed_count} remote_claimed=#{snapshot.autonomy.remote_claimed_count} orphaned_assignments=#{snapshot.autonomy.orphaned_assignment_count} role_backlog=#{render_role_queue_backlog_summary(snapshot.autonomy.role_queue_backlog)} saturated_workers=#{Enum.count(snapshot.autonomy.worker_pressure, &(&1.capacity_posture == "saturated"))} capability_drift=#{length(snapshot.autonomy.capability_drifts)}
     ### Role Queue Backlog
     #{render_role_queue_backlog(snapshot.autonomy.role_queue_backlog)}
 
@@ -336,7 +336,7 @@ defmodule HydraX.Report do
 
       items ->
         Enum.map_join(items, "\n", fn entry ->
-          "- #{entry.role}: queued=#{entry.queued_count} workers=#{entry.worker_count} active_claims=#{entry.active_claimed_count} top_priority=#{entry.highest_priority}"
+          "- #{entry.role}: queued=#{entry.queued_count} workers=#{entry.worker_count} active_claims=#{entry.active_claimed_count} stale_claims=#{entry.stale_claimed_count} top_priority=#{entry.highest_priority}"
         end)
     end
   end
@@ -350,7 +350,7 @@ defmodule HydraX.Report do
 
       items ->
         Enum.map_join(items, "\n", fn entry ->
-          "- #{entry.agent_name} (#{entry.role}): posture=#{entry.capacity_posture} open=#{entry.assigned_open_count} claims=#{entry.active_claimed_count} blocked=#{entry.blocked_count} failed=#{entry.failed_count} shared_backlog=#{entry.shared_role_queue_count}"
+          "- #{entry.agent_name} (#{entry.role}): posture=#{entry.capacity_posture} open=#{entry.assigned_open_count} claims=#{entry.active_claimed_count} stale=#{entry.stale_claimed_count} blocked=#{entry.blocked_count} failed=#{entry.failed_count} shared_backlog=#{entry.shared_role_queue_count}"
         end)
     end
   end
@@ -1491,6 +1491,7 @@ defmodule HydraX.Report do
         capability_fallback_count: snapshot.autonomy.capability_fallback_count,
         role_only_open_count: snapshot.autonomy.role_only_open_count,
         active_claimed_count: snapshot.autonomy.active_claimed_count,
+        stale_claimed_count: snapshot.autonomy.stale_claimed_count,
         remote_claimed_count: snapshot.autonomy.remote_claimed_count,
         orphaned_assignment_count: snapshot.autonomy.orphaned_assignment_count,
         active_roles: snapshot.autonomy.active_roles,

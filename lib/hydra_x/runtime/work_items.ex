@@ -581,6 +581,9 @@ defmodule HydraX.Runtime.WorkItems do
     active_claimed_count =
       Enum.count(all_work_items, &work_item_ownership_active?/1)
 
+    stale_claimed_count =
+      Enum.count(all_work_items, &stale_work_item_ownership?/1)
+
     remote_claimed_count =
       Enum.count(all_work_items, &work_item_remotely_owned?/1)
 
@@ -625,6 +628,7 @@ defmodule HydraX.Runtime.WorkItems do
       capability_fallback_count: capability_fallback_count,
       role_only_open_count: role_only_open_count,
       active_claimed_count: active_claimed_count,
+      stale_claimed_count: stale_claimed_count,
       remote_claimed_count: remote_claimed_count,
       orphaned_assignment_count: orphaned_assignment_count,
       autonomy_agent_count: length(autonomy_agents),
@@ -654,7 +658,15 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp work_item_ownership_active?(%WorkItem{} = work_item) do
-    get_in(work_item.metadata || %{}, ["ownership", "active"]) == true
+    ownership = get_in(work_item.metadata || %{}, ["ownership"]) || %{}
+
+    ownership["active"] == true and not stale_or_missing_work_item_lease?(work_item)
+  end
+
+  defp stale_work_item_ownership?(%WorkItem{} = work_item) do
+    ownership = get_in(work_item.metadata || %{}, ["ownership"]) || %{}
+
+    ownership["active"] == true and stale_or_missing_work_item_lease?(work_item)
   end
 
   defp work_item_remotely_owned?(%WorkItem{} = work_item) do
@@ -678,6 +690,13 @@ defmodule HydraX.Runtime.WorkItems do
       |> Enum.reject(&is_nil/1)
       |> Enum.frequencies()
 
+    stale_claimed_counts =
+      all_work_items
+      |> Enum.filter(&stale_work_item_ownership?/1)
+      |> Enum.map(& &1.assigned_role)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.frequencies()
+
     all_work_items
     |> Enum.filter(&role_queue_candidate?/1)
     |> Enum.group_by(& &1.assigned_role)
@@ -687,6 +706,7 @@ defmodule HydraX.Runtime.WorkItems do
         queued_count: length(items),
         worker_count: Map.get(worker_counts, role, 0),
         active_claimed_count: Map.get(claimed_counts, role, 0),
+        stale_claimed_count: Map.get(stale_claimed_counts, role, 0),
         highest_priority:
           items
           |> Enum.map(&(&1.priority || 0))
@@ -709,6 +729,7 @@ defmodule HydraX.Runtime.WorkItems do
 
       assigned_open_count = length(assigned_items)
       active_claimed_count = Enum.count(assigned_items, &work_item_ownership_active?/1)
+      stale_claimed_count = Enum.count(assigned_items, &stale_work_item_ownership?/1)
       blocked_count = Enum.count(assigned_items, &(&1.status == "blocked"))
       failed_count = Enum.count(assigned_items, &(&1.status == "failed"))
       shared_role_queue_count = Map.get(role_queue_counts, agent.role, 0)
@@ -719,6 +740,7 @@ defmodule HydraX.Runtime.WorkItems do
         role: agent.role,
         assigned_open_count: assigned_open_count,
         active_claimed_count: active_claimed_count,
+        stale_claimed_count: stale_claimed_count,
         blocked_count: blocked_count,
         failed_count: failed_count,
         shared_role_queue_count: shared_role_queue_count,
