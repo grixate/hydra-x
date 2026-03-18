@@ -1235,6 +1235,7 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp list_stale_claimed_work_items(opts) do
     limit = Keyword.get(opts, :limit, 50)
+    owner = Coordination.status().owner
 
     WorkItem
     |> where(
@@ -1244,9 +1245,18 @@ defmodule HydraX.Runtime.WorkItems do
     |> order_by([work_item], desc: work_item.priority, asc: work_item.inserted_at)
     |> limit(^max(limit * 3, limit))
     |> Repo.all()
-    |> Enum.filter(&stale_work_item_ownership?/1)
+    |> Enum.filter(
+      &(stale_work_item_ownership?(&1) and not locally_replayable_stale_claim?(&1, owner))
+    )
     |> Enum.take(limit)
     |> Enum.map(&get_work_item!(&1.id))
+  end
+
+  defp locally_replayable_stale_claim?(%WorkItem{} = work_item, owner) do
+    ownership = get_in(work_item.metadata || %{}, ["ownership"]) || %{}
+
+    ownership["owner"] == owner and
+      work_item.status in ["claimed", "running", "blocked", "replayed"]
   end
 
   defp orphaned_work_assignment?(%WorkItem{} = work_item) do

@@ -955,11 +955,15 @@ defmodule HydraX.RuntimeTest do
     |> Ecto.Changeset.change(expires_at: DateTime.add(DateTime.utc_now(), -60, :second))
     |> Repo.update!()
 
-    assert {:ok, _lease} =
-             Runtime.claim_lease("conversation:#{conversation.id}",
-               owner: "node:remote",
-               ttl_seconds: 60
-             )
+    wait_for(fn ->
+      match?(
+        {:ok, _lease},
+        Runtime.claim_lease("conversation:#{conversation.id}",
+          owner: "node:remote",
+          ttl_seconds: 60
+        )
+      )
+    end)
 
     send(channel_pid, :lease_tick)
 
@@ -6205,8 +6209,8 @@ defmodule HydraX.RuntimeTest do
         "status" => "claimed",
         "metadata" => %{
           "ownership" => %{
-            "owner" => Runtime.coordination_status().owner,
-            "stage" => "claimed",
+            "owner" => "node:stale-cleanup",
+            "stage" => "claimed_remote",
             "active" => true
           }
         }
@@ -6827,8 +6831,8 @@ defmodule HydraX.RuntimeTest do
         "status" => "claimed",
         "metadata" => %{
           "ownership" => %{
-            "owner" => Runtime.coordination_status().owner,
-            "stage" => "claimed",
+            "owner" => "node:stale-cleanup",
+            "stage" => "claimed_remote",
             "active" => true
           }
         }
@@ -6850,6 +6854,52 @@ defmodule HydraX.RuntimeTest do
     assert ownership["stage"] == "expired"
     assert ownership["active"] == false
     assert ownership["expired_at"]
+  end
+
+  test "stale claim cleanup leaves locally owned replay work for replay" do
+    agent =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, agent} =
+      Runtime.save_agent(agent, %{
+        "role" => "researcher",
+        "name" => "Researcher Stale Replay",
+        "slug" => "researcher-stale-replay-#{System.unique_integer([:positive])}"
+      })
+
+    {:ok, work_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Replay this stale local claim instead of expiring it.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "researcher",
+        "status" => "claimed",
+        "metadata" => %{
+          "ownership" => %{
+            "owner" => Runtime.coordination_status().owner,
+            "stage" => "claimed",
+            "active" => true
+          }
+        }
+      })
+
+    cleanup_summary = Runtime.cleanup_stale_work_item_claims(limit: 10)
+
+    assert cleanup_summary.expired_count == 0
+
+    replay_summary = Runtime.resume_owned_work_items(limit: 10)
+
+    assert replay_summary.resumed_count == 1
+
+    assert Enum.any?(replay_summary.results, fn result ->
+             result[:work_item_id] == work_item.id
+           end)
+
+    refreshed = Runtime.get_work_item!(work_item.id)
+
+    assert refreshed.status == "completed"
+    assert Runtime.active_lease("work_item:#{work_item.id}") == nil
   end
 
   test "same-role workers do not claim work that is specifically assigned to another active worker" do
