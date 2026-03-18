@@ -6795,6 +6795,16 @@ defmodule HydraX.RuntimeTest do
     refreshed = Runtime.get_work_item!(role_queued_work.id)
     assert refreshed.status == "planned"
     assert is_nil(refreshed.assigned_agent_id)
+    dispatch = get_in(refreshed.metadata || %{}, ["role_queue_dispatch"]) || %{}
+    assert dispatch["reason"] == "worker_saturated"
+    assert dispatch["deferred_until"]
+
+    refute Enum.any?(Runtime.autonomy_status().role_queue_backlog, &(&1.role == "researcher"))
+
+    second_summary = Runtime.process_role_queued_work(limit: 10)
+
+    assert second_summary.pressure_skipped_count == 0
+    assert Enum.any?(second_summary.results, &(&1[:action] == "idle"))
   end
 
   test "role queue dispatch records work claimed by another node" do
@@ -6845,6 +6855,17 @@ defmodule HydraX.RuntimeTest do
     assert ownership["owner"] == "node:remote-role-queue"
     assert ownership["stage"] == "claimed_remote"
     assert ownership["active"] == true
+    dispatch = get_in(refreshed.metadata || %{}, ["role_queue_dispatch"]) || %{}
+    assert dispatch["reason"] == "claimed_remote"
+    assert dispatch["lease_owner"] == "node:remote-role-queue"
+    assert dispatch["deferred_until"]
+
+    refute Enum.any?(Runtime.autonomy_status().role_queue_backlog, &(&1.role == "researcher"))
+
+    second_summary = Runtime.process_role_queued_work(limit: 10)
+
+    assert second_summary.remote_owned_count == 0
+    assert Enum.any?(second_summary.results, &(&1[:action] == "idle"))
   end
 
   test "role queue dispatch reclaims stale remote-owned work" do

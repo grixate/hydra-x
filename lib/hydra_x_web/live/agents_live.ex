@@ -1389,12 +1389,16 @@ defmodule HydraXWeb.AgentsLive do
         posture = result[:capacity_posture] || result["capacity_posture"]
         lease_owner = result[:lease_owner] || result["lease_owner"]
 
+        deferred_until =
+          result[:deferred_until] || result["deferred_until"] || result[:lease_expires_at] ||
+            result["lease_expires_at"]
+
         case action do
           "worker_saturated" ->
-            "recent role dispatch saturated#{if is_binary(posture), do: " (#{posture})", else: ""}"
+            "recent role dispatch saturated#{if is_binary(posture), do: " (#{posture})", else: ""}#{if cooldown = recovery_deferred_label(deferred_until), do: " · #{cooldown}", else: ""}"
 
           "claimed_remote" ->
-            "recent role dispatch claimed remotely#{if work_item_id, do: " ##{work_item_id}", else: ""}#{if is_binary(lease_owner), do: " by #{lease_owner}", else: ""}"
+            "recent role dispatch claimed remotely#{if work_item_id, do: " ##{work_item_id}", else: ""}#{if is_binary(lease_owner), do: " by #{lease_owner}", else: ""}#{if cooldown = recovery_deferred_label(deferred_until), do: " · #{cooldown}", else: ""}"
 
           _ ->
             "recent role dispatch #{action}#{if work_item_id, do: " ##{work_item_id}", else: ""}"

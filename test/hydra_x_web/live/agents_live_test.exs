@@ -446,7 +446,8 @@ defmodule HydraXWeb.AgentsLiveTest do
           status: "skipped",
           action: "worker_saturated",
           reason: "worker_saturated",
-          capacity_posture: "saturated"
+          capacity_posture: "saturated",
+          deferred_until: "2026-03-18T10:15:00Z"
         }
       ]
     })
@@ -454,6 +455,7 @@ defmodule HydraXWeb.AgentsLiveTest do
     {:ok, _view, html} = live(conn, ~p"/agents")
 
     assert html =~ "recent role dispatch saturated (saturated)"
+    assert html =~ "cooldown until 2026-03-18 10:15:00 UTC"
   end
 
   test "agents page shows remote-owned role dispatch skips", %{conn: conn} do
@@ -482,7 +484,8 @@ defmodule HydraXWeb.AgentsLiveTest do
           work_item_id: 8_888,
           status: "skipped",
           action: "claimed_remote",
-          lease_owner: "node:remote-role-queue"
+          lease_owner: "node:remote-role-queue",
+          lease_expires_at: "2026-03-18T10:20:00Z"
         }
       ]
     })
@@ -490,6 +493,7 @@ defmodule HydraXWeb.AgentsLiveTest do
     {:ok, _view, html} = live(conn, ~p"/agents")
 
     assert html =~ "recent role dispatch claimed remotely #8888 by node:remote-role-queue"
+    assert html =~ "cooldown until 2026-03-18 10:20:00 UTC"
   end
 
   test "agents page shows stale claim cleanup results", %{conn: conn} do

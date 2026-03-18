@@ -912,7 +912,28 @@ defmodule HydraX.Runtime.WorkItems do
             end
 
           {:error, {:taken, lease}} ->
-            remote_work_item = note_remote_work_item_ownership(work_item, lease, "claimed_remote")
+            remote_work_item =
+              work_item
+              |> note_remote_work_item_ownership(lease, "claimed_remote")
+              |> case do
+                {:ok, updated} ->
+                  case role_queue_dispatch_pass?(opts) do
+                    true ->
+                      case defer_role_queue_dispatch(updated, "claimed_remote", %{
+                             "lease_owner" => lease.owner,
+                             "lease_expires_at" => lease.expires_at
+                           }) do
+                        {:ok, deferred_work_item} -> deferred_work_item
+                        _ -> updated
+                      end
+
+                    false ->
+                      updated
+                  end
+
+                _ ->
+                  work_item
+              end
 
             if role_queue_dispatch_pass?(opts) do
               {:processed,
@@ -920,13 +941,14 @@ defmodule HydraX.Runtime.WorkItems do
                  status: "skipped",
                  processed_count: 0,
                  action: "claimed_remote",
-                 work_item:
-                   case remote_work_item do
-                     {:ok, updated} -> updated
-                     _ -> work_item
-                   end,
+                 work_item: remote_work_item,
                  lease_owner: lease.owner,
-                 lease_expires_at: lease.expires_at
+                 lease_expires_at: lease.expires_at,
+                 deferred_until:
+                   get_in(remote_work_item.metadata || %{}, [
+                     "role_queue_dispatch",
+                     "deferred_until"
+                   ])
                }}
             else
               {:idle, nil}
@@ -1115,6 +1137,18 @@ defmodule HydraX.Runtime.WorkItems do
     recovery = get_in(work_item.metadata || %{}, ["assignment_recovery"]) || %{}
 
     case parse_datetime(recovery["deferred_until"]) do
+      %DateTime{} = deferred_until ->
+        DateTime.compare(deferred_until, DateTime.utc_now()) == :gt
+
+      _ ->
+        false
+    end
+  end
+
+  defp role_queue_dispatch_deferred?(%WorkItem{} = work_item) do
+    dispatch = get_in(work_item.metadata || %{}, ["role_queue_dispatch"]) || %{}
+
+    case parse_datetime(dispatch["deferred_until"]) do
       %DateTime{} = deferred_until ->
         DateTime.compare(deferred_until, DateTime.utc_now()) == :gt
 
@@ -1378,7 +1412,8 @@ defmodule HydraX.Runtime.WorkItems do
 
     work_item.status in ["planned", "replayed"] and
       is_nil(work_item.assigned_agent_id) and
-      metadata["assignment_mode"] == "role_claim"
+      metadata["assignment_mode"] == "role_claim" and
+      not role_queue_dispatch_deferred?(work_item)
   end
 
   defp role_queue_dispatch_attrs(%WorkItem{} = work_item) do
@@ -1390,6 +1425,20 @@ defmodule HydraX.Runtime.WorkItems do
       "deliverables" => work_item.deliverables || %{},
       "metadata" => work_item.metadata || %{}
     }
+  end
+
+  defp next_role_queued_work_item_for_agent(%AgentProfile{} = agent) do
+    WorkItem
+    |> where(
+      [work_item],
+      work_item.status in ["planned", "replayed"] and
+        is_nil(work_item.assigned_agent_id) and work_item.assigned_role == ^agent.role
+    )
+    |> order_by([work_item], desc: work_item.priority, asc: work_item.inserted_at)
+    |> limit(10)
+    |> Repo.all()
+    |> Enum.map(&get_work_item!(&1.id))
+    |> Enum.find(&role_queue_candidate?/1)
   end
 
   defp drain_role_queued_work(_opts, summary, limit, _round)
@@ -1414,8 +1463,31 @@ defmodule HydraX.Runtime.WorkItems do
             pressure = worker_pressure_entry(agent.id) || %{}
 
             if pressure[:capacity_posture] == "saturated" do
-              {:cont,
-               {accumulate_role_queue_skip(acc, agent, "worker_saturated", pressure), progressed?}}
+              case next_role_queued_work_item_for_agent(agent) do
+                %WorkItem{} = work_item ->
+                  case defer_role_queue_dispatch(work_item, "worker_saturated", %{
+                         "capacity_posture" =>
+                           pressure[:capacity_posture] || pressure["capacity_posture"]
+                       }) do
+                    {:ok, deferred_work_item} ->
+                      {:cont,
+                       {accumulate_role_queue_skip(
+                          acc,
+                          agent,
+                          "worker_saturated",
+                          pressure,
+                          deferred_work_item
+                        ), progressed?}}
+
+                    {:error, _reason} ->
+                      {:cont,
+                       {accumulate_role_queue_skip(acc, agent, "worker_saturated", pressure),
+                        progressed?}}
+                  end
+
+                nil ->
+                  {:cont, {accumulate_role_queue_skip(acc, agent), progressed?}}
+              end
             else
               case run_autonomy_cycle(agent.id, opts) do
                 {:ok, %{status: "idle"}} ->
@@ -1620,7 +1692,57 @@ defmodule HydraX.Runtime.WorkItems do
     end
   end
 
+  defp defer_role_queue_dispatch(%WorkItem{} = work_item, reason, attrs) do
+    observed_at = DateTime.utc_now()
+    attrs = Helpers.normalize_string_keys(attrs)
+
+    deferred_until =
+      case parse_datetime(attrs["lease_expires_at"]) do
+        %DateTime{} = expires_at when reason == "claimed_remote" ->
+          expires_at
+
+        _ ->
+          DateTime.add(observed_at, role_queue_dispatch_delay_seconds(), :second)
+      end
+
+    metadata =
+      work_item.metadata
+      |> Helpers.normalize_string_keys()
+      |> Map.put(
+        "role_queue_dispatch",
+        %{
+          "observed_at" => observed_at,
+          "deferred_until" => deferred_until,
+          "reason" => reason,
+          "lease_owner" => attrs["lease_owner"],
+          "lease_expires_at" =>
+            parse_datetime(attrs["lease_expires_at"]) || attrs["lease_expires_at"],
+          "capacity_posture" => attrs["capacity_posture"]
+        }
+        |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+        |> Map.new()
+      )
+
+    save_work_item(work_item, %{
+      "metadata" => metadata,
+      "runtime_state" =>
+        append_history(work_item.runtime_state, work_item.status || "planned", %{
+          "observed_at" => observed_at,
+          "phase" => "role_queue_dispatch",
+          "reason" => reason,
+          "deferred_until" => deferred_until,
+          "lease_owner" => attrs["lease_owner"],
+          "lease_expires_at" => attrs["lease_expires_at"],
+          "capacity_posture" => attrs["capacity_posture"]
+        })
+    })
+  end
+
   defp queued_recovery_delay_seconds do
+    max(div(Config.scheduler_poll_ms() * 2, 1000), 5)
+  end
+
+  defp role_queue_dispatch_delay_seconds do
     max(div(Config.scheduler_poll_ms() * 2, 1000), 5)
   end
 
@@ -1637,7 +1759,8 @@ defmodule HydraX.Runtime.WorkItems do
       status: result[:status] || "processed",
       action: action,
       lease_owner: result[:lease_owner],
-      lease_expires_at: result[:lease_expires_at]
+      lease_expires_at: result[:lease_expires_at],
+      deferred_until: result[:deferred_until]
     }
 
     %{
@@ -1650,7 +1773,15 @@ defmodule HydraX.Runtime.WorkItems do
     }
   end
 
-  defp accumulate_role_queue_skip(acc, %AgentProfile{} = agent, reason \\ "idle", pressure \\ %{}) do
+  defp accumulate_role_queue_skip(
+         acc,
+         %AgentProfile{} = agent,
+         reason \\ "idle",
+         pressure \\ %{},
+         work_item \\ nil
+       ) do
+    dispatch = get_in((work_item && work_item.metadata) || %{}, ["role_queue_dispatch"]) || %{}
+
     %{
       acc
       | skipped_count: acc.skipped_count + 1,
@@ -1661,10 +1792,14 @@ defmodule HydraX.Runtime.WorkItems do
             agent_id: agent.id,
             agent_name: agent.name,
             role: agent.role,
+            work_item_id: work_item && work_item.id,
             status: if(reason == "worker_saturated", do: "skipped", else: "idle"),
             action: if(reason == "worker_saturated", do: "worker_saturated", else: "idle"),
             reason: reason,
-            capacity_posture: pressure[:capacity_posture] || pressure["capacity_posture"]
+            capacity_posture: pressure[:capacity_posture] || pressure["capacity_posture"],
+            deferred_until: dispatch["deferred_until"],
+            lease_owner: dispatch["lease_owner"],
+            lease_expires_at: dispatch["lease_expires_at"]
           }
           | acc.results
         ]
@@ -4126,7 +4261,9 @@ defmodule HydraX.Runtime.WorkItems do
     |> Repo.all()
     |> Enum.map(&get_work_item!(&1.id))
     |> Enum.find(fn work_item ->
-      not work_item_remotely_owned?(work_item) and not work_item_execution_deferred?(work_item)
+      not work_item_remotely_owned?(work_item) and
+        not work_item_execution_deferred?(work_item) and
+        not role_queue_dispatch_deferred?(work_item)
     end)
     |> case do
       nil -> nil
