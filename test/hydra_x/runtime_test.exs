@@ -6339,6 +6339,61 @@ defmodule HydraX.RuntimeTest do
              inactive_researcher.id
   end
 
+  test "orphaned assignment recovery skips work owned by another node lease" do
+    inactive_researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, inactive_researcher} =
+      Runtime.save_agent(inactive_researcher, %{
+        "role" => "researcher",
+        "status" => "paused",
+        "name" => "Remote Unavailable Researcher",
+        "slug" => "remote-unavailable-researcher-#{System.unique_integer([:positive])}"
+      })
+
+    active_researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, _active_researcher} =
+      Runtime.save_agent(active_researcher, %{
+        "role" => "researcher",
+        "name" => "Remote Ready Researcher",
+        "slug" => "remote-ready-researcher-#{System.unique_integer([:positive])}"
+      })
+
+    {:ok, work_item} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Leave this orphaned assignment to the remote recovery owner.",
+        "assigned_agent_id" => inactive_researcher.id,
+        "assigned_role" => "researcher",
+        "status" => "planned"
+      })
+
+    assert {:ok, _lease} =
+             Runtime.claim_lease("work_item:#{work_item.id}",
+               owner: "node:remote-assignment",
+               ttl_seconds: 120,
+               metadata: %{"phase" => "assignment_recovery"}
+             )
+
+    summary = Runtime.recover_orphaned_work_assignments(limit: 10)
+
+    assert summary.recovered_count == 0
+    assert summary.skipped_count == 1
+
+    refreshed = Runtime.get_work_item!(work_item.id)
+    ownership = get_in(refreshed.metadata || %{}, ["ownership"])
+
+    assert refreshed.status == "planned"
+    assert refreshed.assigned_agent_id == inactive_researcher.id
+    assert ownership["owner"] == "node:remote-assignment"
+    assert ownership["stage"] == "claimed_remote"
+    assert ownership["active"] == true
+  end
+
   test "role queue dispatch processes delegated child work through active workers" do
     planner =
       create_agent()

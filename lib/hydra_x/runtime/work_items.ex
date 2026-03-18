@@ -399,21 +399,31 @@ defmodule HydraX.Runtime.WorkItems do
     summary =
       list_orphaned_work_assignments(limit: limit)
       |> Enum.reduce(reassignment_summary(owner), fn work_item, acc ->
-        case reassign_orphaned_work_item(work_item) do
-          {:ok, recovered_work_item, %AgentProfile{} = recovered_agent} ->
-            case run_autonomy_cycle(
-                   recovered_agent.id,
-                   Keyword.put(opts, :work_item_id, recovered_work_item.id)
-                 ) do
-              {:ok, result} ->
-                accumulate_reassigned_work_item(acc, recovered_work_item, result)
+        case recover_claim_work_item(work_item) do
+          {:ok, claimed} ->
+            case reassign_orphaned_work_item(claimed) do
+              {:ok, recovered_work_item, %AgentProfile{} = recovered_agent} ->
+                case run_autonomy_cycle(
+                       recovered_agent.id,
+                       Keyword.put(opts, :work_item_id, recovered_work_item.id)
+                     ) do
+                  {:ok, result} ->
+                    accumulate_reassigned_work_item(acc, recovered_work_item, result)
+
+                  {:error, reason} ->
+                    accumulate_reassignment_error(acc, recovered_work_item, reason)
+                end
+
+              {:error, :missing_agent} ->
+                accumulate_reassignment_skip(acc, claimed, "missing_agent")
 
               {:error, reason} ->
-                accumulate_reassignment_error(acc, recovered_work_item, reason)
+                accumulate_reassignment_error(acc, claimed, reason)
             end
 
-          {:error, :missing_agent} ->
-            accumulate_reassignment_skip(acc, work_item, "missing_agent")
+          {:error, {:taken, lease}} ->
+            _ = note_remote_work_item_ownership(work_item, lease, "claimed_remote")
+            accumulate_reassignment_skip(acc, work_item, "lease_owned_elsewhere")
 
           {:error, reason} ->
             accumulate_reassignment_error(acc, work_item, reason)
@@ -1016,6 +1026,34 @@ defmodule HydraX.Runtime.WorkItems do
 
       save_work_item(work_item, %{
         "metadata" => put_work_item_ownership(work_item.metadata, ownership)
+      })
+    end
+  end
+
+  defp recover_claim_work_item(%WorkItem{} = work_item) do
+    metadata = %{
+      "phase" => "assignment_recovery",
+      "work_item_id" => work_item.id,
+      "assigned_role" => work_item.assigned_role,
+      "assigned_agent_id" => work_item.assigned_agent_id
+    }
+
+    with {:ok, _lease} <-
+           Coordination.claim_lease(lease_name(work_item.id),
+             ttl_seconds: @claim_ttl_seconds,
+             metadata: metadata
+           ) do
+      ownership = claimed_work_item_ownership(work_item.id, "recovering")
+
+      save_work_item(work_item, %{
+        "metadata" => put_work_item_ownership(work_item.metadata, ownership),
+        "runtime_state" =>
+          append_history(work_item.runtime_state, work_item.status || "planned", %{
+            "recovered_at" => DateTime.utc_now(),
+            "phase" => "assignment_recovery",
+            "lease_name" => lease_name(work_item.id),
+            "lease_owner" => ownership["owner"]
+          })
       })
     end
   end
