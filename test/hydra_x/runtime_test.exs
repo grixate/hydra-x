@@ -6447,7 +6447,9 @@ defmodule HydraX.RuntimeTest do
     assert summary.skipped_count == 0
 
     assert Enum.any?(summary.results, fn result ->
-             result[:work_item_id] == work_item.id and result[:action] == "reassigned_queued"
+             result[:work_item_id] == work_item.id and result[:action] == "reassigned_queued" and
+               result[:capacity_posture] == "saturated" and
+               result[:queue_reason] == "worker_saturated"
            end)
 
     refreshed = Runtime.get_work_item!(work_item.id)

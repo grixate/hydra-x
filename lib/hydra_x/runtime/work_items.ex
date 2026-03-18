@@ -403,7 +403,10 @@ defmodule HydraX.Runtime.WorkItems do
           {:ok, claimed} ->
             case reassign_orphaned_work_item(claimed) do
               {:ok, recovered_work_item, %AgentProfile{} = recovered_agent} ->
-                if recover_work_item_immediately?(recovered_agent) do
+                pressure = worker_pressure_entry(recovered_agent.id) || %{}
+                capacity_posture = pressure[:capacity_posture] || pressure["capacity_posture"]
+
+                if recover_work_item_immediately?(pressure) do
                   case run_autonomy_cycle(
                          recovered_agent.id,
                          Keyword.put(opts, :work_item_id, recovered_work_item.id)
@@ -412,7 +415,7 @@ defmodule HydraX.Runtime.WorkItems do
                       accumulate_reassigned_work_item(
                         acc,
                         recovered_work_item,
-                        result,
+                        Map.put(result, :capacity_posture, capacity_posture),
                         "reassigned_executed"
                       )
 
@@ -425,7 +428,12 @@ defmodule HydraX.Runtime.WorkItems do
                       accumulate_reassigned_work_item(
                         acc,
                         queued_work_item,
-                        %{status: queued_work_item.status, action: "reassigned_queued"},
+                        %{
+                          status: queued_work_item.status,
+                          action: "reassigned_queued",
+                          capacity_posture: capacity_posture,
+                          queue_reason: "worker_saturated"
+                        },
                         "reassigned_queued"
                       )
 
@@ -1322,7 +1330,9 @@ defmodule HydraX.Runtime.WorkItems do
       work_item_id: work_item.id,
       assigned_agent_id: work_item.assigned_agent_id,
       status: result.status,
-      action: action
+      action: action,
+      capacity_posture: result[:capacity_posture] || result["capacity_posture"],
+      queue_reason: result[:queue_reason] || result["queue_reason"]
     }
 
     %{
@@ -1364,8 +1374,8 @@ defmodule HydraX.Runtime.WorkItems do
     }
   end
 
-  defp recover_work_item_immediately?(%AgentProfile{id: agent_id}) do
-    case worker_pressure_entry(agent_id) do
+  defp recover_work_item_immediately?(pressure) when is_map(pressure) do
+    case pressure do
       %{capacity_posture: "saturated"} -> false
       _ -> true
     end

@@ -378,6 +378,42 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "replan follow-up queued 1"
   end
 
+  test "agents page shows queued assignment recoveries with saturation detail", %{conn: conn} do
+    {:ok, agent} =
+      Runtime.save_agent(%{
+        name: "Recovery Agent",
+        slug: "recovery-agent",
+        role: "researcher",
+        workspace_root: Path.join(System.tmp_dir!(), "hydra-x-recovery-agent"),
+        description: "recovery",
+        is_default: false
+      })
+
+    Runtime.Jobs.record_scheduler_pass(:assignment_recoveries, %{
+      owner: "node:agents-test",
+      recovered_count: 1,
+      executed_count: 0,
+      queued_count: 1,
+      skipped_count: 0,
+      error_count: 0,
+      results: [
+        %{
+          assigned_agent_id: agent.id,
+          work_item_id: 7_777,
+          status: "planned",
+          action: "reassigned_queued",
+          capacity_posture: "saturated",
+          queue_reason: "worker_saturated"
+        }
+      ]
+    })
+
+    {:ok, _view, html} = live(conn, ~p"/agents")
+
+    assert html =~ "recent assignment recovery queued #7777"
+    assert html =~ "worker saturated (saturated)"
+  end
+
   test "agents page highlights degraded review queues and degraded publish drafts", %{conn: conn} do
     {:ok, agent} =
       Runtime.save_agent(%{

@@ -1390,8 +1390,30 @@ defmodule HydraXWeb.AgentsLive do
       result ->
         action = result[:action] || result["action"]
         work_item_id = result[:work_item_id] || result["work_item_id"]
+        posture = result[:capacity_posture] || result["capacity_posture"]
+        queue_reason = result[:queue_reason] || result["queue_reason"]
 
-        "recent assignment recovery #{action}#{if work_item_id, do: " ##{work_item_id}", else: ""}"
+        detail =
+          case {queue_reason, posture} do
+            {"worker_saturated", posture} when is_binary(posture) ->
+              " · worker saturated (#{posture})"
+
+            {_, posture}
+            when is_binary(posture) and action in ["reassigned_queued", "reassigned_executed"] ->
+              " · #{posture}"
+
+            _ ->
+              ""
+          end
+
+        action_label =
+          case action do
+            "reassigned_queued" -> "queued"
+            "reassigned_executed" -> "executed"
+            other -> other
+          end
+
+        "recent assignment recovery #{action_label}#{if work_item_id, do: " ##{work_item_id}", else: ""}#{detail}"
     end
   end
 
