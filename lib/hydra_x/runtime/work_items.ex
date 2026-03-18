@@ -1122,8 +1122,12 @@ defmodule HydraX.Runtime.WorkItems do
       {:idle, nil}
     else
       delegated_children =
-        pending_items
-        |> Enum.take(available_slots)
+        claimed
+        |> select_delegation_batch_entries_for_dispatch(
+          pending_items,
+          available_slots,
+          Map.get(snapshot, "items", [])
+        )
         |> Enum.map(&dispatch_delegated_batch_item(claimed, agent, &1))
 
       refreshed_parent =
@@ -2108,8 +2112,8 @@ defmodule HydraX.Runtime.WorkItems do
     seeded_work_item = %{work_item | metadata: seeded_metadata}
 
     delegated_children =
-      entries
-      |> Enum.take(concurrency)
+      seeded_work_item
+      |> select_delegation_batch_entries_for_dispatch(entries, concurrency)
       |> Enum.map(&dispatch_delegated_batch_item(seeded_work_item, agent, &1))
 
     children = Enum.map(delegated_children, & &1.child)
@@ -4213,9 +4217,151 @@ defmodule HydraX.Runtime.WorkItems do
       "mode" => if(length(entries) > 1, do: "parallel", else: "single"),
       "expected_count" => length(entries),
       "batch_concurrency" => concurrency,
+      "batch_strategy" => delegation_batch_strategy(metadata),
       "items" => Enum.map(entries, &delegation_batch_planned_item/1)
     })
   end
+
+  defp select_delegation_batch_entries_for_dispatch(
+         work_item,
+         entries,
+         concurrency,
+         existing_items \\ []
+       )
+
+  defp select_delegation_batch_entries_for_dispatch(
+         _work_item,
+         _entries,
+         concurrency,
+         _existing_items
+       )
+       when not is_integer(concurrency) or concurrency <= 0 do
+    []
+  end
+
+  defp select_delegation_batch_entries_for_dispatch(
+         work_item,
+         entries,
+         concurrency,
+         existing_items
+       ) do
+    case delegation_batch_strategy(work_item) do
+      "balance_roles" ->
+        balance_delegation_batch_entries(entries, concurrency, existing_items)
+
+      _ ->
+        Enum.take(entries, concurrency)
+    end
+  end
+
+  defp balance_delegation_batch_entries(entries, concurrency, existing_items) do
+    indexed_entries = Enum.with_index(entries)
+    role_capacity = delegation_role_capacity()
+    active_role_counts = delegation_active_role_counts(existing_items)
+
+    {selected, _counts} =
+      Enum.reduce(1..concurrency, {[], active_role_counts}, fn _slot, {chosen, counts} ->
+        remaining =
+          indexed_entries
+          |> Enum.reject(fn {_entry, index} ->
+            Enum.any?(chosen, fn {_chosen, chosen_index} -> chosen_index == index end)
+          end)
+
+        case best_delegation_batch_entry(remaining, counts, role_capacity) do
+          nil ->
+            {chosen, counts}
+
+          {entry, index} ->
+            role = entry["assigned_role"] || entry["role"]
+
+            {
+              chosen ++ [{entry, index}],
+              Map.update(counts, role, 1, &(&1 + 1))
+            }
+        end
+      end)
+
+    Enum.map(selected, fn {entry, _index} -> entry end)
+  end
+
+  defp best_delegation_batch_entry([], _counts, _role_capacity), do: nil
+
+  defp best_delegation_batch_entry(indexed_entries, counts, role_capacity) do
+    indexed_entries
+    |> Enum.max_by(
+      fn {entry, index} ->
+        role = entry["assigned_role"] || entry["role"]
+        pressure = Map.get(role_capacity, role, %{})
+
+        {
+          delegation_role_capacity_score(pressure),
+          -Map.get(counts, role, 0),
+          -delegation_entry_priority(entry),
+          -index
+        }
+      end,
+      fn -> nil end
+    )
+  end
+
+  defp delegation_role_capacity do
+    active_agents =
+      Agents.list_agents()
+      |> Enum.filter(&(&1.status == "active"))
+
+    all_work_items = list_work_items(limit: 500, preload: false)
+    role_queue_backlog = build_role_queue_backlog(all_work_items, active_agents)
+
+    build_worker_pressure(all_work_items, active_agents, role_queue_backlog)
+    |> Enum.group_by(& &1.role)
+    |> Map.new(fn {role, workers} ->
+      {role,
+       %{
+         total_workers: length(workers),
+         idle_workers: Enum.count(workers, &(&1.capacity_posture == "idle")),
+         available_workers: Enum.count(workers, &(&1.capacity_posture == "available")),
+         busy_workers: Enum.count(workers, &(&1.capacity_posture == "busy")),
+         saturated_workers: Enum.count(workers, &(&1.capacity_posture == "saturated")),
+         active_claimed_count: Enum.reduce(workers, 0, &(&1.active_claimed_count + &2)),
+         shared_role_queue_count:
+           Enum.max(Enum.map(workers, &(&1.shared_role_queue_count || 0)), fn -> 0 end)
+       }}
+    end)
+  end
+
+  defp delegation_active_role_counts(items) when is_list(items) do
+    items
+    |> Enum.reduce(%{}, fn item, acc ->
+      status = item["status"] || item[:status]
+      role = item["assigned_role"] || item[:assigned_role] || item["role"] || item[:role]
+
+      if role in [nil, ""] or status in (@terminal_work_item_statuses ++ ["pending_dispatch"]) do
+        acc
+      else
+        Map.update(acc, role, 1, &(&1 + 1))
+      end
+    end)
+  end
+
+  defp delegation_active_role_counts(_items), do: %{}
+
+  defp delegation_role_capacity_score(pressure) when is_map(pressure) do
+    (pressure[:idle_workers] || pressure["idle_workers"] || 0) * 4.0 +
+      (pressure[:available_workers] || pressure["available_workers"] || 0) * 2.0 +
+      (pressure[:busy_workers] || pressure["busy_workers"] || 0) * 0.5 -
+      (pressure[:saturated_workers] || pressure["saturated_workers"] || 0) * 3.0 -
+      min(pressure[:shared_role_queue_count] || pressure["shared_role_queue_count"] || 0, 8) *
+        0.25 -
+      min(pressure[:active_claimed_count] || pressure["active_claimed_count"] || 0, 8) * 0.15
+  end
+
+  defp delegation_role_capacity_score(_pressure), do: 0.0
+
+  defp delegation_entry_priority(entry) when is_map(entry) do
+    entry["priority"] || entry[:priority] || 0
+  end
+
+  defp delegation_entry_priority(_entry), do: 0
 
   defp dispatch_delegated_batch_item(%WorkItem{} = work_item, %AgentProfile{} = agent, entry) do
     child_goal = entry["goal"]
@@ -4385,6 +4531,15 @@ defmodule HydraX.Runtime.WorkItems do
         item["status"] == "pending_dispatch" or is_nil(item["id"])
       end)
 
+    pending_roles =
+      child_entries
+      |> Enum.filter(fn item ->
+        item["status"] == "pending_dispatch" or is_nil(item["id"])
+      end)
+      |> Enum.map(&(&1["assigned_role"] || &1["role"]))
+      |> Enum.reject(&(&1 in [nil, ""]))
+      |> Enum.frequencies()
+
     completed_count = Enum.count(child_entries, &(&1["status"] == "completed"))
     failed_count = Enum.count(child_entries, &(&1["status"] == "failed"))
     canceled_count = Enum.count(child_entries, &(&1["status"] == "canceled"))
@@ -4407,6 +4562,7 @@ defmodule HydraX.Runtime.WorkItems do
       %{
         "mode" => if(expected_count > 1, do: "parallel", else: "single"),
         "expected_count" => expected_count,
+        "batch_strategy" => delegation_batch_strategy(work_item, metadata_snapshot),
         "batch_concurrency" =>
           delegation_batch_concurrency(
             work_item,
@@ -4415,6 +4571,7 @@ defmodule HydraX.Runtime.WorkItems do
           ),
         "dispatched_count" => dispatched_count,
         "pending_count" => pending_count,
+        "pending_roles" => pending_roles,
         "active_count" => active_count,
         "terminal_count" => terminal_count,
         "completed_count" => completed_count,
@@ -4553,20 +4710,42 @@ defmodule HydraX.Runtime.WorkItems do
   defp delegation_batch_concurrency(%WorkItem{} = work_item, expected_count, _seeded_concurrency) do
     metadata = work_item.metadata || %{}
 
-    metadata["delegate_batch_concurrency"] ||
-      get_in(metadata, ["delegation_batch", "batch_concurrency"]) ||
-      expected_count
-      |> clamp_delegation_batch_concurrency(expected_count)
+    value =
+      metadata["delegate_batch_concurrency"] ||
+        get_in(metadata, ["delegation_batch", "batch_concurrency"]) ||
+        expected_count
+
+    clamp_delegation_batch_concurrency(value, expected_count)
   end
 
   defp delegation_batch_concurrency(work_item, expected_count, _seeded_concurrency)
        when is_map(work_item) do
     metadata = work_item_metadata(work_item)
 
-    metadata["delegate_batch_concurrency"] ||
-      get_in(metadata, ["delegation_batch", "batch_concurrency"]) ||
-      expected_count
-      |> clamp_delegation_batch_concurrency(expected_count)
+    value =
+      metadata["delegate_batch_concurrency"] ||
+        get_in(metadata, ["delegation_batch", "batch_concurrency"]) ||
+        expected_count
+
+    clamp_delegation_batch_concurrency(value, expected_count)
+  end
+
+  defp delegation_batch_strategy(work_item), do: delegation_batch_strategy(work_item, nil)
+
+  defp delegation_batch_strategy(%WorkItem{} = work_item, seeded_snapshot) do
+    delegation_batch_strategy_from_metadata(work_item.metadata || %{}, seeded_snapshot)
+  end
+
+  defp delegation_batch_strategy(work_item, seeded_snapshot) when is_map(work_item) do
+    delegation_batch_strategy_from_metadata(work_item_metadata(work_item), seeded_snapshot)
+  end
+
+  defp delegation_batch_strategy_from_metadata(metadata, seeded_snapshot)
+       when is_map(metadata) and (is_map(seeded_snapshot) or is_nil(seeded_snapshot)) do
+    metadata["delegate_batch_strategy"] ||
+      get_in(metadata, ["delegation_batch", "batch_strategy"]) ||
+      (seeded_snapshot && seeded_snapshot["batch_strategy"]) ||
+      "ordered"
   end
 
   defp clamp_delegation_batch_concurrency(value, expected_count)

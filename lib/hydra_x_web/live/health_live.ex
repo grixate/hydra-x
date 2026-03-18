@@ -927,7 +927,7 @@ defmodule HydraXWeb.HealthLive do
                     · expiry {event.expired_by}
                   </span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip                                   {event.ip}</span>
+                  <span :if={event.ip}> · ip                                    {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -2395,8 +2395,9 @@ defmodule HydraXWeb.HealthLive do
     case Runtime.delegation_batch_snapshot(item) do
       %{} = snapshot ->
         [
-          "delegation #{snapshot["mode"]} · concurrency #{snapshot["batch_concurrency"] || 1} · completed #{snapshot["completed_count"] || 0} · failed #{snapshot["failed_count"] || 0} · canceled #{snapshot["canceled_count"] || 0}",
-          autonomy_delegation_roles_line(snapshot)
+          "delegation #{snapshot["mode"]} · strategy #{snapshot["batch_strategy"] || "ordered"} · concurrency #{snapshot["batch_concurrency"] || 1} · completed #{snapshot["completed_count"] || 0} · failed #{snapshot["failed_count"] || 0} · canceled #{snapshot["canceled_count"] || 0}",
+          autonomy_delegation_roles_line(snapshot),
+          autonomy_delegation_pending_roles_line(snapshot)
         ]
         |> Enum.reject(&is_nil_or_empty/1)
         |> case do
@@ -2414,6 +2415,18 @@ defmodule HydraXWeb.HealthLive do
   end
 
   defp autonomy_delegation_roles_line(_snapshot), do: nil
+
+  defp autonomy_delegation_pending_roles_line(%{"pending_roles" => pending_roles})
+       when is_map(pending_roles) and map_size(pending_roles) > 0 do
+    pending_roles =
+      pending_roles
+      |> Enum.sort_by(fn {role, _count} -> role end)
+      |> Enum.map_join(", ", fn {role, count} -> "#{role} x#{count}" end)
+
+    "pending roles #{pending_roles}"
+  end
+
+  defp autonomy_delegation_pending_roles_line(_snapshot), do: nil
 
   defp autonomy_delegation_pending_summary(%{"pending_count" => count})
        when is_integer(count) and count > 0 do

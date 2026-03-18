@@ -458,6 +458,7 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "cooldown until 2026-03-18 10:15:00 UTC"
     assert html =~ delegation_parent.goal
     assert html =~ "delegation batch 2 · active 1 · terminal 1"
+    assert html =~ "strategy ordered"
     assert html =~ "delegation roles researcher, operator"
     assert html =~ "Operator confirmed the rollout."
     assert html =~ "ownership #{local_owner} · completed"

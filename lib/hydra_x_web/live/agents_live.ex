@@ -1802,8 +1802,9 @@ defmodule HydraXWeb.AgentsLive do
     case Runtime.delegation_batch_snapshot(work_item) do
       %{} = snapshot ->
         [
-          "delegation #{snapshot["mode"]} · concurrency #{snapshot["batch_concurrency"] || 1} · completed #{snapshot["completed_count"] || 0} · failed #{snapshot["failed_count"] || 0} · canceled #{snapshot["canceled_count"] || 0}",
-          delegation_roles_line(snapshot)
+          "delegation #{snapshot["mode"]} · strategy #{snapshot["batch_strategy"] || "ordered"} · concurrency #{snapshot["batch_concurrency"] || 1} · completed #{snapshot["completed_count"] || 0} · failed #{snapshot["failed_count"] || 0} · canceled #{snapshot["canceled_count"] || 0}",
+          delegation_roles_line(snapshot),
+          delegation_pending_roles_line(snapshot)
         ]
         |> Enum.reject(&(&1 in [nil, ""]))
         |> case do
@@ -1821,6 +1822,18 @@ defmodule HydraXWeb.AgentsLive do
   end
 
   defp delegation_roles_line(_snapshot), do: nil
+
+  defp delegation_pending_roles_line(%{"pending_roles" => pending_roles})
+       when is_map(pending_roles) and map_size(pending_roles) > 0 do
+    pending_roles =
+      pending_roles
+      |> Enum.sort_by(fn {role, _count} -> role end)
+      |> Enum.map_join(", ", fn {role, count} -> "#{role} x#{count}" end)
+
+    "pending roles #{pending_roles}"
+  end
+
+  defp delegation_pending_roles_line(_snapshot), do: nil
 
   defp delegation_pending_summary(%{"pending_count" => count})
        when is_integer(count) and count > 0,

@@ -1462,6 +1462,7 @@ defmodule HydraX.ReportTest do
 
     assert markdown =~ "delegation=parallel:2:active=1:terminal=1"
     assert markdown =~ "delegation_roles=researcher,operator"
+    assert markdown =~ "delegation_strategy=ordered"
     assert json =~ "\"delegation_batch_summary\": \"parallel:2:active=1:terminal=1\""
     assert json =~ "\"expected_count\": 2"
   end

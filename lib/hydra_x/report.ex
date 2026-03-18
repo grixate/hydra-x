@@ -839,6 +839,8 @@ defmodule HydraX.Report do
       %{} = snapshot ->
         [
           delegation_roles_detail(snapshot),
+          delegation_pending_roles_detail(snapshot),
+          "delegation_strategy=#{snapshot["batch_strategy"] || "ordered"}",
           "delegation_concurrency=#{snapshot["batch_concurrency"] || 1}",
           "delegation_completed=#{snapshot["completed_count"] || 0}",
           "delegation_failed=#{snapshot["failed_count"] || 0}",
@@ -856,6 +858,18 @@ defmodule HydraX.Report do
   end
 
   defp delegation_roles_detail(_snapshot), do: nil
+
+  defp delegation_pending_roles_detail(%{"pending_roles" => pending_roles})
+       when is_map(pending_roles) and map_size(pending_roles) > 0 do
+    pending_roles =
+      pending_roles
+      |> Enum.sort_by(fn {role, _count} -> role end)
+      |> Enum.map_join(",", fn {role, count} -> "#{role}:#{count}" end)
+
+    "delegation_pending_roles=#{pending_roles}"
+  end
+
+  defp delegation_pending_roles_detail(_snapshot), do: nil
 
   defp report_delegation_pending_summary(%{"pending_count" => count})
        when is_integer(count) and count > 0 do

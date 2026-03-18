@@ -4376,6 +4376,73 @@ defmodule HydraX.RuntimeTest do
     assert get_in(finalized_parent.metadata || %{}, ["delegation_batch", "completed_count"]) == 3
   end
 
+  test "planner can balance delegation batches across role pools" do
+    planner =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, planner} = Runtime.save_agent(planner, %{"role" => "planner"})
+
+    researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, _researcher} = Runtime.save_agent(researcher, %{"role" => "researcher"})
+
+    operator =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, _operator} = Runtime.save_agent(operator, %{"role" => "operator"})
+
+    {:ok, parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Coordinate a role-balanced delegation batch for operator readiness.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "execution_mode" => "delegate",
+        "priority" => 9,
+        "metadata" => %{
+          "delegate_batch_concurrency" => 2,
+          "delegate_batch_strategy" => "balance_roles",
+          "delegate_batch" => [
+            %{
+              "goal" => "Assess report export evidence requirements.",
+              "role" => "researcher"
+            },
+            %{
+              "goal" => "Assess operator-facing review requirements.",
+              "role" => "researcher"
+            },
+            %{
+              "goal" => "Prepare an operator-ready fallback note.",
+              "role" => "operator",
+              "kind" => "task"
+            }
+          ]
+        }
+      })
+
+    assert {:ok, planner_summary} = Runtime.run_autonomy_cycle(planner.id)
+    assert planner_summary.action == "delegated"
+
+    delegated_roles =
+      planner_summary.delegated_work_items
+      |> Enum.map(& &1.assigned_role)
+      |> Enum.sort()
+
+    assert delegated_roles == ["operator", "researcher"]
+
+    parent = Runtime.get_work_item!(parent.id)
+    batch_snapshot = Runtime.delegation_batch_snapshot(parent)
+
+    assert batch_snapshot["batch_strategy"] == "balance_roles"
+    assert batch_snapshot["batch_concurrency"] == 2
+    assert batch_snapshot["pending_roles"] == %{"researcher" => 1}
+    assert Enum.sort(batch_snapshot["roles"]) == ["operator", "researcher"]
+  end
+
   test "research work items create a decision ledger and promote approved memories" do
     researcher =
       create_agent()
