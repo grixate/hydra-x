@@ -151,7 +151,12 @@ defmodule HydraXWeb.AgentsLiveTest do
             "strategy" => "role_capability_match",
             "resolved_agent_name" => "Research Agent",
             "resolved_agent_slug" => "research-agent",
-            "reasons" => ["exact role match", "supports channel delivery", "queue clear"]
+            "reasons" => [
+              "exact role match",
+              "supports channel delivery",
+              "pressure idle",
+              "queue clear"
+            ]
           },
           "follow_up_context" => %{
             "delivery_decisions" => [
@@ -307,7 +312,7 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "assigned Research Agent via role capability match"
 
     assert html =~
-             "assignment Research Agent: exact role match, supports channel delivery, queue clear"
+             "assignment Research Agent: exact role match, supports channel delivery, pressure idle, queue clear"
 
     assert html =~ "Role backlog"
     assert html =~ "Queue posture"

@@ -4041,13 +4041,19 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp build_assignment_candidates(agents, attrs) do
     pending_counts = pending_assignment_counts(agents)
+    pressure_by_agent_id = assignment_worker_pressure(agents)
 
     Enum.map(agents, fn agent ->
-      build_assignment_candidate(agent, attrs, Map.get(pending_counts, agent.id, 0))
+      build_assignment_candidate(
+        agent,
+        attrs,
+        Map.get(pending_counts, agent.id, 0),
+        Map.get(pressure_by_agent_id, agent.id, %{})
+      )
     end)
   end
 
-  defp build_assignment_candidate(agent, attrs, pending_count) do
+  defp build_assignment_candidate(agent, attrs, pending_count, pressure) do
     profile = capability_profile(agent)
     required_artifact_types = required_assignment_artifact_types(attrs)
     required_delivery_modes = required_assignment_delivery_modes(attrs)
@@ -4058,6 +4064,13 @@ defmodule HydraX.Runtime.WorkItems do
     side_effect_allowed = Autonomy.side_effect_allowed?(profile, side_effect_class)
     artifact_match = capability_supports_artifacts?(profile, required_artifact_types)
     delivery_match = capability_supports_delivery_modes?(profile, required_delivery_modes)
+    capacity_posture = pressure[:capacity_posture] || pressure["capacity_posture"]
+
+    active_claimed_count =
+      pressure[:active_claimed_count] || pressure["active_claimed_count"] || 0
+
+    shared_role_queue_count =
+      pressure[:shared_role_queue_count] || pressure["shared_role_queue_count"] || 0
 
     match? = autonomy_allowed and side_effect_allowed and artifact_match and delivery_match
 
@@ -4070,7 +4083,10 @@ defmodule HydraX.Runtime.WorkItems do
         |> maybe_add_score(artifact_match, 2.0)
         |> maybe_add_score(delivery_match, 2.0)
         |> maybe_add_score(agent.is_default, 0.5)
+        |> Kernel.+(assignment_capacity_bonus(capacity_posture))
+        |> Kernel.-(min(active_claimed_count, 4) * 0.35)
         |> Kernel.-(min(pending_count, 12) * 0.25)
+        |> Kernel.-(min(shared_role_queue_count, 8) * 0.1)
       else
         -1.0
       end
@@ -4080,6 +4096,9 @@ defmodule HydraX.Runtime.WorkItems do
       match?: match?,
       score: score,
       pending_count: pending_count,
+      capacity_posture: capacity_posture,
+      active_claimed_count: active_claimed_count,
+      shared_role_queue_count: shared_role_queue_count,
       role_match: role_match,
       reasons:
         assignment_reasons(
@@ -4088,7 +4107,10 @@ defmodule HydraX.Runtime.WorkItems do
           side_effect_class,
           required_delivery_modes,
           required_artifact_types,
-          pending_count
+          pending_count,
+          capacity_posture,
+          active_claimed_count,
+          shared_role_queue_count
         )
     }
   end
@@ -4113,10 +4135,24 @@ defmodule HydraX.Runtime.WorkItems do
           "resolved_role" => candidate.agent.role,
           "score" => Float.round(candidate.score, 2),
           "pending_work_items" => candidate.pending_count,
+          "capacity_posture" => candidate.capacity_posture,
+          "active_claimed_count" => candidate.active_claimed_count,
+          "shared_role_queue_count" => candidate.shared_role_queue_count,
           "reasons" => candidate.reasons
         }
       }
     end
+  end
+
+  defp assignment_worker_pressure([]), do: %{}
+
+  defp assignment_worker_pressure(agents) do
+    all_work_items = list_work_items(limit: 500, preload: false)
+    role_queue_backlog = build_role_queue_backlog(all_work_items, agents)
+
+    all_work_items
+    |> build_worker_pressure(agents, role_queue_backlog)
+    |> Map.new(&{&1.agent_id, &1})
   end
 
   defp pending_assignment_counts(agents) do
@@ -4191,7 +4227,10 @@ defmodule HydraX.Runtime.WorkItems do
          side_effect_class,
          required_delivery_modes,
          required_artifact_types,
-         pending_count
+         pending_count,
+         capacity_posture,
+         active_claimed_count,
+         shared_role_queue_count
        ) do
     [
       role_match && "exact role match",
@@ -4200,12 +4239,21 @@ defmodule HydraX.Runtime.WorkItems do
         "supports #{Enum.join(required_delivery_modes, "/")} delivery",
       required_artifact_types != [] &&
         "produces #{Enum.join(required_artifact_types, ", ")}",
+      is_binary(capacity_posture) && "pressure #{capacity_posture}",
+      active_claimed_count > 0 && "active claims #{active_claimed_count}",
+      shared_role_queue_count > 0 && "shared backlog #{shared_role_queue_count}",
       pending_count == 0 && "queue clear",
       pending_count > 0 && "queue #{pending_count}",
       agent.is_default && "default agent"
     ]
     |> Enum.reject(&(&1 in [false, nil, ""]))
   end
+
+  defp assignment_capacity_bonus("idle"), do: 1.25
+  defp assignment_capacity_bonus("available"), do: 0.75
+  defp assignment_capacity_bonus("busy"), do: -0.5
+  defp assignment_capacity_bonus("saturated"), do: -3.0
+  defp assignment_capacity_bonus(_posture), do: 0.0
 
   defp maybe_add_score(score, true, value), do: score + value
   defp maybe_add_score(score, _condition, _value), do: score

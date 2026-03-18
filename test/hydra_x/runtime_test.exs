@@ -4443,6 +4443,8 @@ defmodule HydraX.RuntimeTest do
     assert get_in(item.metadata || %{}, ["assignment_resolution", "resolved_agent_id"]) ==
              builder_two.id
 
+    assert get_in(item.metadata || %{}, ["assignment_resolution", "capacity_posture"]) == "idle"
+    assert "pressure idle" in get_in(item.metadata || %{}, ["assignment_resolution", "reasons"])
     assert "queue clear" in get_in(item.metadata || %{}, ["assignment_resolution", "reasons"])
   end
 
