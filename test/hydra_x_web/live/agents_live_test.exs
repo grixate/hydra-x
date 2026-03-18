@@ -419,6 +419,41 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "worker saturated (saturated)"
   end
 
+  test "agents page shows saturated role dispatch skips", %{conn: conn} do
+    {:ok, agent} =
+      Runtime.save_agent(%{
+        name: "Dispatch Agent",
+        slug: "dispatch-agent",
+        role: "researcher",
+        workspace_root: Path.join(System.tmp_dir!(), "hydra-x-dispatch-agent"),
+        description: "dispatch",
+        is_default: false
+      })
+
+    Runtime.Jobs.record_scheduler_pass(:role_queue_dispatches, %{
+      owner: "node:agents-test",
+      processed_count: 0,
+      pressure_skipped_count: 1,
+      skipped_count: 1,
+      error_count: 0,
+      results: [
+        %{
+          agent_id: agent.id,
+          agent_name: agent.name,
+          role: agent.role,
+          status: "skipped",
+          action: "worker_saturated",
+          reason: "worker_saturated",
+          capacity_posture: "saturated"
+        }
+      ]
+    })
+
+    {:ok, _view, html} = live(conn, ~p"/agents")
+
+    assert html =~ "recent role dispatch saturated (saturated)"
+  end
+
   test "agents page highlights degraded review queues and degraded publish drafts", %{conn: conn} do
     {:ok, agent} =
       Runtime.save_agent(%{

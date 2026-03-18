@@ -102,6 +102,7 @@ defmodule HydraXWeb.HealthLiveTest do
     Runtime.Jobs.record_scheduler_pass(:role_queue_dispatches, %{
       owner: "node:test",
       processed_count: 6,
+      pressure_skipped_count: 2,
       skipped_count: 2,
       error_count: 0,
       results: []

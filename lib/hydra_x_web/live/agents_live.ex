@@ -1375,7 +1375,15 @@ defmodule HydraXWeb.AgentsLive do
       result ->
         action = result[:action] || result["action"]
         work_item_id = result[:work_item_id] || result["work_item_id"]
-        "recent role dispatch #{action}#{if work_item_id, do: " ##{work_item_id}", else: ""}"
+        posture = result[:capacity_posture] || result["capacity_posture"]
+
+        case action do
+          "worker_saturated" ->
+            "recent role dispatch saturated#{if is_binary(posture), do: " (#{posture})", else: ""}"
+
+          _ ->
+            "recent role dispatch #{action}#{if work_item_id, do: " ##{work_item_id}", else: ""}"
+        end
     end
   end
 

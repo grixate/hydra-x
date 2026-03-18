@@ -6595,6 +6595,55 @@ defmodule HydraX.RuntimeTest do
     assert get_in(child.metadata || %{}, ["assignment_resolution", "strategy"]) == "worker_claim"
   end
 
+  test "role queue dispatch skips saturated workers until capacity is available" do
+    saturated_researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, saturated_researcher} =
+      Runtime.save_agent(saturated_researcher, %{
+        "role" => "researcher",
+        "name" => "Researcher Saturated",
+        "slug" => "researcher-saturated-#{System.unique_integer([:positive])}"
+      })
+
+    for idx <- 1..4 do
+      {:ok, _work_item} =
+        Runtime.save_work_item(%{
+          "kind" => "research",
+          "goal" => "Keep the saturated researcher occupied #{idx}.",
+          "assigned_agent_id" => saturated_researcher.id,
+          "assigned_role" => "researcher",
+          "status" => "planned"
+        })
+    end
+
+    {:ok, role_queued_work} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Wait for a non-saturated researcher before claiming this task.",
+        "assigned_role" => "researcher",
+        "status" => "planned",
+        "metadata" => %{"assignment_mode" => "role_claim"}
+      })
+
+    summary = Runtime.process_role_queued_work(limit: 10)
+
+    assert summary.processed_count == 0
+    assert summary.pressure_skipped_count == 1
+    assert summary.skipped_count >= 1
+
+    assert Enum.any?(summary.results, fn result ->
+             result[:agent_id] == saturated_researcher.id and
+               result[:action] == "worker_saturated" and
+               result[:capacity_posture] == "saturated"
+           end)
+
+    refreshed = Runtime.get_work_item!(role_queued_work.id)
+    assert refreshed.status == "planned"
+    assert is_nil(refreshed.assigned_agent_id)
+  end
+
   test "same-role workers do not claim work that is specifically assigned to another active worker" do
     assigned_researcher =
       create_agent()

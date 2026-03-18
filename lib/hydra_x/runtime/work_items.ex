@@ -1279,15 +1279,22 @@ defmodule HydraX.Runtime.WorkItems do
           if acc.processed_count >= limit do
             {:halt, {acc, progressed?}}
           else
-            case run_autonomy_cycle(agent.id, opts) do
-              {:ok, %{status: "idle"}} ->
-                {:cont, {accumulate_role_queue_skip(acc, agent), progressed?}}
+            pressure = worker_pressure_entry(agent.id) || %{}
 
-              {:ok, result} ->
-                {:cont, {accumulate_role_queue_result(acc, agent, result), true}}
+            if pressure[:capacity_posture] == "saturated" do
+              {:cont,
+               {accumulate_role_queue_skip(acc, agent, "worker_saturated", pressure), progressed?}}
+            else
+              case run_autonomy_cycle(agent.id, opts) do
+                {:ok, %{status: "idle"}} ->
+                  {:cont, {accumulate_role_queue_skip(acc, agent), progressed?}}
 
-              {:error, reason} ->
-                {:cont, {accumulate_role_queue_error(acc, agent, reason), progressed?}}
+                {:ok, result} ->
+                  {:cont, {accumulate_role_queue_result(acc, agent, result), true}}
+
+                {:error, reason} ->
+                  {:cont, {accumulate_role_queue_error(acc, agent, reason), progressed?}}
+              end
             end
           end
         end)
@@ -1304,6 +1311,7 @@ defmodule HydraX.Runtime.WorkItems do
     %{
       owner: owner,
       processed_count: 0,
+      pressure_skipped_count: 0,
       skipped_count: 0,
       error_count: 0,
       rounds: 0,
@@ -1430,17 +1438,21 @@ defmodule HydraX.Runtime.WorkItems do
     }
   end
 
-  defp accumulate_role_queue_skip(acc, %AgentProfile{} = agent) do
+  defp accumulate_role_queue_skip(acc, %AgentProfile{} = agent, reason \\ "idle", pressure \\ %{}) do
     %{
       acc
       | skipped_count: acc.skipped_count + 1,
+        pressure_skipped_count:
+          acc.pressure_skipped_count + if(reason == "worker_saturated", do: 1, else: 0),
         results: [
           %{
             agent_id: agent.id,
             agent_name: agent.name,
             role: agent.role,
-            status: "idle",
-            action: "idle"
+            status: if(reason == "worker_saturated", do: "skipped", else: "idle"),
+            action: if(reason == "worker_saturated", do: "worker_saturated", else: "idle"),
+            reason: reason,
+            capacity_posture: pressure[:capacity_posture] || pressure["capacity_posture"]
           }
           | acc.results
         ]

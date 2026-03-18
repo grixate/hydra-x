@@ -927,7 +927,7 @@ defmodule HydraXWeb.HealthLive do
                     · expiry {event.expired_by}
                   </span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip                          {event.ip}</span>
+                  <span :if={event.ip}> · ip                           {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -1501,11 +1501,7 @@ defmodule HydraXWeb.HealthLive do
               Role queue dispatch
             </div>
             <p class="mt-3 text-sm text-[var(--hx-mute)]">
-              {scheduler_pass_detail(
-                @scheduler_status.role_queue_dispatches,
-                "processed_count",
-                "processed"
-              )}
+              {role_queue_dispatch_detail(@scheduler_status.role_queue_dispatches)}
             </p>
           </article>
           <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
@@ -2088,6 +2084,10 @@ defmodule HydraXWeb.HealthLive do
 
   defp scheduler_pass_detail(pass, primary_key, verb) do
     "#{verb} #{scheduler_count_value(pass, primary_key)} · skipped #{scheduler_count_value(pass, "skipped_count")} · errors #{scheduler_count_value(pass, "error_count")} · owner #{scheduler_owner_value(pass) || "unknown"}"
+  end
+
+  defp role_queue_dispatch_detail(pass) do
+    "processed #{scheduler_count_value(pass, "processed_count")} · pressure skipped #{scheduler_count_value(pass, "pressure_skipped_count")} · skipped #{scheduler_count_value(pass, "skipped_count")} · errors #{scheduler_count_value(pass, "error_count")} · owner #{scheduler_owner_value(pass) || "unknown"}"
   end
 
   defp assignment_recovery_label(pass) do
