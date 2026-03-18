@@ -403,15 +403,35 @@ defmodule HydraX.Runtime.WorkItems do
           {:ok, claimed} ->
             case reassign_orphaned_work_item(claimed) do
               {:ok, recovered_work_item, %AgentProfile{} = recovered_agent} ->
-                case run_autonomy_cycle(
-                       recovered_agent.id,
-                       Keyword.put(opts, :work_item_id, recovered_work_item.id)
-                     ) do
-                  {:ok, result} ->
-                    accumulate_reassigned_work_item(acc, recovered_work_item, result)
+                if recover_work_item_immediately?(recovered_agent) do
+                  case run_autonomy_cycle(
+                         recovered_agent.id,
+                         Keyword.put(opts, :work_item_id, recovered_work_item.id)
+                       ) do
+                    {:ok, result} ->
+                      accumulate_reassigned_work_item(
+                        acc,
+                        recovered_work_item,
+                        result,
+                        "reassigned_executed"
+                      )
 
-                  {:error, reason} ->
-                    accumulate_reassignment_error(acc, recovered_work_item, reason)
+                    {:error, reason} ->
+                      accumulate_reassignment_error(acc, recovered_work_item, reason)
+                  end
+                else
+                  case queue_recovered_work_item(recovered_work_item, claimed) do
+                    {:ok, queued_work_item} ->
+                      accumulate_reassigned_work_item(
+                        acc,
+                        queued_work_item,
+                        %{status: queued_work_item.status, action: "reassigned_queued"},
+                        "reassigned_queued"
+                      )
+
+                    {:error, reason} ->
+                      accumulate_reassignment_error(acc, recovered_work_item, reason)
+                  end
                 end
 
               {:error, :missing_agent} ->
@@ -1287,23 +1307,29 @@ defmodule HydraX.Runtime.WorkItems do
     %{
       owner: owner,
       recovered_count: 0,
+      executed_count: 0,
+      queued_count: 0,
       skipped_count: 0,
       error_count: 0,
       results: []
     }
   end
 
-  defp accumulate_reassigned_work_item(acc, %WorkItem{} = work_item, result) do
+  defp accumulate_reassigned_work_item(acc, %WorkItem{} = work_item, result, action_override) do
+    action = action_override
+
     entry = %{
       work_item_id: work_item.id,
       assigned_agent_id: work_item.assigned_agent_id,
       status: result.status,
-      action: result[:action] || "reassigned"
+      action: action
     }
 
     %{
       acc
       | recovered_count: acc.recovered_count + 1,
+        executed_count: acc.executed_count + if(action == "reassigned_executed", do: 1, else: 0),
+        queued_count: acc.queued_count + if(action == "reassigned_queued", do: 1, else: 0),
         results: [entry | acc.results]
     }
   end
@@ -1336,6 +1362,42 @@ defmodule HydraX.Runtime.WorkItems do
       | error_count: acc.error_count + 1,
         results: [entry | acc.results]
     }
+  end
+
+  defp recover_work_item_immediately?(%AgentProfile{id: agent_id}) do
+    case worker_pressure_entry(agent_id) do
+      %{capacity_posture: "saturated"} -> false
+      _ -> true
+    end
+  end
+
+  defp worker_pressure_entry(agent_id) do
+    all_work_items = list_work_items(limit: 500, preload: false)
+
+    autonomy_agents =
+      Agents.list_agents()
+      |> Enum.filter(&(Map.get(capability_profile(&1), "max_autonomy_level") != "observe"))
+
+    role_queue_backlog = build_role_queue_backlog(all_work_items, autonomy_agents)
+
+    all_work_items
+    |> build_worker_pressure(autonomy_agents, role_queue_backlog)
+    |> Enum.find(&(&1.agent_id == agent_id))
+  end
+
+  defp queue_recovered_work_item(%WorkItem{} = work_item, %WorkItem{} = claimed) do
+    with {:ok, queued} <-
+           save_work_item(work_item, %{
+             "runtime_state" =>
+               append_history(work_item.runtime_state, work_item.status || "planned", %{
+                 "queued_at" => DateTime.utc_now(),
+                 "phase" => "assignment_recovery",
+                 "reason" => "worker_saturated"
+               })
+           }),
+         {:ok, released} <- release_claimed_work_item(queued, claimed) do
+      {:ok, released}
+    end
   end
 
   defp accumulate_role_queue_result(acc, %AgentProfile{} = agent, result) do

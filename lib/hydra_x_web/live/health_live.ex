@@ -927,7 +927,7 @@ defmodule HydraXWeb.HealthLive do
                     · expiry {event.expired_by}
                   </span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip                         {event.ip}</span>
+                  <span :if={event.ip}> · ip                          {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -1435,7 +1435,7 @@ defmodule HydraXWeb.HealthLive do
         <p class="mt-3 text-sm text-[var(--hx-mute)]">
           coordination {scheduler_coordination_label(@scheduler_status.coordination)} · ingress{" "}
           {scheduler_pass_label(@scheduler_status.pending_ingress, "processed_count")} · work items{" "}
-          {scheduler_pass_label(@scheduler_status.assignment_recoveries, "recovered_count")} · queue{" "}
+          {assignment_recovery_label(@scheduler_status.assignment_recoveries)} · queue{" "}
           {scheduler_pass_label(@scheduler_status.role_queue_dispatches, "processed_count")} · replays{" "}
           {scheduler_pass_label(@scheduler_status.work_item_replays, "resumed_count")} · handoffs{" "}
           {scheduler_pass_label(@scheduler_status.ownership_handoffs, "resumed_count")} · deliveries{" "}
@@ -1493,11 +1493,7 @@ defmodule HydraXWeb.HealthLive do
               Assignment recovery
             </div>
             <p class="mt-3 text-sm text-[var(--hx-mute)]">
-              {scheduler_pass_detail(
-                @scheduler_status.assignment_recoveries,
-                "recovered_count",
-                "recovered"
-              )}
+              {assignment_recovery_detail(@scheduler_status.assignment_recoveries)}
             </p>
           </article>
           <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
@@ -2092,6 +2088,17 @@ defmodule HydraXWeb.HealthLive do
 
   defp scheduler_pass_detail(pass, primary_key, verb) do
     "#{verb} #{scheduler_count_value(pass, primary_key)} · skipped #{scheduler_count_value(pass, "skipped_count")} · errors #{scheduler_count_value(pass, "error_count")} · owner #{scheduler_owner_value(pass) || "unknown"}"
+  end
+
+  defp assignment_recovery_label(pass) do
+    recovered = scheduler_count_value(pass, "recovered_count")
+    executed = scheduler_count_value(pass, "executed_count")
+    queued = scheduler_count_value(pass, "queued_count")
+    "#{recovered} recovered (#{executed} executed, #{queued} queued)"
+  end
+
+  defp assignment_recovery_detail(pass) do
+    "recovered #{scheduler_count_value(pass, "recovered_count")} · executed #{scheduler_count_value(pass, "executed_count")} · queued #{scheduler_count_value(pass, "queued_count")} · skipped #{scheduler_count_value(pass, "skipped_count")} · errors #{scheduler_count_value(pass, "error_count")} · owner #{scheduler_owner_value(pass) || "unknown"}"
   end
 
   defp job_run_status_reason(%{metadata: metadata}) when is_map(metadata) do

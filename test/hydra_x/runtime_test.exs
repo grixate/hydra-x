@@ -6324,7 +6324,7 @@ defmodule HydraX.RuntimeTest do
     assert summary.recovered_count == 1
 
     assert Enum.any?(summary.results, fn result ->
-             result[:work_item_id] == work_item.id and result[:action] == "researched"
+             result[:work_item_id] == work_item.id and result[:action] == "reassigned_executed"
            end)
 
     refreshed = Runtime.get_work_item!(work_item.id)
@@ -6392,6 +6392,72 @@ defmodule HydraX.RuntimeTest do
     assert ownership["owner"] == "node:remote-assignment"
     assert ownership["stage"] == "claimed_remote"
     assert ownership["active"] == true
+  end
+
+  test "orphaned assignment recovery queues work when the recovered worker is saturated" do
+    inactive_researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, inactive_researcher} =
+      Runtime.save_agent(inactive_researcher, %{
+        "role" => "researcher",
+        "status" => "paused",
+        "name" => "Queued Recovery Unavailable Researcher",
+        "slug" => "queued-recovery-unavailable-#{System.unique_integer([:positive])}"
+      })
+
+    active_researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, active_researcher} =
+      Runtime.save_agent(active_researcher, %{
+        "role" => "researcher",
+        "name" => "Queued Recovery Ready Researcher",
+        "slug" => "queued-recovery-ready-#{System.unique_integer([:positive])}"
+      })
+
+    for idx <- 1..4 do
+      {:ok, _work_item} =
+        Runtime.save_work_item(%{
+          "kind" => "research",
+          "goal" => "Saturate recovered worker slot #{idx}.",
+          "assigned_agent_id" => active_researcher.id,
+          "assigned_role" => "researcher",
+          "status" => "planned"
+        })
+    end
+
+    {:ok, work_item} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" =>
+          "Recover this orphaned assignment without forcing a saturated worker to run it.",
+        "assigned_agent_id" => inactive_researcher.id,
+        "assigned_role" => "researcher",
+        "status" => "planned"
+      })
+
+    summary = Runtime.recover_orphaned_work_assignments(limit: 10)
+
+    assert summary.recovered_count == 1
+    assert summary.executed_count == 0
+    assert summary.queued_count == 1
+    assert summary.skipped_count == 0
+
+    assert Enum.any?(summary.results, fn result ->
+             result[:work_item_id] == work_item.id and result[:action] == "reassigned_queued"
+           end)
+
+    refreshed = Runtime.get_work_item!(work_item.id)
+    ownership = get_in(refreshed.metadata || %{}, ["ownership"])
+
+    assert refreshed.status == "planned"
+    assert refreshed.assigned_agent_id == active_researcher.id
+    assert ownership["stage"] == "planned"
+    assert ownership["active"] == false
+    assert ownership["released_at"]
   end
 
   test "role queue dispatch processes delegated child work through active workers" do

@@ -195,7 +195,7 @@ defmodule HydraX.Report do
     - Coordination: #{render_scheduler_coordination(snapshot.scheduler.coordination)}
     - Skip reasons: #{render_skip_reason_counts(snapshot.scheduler.skipped_reason_counts)}
     - Ingress replay: #{render_scheduler_pass(snapshot.scheduler.pending_ingress, "processed_count", "processed")}
-    - Assignment recovery: #{render_scheduler_pass(snapshot.scheduler.assignment_recoveries, "recovered_count", "recovered")}
+    - Assignment recovery: #{render_assignment_recovery_pass(snapshot.scheduler.assignment_recoveries)}
     - Role queue dispatch: #{render_scheduler_pass(snapshot.scheduler.role_queue_dispatches, "processed_count", "processed")}
     - Work item replay: #{render_scheduler_pass(snapshot.scheduler.work_item_replays, "resumed_count", "resumed")}
     - Ownership replay: #{render_scheduler_pass(snapshot.scheduler.ownership_handoffs, "resumed_count", "resumed")}
@@ -291,6 +291,17 @@ defmodule HydraX.Report do
     errors = render_scheduler_count(pass, "error_count")
     owner = render_scheduler_owner(pass) || "unknown"
     "#{verb}=#{count}; skipped=#{skipped}; errors=#{errors}; owner=#{owner}"
+  end
+
+  defp render_assignment_recovery_pass(pass) do
+    recovered = render_scheduler_count(pass, "recovered_count")
+    executed = render_scheduler_count(pass, "executed_count")
+    queued = render_scheduler_count(pass, "queued_count")
+    skipped = render_scheduler_count(pass, "skipped_count")
+    errors = render_scheduler_count(pass, "error_count")
+    owner = render_scheduler_owner(pass) || "unknown"
+
+    "recovered=#{recovered}; executed=#{executed}; queued=#{queued}; skipped=#{skipped}; errors=#{errors}; owner=#{owner}"
   end
 
   defp render_role_queue_backlog_summary(entries) do

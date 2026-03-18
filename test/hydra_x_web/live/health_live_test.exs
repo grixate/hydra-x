@@ -92,6 +92,8 @@ defmodule HydraXWeb.HealthLiveTest do
     Runtime.Jobs.record_scheduler_pass(:assignment_recoveries, %{
       owner: "node:test",
       recovered_count: 1,
+      executed_count: 1,
+      queued_count: 0,
       skipped_count: 0,
       error_count: 0,
       results: []
