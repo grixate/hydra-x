@@ -25,6 +25,7 @@ defmodule HydraX.Scheduler do
        running_jobs: MapSet.new(),
        coordination: scheduler_coordination_snapshot(),
        pending_ingress: pending_ingress_snapshot(),
+       assignment_recoveries: assignment_recovery_snapshot(),
        role_queue_dispatches: role_queue_dispatch_snapshot(),
        work_item_replays: work_item_replay_snapshot(),
        ownership_handoffs: ownership_handoff_snapshot(),
@@ -59,6 +60,7 @@ defmodule HydraX.Scheduler do
   defp do_poll(state) do
     due_jobs = Runtime.list_due_scheduled_jobs(DateTime.utc_now())
     pending_ingress = Gateway.process_owned_ingress(limit: 50)
+    assignment_recoveries = Runtime.recover_orphaned_work_assignments(limit: 50)
     role_queue_dispatches = Runtime.process_role_queued_work(limit: 50)
     work_item_replays = Runtime.resume_owned_work_items(limit: 50)
     ownership_handoffs = Runtime.resume_owned_conversations(limit: 50)
@@ -90,6 +92,7 @@ defmodule HydraX.Scheduler do
        state
        | running_jobs: running_ids,
          pending_ingress: pending_ingress,
+         assignment_recoveries: assignment_recoveries,
          role_queue_dispatches: role_queue_dispatches,
          work_item_replays: work_item_replays,
          ownership_handoffs: ownership_handoffs,
@@ -166,6 +169,16 @@ defmodule HydraX.Scheduler do
     %{
       owner: Runtime.coordination_status().owner,
       resumed_count: 0,
+      skipped_count: 0,
+      error_count: 0,
+      results: []
+    }
+  end
+
+  defp assignment_recovery_snapshot do
+    %{
+      owner: Runtime.coordination_status().owner,
+      recovered_count: 0,
       skipped_count: 0,
       error_count: 0,
       results: []

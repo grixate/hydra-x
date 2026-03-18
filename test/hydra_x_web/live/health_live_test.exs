@@ -89,6 +89,14 @@ defmodule HydraXWeb.HealthLiveTest do
       results: []
     })
 
+    Runtime.Jobs.record_scheduler_pass(:assignment_recoveries, %{
+      owner: "node:test",
+      recovered_count: 1,
+      skipped_count: 0,
+      error_count: 0,
+      results: []
+    })
+
     Runtime.Jobs.record_scheduler_pass(:role_queue_dispatches, %{
       owner: "node:test",
       processed_count: 6,
@@ -126,6 +134,7 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "node:test"
     assert html =~ "Ingress replay"
     assert html =~ "processed 2"
+    assert html =~ "Assignment recovery"
     assert html =~ "Role queue dispatch"
     assert html =~ "processed 6"
     assert html =~ "Work item replay"
@@ -321,6 +330,7 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "Role-only open"
     assert html =~ "Active claims"
     assert html =~ "Remote claims"
+    assert html =~ "Orphaned assignments"
     assert html =~ "Role backlog"
     assert html =~ "Saturated workers"
     assert html =~ "Role queue backlog"

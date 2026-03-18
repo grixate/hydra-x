@@ -927,7 +927,7 @@ defmodule HydraXWeb.HealthLive do
                     · expiry {event.expired_by}
                   </span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip                        {event.ip}</span>
+                  <span :if={event.ip}> · ip                         {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -1282,6 +1282,14 @@ defmodule HydraXWeb.HealthLive do
           </article>
           <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
             <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Orphaned assignments
+            </div>
+            <div class="mt-3 font-display text-4xl">
+              {@autonomy_status.orphaned_assignment_count}
+            </div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
               Role backlog
             </div>
             <div class="mt-3 font-display text-4xl">
@@ -1427,12 +1435,13 @@ defmodule HydraXWeb.HealthLive do
         <p class="mt-3 text-sm text-[var(--hx-mute)]">
           coordination {scheduler_coordination_label(@scheduler_status.coordination)} · ingress{" "}
           {scheduler_pass_label(@scheduler_status.pending_ingress, "processed_count")} · work items{" "}
+          {scheduler_pass_label(@scheduler_status.assignment_recoveries, "recovered_count")} · queue{" "}
           {scheduler_pass_label(@scheduler_status.role_queue_dispatches, "processed_count")} · replays{" "}
           {scheduler_pass_label(@scheduler_status.work_item_replays, "resumed_count")} · handoffs{" "}
           {scheduler_pass_label(@scheduler_status.ownership_handoffs, "resumed_count")} · deliveries{" "}
           {scheduler_pass_label(@scheduler_status.deferred_deliveries, "delivered_count")}
         </p>
-        <div class="mt-6 grid gap-3 lg:grid-cols-5">
+        <div class="mt-6 grid gap-3 lg:grid-cols-6">
           <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
             <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
               Configured jobs
@@ -1466,7 +1475,7 @@ defmodule HydraXWeb.HealthLive do
             <div class="mt-3 font-display text-4xl">{length(@scheduler_status.skipped_runs)}</div>
           </article>
         </div>
-        <div class="mt-4 grid gap-3 lg:grid-cols-5">
+        <div class="mt-4 grid gap-3 lg:grid-cols-6">
           <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
             <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
               Ingress replay
@@ -1476,6 +1485,18 @@ defmodule HydraXWeb.HealthLive do
                 @scheduler_status.pending_ingress,
                 "processed_count",
                 "processed"
+              )}
+            </p>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Assignment recovery
+            </div>
+            <p class="mt-3 text-sm text-[var(--hx-mute)]">
+              {scheduler_pass_detail(
+                @scheduler_status.assignment_recoveries,
+                "recovered_count",
+                "recovered"
               )}
             </p>
           </article>
@@ -2268,6 +2289,7 @@ defmodule HydraXWeb.HealthLive do
   defp assignment_strategy_label("role_capability_match"), do: "role capability match"
   defp assignment_strategy_label("capability_fallback"), do: "capability fallback"
   defp assignment_strategy_label("worker_claim"), do: "worker claim"
+  defp assignment_strategy_label("inactive_reassignment"), do: "inactive reassignment"
   defp assignment_strategy_label("replay_reassignment"), do: "replay reassignment"
   defp assignment_strategy_label(strategy) when is_binary(strategy), do: strategy
   defp assignment_strategy_label(_strategy), do: "assignment"

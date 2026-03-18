@@ -392,6 +392,38 @@ defmodule HydraX.Runtime.WorkItems do
     summary
   end
 
+  def recover_orphaned_work_assignments(opts \\ []) do
+    owner = Coordination.status().owner
+    limit = Keyword.get(opts, :limit, 50)
+
+    summary =
+      list_orphaned_work_assignments(limit: limit)
+      |> Enum.reduce(reassignment_summary(owner), fn work_item, acc ->
+        case reassign_orphaned_work_item(work_item) do
+          {:ok, recovered_work_item, %AgentProfile{} = recovered_agent} ->
+            case run_autonomy_cycle(
+                   recovered_agent.id,
+                   Keyword.put(opts, :work_item_id, recovered_work_item.id)
+                 ) do
+              {:ok, result} ->
+                accumulate_reassigned_work_item(acc, recovered_work_item, result)
+
+              {:error, reason} ->
+                accumulate_reassignment_error(acc, recovered_work_item, reason)
+            end
+
+          {:error, :missing_agent} ->
+            accumulate_reassignment_skip(acc, work_item, "missing_agent")
+
+          {:error, reason} ->
+            accumulate_reassignment_error(acc, work_item, reason)
+        end
+      end)
+
+    _ = HydraX.Runtime.Jobs.record_scheduler_pass(:assignment_recoveries, summary)
+    summary
+  end
+
   def process_role_queued_work(opts \\ []) do
     owner = Coordination.status().owner
     limit = Keyword.get(opts, :limit, 50)
@@ -514,6 +546,9 @@ defmodule HydraX.Runtime.WorkItems do
     remote_claimed_count =
       Enum.count(all_work_items, &work_item_remotely_owned?/1)
 
+    orphaned_assignment_count =
+      Enum.count(all_work_items, &orphaned_work_assignment?/1)
+
     role_queue_backlog =
       build_role_queue_backlog(all_work_items, autonomy_agents)
 
@@ -553,6 +588,7 @@ defmodule HydraX.Runtime.WorkItems do
       role_only_open_count: role_only_open_count,
       active_claimed_count: active_claimed_count,
       remote_claimed_count: remote_claimed_count,
+      orphaned_assignment_count: orphaned_assignment_count,
       autonomy_agent_count: length(autonomy_agents),
       active_roles: autonomy_agents |> Enum.map(& &1.role) |> Enum.frequencies(),
       role_queue_backlog: role_queue_backlog,
@@ -721,6 +757,9 @@ defmodule HydraX.Runtime.WorkItems do
           work_item.status == "blocked" and blocked_parent_ready?(work_item) ->
             finalize_blocked_parent(agent, work_item)
 
+          work_item.status == "planned" ->
+            process_specific_work_item(agent, work_item, opts)
+
           work_item.status in ["claimed", "running", "replayed"] ->
             resume_claimed_work_item(agent, work_item, opts)
 
@@ -736,7 +775,8 @@ defmodule HydraX.Runtime.WorkItems do
       |> where(
         [work_item],
         work_item.status == "blocked" and
-          (work_item.assigned_agent_id == ^agent.id or work_item.assigned_role == ^agent.role)
+          (work_item.assigned_agent_id == ^agent.id or
+             (is_nil(work_item.assigned_agent_id) and work_item.assigned_role == ^agent.role))
       )
       |> order_by([work_item], desc: work_item.priority, asc: work_item.inserted_at)
       |> limit(10)
@@ -785,6 +825,29 @@ defmodule HydraX.Runtime.WorkItems do
             {:processed,
              %{status: "failed", processed_count: 0, action: "claim_failed", error: reason}}
         end
+    end
+  end
+
+  defp process_specific_work_item(agent, %WorkItem{} = work_item, opts) do
+    case claim_work_item(work_item, agent: agent, metadata: %{"phase" => "run_specific"}) do
+      {:ok, claimed} ->
+        case authorize_work_item(agent, claimed) do
+          :ok ->
+            process_work_item(agent, claimed, opts)
+            |> finalize_claimed_summary(claimed)
+
+          {:error, failure} ->
+            block_work_item_for_policy(claimed, failure)
+            |> finalize_claimed_summary(claimed)
+        end
+
+      {:error, {:taken, lease}} ->
+        note_remote_work_item_ownership(work_item, lease, "claimed_remote")
+        {:idle, nil}
+
+      {:error, reason} ->
+        {:processed,
+         %{status: "failed", processed_count: 0, action: "claim_failed", error: reason}}
     end
   end
 
@@ -933,7 +996,8 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp work_item_assigned_to_agent?(%WorkItem{} = work_item, %AgentProfile{} = agent) do
-    work_item.assigned_agent_id == agent.id or work_item.assigned_role == agent.role
+    work_item.assigned_agent_id == agent.id or
+      (is_nil(work_item.assigned_agent_id) and work_item.assigned_role == agent.role)
   end
 
   defp replay_claim_work_item(%WorkItem{} = work_item) do
@@ -1008,6 +1072,65 @@ defmodule HydraX.Runtime.WorkItems do
           })
 
         {:ok, reassigned, agent}
+
+      _ ->
+        {:error, :missing_agent}
+    end
+  end
+
+  defp list_orphaned_work_assignments(opts) do
+    limit = Keyword.get(opts, :limit, 50)
+
+    WorkItem
+    |> where(
+      [work_item],
+      work_item.status in ["planned", "blocked"] and
+        not is_nil(work_item.assigned_agent_id)
+    )
+    |> order_by([work_item], desc: work_item.priority, asc: work_item.inserted_at)
+    |> limit(^max(limit * 3, limit))
+    |> Repo.all()
+    |> Enum.filter(&orphaned_work_assignment?/1)
+    |> Enum.take(limit)
+    |> Enum.map(&get_work_item!(&1.id))
+  end
+
+  defp orphaned_work_assignment?(%WorkItem{} = work_item) do
+    is_integer(work_item.assigned_agent_id) and
+      not work_item_ownership_active?(work_item) and
+      is_nil(active_agent_by_id(work_item.assigned_agent_id))
+  end
+
+  defp reassign_orphaned_work_item(%WorkItem{} = work_item) do
+    case resolve_assigned_agent(role_queue_dispatch_attrs(work_item)) do
+      %{agent: %AgentProfile{} = agent, resolution: resolution} ->
+        updated_resolution =
+          resolution
+          |> Map.put("strategy", "inactive_reassignment")
+          |> Map.put("reassigned_from_agent_id", work_item.assigned_agent_id)
+          |> Map.put("recovery_reason", "original assignee unavailable")
+          |> Map.update(
+            "reasons",
+            ["original assignee unavailable"],
+            &Enum.uniq(["original assignee unavailable" | List.wrap(&1)])
+          )
+
+        save_work_item(work_item, %{
+          "assigned_agent_id" => agent.id,
+          "metadata" =>
+            put_assignment_resolution_metadata(work_item.metadata, updated_resolution),
+          "runtime_state" =>
+            append_history(work_item.runtime_state, work_item.status || "planned", %{
+              "reassigned_at" => DateTime.utc_now(),
+              "reason" => "inactive_assignee_recovery",
+              "previous_agent_id" => work_item.assigned_agent_id,
+              "assigned_agent_id" => agent.id
+            })
+        })
+        |> case do
+          {:ok, updated} -> {:ok, updated, agent}
+          error -> error
+        end
 
       _ ->
         {:error, :missing_agent}
@@ -1119,6 +1242,61 @@ defmodule HydraX.Runtime.WorkItems do
       error_count: 0,
       rounds: 0,
       results: []
+    }
+  end
+
+  defp reassignment_summary(owner) do
+    %{
+      owner: owner,
+      recovered_count: 0,
+      skipped_count: 0,
+      error_count: 0,
+      results: []
+    }
+  end
+
+  defp accumulate_reassigned_work_item(acc, %WorkItem{} = work_item, result) do
+    entry = %{
+      work_item_id: work_item.id,
+      assigned_agent_id: work_item.assigned_agent_id,
+      status: result.status,
+      action: result[:action] || "reassigned"
+    }
+
+    %{
+      acc
+      | recovered_count: acc.recovered_count + 1,
+        results: [entry | acc.results]
+    }
+  end
+
+  defp accumulate_reassignment_skip(acc, %WorkItem{} = work_item, reason) do
+    entry = %{
+      work_item_id: work_item.id,
+      assigned_agent_id: work_item.assigned_agent_id,
+      status: "skipped",
+      reason: to_string(reason)
+    }
+
+    %{
+      acc
+      | skipped_count: acc.skipped_count + 1,
+        results: [entry | acc.results]
+    }
+  end
+
+  defp accumulate_reassignment_error(acc, %WorkItem{} = work_item, reason) do
+    entry = %{
+      work_item_id: work_item.id,
+      assigned_agent_id: work_item.assigned_agent_id,
+      status: "error",
+      reason: inspect(reason)
+    }
+
+    %{
+      acc
+      | error_count: acc.error_count + 1,
+        results: [entry | acc.results]
     }
   end
 
@@ -3578,7 +3756,8 @@ defmodule HydraX.Runtime.WorkItems do
     |> where(
       [work_item],
       work_item.status in ["planned", "replayed"] and
-        (work_item.assigned_agent_id == ^agent.id or work_item.assigned_role == ^agent.role)
+        (work_item.assigned_agent_id == ^agent.id or
+           (is_nil(work_item.assigned_agent_id) and work_item.assigned_role == ^agent.role))
     )
     |> order_by([work_item], desc: work_item.priority, asc: work_item.inserted_at)
     |> limit(1)

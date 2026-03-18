@@ -1642,6 +1642,7 @@ defmodule HydraXWeb.AgentsLive do
   defp humanize_assignment_strategy("role_capability_match"), do: "role capability match"
   defp humanize_assignment_strategy("capability_fallback"), do: "capability fallback"
   defp humanize_assignment_strategy("worker_claim"), do: "worker claim"
+  defp humanize_assignment_strategy("inactive_reassignment"), do: "inactive reassignment"
   defp humanize_assignment_strategy("replay_reassignment"), do: "replay reassignment"
   defp humanize_assignment_strategy(strategy) when is_binary(strategy), do: strategy
   defp humanize_assignment_strategy(_strategy), do: "assignment"

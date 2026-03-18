@@ -6193,6 +6193,59 @@ defmodule HydraX.RuntimeTest do
              inactive_researcher.id
   end
 
+  test "orphaned assignment recovery reassigns and executes planned work for an unavailable assignee" do
+    inactive_researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, inactive_researcher} =
+      Runtime.save_agent(inactive_researcher, %{
+        "role" => "researcher",
+        "status" => "paused",
+        "name" => "Unavailable Researcher",
+        "slug" => "unavailable-researcher-#{System.unique_integer([:positive])}"
+      })
+
+    active_researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, active_researcher} =
+      Runtime.save_agent(active_researcher, %{
+        "role" => "researcher",
+        "name" => "Recovered Researcher",
+        "slug" => "recovered-researcher-#{System.unique_integer([:positive])}"
+      })
+
+    {:ok, work_item} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Recover an orphaned assignment and complete the work.",
+        "assigned_agent_id" => inactive_researcher.id,
+        "assigned_role" => "researcher",
+        "status" => "planned"
+      })
+
+    summary = Runtime.recover_orphaned_work_assignments(limit: 10)
+
+    assert summary.recovered_count == 1
+
+    assert Enum.any?(summary.results, fn result ->
+             result[:work_item_id] == work_item.id and result[:action] == "researched"
+           end)
+
+    refreshed = Runtime.get_work_item!(work_item.id)
+
+    assert refreshed.status == "completed"
+    assert refreshed.assigned_agent_id == active_researcher.id
+
+    assert get_in(refreshed.metadata || %{}, ["assignment_resolution", "strategy"]) ==
+             "inactive_reassignment"
+
+    assert get_in(refreshed.metadata || %{}, ["assignment_resolution", "reassigned_from_agent_id"]) ==
+             inactive_researcher.id
+  end
+
   test "role queue dispatch processes delegated child work through active workers" do
     planner =
       create_agent()
@@ -6322,6 +6375,52 @@ defmodule HydraX.RuntimeTest do
     child = Runtime.get_work_item!(child_id)
     assert child.assigned_agent_id == ready_researcher.id
     assert get_in(child.metadata || %{}, ["assignment_resolution", "strategy"]) == "worker_claim"
+  end
+
+  test "same-role workers do not claim work that is specifically assigned to another active worker" do
+    assigned_researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, assigned_researcher} =
+      Runtime.save_agent(assigned_researcher, %{
+        "role" => "researcher",
+        "name" => "Assigned Researcher",
+        "slug" => "assigned-researcher-#{System.unique_integer([:positive])}"
+      })
+
+    other_researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, other_researcher} =
+      Runtime.save_agent(other_researcher, %{
+        "role" => "researcher",
+        "name" => "Other Researcher",
+        "slug" => "other-researcher-#{System.unique_integer([:positive])}"
+      })
+
+    {:ok, work_item} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Keep this work pinned to the assigned researcher.",
+        "assigned_agent_id" => assigned_researcher.id,
+        "assigned_role" => "researcher",
+        "status" => "planned"
+      })
+
+    assert {:ok, idle_summary} = Runtime.run_autonomy_cycle(other_researcher.id)
+    assert idle_summary.status == "idle"
+
+    work_item = Runtime.get_work_item!(work_item.id)
+    assert work_item.status == "planned"
+    assert work_item.assigned_agent_id == assigned_researcher.id
+
+    assert {:ok, assigned_summary} = Runtime.run_autonomy_cycle(assigned_researcher.id)
+    assert assigned_summary.action == "researched"
+
+    work_item = Runtime.get_work_item!(work_item.id)
+    assert work_item.status == "completed"
   end
 
   test "autonomy cycle blocks work items that exceed the agent autonomy ceiling" do

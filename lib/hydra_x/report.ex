@@ -195,6 +195,7 @@ defmodule HydraX.Report do
     - Coordination: #{render_scheduler_coordination(snapshot.scheduler.coordination)}
     - Skip reasons: #{render_skip_reason_counts(snapshot.scheduler.skipped_reason_counts)}
     - Ingress replay: #{render_scheduler_pass(snapshot.scheduler.pending_ingress, "processed_count", "processed")}
+    - Assignment recovery: #{render_scheduler_pass(snapshot.scheduler.assignment_recoveries, "recovered_count", "recovered")}
     - Role queue dispatch: #{render_scheduler_pass(snapshot.scheduler.role_queue_dispatches, "processed_count", "processed")}
     - Work item replay: #{render_scheduler_pass(snapshot.scheduler.work_item_replays, "resumed_count", "resumed")}
     - Ownership replay: #{render_scheduler_pass(snapshot.scheduler.ownership_handoffs, "resumed_count", "resumed")}
@@ -216,7 +217,7 @@ defmodule HydraX.Report do
     #{render_conversations(snapshot.conversations)}
 
     ## Autonomous Work Items
-    - active_jobs=#{snapshot.autonomy.active_autonomy_job_count} unsafe_requests=#{snapshot.autonomy.unsafe_request_count} budget_blocked=#{snapshot.autonomy.budget_blocked_count} auto_assigned=#{snapshot.autonomy.auto_assigned_count} fallback_assigned=#{snapshot.autonomy.capability_fallback_count} role_only_open=#{snapshot.autonomy.role_only_open_count} active_claimed=#{snapshot.autonomy.active_claimed_count} remote_claimed=#{snapshot.autonomy.remote_claimed_count} role_backlog=#{render_role_queue_backlog_summary(snapshot.autonomy.role_queue_backlog)} saturated_workers=#{Enum.count(snapshot.autonomy.worker_pressure, &(&1.capacity_posture == "saturated"))} capability_drift=#{length(snapshot.autonomy.capability_drifts)}
+    - active_jobs=#{snapshot.autonomy.active_autonomy_job_count} unsafe_requests=#{snapshot.autonomy.unsafe_request_count} budget_blocked=#{snapshot.autonomy.budget_blocked_count} auto_assigned=#{snapshot.autonomy.auto_assigned_count} fallback_assigned=#{snapshot.autonomy.capability_fallback_count} role_only_open=#{snapshot.autonomy.role_only_open_count} active_claimed=#{snapshot.autonomy.active_claimed_count} remote_claimed=#{snapshot.autonomy.remote_claimed_count} orphaned_assignments=#{snapshot.autonomy.orphaned_assignment_count} role_backlog=#{render_role_queue_backlog_summary(snapshot.autonomy.role_queue_backlog)} saturated_workers=#{Enum.count(snapshot.autonomy.worker_pressure, &(&1.capacity_posture == "saturated"))} capability_drift=#{length(snapshot.autonomy.capability_drifts)}
     ### Role Queue Backlog
     #{render_role_queue_backlog(snapshot.autonomy.role_queue_backlog)}
 
@@ -265,6 +266,7 @@ defmodule HydraX.Report do
       lease_owned_skips: status.lease_owned_skips,
       coordination: status.coordination,
       pending_ingress: status.pending_ingress,
+      assignment_recoveries: status.assignment_recoveries,
       role_queue_dispatches: status.role_queue_dispatches,
       work_item_replays: status.work_item_replays,
       ownership_handoffs: status.ownership_handoffs,
@@ -1422,6 +1424,7 @@ defmodule HydraX.Report do
         lease_owned_skips: Enum.map(snapshot.scheduler.lease_owned_skips, &json_job_run/1),
         coordination: snapshot.scheduler.coordination,
         pending_ingress: snapshot.scheduler.pending_ingress,
+        assignment_recoveries: snapshot.scheduler.assignment_recoveries,
         role_queue_dispatches: snapshot.scheduler.role_queue_dispatches,
         work_item_replays: snapshot.scheduler.work_item_replays,
         ownership_handoffs: snapshot.scheduler.ownership_handoffs,
@@ -1467,6 +1470,7 @@ defmodule HydraX.Report do
         role_only_open_count: snapshot.autonomy.role_only_open_count,
         active_claimed_count: snapshot.autonomy.active_claimed_count,
         remote_claimed_count: snapshot.autonomy.remote_claimed_count,
+        orphaned_assignment_count: snapshot.autonomy.orphaned_assignment_count,
         active_roles: snapshot.autonomy.active_roles,
         role_queue_backlog: snapshot.autonomy.role_queue_backlog,
         worker_pressure: snapshot.autonomy.worker_pressure,
