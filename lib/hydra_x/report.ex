@@ -763,6 +763,8 @@ defmodule HydraX.Report do
 
       publish = render_work_item_publish_summary(item)
       publish_details = render_work_item_publish_details(item)
+      delegation = render_work_item_delegation_summary(item)
+      delegation_details = render_work_item_delegation_details(item)
       assignment = render_work_item_assignment(item)
       assignment_recovery = render_work_item_assignment_recovery(item)
       ownership = render_work_item_ownership(item)
@@ -780,12 +782,14 @@ defmodule HydraX.Report do
           "enablement=#{item.result_refs["extension_enablement_status"]}",
         artifacts != "" && "artifacts=#{artifacts}",
         promoted_memories != "" && "promoted=#{promoted_memories}",
+        delegation && "delegation=#{delegation}",
         assignment && "assignment=#{assignment}",
         assignment_recovery && "recovery=#{assignment_recovery}",
         ownership && "ownership=#{ownership}",
         publish && "publish=#{publish}",
         item.goal
       ]
+      |> Kernel.++(delegation_details)
       |> Kernel.++(publish_details)
       |> Enum.reject(&is_nil_or_empty/1)
       |> Enum.join(" ")
@@ -812,6 +816,38 @@ defmodule HydraX.Report do
         nil
     end
   end
+
+  defp render_work_item_delegation_summary(item) do
+    case Runtime.delegation_batch_snapshot(item) do
+      %{"expected_count" => expected_count} = snapshot ->
+        "#{snapshot["mode"]}:#{expected_count}:active=#{snapshot["active_count"] || 0}:terminal=#{snapshot["terminal_count"] || 0}"
+
+      _ ->
+        nil
+    end
+  end
+
+  defp render_work_item_delegation_details(item) do
+    case Runtime.delegation_batch_snapshot(item) do
+      %{} = snapshot ->
+        [
+          delegation_roles_detail(snapshot),
+          "delegation_completed=#{snapshot["completed_count"] || 0}",
+          "delegation_failed=#{snapshot["failed_count"] || 0}",
+          "delegation_canceled=#{snapshot["canceled_count"] || 0}"
+        ]
+        |> Enum.reject(&(&1 in [nil, ""]))
+
+      _ ->
+        []
+    end
+  end
+
+  defp delegation_roles_detail(%{"roles" => roles}) when is_list(roles) and roles != [] do
+    "delegation_roles=#{Enum.join(roles, ",")}"
+  end
+
+  defp delegation_roles_detail(_snapshot), do: nil
 
   defp render_work_item_ownership(item) do
     ownership = get_in(item.metadata || %{}, ["ownership"]) || %{}
@@ -1851,6 +1887,8 @@ defmodule HydraX.Report do
       metadata: item.metadata,
       assignment_recovery: get_in(item.metadata || %{}, ["assignment_recovery"]),
       assignment_recovery_summary: render_work_item_assignment_recovery(item),
+      delegation_batch: Runtime.delegation_batch_snapshot(item),
+      delegation_batch_summary: render_work_item_delegation_summary(item),
       ownership: get_in(item.metadata || %{}, ["ownership"]),
       ownership_summary: render_work_item_ownership(item),
       publish_follow_up: work_item_publish_snapshot(item),

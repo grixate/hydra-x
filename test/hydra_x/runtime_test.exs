@@ -4181,6 +4181,99 @@ defmodule HydraX.RuntimeTest do
            end)
   end
 
+  test "planner delegate batches create multiple child work items and batch snapshots" do
+    planner =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, planner} = Runtime.save_agent(planner, %{"role" => "planner"})
+
+    researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, researcher} = Runtime.save_agent(researcher, %{"role" => "researcher"})
+
+    operator =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, operator} = Runtime.save_agent(operator, %{"role" => "operator"})
+
+    {:ok, parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Supervise a parallel research and operator follow-up batch.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "execution_mode" => "delegate",
+        "priority" => 8,
+        "metadata" => %{
+          "delegate_batch" => [
+            %{
+              "goal" => "Assess which operator-facing autonomy report should carry the findings.",
+              "role" => "researcher"
+            },
+            %{
+              "goal" => "Prepare an operator-facing fallback note for the delivery team.",
+              "role" => "operator",
+              "kind" => "task"
+            }
+          ]
+        }
+      })
+
+    assert {:ok, planner_summary} = Runtime.run_autonomy_cycle(planner.id)
+    assert planner_summary.action == "delegated"
+    assert length(planner_summary.delegated_work_items) == 2
+
+    parent = Runtime.get_work_item!(parent.id)
+
+    assert Enum.sort(parent.result_refs["child_work_item_ids"]) ==
+             Enum.sort(Enum.map(planner_summary.delegated_work_items, & &1.id))
+
+    batch_snapshot = Runtime.delegation_batch_snapshot(parent)
+    assert batch_snapshot["mode"] == "parallel"
+    assert batch_snapshot["expected_count"] == 2
+    assert batch_snapshot["active_count"] == 2
+    assert batch_snapshot["terminal_count"] == 0
+    assert Enum.sort(batch_snapshot["roles"]) == ["operator", "researcher"]
+
+    plan_artifact =
+      Runtime.work_item_artifacts(parent.id)
+      |> Enum.find(&(&1.type == "plan"))
+
+    assert plan_artifact
+    assert plan_artifact.payload["delegation_batch"]["expected_count"] == 2
+    assert length(plan_artifact.payload["delegated_work_item_ids"] || []) == 2
+
+    assert {:ok, researcher_summary} = Runtime.run_autonomy_cycle(researcher.id)
+    assert researcher_summary.action == "researched"
+
+    assert {:ok, operator_summary} = Runtime.run_autonomy_cycle(operator.id)
+    assert operator_summary.action == "completed_fallback"
+
+    refreshed_parent = Runtime.get_work_item!(parent.id)
+    refreshed_batch = Runtime.delegation_batch_snapshot(refreshed_parent)
+    assert refreshed_batch["active_count"] == 0
+    assert refreshed_batch["terminal_count"] == 2
+    assert refreshed_batch["completed_count"] == 2
+
+    assert {:ok, finalize_summary} = Runtime.run_autonomy_cycle(planner.id)
+    assert finalize_summary.action == "finalized_blocked_parent"
+
+    finalized_parent = Runtime.get_work_item!(parent.id)
+    assert get_in(finalized_parent.metadata || %{}, ["delegation_batch", "completed_count"]) == 2
+
+    synthesis =
+      Runtime.work_item_artifacts(finalized_parent.id)
+      |> Enum.find(&(&1.type == "decision_ledger"))
+
+    assert synthesis
+    assert synthesis.payload["delegation_batch"]["expected_count"] == 2
+    assert synthesis.payload["delegation_batch"]["completed_count"] == 2
+  end
+
   test "research work items create a decision ledger and promote approved memories" do
     researcher =
       create_agent()

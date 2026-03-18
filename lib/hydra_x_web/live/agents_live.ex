@@ -580,6 +580,9 @@ defmodule HydraXWeb.AgentsLive do
                       {item.autonomy_level} · effect {work_item_side_effect_class(item)}<span :if={
                         summary = work_item_promoted_memory_summary(item)
                       }> · {summary}</span>
+                      <span :if={summary = work_item_delegation_summary(item)}>
+                        · {summary}
+                      </span>
                       <span :if={summary = work_item_publish_summary(item)}>
                         · {summary}
                       </span>
@@ -642,11 +645,23 @@ defmodule HydraXWeb.AgentsLive do
                         {label}
                       </span>
                       <span
+                        :if={summary = work_item_delegation_summary(item)}
+                        class="rounded-full border border-indigo-400/20 bg-indigo-400/10 px-3 py-1 text-indigo-200"
+                      >
+                        {summary}
+                      </span>
+                      <span
                         :if={summary = work_item_publish_summary(item)}
                         class="rounded-full border border-sky-400/20 bg-sky-400/10 px-3 py-1 text-sky-200"
                       >
                         {summary}
                       </span>
+                    </div>
+                    <div
+                      :if={delegation_detail_lines = work_item_delegation_detail_lines(item)}
+                      class="mt-2 space-y-1 text-[11px] text-[var(--hx-mute)]"
+                    >
+                      <p :for={detail <- delegation_detail_lines}>{detail}</p>
                     </div>
                     <div
                       :if={publish_detail_lines = work_item_publish_detail_lines(item)}
@@ -1765,6 +1780,40 @@ defmodule HydraXWeb.AgentsLive do
       details -> details
     end
   end
+
+  defp work_item_delegation_summary(work_item) do
+    case Runtime.delegation_batch_snapshot(work_item) do
+      %{"expected_count" => expected_count} = snapshot ->
+        "delegation batch #{expected_count} · active #{snapshot["active_count"] || 0} · terminal #{snapshot["terminal_count"] || 0}"
+
+      _ ->
+        nil
+    end
+  end
+
+  defp work_item_delegation_detail_lines(work_item) do
+    case Runtime.delegation_batch_snapshot(work_item) do
+      %{} = snapshot ->
+        [
+          "delegation #{snapshot["mode"]} · completed #{snapshot["completed_count"] || 0} · failed #{snapshot["failed_count"] || 0} · canceled #{snapshot["canceled_count"] || 0}",
+          delegation_roles_line(snapshot)
+        ]
+        |> Enum.reject(&(&1 in [nil, ""]))
+        |> case do
+          [] -> nil
+          details -> details
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp delegation_roles_line(%{"roles" => roles}) when is_list(roles) and roles != [] do
+    "delegation roles #{Enum.join(roles, ", ")}"
+  end
+
+  defp delegation_roles_line(_snapshot), do: nil
 
   defp work_item_assignment_summary(work_item) do
     resolution = get_in(work_item.metadata || %{}, ["assignment_resolution"]) || %{}

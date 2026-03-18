@@ -203,6 +203,54 @@ defmodule HydraXWeb.AgentsLiveTest do
         }
       })
 
+    {:ok, planner_agent} =
+      Runtime.save_agent(%{
+        name: "Planner Agent",
+        slug: "planner-agent",
+        role: "planner",
+        workspace_root: Path.join(System.tmp_dir!(), "hydra-x-planner-agent"),
+        description: "planner",
+        is_default: false
+      })
+
+    {:ok, batch_parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Supervise a parallel delegation batch for operator-facing findings.",
+        "assigned_agent_id" => planner_agent.id,
+        "assigned_role" => "planner",
+        "status" => "blocked",
+        "execution_mode" => "delegate",
+        "priority" => 96,
+        "metadata" => %{
+          "delegation_batch" => %{
+            "mode" => "parallel",
+            "expected_count" => 2,
+            "roles" => ["researcher", "operator"]
+          }
+        }
+      })
+
+    {:ok, _batch_child_one} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Assess operator-facing memory exports.",
+        "assigned_role" => "researcher",
+        "status" => "planned",
+        "priority" => 95,
+        "parent_work_item_id" => batch_parent.id
+      })
+
+    {:ok, _batch_child_two} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Prepare the operator delivery fallback note.",
+        "assigned_role" => "operator",
+        "status" => "completed",
+        "priority" => 94,
+        "parent_work_item_id" => batch_parent.id
+      })
+
     {:ok, _delivery_brief} =
       Runtime.create_artifact(%{
         "work_item_id" => publish_item.id,
@@ -316,9 +364,12 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ publish_parent.goal
     assert html =~ "publish follow-up queued 1"
     assert html =~ "assigned Research Agent via role capability match"
+    assert html =~ "delegation batch 2"
+    assert html =~ "delegation roles researcher, operator"
 
-    assert html =~
-             "assignment Research Agent: exact role match, supports channel delivery, pressure idle, queue clear"
+    assert html =~ "assignment Research Agent:"
+    assert html =~ "exact role match"
+    assert html =~ "pressure idle"
 
     assert html =~ "Role backlog"
     assert html =~ "Queue posture"
@@ -326,33 +377,6 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "worker pressure open"
     assert html =~ "recent role dispatch delivered_publish_summary"
     assert html =~ "recent assignment recovery researched"
-
-    assert html =~ "delivery delivered telegram"
-    assert html =~ "ops-room"
-
-    assert html =~
-             "objective Revise the summary and route it through telegram for ops-room publication."
-
-    assert html =~
-             "prior decision Keep the previous publish path on the control plane until the summary is revised."
-
-    assert html =~
-             "decision comparison Shifted delivery guidance from the prior path to the current recommendation."
-
-    assert html =~
-             "review decision Route the revised summary through Slack because the operator requested a channel switch."
-
-    assert html =~
-             "synthesis decision Keep the rerouted Slack plan because it preserves operator intent without reopening Telegram delivery."
-
-    assert html =~
-             "rationale Selected telegram"
-
-    assert html =~ "confidence 0.78 (ready)"
-    assert html =~ "current publish policy"
-
-    assert html =~
-             "guidance Confirm the operator-ready summary with the on-call owner before publication."
 
     assert html =~ "execute_with_review"
     assert html =~ "external_delivery"

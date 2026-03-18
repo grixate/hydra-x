@@ -125,6 +125,38 @@ defmodule HydraX.Runtime.WorkItems do
     |> promoted_work_item_memories()
   end
 
+  def delegation_batch_snapshot(work_item_or_id)
+
+  def delegation_batch_snapshot(work_item_id) when is_integer(work_item_id) do
+    work_item_id
+    |> get_work_item!()
+    |> delegation_batch_snapshot()
+  end
+
+  def delegation_batch_snapshot(%WorkItem{} = work_item) do
+    work_item
+    |> build_delegation_batch_snapshot(delegation_batch_children(work_item))
+    |> case do
+      %{"expected_count" => expected_count} = snapshot when expected_count > 1 ->
+        snapshot
+
+      _ ->
+        nil
+    end
+  end
+
+  def delegation_batch_snapshot(work_item) when is_map(work_item) do
+    work_item
+    |> build_delegation_batch_snapshot(delegation_batch_children(work_item))
+    |> case do
+      %{"expected_count" => expected_count} = snapshot when expected_count > 1 ->
+        snapshot
+
+      _ ->
+        nil
+    end
+  end
+
   def create_artifact(attrs) when is_map(attrs) do
     normalized = Helpers.normalize_string_keys(attrs)
     work_item_id = normalized["work_item_id"]
@@ -915,8 +947,17 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp blocked_parent_ready?(%WorkItem{} = work_item) do
-    children = list_work_items(parent_work_item_id: work_item.id, limit: 20, preload: false)
-    children != [] and Enum.all?(children, &terminal_work_item?/1)
+    children =
+      list_work_items(
+        parent_work_item_id: work_item.id,
+        limit: delegated_child_limit(work_item),
+        preload: false
+      )
+
+    expected_count = delegation_expected_count(work_item)
+
+    children != [] and length(children) >= expected_count and
+      Enum.all?(children, &terminal_work_item?/1)
   end
 
   defp terminal_work_item?(%WorkItem{status: status}), do: status in @terminal_work_item_statuses
@@ -1032,7 +1073,7 @@ defmodule HydraX.Runtime.WorkItems do
       list_work_items(
         parent_work_item_id: claimed.id,
         statuses: @terminal_work_item_statuses,
-        limit: 10
+        limit: delegated_child_limit(claimed)
       )
 
     artifact_ids =
@@ -1062,6 +1103,8 @@ defmodule HydraX.Runtime.WorkItems do
         decision_scope: "planner"
       )
 
+    delegation_batch = build_delegation_batch_snapshot(claimed, children)
+
     {:ok, summary_artifact} =
       create_artifact(%{
         "work_item_id" => claimed.id,
@@ -1076,6 +1119,7 @@ defmodule HydraX.Runtime.WorkItems do
           "result_artifact_ids" => artifact_ids,
           "promoted_findings" => supporting_memories,
           "constraint_findings" => constraint_findings,
+          "delegation_batch" => delegation_batch,
           "delivery_decisions" => delivery_decisions,
           "delivery_decision_snapshot" => delivery_decision_snapshot
         },
@@ -1928,57 +1972,79 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp process_work_item(agent, %WorkItem{execution_mode: "delegate"} = work_item, _opts) do
-    child_role = work_item.metadata["delegate_role"] || Autonomy.role_for_kind(work_item.kind)
-    child_goal = work_item.metadata["delegate_goal"] || work_item.goal
-    override_context = delegation_override_context(work_item)
+    delegated_children =
+      work_item
+      |> delegation_batch_entries()
+      |> Enum.map(fn entry ->
+        child_goal = entry["goal"]
+        override_context = delegation_override_context(work_item)
 
-    delegation_limit =
-      if Enum.any?(override_context, &delivery_decision_finding?/1), do: 5, else: 3
+        delegation_limit =
+          if Enum.any?(override_context, &delivery_decision_finding?/1), do: 5, else: 3
 
-    delegation_context =
-      merge_delegation_context(
-        delegation_context_snapshot(agent.id, child_goal),
-        override_context,
-        delegation_limit
-      )
+        delegation_context =
+          merge_delegation_context(
+            delegation_context_snapshot(agent.id, child_goal),
+            override_context,
+            delegation_limit
+          )
 
-    {:ok, child} =
-      save_work_item(%{
-        "kind" => work_item.kind,
-        "goal" => child_goal,
-        "status" => "planned",
-        "execution_mode" => "execute",
-        "assigned_role" => child_role,
-        "delegated_by_agent_id" => agent.id,
-        "parent_work_item_id" => work_item.id,
-        "priority" => max(work_item.priority, 1),
-        "autonomy_level" => work_item.autonomy_level,
-        "approval_stage" => work_item.approval_stage,
-        "review_required" => work_item.review_required,
-        "budget" => work_item.budget,
-        "required_outputs" => work_item.required_outputs,
-        "metadata" =>
-          %{
-            "assignment_mode" => "role_claim",
-            "claim_scope" => "role_pool",
-            "delegated_from_role" => agent.role,
-            "delegated_from_work_item_id" => work_item.id
-          }
+        child_metadata =
+          entry["metadata"]
+          |> delegation_child_metadata(work_item, agent, entry)
           |> maybe_put_delegation_context(delegation_context, agent.id, child_goal)
-      })
+
+        {:ok, child} =
+          save_work_item(%{
+            "kind" => entry["kind"],
+            "goal" => child_goal,
+            "status" => "planned",
+            "execution_mode" => "execute",
+            "assigned_role" => entry["assigned_role"],
+            "assigned_agent_id" => entry["assigned_agent_id"],
+            "delegated_by_agent_id" => agent.id,
+            "parent_work_item_id" => work_item.id,
+            "priority" => entry["priority"],
+            "autonomy_level" => entry["autonomy_level"],
+            "approval_stage" => entry["approval_stage"],
+            "review_required" => entry["review_required"],
+            "budget" => entry["budget"],
+            "required_outputs" => entry["required_outputs"],
+            "deliverables" => entry["deliverables"],
+            "metadata" => child_metadata
+          })
+
+        %{child: child, spec: entry, delegation_context: delegation_context}
+      end)
+
+    children = Enum.map(delegated_children, & &1.child)
+    batch_snapshot = build_delegation_batch_snapshot(work_item, children, delegated_children)
+    first_child = List.first(children)
 
     {:ok, plan_artifact} =
       create_artifact(%{
         "work_item_id" => work_item.id,
         "type" => "plan",
-        "title" => "Delegation plan",
-        "summary" => "Delegated #{work_item.kind} to #{child_role}",
-        "body" => delegation_plan_body(work_item, child, delegation_context),
+        "title" => delegation_plan_title(batch_snapshot),
+        "summary" => delegation_plan_summary(work_item, batch_snapshot),
+        "body" => delegation_plan_body(work_item, delegated_children, batch_snapshot),
         "payload" => %{
-          "delegated_work_item_id" => child.id,
-          "assigned_role" => child_role,
+          "delegated_work_item_id" => first_child && first_child.id,
+          "delegated_work_item_ids" => Enum.map(children, & &1.id),
+          "assigned_role" => first_child && first_child.assigned_role,
+          "assigned_roles" => batch_snapshot["roles"],
           "required_outputs" => work_item.required_outputs,
-          "delegation_context" => delegation_context
+          "delegation_batch" => batch_snapshot,
+          "delegated_work_items" =>
+            Enum.map(delegated_children, fn entry ->
+              %{
+                "id" => entry.child.id,
+                "kind" => entry.child.kind,
+                "goal" => entry.child.goal,
+                "assigned_role" => entry.child.assigned_role,
+                "delegation_context" => entry.delegation_context
+              }
+            end)
         },
         "provenance" => %{"source" => "autonomy", "phase" => "delegate"},
         "confidence" => 0.78
@@ -1989,13 +2055,14 @@ defmodule HydraX.Runtime.WorkItems do
         "status" => "blocked",
         "result_refs" => %{
           "artifact_ids" => [plan_artifact.id],
-          "child_work_item_ids" => [child.id]
+          "child_work_item_ids" => Enum.map(children, & &1.id)
         },
+        "metadata" => Map.put(work_item.metadata || %{}, "delegation_batch", batch_snapshot),
         "runtime_state" =>
           append_history(work_item.runtime_state, "blocked", %{
             "blocked_at" => DateTime.utc_now(),
             "reason" => "delegated",
-            "child_work_item_id" => child.id
+            "child_work_item_ids" => Enum.map(children, & &1.id)
           })
       })
 
@@ -2006,7 +2073,8 @@ defmodule HydraX.Runtime.WorkItems do
        work_item: updated,
        artifacts: [plan_artifact],
        action: "delegated",
-       delegated_work_item: child
+       delegated_work_item: first_child,
+       delegated_work_items: children
      }}
   end
 
@@ -3850,17 +3918,54 @@ defmodule HydraX.Runtime.WorkItems do
   defp maybe_add_finding(list, false, _message), do: list
   defp maybe_add_finding(list, true, message), do: list ++ [message]
 
-  defp delegation_plan_body(parent, child, delegation_context) do
+  defp delegation_plan_body(parent, %WorkItem{} = child, delegation_context)
+       when is_list(delegation_context) do
+    delegation_plan_body(parent, [%{child: child, delegation_context: delegation_context}], %{
+      "mode" => "single",
+      "expected_count" => 1
+    })
+  end
+
+  defp delegation_plan_body(parent, delegated_children, batch_snapshot)
+       when is_list(delegated_children) do
     """
     Parent goal: #{parent.goal}
-    Delegated role: #{child.assigned_role}
+    Delegation mode: #{batch_snapshot["mode"]}
+    Expected children: #{batch_snapshot["expected_count"]}
+
+    Delegated work:
+    #{Enum.map_join(delegated_children, "\n\n", &delegation_plan_child_block/1)}
+    """
+    |> String.trim()
+  end
+
+  defp delegation_plan_child_block(%{child: child, delegation_context: delegation_context}) do
+    """
     Child work item: ##{child.id}
+    Goal: #{child.goal}
+    Delegated role: #{child.assigned_role}
+    Kind: #{child.kind}
     Execution mode: #{child.execution_mode}
     Delegated context:
     #{Enum.map_join(delegation_context, "\n", fn memory -> "- #{memory["type"]}: #{memory["content"]}" end)}
     """
     |> String.trim()
   end
+
+  defp delegation_plan_title(%{"expected_count" => expected_count}) when expected_count > 1,
+    do: "Delegation batch plan"
+
+  defp delegation_plan_title(_snapshot), do: "Delegation plan"
+
+  defp delegation_plan_summary(parent, %{"expected_count" => expected_count, "roles" => roles})
+       when expected_count > 1 do
+    "Delegated #{parent.kind} batch of #{expected_count} tasks to #{Enum.join(List.wrap(roles), ", ")}"
+  end
+
+  defp delegation_plan_summary(parent, %{"roles" => [role | _]}),
+    do: "Delegated #{parent.kind} to #{role}"
+
+  defp delegation_plan_summary(parent, _snapshot), do: "Delegated #{parent.kind}"
 
   defp delegation_summary_line(_parent, children, supporting_memories) do
     child_count = length(children)
@@ -3957,6 +4062,264 @@ defmodule HydraX.Runtime.WorkItems do
 
     "- ##{child.id} #{child.goal} [#{child.status}]#{failure}"
   end
+
+  defp delegation_batch_entries(%WorkItem{} = work_item) do
+    metadata = work_item.metadata || %{}
+    default_goal = metadata["delegate_goal"] || work_item.goal
+    default_kind = work_item.kind
+    default_role = metadata["delegate_role"] || Autonomy.role_for_kind(default_kind)
+    default_priority = max(work_item.priority, 1)
+
+    metadata
+    |> Map.get("delegate_batch", [])
+    |> List.wrap()
+    |> case do
+      [] ->
+        [
+          %{
+            "goal" => default_goal,
+            "kind" => default_kind,
+            "assigned_role" => Autonomy.normalize_role(default_role),
+            "assigned_agent_id" => nil,
+            "priority" => default_priority,
+            "autonomy_level" => work_item.autonomy_level,
+            "approval_stage" => work_item.approval_stage,
+            "review_required" => work_item.review_required,
+            "budget" => work_item.budget,
+            "required_outputs" => work_item.required_outputs,
+            "deliverables" => work_item.deliverables,
+            "metadata" => %{},
+            "child_key" => "delegate-1"
+          }
+        ]
+
+      entries ->
+        entries
+        |> Enum.with_index(1)
+        |> Enum.map(fn {entry, index} ->
+          normalize_delegation_batch_entry(
+            entry,
+            work_item,
+            index,
+            default_goal,
+            default_kind,
+            default_role,
+            default_priority
+          )
+        end)
+    end
+  end
+
+  defp normalize_delegation_batch_entry(
+         entry,
+         %WorkItem{} = work_item,
+         index,
+         default_goal,
+         default_kind,
+         default_role,
+         default_priority
+       )
+       when is_map(entry) do
+    normalized = Helpers.normalize_string_keys(entry)
+    kind = normalized["kind"] || default_kind
+
+    role =
+      normalized["assigned_role"] || normalized["delegate_role"] || normalized["role"] ||
+        Autonomy.role_for_kind(kind) || default_role
+
+    %{
+      "goal" => normalized["goal"] || default_goal,
+      "kind" => kind,
+      "assigned_role" => Autonomy.normalize_role(role),
+      "assigned_agent_id" => normalized["assigned_agent_id"],
+      "priority" => normalized["priority"] || default_priority,
+      "autonomy_level" => normalized["autonomy_level"] || work_item.autonomy_level,
+      "approval_stage" => normalized["approval_stage"] || work_item.approval_stage,
+      "review_required" => Map.get(normalized, "review_required", work_item.review_required),
+      "budget" => normalized["budget"] || work_item.budget,
+      "required_outputs" => normalized["required_outputs"] || default_required_outputs(kind),
+      "deliverables" => normalized["deliverables"] || work_item.deliverables,
+      "metadata" => Helpers.normalize_string_keys(normalized["metadata"] || %{}),
+      "child_key" => normalized["child_key"] || normalized["key"] || "delegate-#{index}"
+    }
+  end
+
+  defp delegation_child_metadata(
+         metadata,
+         %WorkItem{} = work_item,
+         %AgentProfile{} = agent,
+         entry
+       ) do
+    Map.merge(
+      Helpers.normalize_string_keys(metadata || %{}),
+      %{
+        "assignment_mode" => "role_claim",
+        "claim_scope" => "role_pool",
+        "delegated_from_role" => agent.role,
+        "delegated_from_work_item_id" => work_item.id,
+        "delegation_batch_key" => entry["child_key"]
+      }
+    )
+  end
+
+  defp build_delegation_batch_snapshot(work_item, children, delegated_children \\ nil)
+
+  defp build_delegation_batch_snapshot(work_item, children, delegated_children) do
+    metadata_snapshot =
+      work_item
+      |> work_item_metadata()
+      |> Map.get("delegation_batch", %{})
+      |> Helpers.normalize_string_keys()
+
+    child_entries =
+      cond do
+        is_list(delegated_children) and delegated_children != [] ->
+          Enum.map(delegated_children, &delegation_batch_child_entry/1)
+
+        children != [] ->
+          Enum.map(children, &delegation_batch_child_entry/1)
+
+        true ->
+          List.wrap(metadata_snapshot["items"])
+      end
+
+    expected_count =
+      metadata_snapshot["expected_count"] || length(child_entries) ||
+        delegation_expected_count(work_item)
+
+    roles =
+      child_entries
+      |> Enum.map(&(&1["assigned_role"] || &1["role"]))
+      |> Enum.reject(&(&1 in [nil, ""]))
+      |> Enum.uniq()
+
+    terminal_count =
+      Enum.count(child_entries, &(&1["status"] in @terminal_work_item_statuses))
+
+    completed_count = Enum.count(child_entries, &(&1["status"] == "completed"))
+    failed_count = Enum.count(child_entries, &(&1["status"] == "failed"))
+    canceled_count = Enum.count(child_entries, &(&1["status"] == "canceled"))
+
+    active_count =
+      case child_entries do
+        [] -> max(expected_count - terminal_count, 0)
+        _ -> Enum.count(child_entries, &(&1["status"] not in @terminal_work_item_statuses))
+      end
+
+    if expected_count <= 0 do
+      %{}
+    else
+      %{
+        "mode" => if(expected_count > 1, do: "parallel", else: "single"),
+        "expected_count" => expected_count,
+        "active_count" => active_count,
+        "terminal_count" => terminal_count,
+        "completed_count" => completed_count,
+        "failed_count" => failed_count,
+        "canceled_count" => canceled_count,
+        "roles" => roles,
+        "items" => child_entries,
+        "child_work_item_ids" =>
+          child_entries
+          |> Enum.map(& &1["id"])
+          |> Enum.filter(&is_integer/1),
+        "batch_label" =>
+          metadata_snapshot["batch_label"] ||
+            if(expected_count > 1, do: "parallel delegation batch", else: "delegation")
+      }
+    end
+  end
+
+  defp delegation_batch_child_entry(%{child: child, spec: spec}) do
+    child
+    |> delegation_batch_child_entry()
+    |> Map.put("child_key", spec["child_key"])
+  end
+
+  defp delegation_batch_child_entry(%WorkItem{} = child) do
+    %{
+      "id" => child.id,
+      "goal" => child.goal,
+      "kind" => child.kind,
+      "assigned_role" => child.assigned_role,
+      "status" => child.status,
+      "child_key" => get_in(child.metadata || %{}, ["delegation_batch_key"])
+    }
+  end
+
+  defp delegation_batch_children(%WorkItem{} = work_item) do
+    case Map.get(work_item, :child_work_items) do
+      children when is_list(children) ->
+        children
+
+      %Ecto.Association.NotLoaded{} ->
+        list_work_items(
+          parent_work_item_id: work_item.id,
+          limit: delegated_child_limit(work_item),
+          preload: false
+        )
+
+      _ ->
+        list_work_items(
+          parent_work_item_id: work_item.id,
+          limit: delegated_child_limit(work_item),
+          preload: false
+        )
+    end
+  end
+
+  defp delegation_batch_children(work_item) when is_map(work_item) do
+    case Map.get(work_item, :child_work_items) || Map.get(work_item, "child_work_items") do
+      children when is_list(children) ->
+        children
+
+      _ ->
+        case Map.get(work_item, :id) || Map.get(work_item, "id") do
+          id when is_integer(id) ->
+            list_work_items(
+              parent_work_item_id: id,
+              limit: delegated_child_limit(work_item),
+              preload: false
+            )
+
+          _ ->
+            []
+        end
+    end
+  end
+
+  defp delegation_expected_count(%WorkItem{} = work_item) do
+    metadata = work_item.metadata || %{}
+    batch = Map.get(metadata, "delegation_batch", %{})
+
+    batch["expected_count"] ||
+      metadata
+      |> Map.get("delegate_batch", [])
+      |> List.wrap()
+      |> length()
+      |> max(1)
+  end
+
+  defp delegation_expected_count(work_item) when is_map(work_item) do
+    metadata = work_item_metadata(work_item)
+    batch = Map.get(metadata, "delegation_batch", %{})
+
+    batch["expected_count"] ||
+      metadata
+      |> Map.get("delegate_batch", [])
+      |> List.wrap()
+      |> length()
+      |> max(1)
+  end
+
+  defp delegated_child_limit(work_item) do
+    max(delegation_expected_count(work_item), 20)
+  end
+
+  defp work_item_metadata(%WorkItem{} = work_item), do: work_item.metadata || %{}
+
+  defp work_item_metadata(work_item) when is_map(work_item),
+    do: Map.get(work_item, :metadata) || Map.get(work_item, "metadata") || %{}
 
   defp research_plan_body(work_item, evidence) do
     """
@@ -6788,6 +7151,8 @@ defmodule HydraX.Runtime.WorkItems do
     follow_up_context =
       build_follow_up_context(claimed, supporting_memories, summary_artifact, constraint_findings)
 
+    delegation_batch = build_delegation_batch_snapshot(claimed, children)
+
     {status, approval_stage} =
       case latest_decision do
         "rejected" -> {"failed", claimed.approval_stage}
@@ -6811,6 +7176,7 @@ defmodule HydraX.Runtime.WorkItems do
       },
       "metadata" =>
         (claimed.metadata || %{})
+        |> Map.put("delegation_batch", delegation_batch)
         |> Map.put("follow_up_context", follow_up_context),
       "runtime_state" =>
         append_history(claimed.runtime_state, status, %{

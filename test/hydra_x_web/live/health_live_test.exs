@@ -372,6 +372,44 @@ defmodule HydraXWeb.HealthLiveTest do
         }
       })
 
+    {:ok, delegation_parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Supervise a parallel delegation batch for operator-facing research.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "planner",
+        "status" => "blocked",
+        "execution_mode" => "delegate",
+        "priority" => 100,
+        "metadata" => %{
+          "delegation_batch" => %{
+            "mode" => "parallel",
+            "expected_count" => 2,
+            "roles" => ["researcher", "operator"]
+          }
+        }
+      })
+
+    {:ok, _delegation_child_one} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Assess operator-facing evidence exports.",
+        "assigned_role" => "researcher",
+        "status" => "planned",
+        "priority" => 90,
+        "parent_work_item_id" => delegation_parent.id
+      })
+
+    {:ok, _delegation_child_two} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Prepare an internal operator fallback brief.",
+        "assigned_role" => "operator",
+        "status" => "completed",
+        "priority" => 89,
+        "parent_work_item_id" => delegation_parent.id
+      })
+
     {:ok, _job} =
       Runtime.save_scheduled_job(%{
         agent_id: agent.id,
@@ -418,6 +456,9 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "stale 1"
     assert html =~ "assignment recovery queued: worker saturated"
     assert html =~ "cooldown until 2026-03-18 10:15:00 UTC"
+    assert html =~ delegation_parent.goal
+    assert html =~ "delegation batch 2 · active 1 · terminal 1"
+    assert html =~ "delegation roles researcher, operator"
     assert html =~ "Operator confirmed the rollout."
     assert html =~ "ownership #{local_owner} · completed"
     assert html =~ "ownership node:remote-health · claimed_remote"

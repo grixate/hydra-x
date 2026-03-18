@@ -1406,6 +1406,66 @@ defmodule HydraX.ReportTest do
              "\"stale_stream\": true"
   end
 
+  test "export_snapshot includes delegation batch posture" do
+    output_root =
+      Path.join(
+        System.tmp_dir!(),
+        "hydra-x-report-delegation-batch-#{System.unique_integer([:positive])}"
+      )
+
+    on_exit(fn -> File.rm_rf(output_root) end)
+
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Supervise a parallel delegation batch for report export coverage.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "planner",
+        "status" => "blocked",
+        "execution_mode" => "delegate",
+        "priority" => 100,
+        "metadata" => %{
+          "delegation_batch" => %{
+            "mode" => "parallel",
+            "expected_count" => 2,
+            "roles" => ["researcher", "operator"]
+          }
+        }
+      })
+
+    {:ok, _child_one} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Assess report export routing.",
+        "assigned_role" => "researcher",
+        "status" => "planned",
+        "priority" => 90,
+        "parent_work_item_id" => parent.id
+      })
+
+    {:ok, _child_two} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Prepare an internal report fallback note.",
+        "assigned_role" => "operator",
+        "status" => "completed",
+        "priority" => 89,
+        "parent_work_item_id" => parent.id
+      })
+
+    {:ok, export} = Report.export_snapshot(output_root)
+
+    markdown = File.read!(export.markdown_path)
+    json = File.read!(Path.join(export.bundle_dir, "work_items.json"))
+
+    assert markdown =~ "delegation=parallel:2:active=1:terminal=1"
+    assert markdown =~ "delegation_roles=researcher,operator"
+    assert json =~ "\"delegation_batch_summary\": \"parallel:2:active=1:terminal=1\""
+    assert json =~ "\"expected_count\": 2"
+  end
+
   defp restore_env(key, nil), do: System.delete_env(key)
   defp restore_env(key, value), do: System.put_env(key, value)
 end

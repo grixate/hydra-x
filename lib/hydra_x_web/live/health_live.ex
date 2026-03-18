@@ -927,7 +927,7 @@ defmodule HydraXWeb.HealthLive do
                     · expiry {event.expired_by}
                   </span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip                                 {event.ip}</span>
+                  <span :if={event.ip}> · ip                                  {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -1365,6 +1365,12 @@ defmodule HydraXWeb.HealthLive do
                   {autonomy_artifact_summary(item)}
                 </p>
                 <div
+                  :if={summary = autonomy_delegation_summary(item)}
+                  class="mt-2 text-[11px] text-[var(--hx-mute)]"
+                >
+                  {summary}
+                </div>
+                <div
                   :if={assignment = autonomy_assignment_detail(item)}
                   class="mt-2 text-[11px] text-[var(--hx-mute)]"
                 >
@@ -1381,6 +1387,12 @@ defmodule HydraXWeb.HealthLive do
                   class="mt-2 text-[11px] text-[var(--hx-mute)]"
                 >
                   {recovery}
+                </div>
+                <div
+                  :if={detail_lines = autonomy_delegation_detail_lines(item)}
+                  class="mt-2 space-y-1 text-[11px] text-[var(--hx-mute)]"
+                >
+                  <p :for={detail <- detail_lines}>{detail}</p>
                 </div>
                 <div
                   :if={detail_lines = autonomy_publish_detail_lines(item)}
@@ -2361,6 +2373,40 @@ defmodule HydraXWeb.HealthLive do
   end
 
   defp autonomy_recovery_deferred_label(_value), do: "cooldown active"
+
+  defp autonomy_delegation_summary(item) do
+    case Runtime.delegation_batch_snapshot(item) do
+      %{"expected_count" => expected_count} = snapshot ->
+        "delegation batch #{expected_count} · active #{snapshot["active_count"] || 0} · terminal #{snapshot["terminal_count"] || 0}"
+
+      _ ->
+        nil
+    end
+  end
+
+  defp autonomy_delegation_detail_lines(item) do
+    case Runtime.delegation_batch_snapshot(item) do
+      %{} = snapshot ->
+        [
+          "delegation #{snapshot["mode"]} · completed #{snapshot["completed_count"] || 0} · failed #{snapshot["failed_count"] || 0} · canceled #{snapshot["canceled_count"] || 0}",
+          autonomy_delegation_roles_line(snapshot)
+        ]
+        |> Enum.reject(&is_nil_or_empty/1)
+        |> case do
+          [] -> nil
+          details -> details
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp autonomy_delegation_roles_line(%{"roles" => roles}) when is_list(roles) and roles != [] do
+    "delegation roles #{Enum.join(roles, ", ")}"
+  end
+
+  defp autonomy_delegation_roles_line(_snapshot), do: nil
 
   defp assignment_strategy_label("role_capability_match"), do: "role capability match"
   defp assignment_strategy_label("capability_fallback"), do: "capability fallback"
