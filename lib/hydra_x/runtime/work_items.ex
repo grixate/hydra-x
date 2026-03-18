@@ -2916,40 +2916,47 @@ defmodule HydraX.Runtime.WorkItems do
 
       true ->
         {:ok, review_item} =
-          save_work_item(%{
-            "kind" => "task",
-            "goal" =>
-              "Approve degraded delivery for #{Map.get(review_delivery || %{}, "channel", Map.get(review_delivery || %{}, "mode", "report"))} #{Map.get(review_delivery || %{}, "target", "control-plane")}",
-            "status" => "completed",
-            "execution_mode" => "execute",
-            "assigned_agent_id" => publish_item.assigned_agent_id,
-            "assigned_role" => "operator",
-            "parent_work_item_id" => publish_item.id,
-            "priority" => max(publish_item.priority, 1),
-            "autonomy_level" => "execute_with_review",
-            "approval_stage" => "validated",
-            "result_refs" => %{
-              "artifact_ids" => [delivery_brief.id],
-              "degraded" => true
-            },
-            "metadata" => %{
-              "task_type" => "publish_approval",
-              "publish_work_item_id" => publish_item.id,
-              "delivery_brief_artifact_id" => delivery_brief.id,
-              "delivery" => review_delivery,
-              "delivery_decision" => %{
-                "destination" => payload["delivery_destination"],
-                "destination_rationale" => payload["destination_rationale"],
-                "decision_confidence" => payload["decision_confidence"],
-                "confidence_posture" => payload["confidence_posture"]
+          ensure_follow_up_work_item(
+            publish_item,
+            "publish_approval",
+            fn item ->
+              get_in(item.metadata || %{}, ["delivery_brief_artifact_id"]) == delivery_brief.id
+            end,
+            %{
+              "kind" => "task",
+              "goal" =>
+                "Approve degraded delivery for #{Map.get(review_delivery || %{}, "channel", Map.get(review_delivery || %{}, "mode", "report"))} #{Map.get(review_delivery || %{}, "target", "control-plane")}",
+              "status" => "completed",
+              "execution_mode" => "execute",
+              "assigned_agent_id" => publish_item.assigned_agent_id,
+              "assigned_role" => "operator",
+              "parent_work_item_id" => publish_item.id,
+              "priority" => max(publish_item.priority, 1),
+              "autonomy_level" => "execute_with_review",
+              "approval_stage" => "validated",
+              "result_refs" => %{
+                "artifact_ids" => [delivery_brief.id],
+                "degraded" => true
               },
-              "delivery_decision_snapshot" => payload["delivery_decision_snapshot"] || %{},
-              "delivery_recovery" => delivery_recovery,
-              "degraded_execution" => true,
-              "requested_action" => "publish_review_report",
-              "follow_up_context" => get_in(publish_item.metadata || %{}, ["follow_up_context"])
+              "metadata" => %{
+                "task_type" => "publish_approval",
+                "publish_work_item_id" => publish_item.id,
+                "delivery_brief_artifact_id" => delivery_brief.id,
+                "delivery" => review_delivery,
+                "delivery_decision" => %{
+                  "destination" => payload["delivery_destination"],
+                  "destination_rationale" => payload["destination_rationale"],
+                  "decision_confidence" => payload["decision_confidence"],
+                  "confidence_posture" => payload["confidence_posture"]
+                },
+                "delivery_decision_snapshot" => payload["delivery_decision_snapshot"] || %{},
+                "delivery_recovery" => delivery_recovery,
+                "degraded_execution" => true,
+                "requested_action" => "publish_review_report",
+                "follow_up_context" => get_in(publish_item.metadata || %{}, ["follow_up_context"])
+              }
             }
-          })
+          )
 
         {:ok, updated_publish_item} =
           save_work_item(publish_item, %{
@@ -5020,44 +5027,51 @@ defmodule HydraX.Runtime.WorkItems do
       apply_delivery_recovery_to_deliverables(deliverables, delivery_recovery)
 
     {:ok, follow_up_work_item} =
-      save_work_item(%{
-        "kind" => work_kind,
-        "goal" => "Re-plan #{planner_goal} after degraded delivery was rejected.",
-        "status" => "planned",
-        "execution_mode" => "delegate",
-        "assigned_role" => "planner",
-        "assigned_agent_id" => planner_agent_id,
-        "delegated_by_agent_id" => delegated_by_agent_id,
-        "parent_work_item_id" => publish_item.id,
-        "priority" => max(publish_item.priority, 1),
-        "autonomy_level" => publish_item.autonomy_level,
-        "approval_stage" => approval_stage,
-        "deliverables" => follow_up_deliverables,
-        "budget" => budget,
-        "required_outputs" => required_outputs,
-        "review_required" => review_required,
-        "input_artifact_refs" => %{"summary_artifact_id" => delivery_brief.id},
-        "metadata" => %{
-          "task_type" => "rejected_publish_replan",
-          "delegate_goal" => planner_goal,
-          "delegate_role" => Autonomy.role_for_kind(work_kind),
-          "delivery_brief_artifact_id" => delivery_brief.id,
-          "publish_work_item_id" => publish_item.id,
-          "publish_review_work_item_id" => review_item.id,
-          "delivery_recovery" => delivery_recovery,
-          "constraint_findings" => constraint_findings,
-          "constraint_strategy" => constraint_strategy,
-          "follow_up_context" =>
-            build_follow_up_context(
-              publish_item,
-              supporting_memories,
-              delivery_brief,
-              constraint_findings,
-              constraint_strategy,
-              delivery_recovery
-            )
+      ensure_follow_up_work_item(
+        publish_item,
+        "rejected_publish_replan",
+        fn item ->
+          get_in(item.metadata || %{}, ["publish_review_work_item_id"]) == review_item.id
+        end,
+        %{
+          "kind" => work_kind,
+          "goal" => "Re-plan #{planner_goal} after degraded delivery was rejected.",
+          "status" => "planned",
+          "execution_mode" => "delegate",
+          "assigned_role" => "planner",
+          "assigned_agent_id" => planner_agent_id,
+          "delegated_by_agent_id" => delegated_by_agent_id,
+          "parent_work_item_id" => publish_item.id,
+          "priority" => max(publish_item.priority, 1),
+          "autonomy_level" => publish_item.autonomy_level,
+          "approval_stage" => approval_stage,
+          "deliverables" => follow_up_deliverables,
+          "budget" => budget,
+          "required_outputs" => required_outputs,
+          "review_required" => review_required,
+          "input_artifact_refs" => %{"summary_artifact_id" => delivery_brief.id},
+          "metadata" => %{
+            "task_type" => "rejected_publish_replan",
+            "delegate_goal" => planner_goal,
+            "delegate_role" => Autonomy.role_for_kind(work_kind),
+            "delivery_brief_artifact_id" => delivery_brief.id,
+            "publish_work_item_id" => publish_item.id,
+            "publish_review_work_item_id" => review_item.id,
+            "delivery_recovery" => delivery_recovery,
+            "constraint_findings" => constraint_findings,
+            "constraint_strategy" => constraint_strategy,
+            "follow_up_context" =>
+              build_follow_up_context(
+                publish_item,
+                supporting_memories,
+                delivery_brief,
+                constraint_findings,
+                constraint_strategy,
+                delivery_recovery
+              )
+          }
         }
-      })
+      )
 
     {:ok, updated_publish_item} =
       save_work_item(publish_item, %{
@@ -6040,34 +6054,41 @@ defmodule HydraX.Runtime.WorkItems do
       goal = publish_follow_up_goal(parent, resolved_deliverables, delivery_recovery)
 
       {:ok, follow_up_work_item} =
-        save_work_item(%{
-          "kind" => "task",
-          "goal" => goal,
-          "status" => "planned",
-          "execution_mode" => "execute",
-          "assigned_role" => resolved_deliverables["assigned_role"] || "operator",
-          "assigned_agent_id" => resolved_deliverables["assigned_agent_id"],
-          "delegated_by_agent_id" => parent.assigned_agent_id || parent.delegated_by_agent_id,
-          "parent_work_item_id" => parent.id,
-          "priority" => max(parent.priority - 1, 0),
-          "autonomy_level" => parent.autonomy_level,
-          "approval_stage" => "validated",
-          "deliverables" => resolved_deliverables,
-          "input_artifact_refs" => %{"summary_artifact_id" => summary_artifact.id},
-          "required_outputs" => %{"artifact_types" => ["delivery_brief"]},
-          "metadata" => %{
-            "task_type" => "publish_summary",
-            "summary_artifact_id" => summary_artifact.id,
-            "delivery" => %{
-              "enabled" => resolved_deliverables["enabled"] == true,
-              "mode" => resolved_deliverables["mode"] || "report",
-              "channel" => resolved_deliverables["channel"],
-              "target" => resolved_deliverables["target"]
-            },
-            "delivery_recovery" => delivery_recovery,
-            "follow_up_context" => follow_up_context
+        ensure_follow_up_work_item(
+          parent,
+          "publish_summary",
+          fn item ->
+            get_in(item.metadata || %{}, ["summary_artifact_id"]) == summary_artifact.id
+          end,
+          %{
+            "kind" => "task",
+            "goal" => goal,
+            "status" => "planned",
+            "execution_mode" => "execute",
+            "assigned_role" => resolved_deliverables["assigned_role"] || "operator",
+            "assigned_agent_id" => resolved_deliverables["assigned_agent_id"],
+            "delegated_by_agent_id" => parent.assigned_agent_id || parent.delegated_by_agent_id,
+            "parent_work_item_id" => parent.id,
+            "priority" => max(parent.priority - 1, 0),
+            "autonomy_level" => parent.autonomy_level,
+            "approval_stage" => "validated",
+            "deliverables" => resolved_deliverables,
+            "input_artifact_refs" => %{"summary_artifact_id" => summary_artifact.id},
+            "required_outputs" => %{"artifact_types" => ["delivery_brief"]},
+            "metadata" => %{
+              "task_type" => "publish_summary",
+              "summary_artifact_id" => summary_artifact.id,
+              "delivery" => %{
+                "enabled" => resolved_deliverables["enabled"] == true,
+                "mode" => resolved_deliverables["mode"] || "report",
+                "channel" => resolved_deliverables["channel"],
+                "target" => resolved_deliverables["target"]
+              },
+              "delivery_recovery" => delivery_recovery,
+              "follow_up_context" => follow_up_context
+            }
           }
-        })
+        )
 
       {:ok, updated_parent} =
         save_work_item(parent, %{
@@ -6105,32 +6126,39 @@ defmodule HydraX.Runtime.WorkItems do
         apply_delivery_recovery_to_deliverables(parent.deliverables, delivery_recovery)
 
       {:ok, follow_up_work_item} =
-        save_work_item(%{
-          "kind" => parent.kind,
-          "goal" => "Re-plan #{parent.goal} within the current autonomy constraints.",
-          "status" => "planned",
-          "execution_mode" => "delegate",
-          "assigned_role" => "planner",
-          "assigned_agent_id" => parent.assigned_agent_id,
-          "delegated_by_agent_id" => parent.assigned_agent_id || parent.delegated_by_agent_id,
-          "parent_work_item_id" => parent.id,
-          "priority" => max(parent.priority - 1, 0),
-          "autonomy_level" => parent.autonomy_level,
-          "approval_stage" => parent.approval_stage,
-          "deliverables" => resolved_deliverables,
-          "input_artifact_refs" => %{"summary_artifact_id" => summary_artifact.id},
-          "required_outputs" => parent.required_outputs,
-          "review_required" => parent.review_required,
-          "metadata" => %{
-            "task_type" => "constraint_replan",
-            "delegate_goal" => parent.goal,
-            "summary_artifact_id" => summary_artifact.id,
-            "constraint_findings" => Enum.take(constraint_findings, 5),
-            "constraint_strategy" => constraint_strategy,
-            "delivery_recovery" => delivery_recovery,
-            "follow_up_context" => follow_up_context
+        ensure_follow_up_work_item(
+          parent,
+          "constraint_replan",
+          fn item ->
+            get_in(item.metadata || %{}, ["summary_artifact_id"]) == summary_artifact.id
+          end,
+          %{
+            "kind" => parent.kind,
+            "goal" => "Re-plan #{parent.goal} within the current autonomy constraints.",
+            "status" => "planned",
+            "execution_mode" => "delegate",
+            "assigned_role" => "planner",
+            "assigned_agent_id" => parent.assigned_agent_id,
+            "delegated_by_agent_id" => parent.assigned_agent_id || parent.delegated_by_agent_id,
+            "parent_work_item_id" => parent.id,
+            "priority" => max(parent.priority - 1, 0),
+            "autonomy_level" => parent.autonomy_level,
+            "approval_stage" => parent.approval_stage,
+            "deliverables" => resolved_deliverables,
+            "input_artifact_refs" => %{"summary_artifact_id" => summary_artifact.id},
+            "required_outputs" => parent.required_outputs,
+            "review_required" => parent.review_required,
+            "metadata" => %{
+              "task_type" => "constraint_replan",
+              "delegate_goal" => parent.goal,
+              "summary_artifact_id" => summary_artifact.id,
+              "constraint_findings" => Enum.take(constraint_findings, 5),
+              "constraint_strategy" => constraint_strategy,
+              "delivery_recovery" => delivery_recovery,
+              "follow_up_context" => follow_up_context
+            }
           }
-        })
+        )
 
       {:ok, updated_parent} =
         save_work_item(parent, %{
@@ -6561,6 +6589,40 @@ defmodule HydraX.Runtime.WorkItems do
     |> Map.put("follow_up_work_item_ids", ids)
     |> Map.put("follow_up_summary", %{"count" => length(ids), "types" => types})
   end
+
+  defp ensure_follow_up_work_item(%WorkItem{} = parent, task_type, matcher, attrs)
+       when is_binary(task_type) and is_function(matcher, 1) and is_map(attrs) do
+    case existing_follow_up_work_item(parent, task_type, matcher) do
+      %WorkItem{} = work_item ->
+        {:ok, work_item}
+
+      nil ->
+        save_work_item(attrs)
+    end
+  end
+
+  defp existing_follow_up_work_item(%WorkItem{} = parent, task_type, matcher) do
+    list_work_items(parent_work_item_id: parent.id, limit: 25, preload: false)
+    |> Enum.filter(fn item ->
+      get_in(item.metadata || %{}, ["task_type"]) == task_type and
+        item.status not in ["canceled"]
+    end)
+    |> Enum.sort_by(fn item ->
+      {follow_up_status_rank(item.status), sortable_datetime(item.inserted_at)}
+    end)
+    |> Enum.find(matcher)
+  end
+
+  defp follow_up_status_rank(status) when status in ["planned", "claimed", "running", "blocked"],
+    do: 0
+
+  defp follow_up_status_rank("replayed"), do: 1
+  defp follow_up_status_rank("completed"), do: 2
+  defp follow_up_status_rank("failed"), do: 3
+  defp follow_up_status_rank(_status), do: 4
+
+  defp sortable_datetime(%DateTime{} = datetime), do: DateTime.to_unix(datetime, :microsecond)
+  defp sortable_datetime(_datetime), do: 0
 
   defp promoted_memory_ids(%WorkItem{} = work_item) do
     work_item.result_refs

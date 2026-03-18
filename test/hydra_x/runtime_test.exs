@@ -5164,6 +5164,99 @@ defmodule HydraX.RuntimeTest do
     assert delivery_brief.payload["review_outcome"]["confidence_posture"] == "requires_review"
   end
 
+  test "rejected degraded publish delivery reuses the existing replan follow-up on repeated rejection" do
+    operator =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, operator} = Runtime.save_agent(operator, %{"role" => "operator"})
+
+    {:ok, parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Reject the constrained autonomy summary for external delivery twice.",
+        "assigned_agent_id" => operator.id,
+        "assigned_role" => "operator",
+        "status" => "completed",
+        "approval_stage" => "validated"
+      })
+
+    {:ok, summary_artifact} =
+      Runtime.create_artifact(%{
+        "work_item_id" => parent.id,
+        "type" => "decision_ledger",
+        "title" => "Rejected constrained synthesis",
+        "summary" => "Do not deliver the constrained autonomy summary yet",
+        "body" => "Keep the summary internal until the evidence is expanded."
+      })
+
+    {:ok, publish_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Prepare a degraded publish-ready summary for operators.",
+        "assigned_agent_id" => operator.id,
+        "assigned_role" => "operator",
+        "status" => "planned",
+        "approval_stage" => "validated",
+        "parent_work_item_id" => parent.id,
+        "metadata" => %{
+          "task_type" => "publish_summary",
+          "summary_artifact_id" => summary_artifact.id,
+          "delivery" => %{
+            "enabled" => true,
+            "mode" => "channel",
+            "channel" => "telegram",
+            "target" => "9001"
+          },
+          "follow_up_context" => %{
+            "needs_replan" => true,
+            "constraint_strategy" =>
+              "Reuse existing evidence and require a stronger review gate before delivery."
+          }
+        }
+      })
+
+    assert {:ok, summary} = Runtime.run_autonomy_cycle(operator.id)
+    assert summary.action == "prepared_delivery_brief"
+
+    publish_item = Runtime.get_work_item!(publish_item.id)
+    [approval_item_id] = List.wrap(publish_item.result_refs["follow_up_work_item_ids"])
+    approval_item = Runtime.get_work_item!(approval_item_id)
+
+    {first_rejected_review, _record} =
+      Runtime.reject_work_item!(approval_item.id, %{
+        "requested_action" => "publish_review_report",
+        "rationale" => "Operator rejected the degraded delivery."
+      })
+
+    first_replan_id = first_rejected_review.result_refs["linked_follow_up_work_item_id"]
+    assert is_integer(first_replan_id)
+
+    {second_rejected_review, _record} =
+      Runtime.reject_work_item!(approval_item.id, %{
+        "requested_action" => "publish_review_report",
+        "rationale" => "Operator rejected the degraded delivery again."
+      })
+
+    assert second_rejected_review.result_refs["linked_follow_up_work_item_id"] == first_replan_id
+
+    publish_item = Runtime.get_work_item!(publish_item.id)
+
+    replan_ids =
+      publish_item.result_refs["follow_up_work_item_ids"]
+      |> List.wrap()
+      |> Enum.reject(&(&1 == approval_item_id))
+
+    assert replan_ids == [first_replan_id]
+
+    replan_items =
+      Runtime.list_work_items(parent_work_item_id: publish_item.id, limit: 10)
+      |> Enum.filter(&(&1.metadata["task_type"] == "rejected_publish_replan"))
+
+    assert length(replan_items) == 1
+    assert hd(replan_items).id == first_replan_id
+  end
+
   test "rejected degraded publish recovery can request a channel switch" do
     operator =
       create_agent()
