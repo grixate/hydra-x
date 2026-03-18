@@ -103,6 +103,7 @@ defmodule HydraXWeb.HealthLiveTest do
       owner: "node:test",
       processed_count: 6,
       pressure_skipped_count: 2,
+      remote_owned_count: 1,
       skipped_count: 2,
       error_count: 0,
       results: []

@@ -454,6 +454,42 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "recent role dispatch saturated (saturated)"
   end
 
+  test "agents page shows remote-owned role dispatch skips", %{conn: conn} do
+    {:ok, agent} =
+      Runtime.save_agent(%{
+        name: "Remote Claim Agent",
+        slug: "remote-claim-agent",
+        role: "researcher",
+        workspace_root: Path.join(System.tmp_dir!(), "hydra-x-remote-claim-agent"),
+        description: "remote-claim",
+        is_default: false
+      })
+
+    Runtime.Jobs.record_scheduler_pass(:role_queue_dispatches, %{
+      owner: "node:agents-test",
+      processed_count: 0,
+      pressure_skipped_count: 0,
+      remote_owned_count: 1,
+      skipped_count: 1,
+      error_count: 0,
+      results: [
+        %{
+          agent_id: agent.id,
+          agent_name: agent.name,
+          role: agent.role,
+          work_item_id: 8_888,
+          status: "skipped",
+          action: "claimed_remote",
+          lease_owner: "node:remote-role-queue"
+        }
+      ]
+    })
+
+    {:ok, _view, html} = live(conn, ~p"/agents")
+
+    assert html =~ "recent role dispatch claimed remotely #8888 by node:remote-role-queue"
+  end
+
   test "agents page highlights degraded review queues and degraded publish drafts", %{conn: conn} do
     {:ok, agent} =
       Runtime.save_agent(%{

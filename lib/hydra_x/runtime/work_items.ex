@@ -856,8 +856,25 @@ defmodule HydraX.Runtime.WorkItems do
             end
 
           {:error, {:taken, lease}} ->
-            note_remote_work_item_ownership(work_item, lease, "claimed_remote")
-            {:idle, nil}
+            remote_work_item = note_remote_work_item_ownership(work_item, lease, "claimed_remote")
+
+            if role_queue_dispatch_pass?(opts) do
+              {:processed,
+               %{
+                 status: "skipped",
+                 processed_count: 0,
+                 action: "claimed_remote",
+                 work_item:
+                   case remote_work_item do
+                     {:ok, updated} -> updated
+                     _ -> work_item
+                   end,
+                 lease_owner: lease.owner,
+                 lease_expires_at: lease.expires_at
+               }}
+            else
+              {:idle, nil}
+            end
 
           {:error, reason} ->
             {:processed,
@@ -1312,6 +1329,7 @@ defmodule HydraX.Runtime.WorkItems do
       owner: owner,
       processed_count: 0,
       pressure_skipped_count: 0,
+      remote_owned_count: 0,
       skipped_count: 0,
       error_count: 0,
       rounds: 0,
@@ -1420,6 +1438,8 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp accumulate_role_queue_result(acc, %AgentProfile{} = agent, result) do
     work_item = result[:work_item]
+    action = result[:action] || "processed"
+    processed_increment = role_queue_processed_increment(result)
 
     entry = %{
       agent_id: agent.id,
@@ -1427,12 +1447,16 @@ defmodule HydraX.Runtime.WorkItems do
       role: agent.role,
       work_item_id: work_item && work_item.id,
       status: result[:status] || "processed",
-      action: result[:action] || "processed"
+      action: action,
+      lease_owner: result[:lease_owner],
+      lease_expires_at: result[:lease_expires_at]
     }
 
     %{
       acc
-      | processed_count: acc.processed_count + max(result[:processed_count] || 1, 1),
+      | processed_count: acc.processed_count + processed_increment,
+        remote_owned_count:
+          acc.remote_owned_count + if(action == "claimed_remote", do: 1, else: 0),
         rounds: acc.rounds + 1,
         results: [entry | acc.results]
     }
@@ -1475,6 +1499,27 @@ defmodule HydraX.Runtime.WorkItems do
         ]
     }
   end
+
+  defp role_queue_processed_increment(result) do
+    count = result[:processed_count] || 0
+
+    cond do
+      count > 0 ->
+        count
+
+      (result[:action] || result["action"]) == "claimed_remote" ->
+        0
+
+      true ->
+        1
+    end
+  end
+
+  defp role_queue_dispatch_pass?(opts) when is_list(opts) do
+    Keyword.get(opts, :scheduler_pass) == "role_queue_dispatch"
+  end
+
+  defp role_queue_dispatch_pass?(_opts), do: false
 
   defp resume_work_item_summary(owner) do
     %{
@@ -3889,11 +3934,15 @@ defmodule HydraX.Runtime.WorkItems do
            (is_nil(work_item.assigned_agent_id) and work_item.assigned_role == ^agent.role))
     )
     |> order_by([work_item], desc: work_item.priority, asc: work_item.inserted_at)
-    |> limit(1)
-    |> Repo.one()
+    |> limit(10)
+    |> Repo.all()
+    |> Enum.map(&get_work_item!(&1.id))
+    |> Enum.find(fn work_item ->
+      not work_item_remotely_owned?(work_item)
+    end)
     |> case do
       nil -> nil
-      work_item -> get_work_item!(work_item.id)
+      work_item -> work_item
     end
   end
 

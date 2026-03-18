@@ -1376,10 +1376,14 @@ defmodule HydraXWeb.AgentsLive do
         action = result[:action] || result["action"]
         work_item_id = result[:work_item_id] || result["work_item_id"]
         posture = result[:capacity_posture] || result["capacity_posture"]
+        lease_owner = result[:lease_owner] || result["lease_owner"]
 
         case action do
           "worker_saturated" ->
             "recent role dispatch saturated#{if is_binary(posture), do: " (#{posture})", else: ""}"
+
+          "claimed_remote" ->
+            "recent role dispatch claimed remotely#{if work_item_id, do: " ##{work_item_id}", else: ""}#{if is_binary(lease_owner), do: " by #{lease_owner}", else: ""}"
 
           _ ->
             "recent role dispatch #{action}#{if work_item_id, do: " ##{work_item_id}", else: ""}"

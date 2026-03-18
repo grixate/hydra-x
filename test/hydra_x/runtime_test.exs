@@ -6644,6 +6644,56 @@ defmodule HydraX.RuntimeTest do
     assert is_nil(refreshed.assigned_agent_id)
   end
 
+  test "role queue dispatch records work claimed by another node" do
+    researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, researcher} =
+      Runtime.save_agent(researcher, %{
+        "role" => "researcher",
+        "name" => "Researcher Remote Claim",
+        "slug" => "researcher-remote-claim-#{System.unique_integer([:positive])}"
+      })
+
+    {:ok, role_queued_work} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Let another node claim this role-queued work first.",
+        "assigned_role" => "researcher",
+        "status" => "planned",
+        "metadata" => %{"assignment_mode" => "role_claim"}
+      })
+
+    assert {:ok, _lease} =
+             Runtime.claim_lease("work_item:#{role_queued_work.id}",
+               owner: "node:remote-role-queue",
+               ttl_seconds: 120,
+               metadata: %{"phase" => "run"}
+             )
+
+    summary = Runtime.process_role_queued_work(limit: 10)
+
+    assert summary.processed_count == 0
+    assert summary.remote_owned_count == 1
+    assert summary.skipped_count >= 1
+
+    assert Enum.any?(summary.results, fn result ->
+             result[:agent_id] == researcher.id and
+               result[:work_item_id] == role_queued_work.id and
+               result[:action] == "claimed_remote" and
+               result[:lease_owner] == "node:remote-role-queue"
+           end)
+
+    refreshed = Runtime.get_work_item!(role_queued_work.id)
+    ownership = get_in(refreshed.metadata || %{}, ["ownership"])
+
+    assert refreshed.status == "planned"
+    assert ownership["owner"] == "node:remote-role-queue"
+    assert ownership["stage"] == "claimed_remote"
+    assert ownership["active"] == true
+  end
+
   test "same-role workers do not claim work that is specifically assigned to another active worker" do
     assigned_researcher =
       create_agent()
