@@ -6,6 +6,7 @@ defmodule HydraX.Runtime.WorkItems do
   import Ecto.Query
 
   alias HydraX.Budget
+  alias HydraX.Config
   alias HydraX.LLM.Router
   alias HydraX.Memory
   alias HydraX.Memory.Entry
@@ -1110,6 +1111,18 @@ defmodule HydraX.Runtime.WorkItems do
       (is_nil(work_item.assigned_agent_id) and work_item.assigned_role == agent.role)
   end
 
+  defp work_item_execution_deferred?(%WorkItem{} = work_item) do
+    recovery = get_in(work_item.metadata || %{}, ["assignment_recovery"]) || %{}
+
+    case parse_datetime(recovery["deferred_until"]) do
+      %DateTime{} = deferred_until ->
+        DateTime.compare(deferred_until, DateTime.utc_now()) == :gt
+
+      _ ->
+        false
+    end
+  end
+
   defp replay_claim_work_item(%WorkItem{} = work_item) do
     metadata = %{
       "phase" => "replay",
@@ -1579,18 +1592,36 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp queue_recovered_work_item(%WorkItem{} = work_item, %WorkItem{} = claimed) do
+    queued_at = DateTime.utc_now()
+    deferred_until = DateTime.add(queued_at, queued_recovery_delay_seconds(), :second)
+
     with {:ok, queued} <-
            save_work_item(work_item, %{
+             "metadata" =>
+               Map.put(
+                 Helpers.normalize_string_keys(work_item.metadata || %{}),
+                 "assignment_recovery",
+                 %{
+                   "queued_at" => queued_at,
+                   "deferred_until" => deferred_until,
+                   "queue_reason" => "worker_saturated"
+                 }
+               ),
              "runtime_state" =>
                append_history(work_item.runtime_state, work_item.status || "planned", %{
-                 "queued_at" => DateTime.utc_now(),
+                 "queued_at" => queued_at,
                  "phase" => "assignment_recovery",
-                 "reason" => "worker_saturated"
+                 "reason" => "worker_saturated",
+                 "deferred_until" => deferred_until
                })
            }),
          {:ok, released} <- release_claimed_work_item(queued, claimed) do
       {:ok, released}
     end
+  end
+
+  defp queued_recovery_delay_seconds do
+    max(div(Config.scheduler_poll_ms() * 2, 1000), 5)
   end
 
   defp accumulate_role_queue_result(acc, %AgentProfile{} = agent, result) do
@@ -4095,7 +4126,7 @@ defmodule HydraX.Runtime.WorkItems do
     |> Repo.all()
     |> Enum.map(&get_work_item!(&1.id))
     |> Enum.find(fn work_item ->
-      not work_item_remotely_owned?(work_item)
+      not work_item_remotely_owned?(work_item) and not work_item_execution_deferred?(work_item)
     end)
     |> case do
       nil -> nil

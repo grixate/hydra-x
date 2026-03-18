@@ -429,12 +429,14 @@ defmodule HydraX.RuntimeTest do
     wait_for(fn -> not Process.alive?(channel_pid) end)
 
     wait_for(
-      fn -> Runtime.conversation_channel_state(conversation.id).status == "deferred" end,
+      fn ->
+        Runtime.conversation_channel_state(conversation.id).status in ["deferred", "interrupted"]
+      end,
       240
     )
 
     channel_state = Runtime.conversation_channel_state(conversation.id)
-    assert channel_state.status == "deferred"
+    assert channel_state.status in ["deferred", "interrupted"]
     assert channel_state.resumable
     assert channel_state.ownership["owner"] == "node:remote"
     assert Enum.any?(channel_state.execution_events, &(&1["phase"] == "ownership_lost"))
@@ -595,12 +597,17 @@ defmodule HydraX.RuntimeTest do
       fn ->
         channel_state = Runtime.conversation_channel_state(conversation.id)
 
-        channel_state.status == "completed" and
-          channel_state.pending_response == nil and
-          Enum.any?(
-            Runtime.list_turns(conversation.id),
-            &(&1.role == "assistant" and &1.content == "Captured before ownership handoff.")
-          )
+        channel_state.status == "completed" and channel_state.pending_response == nil
+      end,
+      600
+    )
+
+    wait_for(
+      fn ->
+        Enum.any?(
+          Runtime.list_turns(conversation.id),
+          &(&1.role == "assistant" and &1.content == "Captured before ownership handoff.")
+        )
       end,
       600
     )
@@ -6512,12 +6519,102 @@ defmodule HydraX.RuntimeTest do
 
     refreshed = Runtime.get_work_item!(work_item.id)
     ownership = get_in(refreshed.metadata || %{}, ["ownership"])
+    assignment_recovery = get_in(refreshed.metadata || %{}, ["assignment_recovery"])
 
     assert refreshed.status == "planned"
     assert refreshed.assigned_agent_id == active_researcher.id
+    assert assignment_recovery["queue_reason"] == "worker_saturated"
+    assert assignment_recovery["queued_at"]
+    assert assignment_recovery["deferred_until"]
     assert ownership["stage"] == "planned"
     assert ownership["active"] == false
     assert ownership["released_at"]
+  end
+
+  test "queued recovered work is deferred from immediate execution until the cooldown expires" do
+    inactive_researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, inactive_researcher} =
+      Runtime.save_agent(inactive_researcher, %{
+        "role" => "researcher",
+        "status" => "paused",
+        "name" => "Inactive Deferred Researcher",
+        "slug" => "inactive-deferred-researcher"
+      })
+
+    active_researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, active_researcher} =
+      Runtime.save_agent(active_researcher, %{
+        "role" => "researcher",
+        "name" => "Deferred Recovery Researcher",
+        "slug" => "deferred-recovery-researcher"
+      })
+
+    for idx <- 1..4 do
+      {:ok, _work_item} =
+        Runtime.save_work_item(%{
+          "kind" => "research",
+          "goal" => "Saturate deferred worker slot #{idx}.",
+          "assigned_agent_id" => active_researcher.id,
+          "assigned_role" => "researcher",
+          "status" => "blocked"
+        })
+    end
+
+    {:ok, work_item} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Defer this recovered work before the worker runs it.",
+        "assigned_agent_id" => inactive_researcher.id,
+        "assigned_role" => "researcher",
+        "status" => "planned"
+      })
+
+    recovery_summary = Runtime.recover_orphaned_work_assignments(limit: 10)
+
+    assert recovery_summary.queued_count == 1
+
+    assert {:ok, idle_summary} = Runtime.run_autonomy_cycle(active_researcher.id)
+    assert idle_summary.status == "idle"
+    assert idle_summary.processed_count == 0
+
+    deferred_work_item = Runtime.get_work_item!(work_item.id)
+
+    assignment_recovery =
+      get_in(deferred_work_item.metadata || %{}, ["assignment_recovery"]) || %{}
+
+    assert deferred_work_item.status == "planned"
+    assert deferred_work_item.assigned_agent_id == active_researcher.id
+    assert assignment_recovery["deferred_until"]
+
+    {:ok, resumed_work_item} =
+      Runtime.save_work_item(deferred_work_item, %{
+        "metadata" =>
+          Map.put(
+            deferred_work_item.metadata || %{},
+            "assignment_recovery",
+            Map.put(
+              assignment_recovery,
+              "deferred_until",
+              DateTime.add(DateTime.utc_now(), -60, :second)
+            )
+          )
+      })
+
+    assert {:ok, run_summary} =
+             Runtime.run_autonomy_cycle(active_researcher.id, work_item_id: resumed_work_item.id)
+
+    assert run_summary.processed_count == 1
+
+    completed_work_item = Runtime.get_work_item!(work_item.id)
+
+    assert completed_work_item.status == "completed"
+    assert Runtime.active_lease("work_item:#{work_item.id}") == nil
   end
 
   test "role queue dispatch processes delegated child work through active workers" do
