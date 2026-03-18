@@ -7,7 +7,15 @@ defmodule HydraX.RuntimeTest do
   alias HydraX.Memory
   alias HydraX.Repo
   alias HydraX.Runtime
-  alias HydraX.Runtime.{DiscordConfig, ProviderConfig, SlackConfig, TelegramConfig}
+
+  alias HydraX.Runtime.{
+    CoordinationLease,
+    DiscordConfig,
+    ProviderConfig,
+    SlackConfig,
+    TelegramConfig
+  }
+
   alias HydraX.Security.Secrets
   alias HydraX.Safety
   alias HydraXWeb.OperatorAuth
@@ -5984,7 +5992,7 @@ defmodule HydraX.RuntimeTest do
         }
       })
 
-    {:ok, _remote_claimed_item} =
+    {:ok, remote_claimed_item} =
       Runtime.save_work_item(%{
         "kind" => "task",
         "goal" => "Tracked remote claimed work item.",
@@ -5999,6 +6007,16 @@ defmodule HydraX.RuntimeTest do
           }
         }
       })
+
+    assert {:ok, _lease} =
+             Runtime.claim_lease("work_item:#{remote_claimed_item.id}",
+               owner: "node:remote-status",
+               ttl_seconds: 60
+             )
+
+    on_exit(fn ->
+      Runtime.release_lease("work_item:#{remote_claimed_item.id}", owner: "node:remote-status")
+    end)
 
     {:ok, _unsafe_item} =
       Runtime.save_work_item(%{
@@ -6692,6 +6710,66 @@ defmodule HydraX.RuntimeTest do
     assert ownership["owner"] == "node:remote-role-queue"
     assert ownership["stage"] == "claimed_remote"
     assert ownership["active"] == true
+  end
+
+  test "role queue dispatch reclaims stale remote-owned work" do
+    researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, researcher} =
+      Runtime.save_agent(researcher, %{
+        "role" => "researcher",
+        "name" => "Researcher Reclaim Remote",
+        "slug" => "researcher-reclaim-remote-#{System.unique_integer([:positive])}"
+      })
+
+    {:ok, role_queued_work} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Reclaim this role-queued work after the remote lease expires.",
+        "assigned_role" => "researcher",
+        "status" => "planned",
+        "metadata" => %{
+          "assignment_mode" => "role_claim",
+          "ownership" => %{
+            "owner" => "node:stale-role-queue",
+            "stage" => "claimed_remote",
+            "active" => true
+          }
+        }
+      })
+
+    assert {:ok, _lease} =
+             Runtime.claim_lease("work_item:#{role_queued_work.id}",
+               owner: "node:stale-role-queue",
+               ttl_seconds: 120,
+               metadata: %{"phase" => "run"}
+             )
+
+    stale_lease = Repo.get_by!(CoordinationLease, name: "work_item:#{role_queued_work.id}")
+
+    stale_lease
+    |> Ecto.Changeset.change(expires_at: DateTime.add(DateTime.utc_now(), -60, :second))
+    |> Repo.update!()
+
+    summary = Runtime.process_role_queued_work(limit: 10)
+
+    assert summary.processed_count >= 1
+    assert summary.remote_owned_count == 0
+
+    assert Enum.any?(summary.results, fn result ->
+             result[:agent_id] == researcher.id and result[:work_item_id] == role_queued_work.id and
+               result[:action] == "researched"
+           end)
+
+    refreshed = Runtime.get_work_item!(role_queued_work.id)
+    ownership = get_in(refreshed.metadata || %{}, ["ownership"])
+
+    assert refreshed.status == "completed"
+    assert refreshed.assigned_agent_id == researcher.id
+    assert ownership["owner"] == Runtime.coordination_status().owner
+    assert ownership["active"] == false
   end
 
   test "same-role workers do not claim work that is specifically assigned to another active worker" do

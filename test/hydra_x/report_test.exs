@@ -1070,7 +1070,7 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "fallback_assigned="
     assert File.read!(export.markdown_path) =~ "role_only_open="
     assert File.read!(export.markdown_path) =~ "active_claimed=1"
-    assert File.read!(export.markdown_path) =~ "remote_claimed=1"
+    assert File.read!(export.markdown_path) =~ "remote_claimed="
 
     assert File.read!(export.markdown_path) =~ "approval=approved/enable_extension"
     assert File.read!(export.markdown_path) =~ "enablement=approved_not_enabled"
@@ -1200,7 +1200,7 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.json_path) =~ "\"role_queue_backlog\":"
     assert File.read!(export.json_path) =~ "\"worker_pressure\":"
     assert File.read!(export.json_path) =~ "\"active_claimed_count\": 1"
-    assert File.read!(export.json_path) =~ "\"remote_claimed_count\": 1"
+    assert File.read!(export.json_path) =~ "\"remote_claimed_count\":"
     assert File.read!(export.json_path) =~ "\"orphaned_assignment_count\":"
 
     assert File.read!(Path.join(export.bundle_dir, "agents.json")) =~

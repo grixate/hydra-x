@@ -659,7 +659,9 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp work_item_remotely_owned?(%WorkItem{} = work_item) do
     ownership = get_in(work_item.metadata || %{}, ["ownership"]) || %{}
-    ownership["active"] == true and ownership["owner"] not in [nil, Coordination.status().owner]
+
+    ownership["active"] == true and ownership["owner"] not in [nil, Coordination.status().owner] and
+      not stale_or_missing_work_item_lease?(work_item)
   end
 
   defp build_role_queue_backlog(all_work_items, autonomy_agents) do
