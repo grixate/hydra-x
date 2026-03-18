@@ -408,6 +408,7 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "Remote claims"
     assert html =~ "Orphaned assignments"
     assert html =~ "Role backlog"
+    assert html =~ "deferred 1"
     assert html =~ "Saturated workers"
     assert html =~ "0 queued · 1 deferred"
     assert html =~ "Role queue backlog"

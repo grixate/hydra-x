@@ -927,7 +927,7 @@ defmodule HydraXWeb.HealthLive do
                     · expiry {event.expired_by}
                   </span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip                                {event.ip}</span>
+                  <span :if={event.ip}> · ip                                 {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -1303,6 +1303,9 @@ defmodule HydraXWeb.HealthLive do
             <div class="mt-3 font-display text-4xl">
               {Enum.reduce(@autonomy_status.role_queue_backlog || [], 0, &(&1.queued_count + &2))}
             </div>
+            <p class="mt-2 text-xs text-[var(--hx-mute)]">
+              deferred {@autonomy_status.deferred_role_queue_count || 0}
+            </p>
           </article>
           <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
             <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">

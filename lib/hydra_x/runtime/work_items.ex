@@ -625,6 +625,11 @@ defmodule HydraX.Runtime.WorkItems do
     role_queue_backlog =
       build_role_queue_backlog(all_work_items, autonomy_agents)
 
+    deferred_role_queue_count =
+      Enum.reduce(role_queue_backlog, 0, fn entry, acc ->
+        acc + (entry.deferred_count || 0)
+      end)
+
     worker_pressure =
       build_worker_pressure(all_work_items, autonomy_agents, role_queue_backlog)
 
@@ -663,6 +668,7 @@ defmodule HydraX.Runtime.WorkItems do
       stale_claimed_count: stale_claimed_count,
       remote_claimed_count: remote_claimed_count,
       orphaned_assignment_count: orphaned_assignment_count,
+      deferred_role_queue_count: deferred_role_queue_count,
       autonomy_agent_count: length(autonomy_agents),
       active_roles: autonomy_agents |> Enum.map(& &1.role) |> Enum.frequencies(),
       role_queue_backlog: role_queue_backlog,
