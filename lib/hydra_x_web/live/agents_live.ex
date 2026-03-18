@@ -537,11 +537,17 @@ defmodule HydraXWeb.AgentsLive do
                     {agent.role_queue_backlog[:worker_count] || 0} · active claims{" "}
                     {agent.role_queue_backlog[:active_claimed_count] || 0}
                   </p>
+                  <p :if={(agent.work_queue[:orphaned_role_assignments] || 0) > 0}>
+                    orphaned role {agent.work_queue[:orphaned_role_assignments]}
+                  </p>
                   <p :if={detail = worker_pressure_detail(agent.worker_pressure)}>
                     {detail}
                   </p>
                   <p :if={dispatch = agent.recent_role_dispatch}>
                     {dispatch}
+                  </p>
+                  <p :if={recovery = agent.recent_assignment_recovery}>
+                    {recovery}
                   </p>
                 </div>
                 <div class="mt-3 space-y-2">
@@ -1245,6 +1251,7 @@ defmodule HydraXWeb.AgentsLive do
   end
 
   defp agents_with_runtime do
+    agents = Runtime.list_agents()
     mcp_statuses = Runtime.mcp_statuses() |> Map.new(&{&1.id, &1})
     autonomy_status = Runtime.autonomy_status()
     worker_pressure = Map.new(autonomy_status.worker_pressure || [], &{&1.agent_id, &1})
@@ -1252,10 +1259,30 @@ defmodule HydraXWeb.AgentsLive do
     scheduler_status = Runtime.scheduler_status()
     dispatch_results = List.wrap(scheduler_status.role_queue_dispatches[:results] || [])
 
-    Runtime.list_agents()
+    assignment_recovery_results =
+      List.wrap(scheduler_status.assignment_recoveries[:results] || [])
+
+    active_agent_ids =
+      agents
+      |> Enum.filter(&(&1.status == "active"))
+      |> Enum.map(& &1.id)
+      |> MapSet.new()
+
+    orphaned_role_counts =
+      Runtime.list_work_items(limit: 500, preload: false)
+      |> Enum.filter(fn work_item ->
+        work_item.status not in ["completed", "failed", "canceled"] and
+          is_integer(work_item.assigned_agent_id) and
+          is_binary(work_item.assigned_role) and
+          not MapSet.member?(active_agent_ids, work_item.assigned_agent_id)
+      end)
+      |> Enum.frequencies_by(& &1.assigned_role)
+
+    agents
     |> Enum.map(fn agent ->
       role_backlog = Map.get(role_queue_backlog, agent.role, %{})
       pressure = Map.get(worker_pressure, agent.id, %{})
+      orphaned_role_count = Map.get(orphaned_role_counts, agent.role, 0)
 
       agent
       |> Map.put(:runtime, Runtime.agent_runtime_status(agent))
@@ -1273,10 +1300,18 @@ defmodule HydraXWeb.AgentsLive do
         Runtime.list_work_items(agent_id: agent.id, limit: 4)
         |> Enum.map(&attach_promoted_work_item_memories/1)
       )
-      |> Map.put(:work_queue, work_queue_summary(agent.id, role_backlog, pressure))
+      |> Map.put(
+        :work_queue,
+        work_queue_summary(agent.id, role_backlog, pressure, orphaned_role_count)
+      )
       |> Map.put(:role_queue_backlog, role_backlog)
       |> Map.put(:worker_pressure, pressure)
+      |> Map.put(:orphaned_role_count, orphaned_role_count)
       |> Map.put(:recent_role_dispatch, recent_role_dispatch_summary(dispatch_results, agent.id))
+      |> Map.put(
+        :recent_assignment_recovery,
+        recent_assignment_recovery_summary(assignment_recovery_results, agent.id)
+      )
       |> Map.put(:tool_policy_override, Runtime.get_agent_tool_policy(agent.id))
       |> Map.put(:effective_tool_policy, Runtime.effective_tool_policy(agent.id))
       |> Map.put(:control_policy_override, Runtime.get_agent_control_policy(agent.id))
@@ -1295,7 +1330,7 @@ defmodule HydraXWeb.AgentsLive do
     }
   end
 
-  defp work_queue_summary(agent_id, role_backlog, pressure) do
+  defp work_queue_summary(agent_id, role_backlog, pressure, orphaned_role_count) do
     items = Runtime.list_work_items(agent_id: agent_id, limit: 100, preload: false)
 
     %{
@@ -1310,7 +1345,8 @@ defmodule HydraXWeb.AgentsLive do
         ),
       blocked_or_failed: Enum.count(items, &(&1.status in ["blocked", "failed"])),
       role_backlog: role_backlog[:queued_count] || 0,
-      capacity_posture: pressure[:capacity_posture] || "idle"
+      capacity_posture: pressure[:capacity_posture] || "idle",
+      orphaned_role_assignments: orphaned_role_count
     }
   end
 
@@ -1340,6 +1376,22 @@ defmodule HydraXWeb.AgentsLive do
         action = result[:action] || result["action"]
         work_item_id = result[:work_item_id] || result["work_item_id"]
         "recent role dispatch #{action}#{if work_item_id, do: " ##{work_item_id}", else: ""}"
+    end
+  end
+
+  defp recent_assignment_recovery_summary(results, agent_id) do
+    agent_results =
+      Enum.filter(results, &((&1[:assigned_agent_id] || &1["assigned_agent_id"]) == agent_id))
+
+    case List.first(agent_results) do
+      nil ->
+        nil
+
+      result ->
+        action = result[:action] || result["action"]
+        work_item_id = result[:work_item_id] || result["work_item_id"]
+
+        "recent assignment recovery #{action}#{if work_item_id, do: " ##{work_item_id}", else: ""}"
     end
   end
 

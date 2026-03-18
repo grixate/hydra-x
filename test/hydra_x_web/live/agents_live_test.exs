@@ -165,6 +165,24 @@ defmodule HydraXWeb.AgentsLiveTest do
         }
       })
 
+    {:ok, paused_researcher} =
+      Runtime.save_agent(%{
+        "role" => "researcher",
+        "status" => "paused",
+        "name" => "Paused Researcher",
+        "slug" => "paused-researcher-agents-live",
+        "workspace_root" => Path.join(System.tmp_dir!(), "hydra-x-paused-researcher")
+      })
+
+    {:ok, _orphaned_role_item} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Recover researcher work from an unavailable assignee.",
+        "assigned_agent_id" => paused_researcher.id,
+        "assigned_role" => "researcher",
+        "status" => "planned"
+      })
+
     {:ok, _role_queue_item} =
       Runtime.save_work_item(%{
         "kind" => "task",
@@ -256,6 +274,21 @@ defmodule HydraXWeb.AgentsLiveTest do
       ]
     })
 
+    Runtime.Jobs.record_scheduler_pass(:assignment_recoveries, %{
+      owner: "node:agents-test",
+      recovered_count: 1,
+      skipped_count: 0,
+      error_count: 0,
+      results: [
+        %{
+          assigned_agent_id: agent.id,
+          work_item_id: publish_item.id,
+          status: "completed",
+          action: "researched"
+        }
+      ]
+    })
+
     {:ok, _view, html} = live(conn, ~p"/agents")
 
     assert html =~ "Capability contract"
@@ -278,8 +311,10 @@ defmodule HydraXWeb.AgentsLiveTest do
 
     assert html =~ "Role backlog"
     assert html =~ "Queue posture"
+    assert html =~ "orphaned role 1"
     assert html =~ "worker pressure open"
     assert html =~ "recent role dispatch delivered_publish_summary"
+    assert html =~ "recent assignment recovery researched"
 
     assert html =~ "delivery delivered telegram"
     assert html =~ "ops-room"
