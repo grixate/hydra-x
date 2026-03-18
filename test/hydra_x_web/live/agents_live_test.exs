@@ -490,6 +490,37 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "recent role dispatch claimed remotely #8888 by node:remote-role-queue"
   end
 
+  test "agents page shows stale claim cleanup results", %{conn: conn} do
+    {:ok, agent} =
+      Runtime.save_agent(%{
+        name: "Stale Cleanup Agent",
+        slug: "stale-cleanup-agent",
+        role: "researcher",
+        workspace_root: Path.join(System.tmp_dir!(), "hydra-x-stale-cleanup-agent"),
+        description: "stale-cleanup",
+        is_default: false
+      })
+
+    Runtime.Jobs.record_scheduler_pass(:stale_work_item_claims, %{
+      owner: "node:agents-test",
+      expired_count: 1,
+      skipped_count: 0,
+      error_count: 0,
+      results: [
+        %{
+          assigned_agent_id: agent.id,
+          work_item_id: 9_999,
+          status: "claimed",
+          action: "expired_claim"
+        }
+      ]
+    })
+
+    {:ok, _view, html} = live(conn, ~p"/agents")
+
+    assert html =~ "recent stale cleanup expired_claim #9999"
+  end
+
   test "agents page highlights degraded review queues and degraded publish drafts", %{conn: conn} do
     {:ok, agent} =
       Runtime.save_agent(%{

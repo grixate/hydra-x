@@ -550,6 +550,9 @@ defmodule HydraXWeb.AgentsLive do
                   <p :if={recovery = agent.recent_assignment_recovery}>
                     {recovery}
                   </p>
+                  <p :if={cleanup = agent.recent_stale_claim_cleanup}>
+                    {cleanup}
+                  </p>
                 </div>
                 <div class="mt-3 space-y-2">
                   <p
@@ -1263,6 +1266,9 @@ defmodule HydraXWeb.AgentsLive do
     assignment_recovery_results =
       List.wrap(scheduler_status.assignment_recoveries[:results] || [])
 
+    stale_claim_cleanup_results =
+      List.wrap(scheduler_status.stale_work_item_claims[:results] || [])
+
     active_agent_ids =
       agents
       |> Enum.filter(&(&1.status == "active"))
@@ -1312,6 +1318,10 @@ defmodule HydraXWeb.AgentsLive do
       |> Map.put(
         :recent_assignment_recovery,
         recent_assignment_recovery_summary(assignment_recovery_results, agent.id)
+      )
+      |> Map.put(
+        :recent_stale_claim_cleanup,
+        recent_stale_claim_cleanup_summary(stale_claim_cleanup_results, agent.id)
       )
       |> Map.put(:tool_policy_override, Runtime.get_agent_tool_policy(agent.id))
       |> Map.put(:effective_tool_policy, Runtime.effective_tool_policy(agent.id))
@@ -1427,6 +1437,33 @@ defmodule HydraXWeb.AgentsLive do
           end
 
         "recent assignment recovery #{action_label}#{if work_item_id, do: " ##{work_item_id}", else: ""}#{detail}"
+    end
+  end
+
+  defp recent_stale_claim_cleanup_summary(results, agent_id) do
+    agent_results =
+      Enum.filter(results, &((&1[:assigned_agent_id] || &1["assigned_agent_id"]) == agent_id))
+
+    case Enum.find(agent_results, fn result ->
+           action = result[:action] || result["action"]
+           action not in [nil, "idle"]
+         end) do
+      nil ->
+        nil
+
+      result ->
+        action = result[:action] || result["action"]
+        work_item_id = result[:work_item_id] || result["work_item_id"]
+        reason = result[:reason] || result["reason"]
+
+        detail =
+          if is_binary(reason) do
+            " (#{reason})"
+          else
+            ""
+          end
+
+        "recent stale cleanup #{action}#{if work_item_id, do: " ##{work_item_id}", else: ""}#{detail}"
     end
   end
 
