@@ -362,22 +362,20 @@ defmodule HydraX.Runtime.WorkItems do
       |> Enum.reduce(resume_work_item_summary(owner), fn work_item, acc ->
         case replay_claim_work_item(work_item) do
           {:ok, claimed} ->
-            agent = replay_agent_for_work_item(claimed)
-
-            case agent do
-              %AgentProfile{} = replay_agent ->
+            case replay_agent_for_work_item(claimed) do
+              {:ok, replay_work_item, %AgentProfile{} = replay_agent} ->
                 case run_autonomy_cycle(
                        replay_agent.id,
-                       Keyword.put(opts, :work_item_id, claimed.id)
+                       Keyword.put(opts, :work_item_id, replay_work_item.id)
                      ) do
                   {:ok, summary} ->
-                    accumulate_resumed_work_item(acc, claimed, summary)
+                    accumulate_resumed_work_item(acc, replay_work_item, summary)
 
                   {:error, reason} ->
-                    accumulate_resume_work_item_error(acc, claimed, reason)
+                    accumulate_resume_work_item_error(acc, replay_work_item, reason)
                 end
 
-              nil ->
+              {:error, :missing_agent} ->
                 accumulate_skipped_work_item(acc, claimed, "missing_agent")
             end
 
@@ -961,14 +959,58 @@ defmodule HydraX.Runtime.WorkItems do
   defp replay_agent_for_work_item(%WorkItem{} = work_item) do
     cond do
       is_integer(work_item.assigned_agent_id) ->
-        Agents.get_agent!(work_item.assigned_agent_id)
+        case active_agent_by_id(work_item.assigned_agent_id) do
+          %AgentProfile{} = agent ->
+            {:ok, work_item, agent}
+
+          nil ->
+            replay_reassign_work_item(work_item)
+        end
 
       is_binary(work_item.assigned_role) ->
-        Agents.list_agents()
-        |> Enum.find(&(&1.status == "active" and &1.role == work_item.assigned_role))
+        case resolve_assigned_agent(role_queue_dispatch_attrs(work_item)) do
+          %{agent: %AgentProfile{} = agent} ->
+            {:ok, work_item, agent}
+
+          _ ->
+            {:error, :missing_agent}
+        end
 
       true ->
-        nil
+        {:error, :missing_agent}
+    end
+  end
+
+  defp active_agent_by_id(agent_id) when is_integer(agent_id) do
+    Agents.list_agents()
+    |> Enum.find(&(&1.id == agent_id and &1.status == "active"))
+  end
+
+  defp active_agent_by_id(_agent_id), do: nil
+
+  defp replay_reassign_work_item(%WorkItem{} = work_item) do
+    case resolve_assigned_agent(role_queue_dispatch_attrs(work_item)) do
+      %{agent: %AgentProfile{} = agent, resolution: resolution} ->
+        updated_resolution =
+          resolution
+          |> Map.put("strategy", "replay_reassignment")
+          |> Map.put("reassigned_from_agent_id", work_item.assigned_agent_id)
+          |> Map.put(
+            "reasons",
+            ["original assignee unavailable" | List.wrap(resolution["reasons"])]
+          )
+
+        {:ok, reassigned} =
+          save_work_item(work_item, %{
+            "assigned_agent_id" => agent.id,
+            "metadata" =>
+              put_assignment_resolution_metadata(work_item.metadata, updated_resolution)
+          })
+
+        {:ok, reassigned, agent}
+
+      _ ->
+        {:error, :missing_agent}
     end
   end
 

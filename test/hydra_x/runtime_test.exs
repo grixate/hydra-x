@@ -6136,6 +6136,63 @@ defmodule HydraX.RuntimeTest do
     assert ownership["active"] == true
   end
 
+  test "owned work item replay reassigns claimed work when the original worker is inactive" do
+    inactive_researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, inactive_researcher} =
+      Runtime.save_agent(inactive_researcher, %{
+        "role" => "researcher",
+        "status" => "paused",
+        "name" => "Inactive Researcher",
+        "slug" => "inactive-researcher-#{System.unique_integer([:positive])}"
+      })
+
+    active_researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, active_researcher} =
+      Runtime.save_agent(active_researcher, %{
+        "role" => "researcher",
+        "name" => "Active Researcher",
+        "slug" => "active-researcher-#{System.unique_integer([:positive])}"
+      })
+
+    {:ok, work_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Recover a claimed task after the original worker went inactive.",
+        "assigned_agent_id" => inactive_researcher.id,
+        "assigned_role" => "researcher",
+        "status" => "claimed",
+        "metadata" => %{
+          "assignment_mode" => "role_claim",
+          "ownership" => %{
+            "owner" => Runtime.coordination_status().owner,
+            "stage" => "claimed",
+            "active" => true
+          }
+        }
+      })
+
+    summary = Runtime.resume_owned_work_items(limit: 10)
+
+    assert summary.resumed_count == 1
+
+    refreshed = Runtime.get_work_item!(work_item.id)
+
+    assert refreshed.status == "completed"
+    assert refreshed.assigned_agent_id == active_researcher.id
+
+    assert get_in(refreshed.metadata || %{}, ["assignment_resolution", "strategy"]) ==
+             "replay_reassignment"
+
+    assert get_in(refreshed.metadata || %{}, ["assignment_resolution", "reassigned_from_agent_id"]) ==
+             inactive_researcher.id
+  end
+
   test "role queue dispatch processes delegated child work through active workers" do
     planner =
       create_agent()

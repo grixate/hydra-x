@@ -927,7 +927,7 @@ defmodule HydraXWeb.HealthLive do
                     · expiry {event.expired_by}
                   </span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip                      {event.ip}</span>
+                  <span :if={event.ip}> · ip                        {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -2268,6 +2268,7 @@ defmodule HydraXWeb.HealthLive do
   defp assignment_strategy_label("role_capability_match"), do: "role capability match"
   defp assignment_strategy_label("capability_fallback"), do: "capability fallback"
   defp assignment_strategy_label("worker_claim"), do: "worker claim"
+  defp assignment_strategy_label("replay_reassignment"), do: "replay reassignment"
   defp assignment_strategy_label(strategy) when is_binary(strategy), do: strategy
   defp assignment_strategy_label(_strategy), do: "assignment"
 
