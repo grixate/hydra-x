@@ -5570,6 +5570,7 @@ defmodule HydraX.Runtime.WorkItems do
   defp delegation_batch_expansion_priority(%WorkItem{} = work_item, %{} = snapshot, role_capacity) do
     {
       work_item.priority || 0,
+      delegation_missing_role_urgency_score(snapshot),
       delegation_pending_role_capacity_score(snapshot, role_capacity),
       -(snapshot["expansion_count"] || 0),
       delegation_batch_expansion_age_score(snapshot),
@@ -5579,6 +5580,14 @@ defmodule HydraX.Runtime.WorkItems do
       -(snapshot["terminal_count"] || 0)
     }
   end
+
+  defp delegation_missing_role_urgency_score(%{} = snapshot) do
+    snapshot
+    |> Map.get("missing_completion_roles", %{})
+    |> Enum.reduce(0, fn {_role, count}, acc -> acc + count end)
+  end
+
+  defp delegation_missing_role_urgency_score(_snapshot), do: 0
 
   defp delegation_batch_expansion_age_score(%{} = snapshot) do
     case parse_datetime(snapshot["last_expanded_at"]) do
