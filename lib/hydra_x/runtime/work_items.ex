@@ -1860,6 +1860,9 @@ defmodule HydraX.Runtime.WorkItems do
        ) do
     if parent.assigned_role == "planner" and
          deferred_count >= @delegation_pressure_replan_threshold do
+      {delegate_batch, delegate_batch_metadata} =
+        delegation_pressure_replan_batch(parent, reason)
+
       existing_follow_up =
         existing_follow_up_work_item(parent, "delegation_pressure_replan", fn item ->
           get_in(item.metadata || %{}, ["reason"]) == reason
@@ -1935,15 +1938,18 @@ defmodule HydraX.Runtime.WorkItems do
               "input_artifact_refs" => %{"summary_artifact_id" => pressure_artifact.id},
               "required_outputs" => parent.required_outputs,
               "review_required" => parent.review_required,
-              "metadata" => %{
-                "task_type" => "delegation_pressure_replan",
-                "delegate_goal" => parent.goal,
-                "summary_artifact_id" => pressure_artifact.id,
-                "reason" => reason,
-                "constraint_findings" => [constraint_finding],
-                "constraint_strategy" => constraint_strategy,
-                "follow_up_context" => follow_up_context
-              }
+              "metadata" =>
+                %{
+                  "task_type" => "delegation_pressure_replan",
+                  "delegate_goal" => parent.goal,
+                  "delegate_batch" => delegate_batch,
+                  "summary_artifact_id" => pressure_artifact.id,
+                  "reason" => reason,
+                  "constraint_findings" => [constraint_finding],
+                  "constraint_strategy" => constraint_strategy,
+                  "follow_up_context" => follow_up_context
+                }
+                |> Map.merge(delegate_batch_metadata)
             }
           )
 
@@ -1961,6 +1967,42 @@ defmodule HydraX.Runtime.WorkItems do
     else
       {:ok, parent, nil}
     end
+  end
+
+  defp delegation_pressure_replan_batch(%WorkItem{} = parent, reason) do
+    snapshot = delegation_batch_snapshot(parent) || %{}
+
+    pending_entries =
+      snapshot
+      |> pending_delegation_batch_items()
+      |> prioritize_required_delegation_batch_entries(
+        Map.get(snapshot, "missing_completion_roles", %{})
+      )
+
+    selected_entries =
+      case reason do
+        "role_capacity_constrained" -> Enum.take(pending_entries, 1)
+        "planner_budget_constrained" -> Enum.take(pending_entries, 1)
+        "planner_batch_budget_constrained" -> Enum.take(pending_entries, 1)
+        _ -> Enum.take(pending_entries, 1)
+      end
+
+    metadata =
+      if selected_entries == [] do
+        %{}
+      else
+        %{
+          "delegate_batch_concurrency" => 1,
+          "delegate_batch_completion_quorum" => 1,
+          "delegate_batch_completion_roles" =>
+            selected_entries
+            |> Enum.map(&(&1["assigned_role"] || &1["role"]))
+            |> Enum.reject(&(&1 in [nil, ""]))
+            |> Enum.frequencies()
+        }
+      end
+
+    {selected_entries, metadata}
   end
 
   defp do_finalize_blocked_parent(%WorkItem{} = claimed) do

@@ -4548,6 +4548,106 @@ defmodule HydraX.RuntimeTest do
     assert Enum.map(replan_items, & &1.id) == [replan_item.id]
   end
 
+  test "delegation pressure replans narrow the next planner delegation batch" do
+    planner =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, planner} = Runtime.save_agent(planner, %{"role" => "planner"})
+
+    researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, researcher} = Runtime.save_agent(researcher, %{"role" => "researcher"})
+
+    Enum.each(1..4, fn index ->
+      {:ok, _busy_work} =
+        Runtime.save_work_item(%{
+          "kind" => "task",
+          "goal" => "Saturate researcher queue #{index}",
+          "assigned_agent_id" => researcher.id,
+          "assigned_role" => "researcher",
+          "status" => "blocked",
+          "priority" => 1
+        })
+    end)
+
+    {:ok, parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Re-plan a delegation tree under repeated pressure.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "execution_mode" => "delegate",
+        "priority" => 9,
+        "metadata" => %{
+          "delegate_batch_concurrency" => 1,
+          "delegate_batch" => [
+            %{"goal" => "Research first constrained branch.", "role" => "researcher"},
+            %{"goal" => "Research second constrained branch.", "role" => "researcher"}
+          ]
+        }
+      })
+
+    assert {:ok, delegated} = Runtime.run_autonomy_cycle(planner.id)
+    assert delegated.action == "delegated"
+
+    assert {:ok, researcher_summary} = Runtime.run_autonomy_cycle(researcher.id)
+    assert researcher_summary.action == "researched"
+
+    assert {:ok, _first_deferred} = Runtime.run_autonomy_cycle(planner.id)
+
+    parent = Runtime.get_work_item!(parent.id)
+    batch_snapshot = Runtime.delegation_batch_snapshot(parent)
+
+    stale_snapshot =
+      batch_snapshot
+      |> Map.put("expansion_deferred_count", 2)
+      |> Map.put("last_deferred_at", DateTime.add(DateTime.utc_now(), -120, :second))
+      |> Map.put("expansion_deferred_until", DateTime.add(DateTime.utc_now(), -120, :second))
+
+    {:ok, _parent} =
+      Runtime.save_work_item(parent, %{
+        "metadata" =>
+          (parent.metadata || %{})
+          |> Map.put("delegation_batch", stale_snapshot)
+      })
+
+    assert {:ok, second_deferred} = Runtime.run_autonomy_cycle(planner.id)
+    assert second_deferred.action == "delegation_batch_deferred"
+
+    replan_item = Runtime.get_work_item!(second_deferred.follow_up_work_item.id)
+
+    assert get_in(replan_item.metadata || %{}, ["task_type"]) == "delegation_pressure_replan"
+    assert get_in(replan_item.metadata || %{}, ["delegate_batch_concurrency"]) == 1
+    assert get_in(replan_item.metadata || %{}, ["delegate_batch_completion_quorum"]) == 1
+
+    assert [
+             %{
+               "goal" => "Research second constrained branch.",
+               "assigned_role" => "researcher"
+             }
+           ] =
+             Enum.map(
+               get_in(replan_item.metadata || %{}, ["delegate_batch"]) || [],
+               &Map.take(&1, ["goal", "assigned_role"])
+             )
+
+    assert {:ok, replan_summary} = Runtime.run_autonomy_cycle(planner.id)
+    assert replan_summary.action == "delegated"
+    assert length(replan_summary.delegated_work_items) == 1
+
+    replan_item = Runtime.get_work_item!(replan_item.id)
+    [replan_child_id] = replan_item.result_refs["child_work_item_ids"]
+    replan_child = Runtime.get_work_item!(replan_child_id)
+
+    assert replan_item.status == "blocked"
+    assert length(replan_item.result_refs["child_work_item_ids"]) == 1
+    assert replan_child.goal == "Research second constrained branch."
+    assert replan_child.assigned_role == "researcher"
+  end
+
   test "planner prefers the older waiting delegation batch when capacity is otherwise equal" do
     planner =
       create_agent()
