@@ -1410,6 +1410,7 @@ defmodule HydraXWeb.AgentsLive do
     [
       "delegation supervision #{active_batches} batches",
       delegation_supervision_budget_label(summary),
+      delegation_supervision_batch_budget_label(summary),
       delegation_deferred_batches_label(summary[:deferred_batches] || 0),
       "pending #{summary[:pending_children] || 0}",
       "active #{summary[:active_children] || 0}",
@@ -1432,6 +1433,17 @@ defmodule HydraXWeb.AgentsLive do
   end
 
   defp delegation_supervision_budget_label(_summary), do: nil
+
+  defp delegation_supervision_batch_budget_label(summary) when is_map(summary) do
+    budget = summary[:supervision_batch_budget]
+    remaining = summary[:supervision_batch_budget_remaining]
+
+    if is_integer(budget) and is_integer(remaining) do
+      "batch budget #{budget} · remaining #{remaining}"
+    end
+  end
+
+  defp delegation_supervision_batch_budget_label(_summary), do: nil
 
   defp delegation_deferred_batches_label(count) when is_integer(count) and count > 0,
     do: "deferred #{count}"
@@ -1861,6 +1873,7 @@ defmodule HydraXWeb.AgentsLive do
           delegation_quorum_line(snapshot),
           delegation_quorum_skip_line(snapshot),
           delegation_supervision_budget_line(snapshot),
+          delegation_batch_budget_line(snapshot),
           delegation_expansion_history_line(snapshot),
           delegation_expansion_cooldown_line(snapshot)
         ]
@@ -1921,6 +1934,16 @@ defmodule HydraXWeb.AgentsLive do
   end
 
   defp delegation_supervision_budget_line(_snapshot), do: nil
+
+  defp delegation_batch_budget_line(%{
+         "batch_budget" => budget,
+         "supervision_active_batches" => active_batches
+       })
+       when is_integer(budget) and is_integer(active_batches) do
+    "batch budget #{budget} · active batches #{active_batches}"
+  end
+
+  defp delegation_batch_budget_line(_snapshot), do: nil
 
   defp delegation_expansion_history_line(%{"expansion_count" => count} = snapshot)
        when is_integer(count) and count > 0 do

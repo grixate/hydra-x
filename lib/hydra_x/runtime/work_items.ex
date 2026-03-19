@@ -878,13 +878,19 @@ defmodule HydraX.Runtime.WorkItems do
       constrained_roles = aggregate_constrained_pending_roles(snapshots, role_capacity)
       deferred_batches = Enum.count(snapshots, &delegation_batch_expansion_deferred?/1)
       supervision_budget = delegation_supervision_budget(agent, entries, autonomy_agents)
+
+      supervision_batch_budget =
+        delegation_supervision_batch_budget(agent, entries, autonomy_agents, supervision_budget)
+
       active_children = Enum.reduce(snapshots, 0, &((&1["active_count"] || 0) + &2))
+      occupied_batches = Enum.count(snapshots, &delegation_batch_occupies_supervision_slot?/1)
 
       %{
         agent_id: agent_id,
         agent_name: agent && agent.name,
         role: role || (agent && agent.role),
         active_batches: length(entries),
+        occupied_batches: occupied_batches,
         deferred_batches: deferred_batches,
         pending_children: Enum.reduce(snapshots, 0, &((&1["pending_count"] || 0) + &2)),
         active_children: active_children,
@@ -892,6 +898,8 @@ defmodule HydraX.Runtime.WorkItems do
         constrained_roles: constrained_roles,
         supervision_budget: supervision_budget,
         supervision_budget_remaining: max(supervision_budget - active_children, 0),
+        supervision_batch_budget: supervision_batch_budget,
+        supervision_batch_budget_remaining: max(supervision_batch_budget - occupied_batches, 0),
         highest_priority:
           entries
           |> Enum.map(fn {work_item, _snapshot} -> work_item.priority || 0 end)
@@ -965,6 +973,34 @@ defmodule HydraX.Runtime.WorkItems do
     |> max(1)
   end
 
+  defp delegation_supervision_batch_budget(
+         %AgentProfile{} = agent,
+         entries,
+         autonomy_agents,
+         supervision_budget
+       )
+       when is_list(entries) and is_list(autonomy_agents) do
+    override =
+      entries
+      |> Enum.map(&delegation_batch_budget/1)
+      |> Enum.filter(&is_integer/1)
+      |> Enum.max(fn -> nil end)
+
+    default_budget =
+      supervision_budget ||
+        delegation_supervision_budget(agent, entries, autonomy_agents)
+
+    override || max(div(default_budget + 1, 2), 1)
+  end
+
+  defp delegation_supervision_batch_budget(_agent, _entries, autonomy_agents, supervision_budget)
+       when is_list(autonomy_agents) do
+    budget =
+      supervision_budget || delegation_supervision_budget(nil, nil, autonomy_agents)
+
+    max(div(budget + 1, 2), 1)
+  end
+
   defp delegation_batch_supervision_budget(%WorkItem{} = work_item) do
     metadata = work_item.metadata || %{}
 
@@ -982,6 +1018,22 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp delegation_batch_supervision_budget(_work_item), do: nil
 
+  defp delegation_batch_budget(%WorkItem{} = work_item) do
+    metadata = work_item.metadata || %{}
+
+    value =
+      metadata["delegate_batch_budget"] ||
+        get_in(metadata, ["delegation_batch", "batch_budget"])
+
+    if is_integer(value) and value > 0, do: value
+  end
+
+  defp delegation_batch_budget({%WorkItem{} = work_item, snapshot}) when is_map(snapshot) do
+    snapshot["batch_budget"] || delegation_batch_budget(work_item)
+  end
+
+  defp delegation_batch_budget(_work_item), do: nil
+
   defp delegation_initial_dispatch_budget(%AgentProfile{} = agent, %WorkItem{} = work_item) do
     blocked_batches = blocked_delegation_batches_for_agent(agent)
     seeded_snapshot = build_delegation_batch_snapshot(work_item, [])
@@ -993,12 +1045,27 @@ defmodule HydraX.Runtime.WorkItems do
         list_autonomy_agents()
       )
 
+    supervision_batch_budget =
+      delegation_supervision_batch_budget(
+        agent,
+        blocked_batches ++ [{work_item, seeded_snapshot}],
+        list_autonomy_agents(),
+        supervision_budget
+      )
+
     active_children =
       Enum.reduce(blocked_batches, 0, fn {_blocked_work_item, snapshot}, acc ->
         acc + (snapshot["active_count"] || 0)
       end)
 
-    {supervision_budget, active_children, max(supervision_budget - active_children, 0)}
+    occupied_batches =
+      Enum.count(blocked_batches, fn {_blocked_work_item, snapshot} ->
+        delegation_batch_occupies_supervision_slot?(snapshot)
+      end)
+
+    {supervision_budget, active_children, max(supervision_budget - active_children, 0),
+     supervision_batch_budget, occupied_batches,
+     max(supervision_batch_budget - occupied_batches, 0)}
   end
 
   defp aggregate_constrained_pending_roles(snapshots, role_capacity) do
@@ -1133,12 +1200,26 @@ defmodule HydraX.Runtime.WorkItems do
     supervision_budget =
       delegation_supervision_budget(agent, all_blocked_batches, list_autonomy_agents())
 
+    supervision_batch_budget =
+      delegation_supervision_batch_budget(
+        agent,
+        all_blocked_batches,
+        list_autonomy_agents(),
+        supervision_budget
+      )
+
     active_children =
       Enum.reduce(all_blocked_batches, 0, fn {_work_item, snapshot}, acc ->
         acc + (snapshot["active_count"] || 0)
       end)
 
+    active_batches =
+      Enum.count(all_blocked_batches, fn {_work_item, snapshot} ->
+        delegation_batch_occupies_supervision_slot?(snapshot)
+      end)
+
     remaining_budget = max(supervision_budget - active_children, 0)
+    remaining_batch_budget = max(supervision_batch_budget - active_batches, 0)
 
     ready_batches =
       Enum.filter(blocked_batches, fn {_work_item, snapshot} ->
@@ -1149,6 +1230,12 @@ defmodule HydraX.Runtime.WorkItems do
     expandable_parent =
       if remaining_budget > 0 do
         ready_batches
+        |> Enum.filter(fn {_work_item, snapshot} ->
+          delegation_batch_expansion_eligible_under_batch_budget?(
+            snapshot,
+            remaining_batch_budget
+          )
+        end)
         |> Enum.max_by(
           fn {work_item, snapshot} ->
             delegation_batch_expansion_priority(work_item, snapshot, role_capacity)
@@ -1157,6 +1244,24 @@ defmodule HydraX.Runtime.WorkItems do
         )
         |> case do
           {work_item, _snapshot} -> work_item
+          nil -> nil
+        end
+      end
+
+    batch_budget_blocked_parent =
+      if remaining_budget > 0 and remaining_batch_budget <= 0 do
+        ready_batches
+        |> Enum.reject(fn {_work_item, snapshot} ->
+          delegation_batch_occupies_supervision_slot?(snapshot)
+        end)
+        |> Enum.max_by(
+          fn {work_item, snapshot} ->
+            delegation_batch_expansion_priority(work_item, snapshot, role_capacity)
+          end,
+          fn -> nil end
+        )
+        |> case do
+          {work_item, snapshot} -> {work_item, snapshot}
           nil -> nil
         end
       end
@@ -1210,6 +1315,21 @@ defmodule HydraX.Runtime.WorkItems do
           %{
             "supervision_budget" => supervision_budget,
             "active_children" => active_children
+          }
+        )
+
+      match?({%WorkItem{}, %{}}, batch_budget_blocked_parent) ->
+        {work_item, snapshot} = batch_budget_blocked_parent
+
+        defer_blocked_delegation_batch(
+          work_item,
+          snapshot,
+          "planner_batch_budget_constrained",
+          %{
+            "supervision_budget" => supervision_budget,
+            "active_children" => active_children,
+            "supervision_batch_budget" => supervision_batch_budget,
+            "active_batches" => active_batches
           }
         )
 
@@ -1496,6 +1616,11 @@ defmodule HydraX.Runtime.WorkItems do
         |> maybe_put_snapshot_metric("expansion_capacity_score", attrs["capacity_score"])
         |> maybe_put_snapshot_metric("supervision_budget", attrs["supervision_budget"])
         |> maybe_put_snapshot_metric("supervision_active_children", attrs["active_children"])
+        |> maybe_put_snapshot_metric(
+          "supervision_batch_budget",
+          attrs["supervision_batch_budget"]
+        )
+        |> maybe_put_snapshot_metric("supervision_active_batches", attrs["active_batches"])
       )
 
     with {:ok, deferred} <-
@@ -1509,7 +1634,9 @@ defmodule HydraX.Runtime.WorkItems do
                  "deferred_until" => deferred_until,
                  "capacity_score" => attrs["capacity_score"],
                  "supervision_budget" => attrs["supervision_budget"],
-                 "active_children" => attrs["active_children"]
+                 "active_children" => attrs["active_children"],
+                 "supervision_batch_budget" => attrs["supervision_batch_budget"],
+                 "active_batches" => attrs["active_batches"]
                })
            }) do
       {:processed,
@@ -2440,12 +2567,20 @@ defmodule HydraX.Runtime.WorkItems do
 
     seeded_work_item = %{work_item | metadata: seeded_metadata}
 
-    {supervision_budget, active_children, remaining_budget} =
+    {supervision_budget, active_children, remaining_budget, supervision_batch_budget,
+     active_batches, remaining_batch_budget} =
       delegation_initial_dispatch_budget(agent, seeded_work_item)
+
+    initial_dispatch_limit =
+      if remaining_batch_budget <= 0 do
+        0
+      else
+        min(concurrency, remaining_budget)
+      end
 
     delegated_children =
       seeded_work_item
-      |> select_delegation_batch_entries_for_dispatch(entries, min(concurrency, remaining_budget))
+      |> select_delegation_batch_entries_for_dispatch(entries, initial_dispatch_limit)
       |> Enum.map(&dispatch_delegated_batch_item(seeded_work_item, agent, &1))
 
     children = Enum.map(delegated_children, & &1.child)
@@ -2455,7 +2590,10 @@ defmodule HydraX.Runtime.WorkItems do
       |> maybe_defer_initial_delegation_batch(
         supervision_budget,
         active_children,
-        remaining_budget
+        remaining_budget,
+        supervision_batch_budget,
+        active_batches,
+        remaining_batch_budget
       )
 
     first_child = List.first(children)
@@ -4939,7 +5077,12 @@ defmodule HydraX.Runtime.WorkItems do
         "supervision_budget" =>
           delegation_batch_supervision_budget(work_item) ||
             metadata_snapshot["supervision_budget"],
+        "batch_budget" =>
+          delegation_batch_budget(work_item) ||
+            metadata_snapshot["batch_budget"] ||
+            metadata_snapshot["supervision_batch_budget"],
         "supervision_active_children" => metadata_snapshot["supervision_active_children"],
+        "supervision_active_batches" => metadata_snapshot["supervision_active_batches"],
         "expansion_count" => metadata_snapshot["expansion_count"] || 0,
         "last_expanded_at" => parse_datetime(metadata_snapshot["last_expanded_at"]),
         "expansion_deferred_until" =>
@@ -5162,6 +5305,12 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp delegation_batch_quorum_met?(_snapshot), do: false
 
+  defp delegation_batch_occupies_supervision_slot?(%{} = snapshot) do
+    (snapshot["active_count"] || 0) > 0
+  end
+
+  defp delegation_batch_occupies_supervision_slot?(_snapshot), do: false
+
   defp finalize_delegation_batch_snapshot(%{} = snapshot) do
     if delegation_batch_quorum_met?(snapshot) and (snapshot["pending_count"] || 0) > 0 do
       items =
@@ -5210,6 +5359,20 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp delegation_batch_terminal_status?(status),
     do: status in @terminal_work_item_statuses or status == "quorum_skipped"
+
+  defp delegation_batch_expansion_eligible_under_batch_budget?(
+         %{} = snapshot,
+         remaining_batch_budget
+       )
+       when is_integer(remaining_batch_budget) do
+    delegation_batch_occupies_supervision_slot?(snapshot) or remaining_batch_budget > 0
+  end
+
+  defp delegation_batch_expansion_eligible_under_batch_budget?(
+         _snapshot,
+         _remaining_batch_budget
+       ),
+       do: true
 
   defp delegation_batch_strategy(work_item), do: delegation_batch_strategy(work_item, nil)
 
@@ -5328,20 +5491,40 @@ defmodule HydraX.Runtime.WorkItems do
          %{} = snapshot,
          supervision_budget,
          active_children,
-         remaining_budget
+         remaining_budget,
+         supervision_batch_budget,
+         active_batches,
+         remaining_batch_budget
        )
        when is_integer(supervision_budget) and is_integer(active_children) and
-              remaining_budget <= 0 do
+              is_integer(supervision_batch_budget) and is_integer(active_batches) do
     if (snapshot["pending_count"] || 0) > 0 and (snapshot["active_count"] || 0) == 0 do
       deferred_until =
         DateTime.utc_now()
         |> DateTime.add(delegation_batch_expansion_delay_seconds(), :second)
 
-      snapshot
-      |> Map.put("expansion_deferred_until", deferred_until)
-      |> Map.put("expansion_deferred_reason", "planner_budget_constrained")
-      |> Map.put("supervision_budget", supervision_budget)
-      |> Map.put("supervision_active_children", active_children)
+      cond do
+        remaining_budget <= 0 ->
+          snapshot
+          |> Map.put("expansion_deferred_until", deferred_until)
+          |> Map.put("expansion_deferred_reason", "planner_budget_constrained")
+          |> Map.put("supervision_budget", supervision_budget)
+          |> Map.put("supervision_active_children", active_children)
+          |> Map.put("supervision_batch_budget", supervision_batch_budget)
+          |> Map.put("supervision_active_batches", active_batches)
+
+        remaining_batch_budget <= 0 ->
+          snapshot
+          |> Map.put("expansion_deferred_until", deferred_until)
+          |> Map.put("expansion_deferred_reason", "planner_batch_budget_constrained")
+          |> Map.put("supervision_budget", supervision_budget)
+          |> Map.put("supervision_active_children", active_children)
+          |> Map.put("supervision_batch_budget", supervision_batch_budget)
+          |> Map.put("supervision_active_batches", active_batches)
+
+        true ->
+          snapshot
+      end
     else
       snapshot
     end
@@ -5351,7 +5534,10 @@ defmodule HydraX.Runtime.WorkItems do
          snapshot,
          _budget,
          _active_children,
-         _remaining_budget
+         _remaining_budget,
+         _supervision_batch_budget,
+         _active_batches,
+         _remaining_batch_budget
        ),
        do: snapshot
 

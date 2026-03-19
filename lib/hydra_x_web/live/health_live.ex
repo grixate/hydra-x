@@ -1511,6 +1511,12 @@ defmodule HydraXWeb.HealthLive do
                   }>
                     {" "}· budget {entry.supervision_budget} · remaining {entry.supervision_budget_remaining}
                   </span>
+                  <span :if={
+                    is_integer(entry.supervision_batch_budget) and
+                      is_integer(entry.supervision_batch_budget_remaining)
+                  }>
+                    {" "}· batch budget {entry.supervision_batch_budget} · remaining {entry.supervision_batch_budget_remaining}
+                  </span>
                 </div>
                 <div
                   :if={(entry.constrained_roles || %{}) != %{}}
@@ -2465,6 +2471,7 @@ defmodule HydraXWeb.HealthLive do
           autonomy_delegation_quorum_line(snapshot),
           autonomy_delegation_quorum_skip_line(snapshot),
           autonomy_delegation_supervision_budget_line(snapshot),
+          autonomy_delegation_batch_budget_line(snapshot),
           autonomy_delegation_expansion_history_line(snapshot),
           autonomy_delegation_expansion_cooldown_line(snapshot)
         ]
@@ -2534,6 +2541,16 @@ defmodule HydraXWeb.HealthLive do
   end
 
   defp autonomy_delegation_supervision_budget_line(_snapshot), do: nil
+
+  defp autonomy_delegation_batch_budget_line(%{
+         "batch_budget" => budget,
+         "supervision_active_batches" => active_batches
+       })
+       when is_integer(budget) and is_integer(active_batches) do
+    "batch budget #{budget} · active batches #{active_batches}"
+  end
+
+  defp autonomy_delegation_batch_budget_line(_snapshot), do: nil
 
   defp autonomy_delegation_expansion_history_line(%{"expansion_count" => count} = snapshot)
        when is_integer(count) and count > 0 do

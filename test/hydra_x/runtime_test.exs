@@ -4452,6 +4452,7 @@ defmodule HydraX.RuntimeTest do
         "execution_mode" => "delegate",
         "priority" => 8,
         "metadata" => %{
+          "delegate_batch_budget" => 2,
           "delegate_batch_concurrency" => 1,
           "delegate_batch" => [
             %{"goal" => "Research first branch A.", "role" => "researcher"},
@@ -4469,6 +4470,7 @@ defmodule HydraX.RuntimeTest do
         "execution_mode" => "delegate",
         "priority" => 8,
         "metadata" => %{
+          "delegate_batch_budget" => 2,
           "delegate_batch_concurrency" => 1,
           "delegate_batch" => [
             %{"goal" => "Research first branch B.", "role" => "researcher"},
@@ -4593,6 +4595,82 @@ defmodule HydraX.RuntimeTest do
     assert %DateTime{} = queued_snapshot["expansion_deferred_until"]
   end
 
+  test "planner seeds a blocked delegation batch without dispatching children when the shared batch budget is already exhausted" do
+    planner =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, planner} = Runtime.save_agent(planner, %{"role" => "planner"})
+
+    researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, _researcher} = Runtime.save_agent(researcher, %{"role" => "researcher"})
+
+    {:ok, active_parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Keep the first delegation tree active.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "execution_mode" => "delegate",
+        "priority" => 8,
+        "metadata" => %{
+          "delegate_supervision_budget" => 2,
+          "delegate_batch_budget" => 1,
+          "delegate_batch_concurrency" => 1,
+          "delegate_batch" => [
+            %{"goal" => "Research active batch A.", "role" => "researcher"},
+            %{"goal" => "Research active batch B.", "role" => "researcher"}
+          ]
+        }
+      })
+
+    {:ok, queued_parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Queue the next delegation tree behind the active batch budget.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "execution_mode" => "delegate",
+        "priority" => 8,
+        "metadata" => %{
+          "delegate_supervision_budget" => 2,
+          "delegate_batch_budget" => 1,
+          "delegate_batch_concurrency" => 1,
+          "delegate_batch" => [
+            %{"goal" => "Research queued batch A.", "role" => "researcher"},
+            %{"goal" => "Research queued batch B.", "role" => "researcher"}
+          ]
+        }
+      })
+
+    assert {:ok, delegated_active} = Runtime.run_autonomy_cycle(planner.id)
+    assert delegated_active.action == "delegated"
+    assert length(delegated_active.delegated_work_items) == 1
+
+    assert {:ok, delegated_queued} = Runtime.run_autonomy_cycle(planner.id)
+    assert delegated_queued.action == "delegated"
+    assert delegated_queued.delegated_work_items == []
+
+    active_snapshot = Runtime.delegation_batch_snapshot(Runtime.get_work_item!(active_parent.id))
+    queued_work_item = Runtime.get_work_item!(queued_parent.id)
+    queued_snapshot = Runtime.delegation_batch_snapshot(queued_work_item)
+
+    assert active_snapshot["active_count"] == 1
+    assert queued_work_item.status == "blocked"
+    assert queued_work_item.result_refs["child_work_item_ids"] == []
+    assert queued_snapshot["pending_count"] == 2
+    assert queued_snapshot["active_count"] == 0
+    assert queued_snapshot["expansion_deferred_reason"] == "planner_batch_budget_constrained"
+    assert queued_snapshot["supervision_budget"] == 2
+    assert queued_snapshot["supervision_active_children"] == 1
+    assert queued_snapshot["batch_budget"] == 1
+    assert queued_snapshot["supervision_active_batches"] == 1
+    assert %DateTime{} = queued_snapshot["expansion_deferred_until"]
+  end
+
   test "planner finalizes a delegation batch once the completion quorum is met" do
     planner =
       create_agent()
@@ -4691,6 +4769,7 @@ defmodule HydraX.RuntimeTest do
         "priority" => 8,
         "metadata" => %{
           "delegate_supervision_budget" => 2,
+          "delegate_batch_budget" => 2,
           "delegate_batch_concurrency" => 1,
           "delegate_batch" => [
             %{"goal" => "Research first branch.", "role" => "researcher"},
@@ -4709,6 +4788,7 @@ defmodule HydraX.RuntimeTest do
         "priority" => 8,
         "metadata" => %{
           "delegate_supervision_budget" => 2,
+          "delegate_batch_budget" => 2,
           "delegate_batch_concurrency" => 1,
           "delegate_batch" => [
             %{"goal" => "Prepare first operator branch.", "role" => "operator", "kind" => "task"},
@@ -6793,6 +6873,12 @@ defmodule HydraX.RuntimeTest do
     assert Enum.any?(
              status.delegation_supervision,
              &(&1.agent_id == agent.id and &1.active_batches >= 1 and &1.active_children >= 1)
+           )
+
+    assert Enum.any?(
+             status.delegation_supervision,
+             &(&1.agent_id == agent.id and is_integer(&1.supervision_batch_budget) and
+                 is_integer(&1.supervision_batch_budget_remaining))
            )
 
     assert Enum.any?(status.capability_drifts, &(&1.agent_id == agent.id))

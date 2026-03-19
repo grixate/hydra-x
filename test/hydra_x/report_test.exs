@@ -1486,6 +1486,7 @@ defmodule HydraX.ReportTest do
     assert markdown =~ "Delegation Supervision"
     assert markdown =~ "deferred=1"
     assert markdown =~ "budget=2 remaining=2"
+    assert markdown =~ "batch_budget=1 batch_remaining=1"
     assert json =~ "\"delegation_batch_summary\": \"parallel:2:active=0:terminal=2\""
     assert File.read!(export.json_path) =~ "\"delegation_supervision\""
     assert json =~ "\"expected_count\": 2"

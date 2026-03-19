@@ -480,6 +480,7 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "completion quorum 1 met"
     assert html =~ "quorum skipped 1"
     assert html =~ "budget 2 · remaining 2"
+    assert html =~ "batch budget 1 · remaining 1"
     assert html =~ "supervision budget 2 · active children 1"
     assert html =~ "pending 0 · active 0 · terminal 2"
     assert html =~ "expanded 1 · last expanded 2099-03-18 10:05:00 UTC"
