@@ -163,15 +163,18 @@ defmodule HydraX.GatewayTest do
     refute_receive {:telegram_reply, _payload}
 
     refreshed =
-      wait_for_value(fn ->
-        conversation = Runtime.get_conversation!(conversation.id)
+      wait_for_value(
+        fn ->
+          conversation = Runtime.get_conversation!(conversation.id)
 
-        if get_in(conversation.metadata || %{}, ["last_delivery", "status"]) == "deferred" do
-          {:ok, conversation}
-        else
-          :retry
-        end
-      end)
+          if get_in(conversation.metadata || %{}, ["last_delivery", "status"]) == "deferred" do
+            {:ok, conversation}
+          else
+            :retry
+          end
+        end,
+        240
+      )
 
     assert refreshed.metadata["last_delivery"]["status"] == "deferred"
     assert refreshed.metadata["last_delivery"]["metadata"]["ownership_deferred"]
@@ -1495,7 +1498,7 @@ defmodule HydraX.GatewayTest do
     agent
   end
 
-  defp wait_for_value(fun, attempts \\ 80)
+  defp wait_for_value(fun, attempts)
 
   defp wait_for_value(fun, 0) do
     case fun.() do

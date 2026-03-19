@@ -1031,6 +1031,8 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp maybe_expand_blocked_delegation_batch(agent, _opts) do
+    role_capacity = delegation_role_capacity()
+
     expandable_parent =
       WorkItem
       |> where(
@@ -1041,9 +1043,20 @@ defmodule HydraX.Runtime.WorkItems do
              (is_nil(work_item.assigned_agent_id) and work_item.assigned_role == ^agent.role))
       )
       |> order_by([work_item], desc: work_item.priority, asc: work_item.inserted_at)
-      |> limit(10)
+      |> limit(20)
       |> Repo.all()
-      |> Enum.find(&delegation_batch_expandable?/1)
+      |> Enum.map(fn work_item -> {work_item, delegation_batch_snapshot(work_item)} end)
+      |> Enum.filter(fn {_work_item, snapshot} -> delegation_batch_expandable?(snapshot) end)
+      |> Enum.max_by(
+        fn {work_item, snapshot} ->
+          delegation_batch_expansion_priority(work_item, snapshot, role_capacity)
+        end,
+        fn -> nil end
+      )
+      |> case do
+        {work_item, _snapshot} -> work_item
+        nil -> nil
+      end
 
     case expandable_parent do
       nil ->
@@ -4841,13 +4854,42 @@ defmodule HydraX.Runtime.WorkItems do
   defp clamp_delegation_batch_concurrency(_value, expected_count), do: max(expected_count, 1)
 
   defp delegation_batch_expandable?(%WorkItem{} = work_item) do
-    case delegation_batch_snapshot(work_item) do
-      %{} = snapshot ->
-        (snapshot["pending_count"] || 0) > 0 and delegation_batch_available_slots(snapshot) > 0
+    work_item
+    |> delegation_batch_snapshot()
+    |> delegation_batch_expandable?()
+  end
 
-      _ ->
-        false
-    end
+  defp delegation_batch_expandable?(%{} = snapshot) do
+    (snapshot["pending_count"] || 0) > 0 and delegation_batch_available_slots(snapshot) > 0
+  end
+
+  defp delegation_batch_expandable?(_snapshot), do: false
+
+  defp delegation_batch_expansion_priority(%WorkItem{} = work_item, %{} = snapshot, role_capacity) do
+    {
+      work_item.priority || 0,
+      delegation_pending_role_capacity_score(snapshot, role_capacity),
+      snapshot["pending_count"] || 0,
+      delegation_batch_available_slots(snapshot),
+      -(snapshot["active_count"] || 0),
+      -(snapshot["terminal_count"] || 0)
+    }
+  end
+
+  defp delegation_pending_role_capacity_score(%{} = snapshot, role_capacity) do
+    snapshot
+    |> Map.get("pending_roles", %{})
+    |> Enum.reduce(0.0, fn {role, count}, acc ->
+      pressure = Map.get(role_capacity, role, %{})
+
+      available_workers =
+        (pressure[:idle_workers] || pressure["idle_workers"] || 0) * 2.0 +
+          (pressure[:available_workers] || pressure["available_workers"] || 0) * 1.0 +
+          (pressure[:busy_workers] || pressure["busy_workers"] || 0) * 0.25 -
+          (pressure[:saturated_workers] || pressure["saturated_workers"] || 0) * 2.0
+
+      acc + count * available_workers
+    end)
   end
 
   defp delegation_batch_available_slots(%{} = snapshot) do
