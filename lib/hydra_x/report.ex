@@ -890,6 +890,7 @@ defmodule HydraX.Report do
           delegation_roles_detail(snapshot),
           delegation_pending_roles_detail(snapshot),
           delegation_quorum_detail(snapshot),
+          delegation_role_quorum_detail(snapshot),
           delegation_quorum_skip_detail(snapshot),
           delegation_supervision_budget_detail(snapshot),
           delegation_batch_budget_detail(snapshot),
@@ -938,12 +939,33 @@ defmodule HydraX.Report do
 
   defp delegation_quorum_detail(_snapshot), do: nil
 
+  defp delegation_role_quorum_detail(%{
+         "completion_role_requirements" => requirements,
+         "role_quorum_met" => true
+       })
+       when map_size(requirements) > 0 do
+    "delegation_role_quorum=#{report_delegation_role_requirements(requirements)} delegation_role_quorum_met=true"
+  end
+
+  defp delegation_role_quorum_detail(%{"completion_role_requirements" => requirements})
+       when map_size(requirements) > 0 do
+    "delegation_role_quorum=#{report_delegation_role_requirements(requirements)}"
+  end
+
+  defp delegation_role_quorum_detail(_snapshot), do: nil
+
   defp delegation_quorum_skip_detail(%{"quorum_skipped_count" => count})
        when is_integer(count) and count > 0 do
     "delegation_quorum_skipped=#{count}"
   end
 
   defp delegation_quorum_skip_detail(_snapshot), do: nil
+
+  defp report_delegation_role_requirements(requirements) when is_map(requirements) do
+    requirements
+    |> Enum.sort_by(fn {role, _count} -> role end)
+    |> Enum.map_join(",", fn {role, count} -> "#{role}:#{count}" end)
+  end
 
   defp delegation_supervision_budget_detail(%{
          "supervision_budget" => budget,

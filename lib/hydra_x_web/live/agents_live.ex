@@ -1871,6 +1871,7 @@ defmodule HydraXWeb.AgentsLive do
           delegation_roles_line(snapshot),
           delegation_pending_roles_line(snapshot),
           delegation_quorum_line(snapshot),
+          delegation_role_quorum_line(snapshot),
           delegation_quorum_skip_line(snapshot),
           delegation_supervision_budget_line(snapshot),
           delegation_batch_budget_line(snapshot),
@@ -1918,12 +1919,33 @@ defmodule HydraXWeb.AgentsLive do
 
   defp delegation_quorum_line(_snapshot), do: nil
 
+  defp delegation_role_quorum_line(%{
+         "completion_role_requirements" => requirements,
+         "role_quorum_met" => true
+       })
+       when map_size(requirements) > 0 do
+    "role quorum #{format_delegation_role_requirements(requirements)} met"
+  end
+
+  defp delegation_role_quorum_line(%{"completion_role_requirements" => requirements})
+       when map_size(requirements) > 0 do
+    "role quorum #{format_delegation_role_requirements(requirements)}"
+  end
+
+  defp delegation_role_quorum_line(_snapshot), do: nil
+
   defp delegation_quorum_skip_line(%{"quorum_skipped_count" => count})
        when is_integer(count) and count > 0 do
     "quorum skipped #{count}"
   end
 
   defp delegation_quorum_skip_line(_snapshot), do: nil
+
+  defp format_delegation_role_requirements(requirements) when is_map(requirements) do
+    requirements
+    |> Enum.sort_by(fn {role, _count} -> role end)
+    |> Enum.map_join(", ", fn {role, count} -> "#{role} x#{count}" end)
+  end
 
   defp delegation_supervision_budget_line(%{
          "supervision_budget" => budget,

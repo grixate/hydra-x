@@ -1446,6 +1446,8 @@ defmodule HydraX.ReportTest do
               }
             ],
             "completion_quorum" => 1,
+            "completion_role_requirements" => %{"operator" => 1},
+            "role_quorum_met" => true,
             "quorum_met" => true,
             "quorum_skipped_count" => 1,
             "supervision_budget" => 2,
@@ -1478,6 +1480,7 @@ defmodule HydraX.ReportTest do
     assert markdown =~ "delegation=parallel:2:active=0:terminal=2"
     assert markdown =~ "delegation_roles=researcher,operator"
     assert markdown =~ "delegation_completion_quorum=1 delegation_quorum_met=true"
+    assert markdown =~ "delegation_role_quorum=operator:1 delegation_role_quorum_met=true"
     assert markdown =~ "delegation_quorum_skipped=1"
     assert markdown =~ "delegation_strategy=ordered"
     assert markdown =~ "delegation_supervision_budget=2 delegation_active_children=1"

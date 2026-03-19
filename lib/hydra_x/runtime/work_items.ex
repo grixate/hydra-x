@@ -4705,6 +4705,7 @@ defmodule HydraX.Runtime.WorkItems do
       "batch_concurrency" => concurrency,
       "batch_strategy" => delegation_batch_strategy(metadata),
       "completion_quorum" => delegation_batch_completion_quorum(metadata, length(entries)),
+      "completion_role_requirements" => delegation_batch_completion_role_requirements(metadata),
       "items" => Enum.map(entries, &delegation_batch_planned_item/1)
     })
   end
@@ -5032,6 +5033,7 @@ defmodule HydraX.Runtime.WorkItems do
     canceled_count = Enum.count(child_entries, &(&1["status"] == "canceled"))
     quorum_skipped_count = Enum.count(child_entries, &(&1["status"] == "quorum_skipped"))
     dispatched_count = Enum.count(child_entries, &is_integer(&1["id"]))
+    completed_roles = delegation_batch_completed_roles(child_entries)
 
     active_count =
       case child_entries do
@@ -5048,7 +5050,13 @@ defmodule HydraX.Runtime.WorkItems do
     completion_quorum =
       delegation_batch_completion_quorum(work_item, expected_count, metadata_snapshot)
 
-    quorum_met = completed_count >= completion_quorum
+    completion_role_requirements =
+      delegation_batch_completion_role_requirements(work_item, metadata_snapshot)
+
+    role_quorum_met =
+      delegation_batch_role_quorum_met?(completed_roles, completion_role_requirements)
+
+    quorum_met = completed_count >= completion_quorum and role_quorum_met
 
     if expected_count <= 0 do
       %{}
@@ -5069,7 +5077,10 @@ defmodule HydraX.Runtime.WorkItems do
         "active_count" => active_count,
         "terminal_count" => terminal_count,
         "completed_count" => completed_count,
+        "completed_roles" => completed_roles,
         "completion_quorum" => completion_quorum,
+        "completion_role_requirements" => completion_role_requirements,
+        "role_quorum_met" => role_quorum_met,
         "quorum_met" => quorum_met,
         "failed_count" => failed_count,
         "canceled_count" => canceled_count,
@@ -5284,6 +5295,43 @@ defmodule HydraX.Runtime.WorkItems do
     clamp_delegation_batch_completion_quorum(nil, expected_count)
   end
 
+  defp delegation_batch_completion_role_requirements(metadata) when is_map(metadata) do
+    metadata["delegate_batch_completion_roles"] ||
+      get_in(metadata, ["delegation_batch", "completion_role_requirements"]) ||
+      %{}
+      |> normalize_delegation_batch_completion_role_requirements()
+  end
+
+  defp delegation_batch_completion_role_requirements(
+         %WorkItem{} = work_item,
+         metadata_snapshot
+       ) do
+    metadata_snapshot["completion_role_requirements"] ||
+      delegation_batch_completion_role_requirements(work_item.metadata || %{})
+  end
+
+  defp delegation_batch_completion_role_requirements(work_item, _metadata_snapshot)
+       when is_map(work_item) do
+    delegation_batch_completion_role_requirements(work_item_metadata(work_item))
+  end
+
+  defp delegation_batch_completion_role_requirements(_work_item, _metadata_snapshot), do: %{}
+
+  defp normalize_delegation_batch_completion_role_requirements(requirements)
+       when is_map(requirements) do
+    requirements
+    |> Helpers.normalize_string_keys()
+    |> Enum.reduce(%{}, fn {role, count}, acc ->
+      if is_binary(role) and role != "" and is_integer(count) and count > 0 do
+        Map.put(acc, role, count)
+      else
+        acc
+      end
+    end)
+  end
+
+  defp normalize_delegation_batch_completion_role_requirements(_requirements), do: %{}
+
   defp clamp_delegation_batch_completion_quorum(value, expected_count)
        when is_integer(expected_count) and expected_count > 0 do
     case value do
@@ -5297,10 +5345,35 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp clamp_delegation_batch_completion_quorum(_value, _expected_count), do: 0
 
+  defp delegation_batch_completed_roles(child_entries) when is_list(child_entries) do
+    child_entries
+    |> Enum.filter(&(&1["status"] == "completed"))
+    |> Enum.map(&(&1["assigned_role"] || &1["role"]))
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> Enum.frequencies()
+  end
+
+  defp delegation_batch_completed_roles(_child_entries), do: %{}
+
+  defp delegation_batch_role_quorum_met?(_completed_roles, requirements)
+       when requirements in [%{}, nil] do
+    true
+  end
+
+  defp delegation_batch_role_quorum_met?(completed_roles, requirements)
+       when is_map(completed_roles) and is_map(requirements) do
+    Enum.all?(requirements, fn {role, required_count} ->
+      Map.get(completed_roles, role, 0) >= required_count
+    end)
+  end
+
+  defp delegation_batch_role_quorum_met?(_completed_roles, _requirements), do: false
+
   defp delegation_batch_quorum_met?(%{} = snapshot) do
     completed = snapshot["completed_count"] || 0
     quorum = snapshot["completion_quorum"] || 0
-    quorum > 0 and completed >= quorum
+    role_quorum_met = Map.get(snapshot, "role_quorum_met", true)
+    quorum > 0 and completed >= quorum and role_quorum_met
   end
 
   defp delegation_batch_quorum_met?(_snapshot), do: false

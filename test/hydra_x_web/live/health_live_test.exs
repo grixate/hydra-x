@@ -401,6 +401,8 @@ defmodule HydraXWeb.HealthLiveTest do
               }
             ],
             "completion_quorum" => 1,
+            "completion_role_requirements" => %{"operator" => 1},
+            "role_quorum_met" => true,
             "quorum_met" => true,
             "quorum_skipped_count" => 1,
             "supervision_budget" => 2,
@@ -478,6 +480,7 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "strategy ordered"
     assert html =~ "delegation roles researcher, operator"
     assert html =~ "completion quorum 1 met"
+    assert html =~ "role quorum operator x1 met"
     assert html =~ "quorum skipped 1"
     assert html =~ "budget 2 · remaining 2"
     assert html =~ "batch budget 1 · remaining 1"

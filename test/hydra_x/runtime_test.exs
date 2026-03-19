@@ -4728,6 +4728,78 @@ defmodule HydraX.RuntimeTest do
     assert snapshot["quorum_skipped_count"] == 1
   end
 
+  test "planner finalizes a delegation batch once role-aware completion requirements are met" do
+    planner =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, planner} = Runtime.save_agent(planner, %{"role" => "planner"})
+
+    researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, researcher} = Runtime.save_agent(researcher, %{"role" => "researcher"})
+
+    operator =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, operator} = Runtime.save_agent(operator, %{"role" => "operator"})
+
+    {:ok, parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Supervise a role-aware quorum batch.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "execution_mode" => "delegate",
+        "priority" => 8,
+        "metadata" => %{
+          "delegate_batch_concurrency" => 2,
+          "delegate_batch_completion_quorum" => 2,
+          "delegate_batch_completion_roles" => %{
+            "researcher" => 1,
+            "operator" => 1
+          },
+          "delegate_batch" => [
+            %{"goal" => "Research the first role-aware branch.", "role" => "researcher"},
+            %{
+              "goal" => "Prepare the operator summary for the role-aware branch.",
+              "role" => "operator",
+              "kind" => "task"
+            },
+            %{"goal" => "Research the trailing role-aware branch.", "role" => "researcher"}
+          ]
+        }
+      })
+
+    assert {:ok, delegated} = Runtime.run_autonomy_cycle(planner.id)
+    assert delegated.action == "delegated"
+    assert length(delegated.delegated_work_items) == 2
+
+    assert {:ok, researcher_cycle} = Runtime.run_autonomy_cycle(researcher.id)
+    assert researcher_cycle.action == "researched"
+
+    assert {:ok, operator_cycle} = Runtime.run_autonomy_cycle(operator.id)
+    assert operator_cycle.action == "completed_fallback"
+
+    assert {:ok, finalized} = Runtime.run_autonomy_cycle(planner.id)
+    assert finalized.action == "finalized_blocked_parent"
+
+    updated_parent = Runtime.get_work_item!(parent.id)
+    snapshot = Runtime.delegation_batch_snapshot(updated_parent)
+
+    assert updated_parent.status == "completed"
+    assert snapshot["completion_quorum"] == 2
+    assert snapshot["completion_role_requirements"] == %{"operator" => 1, "researcher" => 1}
+    assert snapshot["completed_roles"] == %{"operator" => 1, "researcher" => 1}
+    assert snapshot["role_quorum_met"] == true
+    assert snapshot["quorum_met"] == true
+    assert snapshot["pending_count"] == 0
+    assert snapshot["quorum_skipped_count"] == 1
+  end
+
   test "planner expands the delegation batch with healthier pending role capacity first" do
     planner =
       create_agent()

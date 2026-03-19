@@ -2469,6 +2469,7 @@ defmodule HydraXWeb.HealthLive do
           autonomy_delegation_roles_line(snapshot),
           autonomy_delegation_pending_roles_line(snapshot),
           autonomy_delegation_quorum_line(snapshot),
+          autonomy_delegation_role_quorum_line(snapshot),
           autonomy_delegation_quorum_skip_line(snapshot),
           autonomy_delegation_supervision_budget_line(snapshot),
           autonomy_delegation_batch_budget_line(snapshot),
@@ -2525,12 +2526,33 @@ defmodule HydraXWeb.HealthLive do
 
   defp autonomy_delegation_quorum_line(_snapshot), do: nil
 
+  defp autonomy_delegation_role_quorum_line(%{
+         "completion_role_requirements" => requirements,
+         "role_quorum_met" => true
+       })
+       when map_size(requirements) > 0 do
+    "role quorum #{autonomy_delegation_role_requirements(requirements)} met"
+  end
+
+  defp autonomy_delegation_role_quorum_line(%{"completion_role_requirements" => requirements})
+       when map_size(requirements) > 0 do
+    "role quorum #{autonomy_delegation_role_requirements(requirements)}"
+  end
+
+  defp autonomy_delegation_role_quorum_line(_snapshot), do: nil
+
   defp autonomy_delegation_quorum_skip_line(%{"quorum_skipped_count" => count})
        when is_integer(count) and count > 0 do
     "quorum skipped #{count}"
   end
 
   defp autonomy_delegation_quorum_skip_line(_snapshot), do: nil
+
+  defp autonomy_delegation_role_requirements(requirements) when is_map(requirements) do
+    requirements
+    |> Enum.sort_by(fn {role, _count} -> role end)
+    |> Enum.map_join(", ", fn {role, count} -> "#{role} x#{count}" end)
+  end
 
   defp autonomy_delegation_supervision_budget_line(%{
          "supervision_budget" => budget,
