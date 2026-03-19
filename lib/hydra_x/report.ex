@@ -376,7 +376,13 @@ defmodule HydraX.Report do
               constrained ->
                 constrained
                 |> Enum.sort_by(fn {role, _count} -> role end)
-                |> Enum.map_join(",", fn {role, count} -> "#{role}:#{count}" end)
+                |> Enum.map_join(",", fn {role, count} ->
+                  pressure =
+                    get_in(entry, [:constrained_role_pressure, role]) ||
+                      get_in(entry, ["constrained_role_pressure", role]) || %{}
+
+                  "#{role}:#{count}" <> report_constraint_pressure_suffix(pressure)
+                end)
                 |> then(&" constrained=#{&1}")
             end
 
@@ -420,6 +426,23 @@ defmodule HydraX.Report do
         end)
     end
   end
+
+  defp report_constraint_pressure_suffix(pressure) when is_map(pressure) do
+    urgent_queued = pressure[:urgent_queued_count] || pressure["urgent_queued_count"] || 0
+
+    urgent_deferred =
+      pressure[:urgent_deferred_count] || pressure["urgent_deferred_count"] || 0
+
+    saturated = pressure[:saturated_workers] || pressure["saturated_workers"] || 0
+
+    available =
+      (pressure[:idle_workers] || pressure["idle_workers"] || 0) +
+        (pressure[:available_workers] || pressure["available_workers"] || 0)
+
+    "[u=#{urgent_queued}/#{urgent_deferred},sat=#{saturated},avail=#{available}]"
+  end
+
+  defp report_constraint_pressure_suffix(_pressure), do: ""
 
   defp render_scheduler_count(pass, key) when is_map(pass) do
     Map.get(pass, key) || Map.get(pass, scheduler_count_key(key)) || 0

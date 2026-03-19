@@ -1381,6 +1381,11 @@ defmodule HydraXWeb.AgentsLive do
         terminal_children: (acc[:terminal_children] || 0) + (entry[:terminal_children] || 0),
         constrained_roles:
           merge_role_frequency_maps(acc[:constrained_roles], entry[:constrained_roles]),
+        constrained_role_pressure:
+          merge_role_pressure_maps(
+            acc[:constrained_role_pressure],
+            entry[:constrained_role_pressure]
+          ),
         missing_required_roles:
           merge_role_frequency_maps(
             acc[:missing_required_roles],
@@ -1414,6 +1419,42 @@ defmodule HydraXWeb.AgentsLive do
     |> Enum.flat_map(&Enum.to_list/1)
     |> Enum.reduce(%{}, fn {role, count}, acc ->
       Map.update(acc, role, count, &(&1 + count))
+    end)
+  end
+
+  defp merge_role_pressure_maps(left, right) do
+    [left || %{}, right || %{}]
+    |> Enum.flat_map(&Enum.to_list/1)
+    |> Enum.reduce(%{}, fn {role, pressure}, acc ->
+      Map.update(acc, role, pressure || %{}, fn current ->
+        %{
+          urgent_queued_count:
+            max(
+              current[:urgent_queued_count] || current["urgent_queued_count"] || 0,
+              pressure[:urgent_queued_count] || pressure["urgent_queued_count"] || 0
+            ),
+          urgent_deferred_count:
+            max(
+              current[:urgent_deferred_count] || current["urgent_deferred_count"] || 0,
+              pressure[:urgent_deferred_count] || pressure["urgent_deferred_count"] || 0
+            ),
+          saturated_workers:
+            max(
+              current[:saturated_workers] || current["saturated_workers"] || 0,
+              pressure[:saturated_workers] || pressure["saturated_workers"] || 0
+            ),
+          idle_workers:
+            max(
+              current[:idle_workers] || current["idle_workers"] || 0,
+              pressure[:idle_workers] || pressure["idle_workers"] || 0
+            ),
+          available_workers:
+            max(
+              current[:available_workers] || current["available_workers"] || 0,
+              pressure[:available_workers] || pressure["available_workers"] || 0
+            )
+        }
+      end)
     end)
   end
 
@@ -1467,7 +1508,14 @@ defmodule HydraXWeb.AgentsLive do
         constrained ->
           constrained
           |> Enum.sort_by(fn {role, _count} -> role end)
-          |> Enum.map_join(", ", fn {role, count} -> "#{role} x#{count}" end)
+          |> Enum.map_join(", ", fn {role, count} ->
+            pressure =
+              get_in(summary, [:constrained_role_pressure, role]) ||
+                get_in(summary, ["constrained_role_pressure", role]) || %{}
+
+            "#{role} x#{count}" <>
+              delegation_constraint_pressure_suffix(pressure)
+          end)
           |> then(&"constrained #{&1}")
       end
 
@@ -1488,6 +1536,23 @@ defmodule HydraXWeb.AgentsLive do
   end
 
   defp delegation_supervision_detail(_summary), do: nil
+
+  defp delegation_constraint_pressure_suffix(pressure) when is_map(pressure) do
+    urgent_queued = pressure[:urgent_queued_count] || pressure["urgent_queued_count"] || 0
+
+    urgent_deferred =
+      pressure[:urgent_deferred_count] || pressure["urgent_deferred_count"] || 0
+
+    saturated = pressure[:saturated_workers] || pressure["saturated_workers"] || 0
+
+    available =
+      (pressure[:idle_workers] || pressure["idle_workers"] || 0) +
+        (pressure[:available_workers] || pressure["available_workers"] || 0)
+
+    " (urgent #{urgent_queued}/#{urgent_deferred}, sat #{saturated}, avail #{available})"
+  end
+
+  defp delegation_constraint_pressure_suffix(_pressure), do: ""
 
   defp delegation_supervision_budget_label(summary) when is_map(summary) do
     budget = summary[:supervision_budget]

@@ -1543,7 +1543,10 @@ defmodule HydraXWeb.HealthLive do
                   :if={(entry.constrained_roles || %{}) != %{}}
                   class="mt-2 text-xs text-[var(--hx-mute)]"
                 >
-                  constrained {autonomy_delegation_constrained_roles(entry.constrained_roles)}
+                  constrained {autonomy_delegation_constrained_roles(
+                    entry.constrained_roles,
+                    entry.constrained_role_pressure
+                  )}
                 </div>
               </div>
             </div>
@@ -2515,14 +2518,34 @@ defmodule HydraXWeb.HealthLive do
 
   defp autonomy_delegation_roles_line(_snapshot), do: nil
 
-  defp autonomy_delegation_constrained_roles(constrained_roles)
+  defp autonomy_delegation_constrained_roles(constrained_roles, pressure_map)
        when is_map(constrained_roles) and map_size(constrained_roles) > 0 do
     constrained_roles
     |> Enum.sort_by(fn {role, _count} -> role end)
-    |> Enum.map_join(", ", fn {role, count} -> "#{role} x#{count}" end)
+    |> Enum.map_join(", ", fn {role, count} ->
+      pressure = Map.get(pressure_map || %{}, role, %{})
+      "#{role} x#{count}" <> autonomy_constraint_pressure_suffix(pressure)
+    end)
   end
 
-  defp autonomy_delegation_constrained_roles(_constrained_roles), do: nil
+  defp autonomy_delegation_constrained_roles(_constrained_roles, _pressure_map), do: nil
+
+  defp autonomy_constraint_pressure_suffix(pressure) when is_map(pressure) do
+    urgent_queued = pressure[:urgent_queued_count] || pressure["urgent_queued_count"] || 0
+
+    urgent_deferred =
+      pressure[:urgent_deferred_count] || pressure["urgent_deferred_count"] || 0
+
+    saturated = pressure[:saturated_workers] || pressure["saturated_workers"] || 0
+
+    available =
+      (pressure[:idle_workers] || pressure["idle_workers"] || 0) +
+        (pressure[:available_workers] || pressure["available_workers"] || 0)
+
+    " (urgent #{urgent_queued}/#{urgent_deferred}, sat #{saturated}, avail #{available})"
+  end
+
+  defp autonomy_constraint_pressure_suffix(_pressure), do: ""
 
   defp autonomy_delegation_pending_roles_line(%{"pending_roles" => pending_roles})
        when is_map(pending_roles) and map_size(pending_roles) > 0 do

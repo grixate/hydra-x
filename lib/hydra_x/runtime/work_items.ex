@@ -923,6 +923,7 @@ defmodule HydraX.Runtime.WorkItems do
       agent = Map.get(agents_by_id, agent_id)
       snapshots = Enum.map(entries, fn {_work_item, snapshot} -> snapshot end)
       constrained_roles = aggregate_constrained_pending_roles(snapshots, role_capacity)
+      constrained_role_pressure = constrained_role_pressure(constrained_roles, role_capacity)
       missing_required_roles = aggregate_missing_completion_roles(snapshots)
       deferred_batches = Enum.count(snapshots, &delegation_batch_expansion_deferred?/1)
 
@@ -948,6 +949,7 @@ defmodule HydraX.Runtime.WorkItems do
         active_children: active_children,
         terminal_children: Enum.reduce(snapshots, 0, &((&1["terminal_count"] || 0) + &2)),
         constrained_roles: constrained_roles,
+        constrained_role_pressure: constrained_role_pressure,
         missing_required_roles: missing_required_roles,
         required_role_gap_count:
           Enum.reduce(missing_required_roles, 0, fn {_role, count}, acc -> acc + count end),
@@ -1152,6 +1154,28 @@ defmodule HydraX.Runtime.WorkItems do
       end
     end)
   end
+
+  defp constrained_role_pressure(constrained_roles, role_capacity)
+       when is_map(constrained_roles) and map_size(constrained_roles) > 0 do
+    constrained_roles
+    |> Enum.reduce(%{}, fn {role, _count}, acc ->
+      pressure = Map.get(role_capacity, role, %{})
+
+      Map.put(acc, role, %{
+        urgent_queued_count:
+          pressure[:urgent_shared_role_queue_count] ||
+            pressure["urgent_shared_role_queue_count"] || 0,
+        urgent_deferred_count:
+          pressure[:urgent_deferred_role_queue_count] ||
+            pressure["urgent_deferred_role_queue_count"] || 0,
+        saturated_workers: pressure[:saturated_workers] || pressure["saturated_workers"] || 0,
+        idle_workers: pressure[:idle_workers] || pressure["idle_workers"] || 0,
+        available_workers: pressure[:available_workers] || pressure["available_workers"] || 0
+      })
+    end)
+  end
+
+  defp constrained_role_pressure(_constrained_roles, _role_capacity), do: %{}
 
   defp aggregate_missing_completion_roles(snapshots) do
     snapshots
