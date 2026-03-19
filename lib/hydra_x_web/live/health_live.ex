@@ -2470,6 +2470,7 @@ defmodule HydraXWeb.HealthLive do
           autonomy_delegation_pending_roles_line(snapshot),
           autonomy_delegation_quorum_line(snapshot),
           autonomy_delegation_role_quorum_line(snapshot),
+          autonomy_delegation_missing_role_quorum_line(snapshot),
           autonomy_delegation_quorum_skip_line(snapshot),
           autonomy_delegation_supervision_budget_line(snapshot),
           autonomy_delegation_batch_budget_line(snapshot),
@@ -2540,6 +2541,13 @@ defmodule HydraXWeb.HealthLive do
   end
 
   defp autonomy_delegation_role_quorum_line(_snapshot), do: nil
+
+  defp autonomy_delegation_missing_role_quorum_line(%{"missing_completion_roles" => requirements})
+       when map_size(requirements) > 0 do
+    "missing role quorum #{autonomy_delegation_role_requirements(requirements)}"
+  end
+
+  defp autonomy_delegation_missing_role_quorum_line(_snapshot), do: nil
 
   defp autonomy_delegation_quorum_skip_line(%{"quorum_skipped_count" => count})
        when is_integer(count) and count > 0 do

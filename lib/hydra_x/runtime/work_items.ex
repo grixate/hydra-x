@@ -4733,16 +4733,25 @@ defmodule HydraX.Runtime.WorkItems do
          concurrency,
          existing_items
        ) do
+    missing_roles =
+      work_item
+      |> delegation_batch_completion_role_requirements(work_item_metadata(work_item))
+      |> delegation_batch_missing_completion_roles(
+        delegation_batch_completed_roles(List.wrap(existing_items))
+      )
+
     case delegation_batch_strategy(work_item) do
       "balance_roles" ->
-        balance_delegation_batch_entries(entries, concurrency, existing_items)
+        balance_delegation_batch_entries(entries, concurrency, existing_items, missing_roles)
 
       _ ->
-        Enum.take(entries, concurrency)
+        entries
+        |> prioritize_required_delegation_batch_entries(missing_roles)
+        |> Enum.take(concurrency)
     end
   end
 
-  defp balance_delegation_batch_entries(entries, concurrency, existing_items) do
+  defp balance_delegation_batch_entries(entries, concurrency, existing_items, missing_roles) do
     indexed_entries = Enum.with_index(entries)
     role_capacity = delegation_role_capacity()
     active_role_counts = delegation_active_role_counts(existing_items)
@@ -4755,7 +4764,13 @@ defmodule HydraX.Runtime.WorkItems do
             Enum.any?(chosen, fn {_chosen, chosen_index} -> chosen_index == index end)
           end)
 
-        case best_delegation_batch_entry(remaining, counts, role_capacity) do
+        missing =
+          delegation_batch_missing_completion_roles(
+            missing_roles,
+            counts
+          )
+
+        case best_delegation_batch_entry(remaining, counts, role_capacity, missing) do
           nil ->
             {chosen, counts}
 
@@ -4772,16 +4787,28 @@ defmodule HydraX.Runtime.WorkItems do
     Enum.map(selected, fn {entry, _index} -> entry end)
   end
 
-  defp best_delegation_batch_entry([], _counts, _role_capacity), do: nil
+  defp prioritize_required_delegation_batch_entries(entries, missing_roles)
+       when is_list(entries) and is_map(missing_roles) and map_size(missing_roles) > 0 do
+    Enum.sort_by(entries, fn entry ->
+      role = entry["assigned_role"] || entry["role"]
+      if Map.get(missing_roles, role, 0) > 0, do: 0, else: 1
+    end)
+  end
 
-  defp best_delegation_batch_entry(indexed_entries, counts, role_capacity) do
+  defp prioritize_required_delegation_batch_entries(entries, _missing_roles), do: entries
+
+  defp best_delegation_batch_entry([], _counts, _role_capacity, _missing_roles), do: nil
+
+  defp best_delegation_batch_entry(indexed_entries, counts, role_capacity, missing_roles) do
     indexed_entries
     |> Enum.max_by(
       fn {entry, index} ->
         role = entry["assigned_role"] || entry["role"]
         pressure = Map.get(role_capacity, role, %{})
+        missing_required = Map.get(missing_roles, role, 0)
 
         {
+          missing_required,
           delegation_role_capacity_score(pressure),
           -Map.get(counts, role, 0),
           -delegation_entry_priority(entry),
@@ -5053,6 +5080,12 @@ defmodule HydraX.Runtime.WorkItems do
     completion_role_requirements =
       delegation_batch_completion_role_requirements(work_item, metadata_snapshot)
 
+    missing_completion_roles =
+      delegation_batch_missing_completion_roles(
+        completion_role_requirements,
+        completed_roles
+      )
+
     role_quorum_met =
       delegation_batch_role_quorum_met?(completed_roles, completion_role_requirements)
 
@@ -5080,6 +5113,7 @@ defmodule HydraX.Runtime.WorkItems do
         "completed_roles" => completed_roles,
         "completion_quorum" => completion_quorum,
         "completion_role_requirements" => completion_role_requirements,
+        "missing_completion_roles" => missing_completion_roles,
         "role_quorum_met" => role_quorum_met,
         "quorum_met" => quorum_met,
         "failed_count" => failed_count,
@@ -5368,6 +5402,26 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp delegation_batch_role_quorum_met?(_completed_roles, _requirements), do: false
+
+  defp delegation_batch_missing_completion_roles(requirements, _completed_roles)
+       when requirements in [%{}, nil] do
+    %{}
+  end
+
+  defp delegation_batch_missing_completion_roles(requirements, completed_roles)
+       when is_map(requirements) and is_map(completed_roles) do
+    Enum.reduce(requirements, %{}, fn {role, required_count}, acc ->
+      missing = max(required_count - Map.get(completed_roles, role, 0), 0)
+
+      if missing > 0 do
+        Map.put(acc, role, missing)
+      else
+        acc
+      end
+    end)
+  end
+
+  defp delegation_batch_missing_completion_roles(_requirements, _completed_roles), do: %{}
 
   defp delegation_batch_quorum_met?(%{} = snapshot) do
     completed = snapshot["completed_count"] || 0

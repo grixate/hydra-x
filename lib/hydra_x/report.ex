@@ -891,6 +891,7 @@ defmodule HydraX.Report do
           delegation_pending_roles_detail(snapshot),
           delegation_quorum_detail(snapshot),
           delegation_role_quorum_detail(snapshot),
+          delegation_missing_role_quorum_detail(snapshot),
           delegation_quorum_skip_detail(snapshot),
           delegation_supervision_budget_detail(snapshot),
           delegation_batch_budget_detail(snapshot),
@@ -953,6 +954,13 @@ defmodule HydraX.Report do
   end
 
   defp delegation_role_quorum_detail(_snapshot), do: nil
+
+  defp delegation_missing_role_quorum_detail(%{"missing_completion_roles" => requirements})
+       when map_size(requirements) > 0 do
+    "delegation_missing_role_quorum=#{report_delegation_role_requirements(requirements)}"
+  end
+
+  defp delegation_missing_role_quorum_detail(_snapshot), do: nil
 
   defp delegation_quorum_skip_detail(%{"quorum_skipped_count" => count})
        when is_integer(count) and count > 0 do

@@ -4189,7 +4189,7 @@ defmodule HydraX.RuntimeTest do
       create_agent()
       |> then(&Runtime.get_agent!(&1.id))
 
-    {:ok, operator} = Runtime.save_agent(operator, %{"role" => "operator"})
+    {:ok, _operator} = Runtime.save_agent(operator, %{"role" => "operator"})
 
     {:ok, parent} =
       Runtime.save_work_item(%{
@@ -4282,7 +4282,7 @@ defmodule HydraX.RuntimeTest do
       create_agent()
       |> then(&Runtime.get_agent!(&1.id))
 
-    {:ok, operator} = Runtime.save_agent(operator, %{"role" => "operator"})
+    {:ok, _operator} = Runtime.save_agent(operator, %{"role" => "operator"})
 
     {:ok, parent} =
       Runtime.save_work_item(%{
@@ -4745,7 +4745,7 @@ defmodule HydraX.RuntimeTest do
       create_agent()
       |> then(&Runtime.get_agent!(&1.id))
 
-    {:ok, operator} = Runtime.save_agent(operator, %{"role" => "operator"})
+    {:ok, _operator} = Runtime.save_agent(operator, %{"role" => "operator"})
 
     {:ok, parent} =
       Runtime.save_work_item(%{
@@ -4798,6 +4798,70 @@ defmodule HydraX.RuntimeTest do
     assert snapshot["quorum_met"] == true
     assert snapshot["pending_count"] == 0
     assert snapshot["quorum_skipped_count"] == 1
+  end
+
+  test "planner prioritizes missing required roles when expanding an ordered delegation batch" do
+    planner =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, planner} = Runtime.save_agent(planner, %{"role" => "planner"})
+
+    researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, researcher} = Runtime.save_agent(researcher, %{"role" => "researcher"})
+
+    operator =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, _operator} = Runtime.save_agent(operator, %{"role" => "operator"})
+
+    {:ok, parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Supervise an ordered role-aware batch.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "execution_mode" => "delegate",
+        "priority" => 8,
+        "metadata" => %{
+          "delegate_batch_concurrency" => 1,
+          "delegate_batch_completion_quorum" => 2,
+          "delegate_batch_completion_roles" => %{
+            "researcher" => 1,
+            "operator" => 1
+          },
+          "delegate_batch" => [
+            %{"goal" => "Research the first ordered branch.", "role" => "researcher"},
+            %{"goal" => "Research the second ordered branch.", "role" => "researcher"},
+            %{
+              "goal" => "Prepare the operator branch for the ordered batch.",
+              "role" => "operator",
+              "kind" => "task"
+            }
+          ]
+        }
+      })
+
+    assert {:ok, delegated} = Runtime.run_autonomy_cycle(planner.id)
+    assert delegated.action == "delegated"
+    assert Enum.map(delegated.delegated_work_items, & &1.assigned_role) == ["researcher"]
+
+    assert {:ok, researcher_cycle} = Runtime.run_autonomy_cycle(researcher.id)
+    assert researcher_cycle.action == "researched"
+
+    refreshed_parent = Runtime.get_work_item!(parent.id)
+    pre_expansion_snapshot = Runtime.delegation_batch_snapshot(refreshed_parent)
+
+    assert pre_expansion_snapshot["missing_completion_roles"] == %{"operator" => 1}
+    assert pre_expansion_snapshot["role_quorum_met"] == false
+
+    assert {:ok, expanded} = Runtime.run_autonomy_cycle(planner.id)
+    assert expanded.action == "delegated_batch_expanded"
+    assert Enum.map(expanded.delegated_work_items, & &1.assigned_role) == ["operator"]
   end
 
   test "planner expands the delegation batch with healthier pending role capacity first" do
