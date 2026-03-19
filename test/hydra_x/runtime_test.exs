@@ -5050,6 +5050,105 @@ defmodule HydraX.RuntimeTest do
     assert length(expanded_plain_parent.result_refs["child_work_item_ids"] || []) == 1
   end
 
+  test "planner expansion avoids role pools carrying urgent queued backlog" do
+    planner =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, planner} = Runtime.save_agent(planner, %{"role" => "planner"})
+
+    researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, researcher} = Runtime.save_agent(researcher, %{"role" => "researcher"})
+
+    operator =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, operator} = Runtime.save_agent(operator, %{"role" => "operator"})
+
+    {:ok, researcher_parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Expand into researcher capacity first when pressure is clear.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "execution_mode" => "delegate",
+        "priority" => 8,
+        "metadata" => %{
+          "delegate_batch_budget" => 2,
+          "delegate_batch_concurrency" => 1,
+          "delegate_batch" => [
+            %{"goal" => "Research the first researcher branch.", "role" => "researcher"},
+            %{"goal" => "Research the second researcher branch.", "role" => "researcher"}
+          ]
+        }
+      })
+
+    {:ok, operator_parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Expand into operator capacity when researcher backlog turns urgent.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "execution_mode" => "delegate",
+        "priority" => 8,
+        "metadata" => %{
+          "delegate_batch_budget" => 2,
+          "delegate_batch_concurrency" => 1,
+          "delegate_batch" => [
+            %{
+              "goal" => "Prepare the first operator branch.",
+              "role" => "operator",
+              "kind" => "task"
+            },
+            %{
+              "goal" => "Prepare the second operator branch.",
+              "role" => "operator",
+              "kind" => "task"
+            }
+          ]
+        }
+      })
+
+    assert {:ok, delegated_research} = Runtime.run_autonomy_cycle(planner.id)
+    assert delegated_research.action == "delegated"
+
+    assert {:ok, delegated_operator} = Runtime.run_autonomy_cycle(planner.id)
+    assert delegated_operator.action == "delegated"
+
+    assert {:ok, researcher_result} = Runtime.run_autonomy_cycle(researcher.id)
+    assert researcher_result.action == "researched"
+
+    assert {:ok, operator_result} = Runtime.run_autonomy_cycle(operator.id)
+    assert operator_result.status == "completed"
+
+    {:ok, _urgent_researcher_backlog} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Hold an urgent queued researcher role backlog.",
+        "assigned_role" => "researcher",
+        "status" => "planned",
+        "priority" => 100,
+        "metadata" => %{
+          "assignment_mode" => "role_claim",
+          "delegation_role_urgency" => 3
+        }
+      })
+
+    assert {:ok, expansion} = Runtime.run_autonomy_cycle(planner.id)
+    assert expansion.action == "delegated_batch_expanded"
+    assert Enum.map(expansion.delegated_work_items, & &1.assigned_role) == ["operator"]
+
+    expanded_researcher_parent = Runtime.get_work_item!(researcher_parent.id)
+    expanded_operator_parent = Runtime.get_work_item!(operator_parent.id)
+
+    assert length(expanded_researcher_parent.result_refs["child_work_item_ids"] || []) == 1
+    assert length(expanded_operator_parent.result_refs["child_work_item_ids"] || []) == 2
+  end
+
   test "planner can balance delegation batches across role pools" do
     planner =
       create_agent()

@@ -977,7 +977,14 @@ defmodule HydraX.Runtime.WorkItems do
          idle_workers: Enum.count(workers, &(&1.capacity_posture == "idle")),
          available_workers: Enum.count(workers, &(&1.capacity_posture == "available")),
          busy_workers: Enum.count(workers, &(&1.capacity_posture == "busy")),
-         saturated_workers: Enum.count(workers, &(&1.capacity_posture == "saturated"))
+         saturated_workers: Enum.count(workers, &(&1.capacity_posture == "saturated")),
+         urgent_shared_role_queue_count:
+           Enum.max(Enum.map(workers, &(&1.urgent_shared_role_queue_count || 0)), fn -> 0 end),
+         urgent_deferred_role_queue_count:
+           Enum.max(
+             Enum.map(workers, &(&1.urgent_deferred_role_queue_count || 0)),
+             fn -> 0 end
+           )
        }}
     end)
   end
@@ -4990,6 +4997,13 @@ defmodule HydraX.Runtime.WorkItems do
          busy_workers: Enum.count(workers, &(&1.capacity_posture == "busy")),
          saturated_workers: Enum.count(workers, &(&1.capacity_posture == "saturated")),
          active_claimed_count: Enum.reduce(workers, 0, &(&1.active_claimed_count + &2)),
+         urgent_shared_role_queue_count:
+           Enum.max(Enum.map(workers, &(&1.urgent_shared_role_queue_count || 0)), fn -> 0 end),
+         urgent_deferred_role_queue_count:
+           Enum.max(
+             Enum.map(workers, &(&1.urgent_deferred_role_queue_count || 0)),
+             fn -> 0 end
+           ),
          shared_role_queue_count:
            Enum.max(Enum.map(workers, &(&1.shared_role_queue_count || 0)), fn -> 0 end)
        }}
@@ -5017,6 +5031,16 @@ defmodule HydraX.Runtime.WorkItems do
       (pressure[:available_workers] || pressure["available_workers"] || 0) * 2.0 +
       (pressure[:busy_workers] || pressure["busy_workers"] || 0) * 0.5 -
       (pressure[:saturated_workers] || pressure["saturated_workers"] || 0) * 3.0 -
+      min(
+        pressure[:urgent_shared_role_queue_count] ||
+          pressure["urgent_shared_role_queue_count"] || 0,
+        8
+      ) * 0.75 -
+      min(
+        pressure[:urgent_deferred_role_queue_count] ||
+          pressure["urgent_deferred_role_queue_count"] || 0,
+        8
+      ) * 0.35 -
       min(pressure[:shared_role_queue_count] || pressure["shared_role_queue_count"] || 0, 8) *
         0.25 -
       min(pressure[:active_claimed_count] || pressure["active_claimed_count"] || 0, 8) * 0.15
@@ -5778,7 +5802,17 @@ defmodule HydraX.Runtime.WorkItems do
         (pressure[:idle_workers] || pressure["idle_workers"] || 0) * 2.0 +
           (pressure[:available_workers] || pressure["available_workers"] || 0) * 1.0 +
           (pressure[:busy_workers] || pressure["busy_workers"] || 0) * 0.25 -
-          (pressure[:saturated_workers] || pressure["saturated_workers"] || 0) * 2.0
+          (pressure[:saturated_workers] || pressure["saturated_workers"] || 0) * 2.0 -
+          min(
+            pressure[:urgent_shared_role_queue_count] ||
+              pressure["urgent_shared_role_queue_count"] || 0,
+            8
+          ) * 0.5 -
+          min(
+            pressure[:urgent_deferred_role_queue_count] ||
+              pressure["urgent_deferred_role_queue_count"] || 0,
+            8
+          ) * 0.25
 
       acc + count * available_workers
     end)
