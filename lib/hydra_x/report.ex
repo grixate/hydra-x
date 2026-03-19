@@ -356,7 +356,7 @@ defmodule HydraX.Report do
 
       items ->
         Enum.map_join(items, "\n", fn entry ->
-          "- #{entry.agent_name} (#{entry.role}): posture=#{entry.capacity_posture} open=#{entry.assigned_open_count} claims=#{entry.active_claimed_count} stale=#{entry.stale_claimed_count} blocked=#{entry.blocked_count} failed=#{entry.failed_count} shared_backlog=#{entry.shared_role_queue_count}"
+          "- #{entry.agent_name} (#{entry.role}): posture=#{entry.capacity_posture} open=#{entry.assigned_open_count} claims=#{entry.active_claimed_count} stale=#{entry.stale_claimed_count} blocked=#{entry.blocked_count} failed=#{entry.failed_count} shared_backlog=#{entry.shared_role_queue_count} urgent_backlog=#{entry.urgent_shared_role_queue_count || 0}/#{entry.urgent_deferred_role_queue_count || 0}"
         end)
     end
   end

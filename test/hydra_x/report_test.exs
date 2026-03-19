@@ -1280,9 +1280,12 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "urgent_role_backlog=0"
     assert File.read!(export.markdown_path) =~ "urgent_deferred_role_backlog=1"
     assert File.read!(export.markdown_path) =~ "urgent=0/1"
+    assert File.read!(export.markdown_path) =~ "urgent_backlog="
     assert File.read!(export.json_path) =~ "\"worker_pressure\":"
     assert File.read!(export.json_path) =~ "\"active_claimed_count\": 1"
     assert File.read!(export.json_path) =~ "\"stale_claimed_count\": 1"
+    assert File.read!(export.json_path) =~ "\"urgent_shared_role_queue_count\":"
+    assert File.read!(export.json_path) =~ "\"urgent_deferred_role_queue_count\":"
     assert File.read!(export.json_path) =~ "\"remote_claimed_count\":"
     assert File.read!(export.json_path) =~ "\"orphaned_assignment_count\":"
 

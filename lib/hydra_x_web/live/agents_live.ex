@@ -1453,7 +1453,7 @@ defmodule HydraXWeb.AgentsLive do
     if map_size(pressure) == 0 do
       nil
     else
-      "worker pressure open #{pressure[:assigned_open_count] || 0} · claims #{pressure[:active_claimed_count] || 0} · stale #{pressure[:stale_claimed_count] || 0} · blocked #{pressure[:blocked_count] || 0} · failed #{pressure[:failed_count] || 0}"
+      "worker pressure open #{pressure[:assigned_open_count] || 0} · claims #{pressure[:active_claimed_count] || 0} · stale #{pressure[:stale_claimed_count] || 0} · blocked #{pressure[:blocked_count] || 0} · failed #{pressure[:failed_count] || 0} · urgent backlog #{pressure[:urgent_shared_role_queue_count] || 0}/#{pressure[:urgent_deferred_role_queue_count] || 0}"
     end
   end
 

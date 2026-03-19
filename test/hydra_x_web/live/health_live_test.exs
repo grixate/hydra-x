@@ -522,6 +522,7 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "Delegation supervision"
     assert html =~ "queued"
     assert html =~ "shared backlog"
+    assert html =~ "urgent backlog"
     assert html =~ "stale 1"
     assert html =~ "assignment recovery queued: worker saturated"
     assert html =~ "cooldown until 2026-03-18 10:15:00 UTC"

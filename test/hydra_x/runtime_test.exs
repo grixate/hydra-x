@@ -7102,7 +7102,8 @@ defmodule HydraX.RuntimeTest do
 
     assert Enum.any?(
              status.worker_pressure,
-             &(&1.agent_id == agent.id and &1.stale_claimed_count >= 1)
+             &(&1.agent_id == agent.id and &1.stale_claimed_count >= 1 and
+                 &1.urgent_shared_role_queue_count >= 1)
            )
 
     assert Enum.any?(

@@ -451,6 +451,7 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "Queue posture"
     assert html =~ "orphaned role 1"
     assert html =~ "worker pressure open"
+    assert html =~ "urgent backlog 0/0"
     assert html =~ "recent role dispatch delivered_publish_summary"
     assert html =~ "required role x1"
     assert html =~ "recent assignment recovery researched"

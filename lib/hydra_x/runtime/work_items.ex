@@ -855,6 +855,12 @@ defmodule HydraX.Runtime.WorkItems do
   defp build_worker_pressure(all_work_items, autonomy_agents, role_queue_backlog) do
     role_queue_counts = Map.new(role_queue_backlog, &{&1.role, &1.queued_count})
 
+    urgent_role_queue_counts =
+      Map.new(role_queue_backlog, &{&1.role, &1.required_role_queued_count || 0})
+
+    urgent_deferred_role_queue_counts =
+      Map.new(role_queue_backlog, &{&1.role, &1.required_role_deferred_count || 0})
+
     autonomy_agents
     |> Enum.map(fn agent ->
       assigned_items =
@@ -869,6 +875,8 @@ defmodule HydraX.Runtime.WorkItems do
       blocked_count = Enum.count(assigned_items, &(&1.status == "blocked"))
       failed_count = Enum.count(assigned_items, &(&1.status == "failed"))
       shared_role_queue_count = Map.get(role_queue_counts, agent.role, 0)
+      urgent_shared_role_queue_count = Map.get(urgent_role_queue_counts, agent.role, 0)
+      urgent_deferred_role_queue_count = Map.get(urgent_deferred_role_queue_counts, agent.role, 0)
 
       %{
         agent_id: agent.id,
@@ -880,6 +888,8 @@ defmodule HydraX.Runtime.WorkItems do
         blocked_count: blocked_count,
         failed_count: failed_count,
         shared_role_queue_count: shared_role_queue_count,
+        urgent_shared_role_queue_count: urgent_shared_role_queue_count,
+        urgent_deferred_role_queue_count: urgent_deferred_role_queue_count,
         capacity_posture:
           worker_capacity_posture(
             assigned_open_count,

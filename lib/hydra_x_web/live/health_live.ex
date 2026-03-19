@@ -1485,7 +1485,8 @@ defmodule HydraXWeb.HealthLive do
                   <div class="text-xs text-[var(--hx-mute)]">{entry.capacity_posture}</div>
                 </div>
                 <div class="mt-2 text-xs text-[var(--hx-mute)]">
-                  open {entry.assigned_open_count} · claims {entry.active_claimed_count} · stale {entry.stale_claimed_count} · blocked {entry.blocked_count} · failed {entry.failed_count} · shared backlog {entry.shared_role_queue_count}
+                  open {entry.assigned_open_count} · claims {entry.active_claimed_count} · stale {entry.stale_claimed_count} · blocked {entry.blocked_count} · failed {entry.failed_count} · shared backlog {entry.shared_role_queue_count} · urgent backlog {entry.urgent_shared_role_queue_count ||
+                    0}/{entry.urgent_deferred_role_queue_count || 0}
                 </div>
               </div>
             </div>
