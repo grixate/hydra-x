@@ -927,7 +927,7 @@ defmodule HydraXWeb.HealthLive do
                     · expiry {event.expired_by}
                   </span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip                                      {event.ip}</span>
+                  <span :if={event.ip}> · ip                                        {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -1500,7 +1500,9 @@ defmodule HydraXWeb.HealthLive do
                   </div>
                 </div>
                 <div class="mt-2 text-xs text-[var(--hx-mute)]">
-                  pending {entry.pending_children} · active {entry.active_children} · terminal {entry.terminal_children}
+                  pending {entry.pending_children} · active {entry.active_children} · terminal {entry.terminal_children}<span :if={
+                    (entry.deferred_batches || 0) > 0
+                  }> · deferred {entry.deferred_batches}</span>
                 </div>
                 <div
                   :if={(entry.constrained_roles || %{}) != %{}}
@@ -2451,7 +2453,8 @@ defmodule HydraXWeb.HealthLive do
         [
           "delegation #{snapshot["mode"]} · strategy #{snapshot["batch_strategy"] || "ordered"} · concurrency #{snapshot["batch_concurrency"] || 1} · completed #{snapshot["completed_count"] || 0} · failed #{snapshot["failed_count"] || 0} · canceled #{snapshot["canceled_count"] || 0}",
           autonomy_delegation_roles_line(snapshot),
-          autonomy_delegation_pending_roles_line(snapshot)
+          autonomy_delegation_pending_roles_line(snapshot),
+          autonomy_delegation_expansion_cooldown_line(snapshot)
         ]
         |> Enum.reject(&is_nil_or_empty/1)
         |> case do
@@ -2490,6 +2493,13 @@ defmodule HydraXWeb.HealthLive do
   end
 
   defp autonomy_delegation_pending_roles_line(_snapshot), do: nil
+
+  defp autonomy_delegation_expansion_cooldown_line(%{"expansion_deferred_until" => value})
+       when not is_nil(value) do
+    "expansion deferred · #{autonomy_recovery_deferred_label(value)}"
+  end
+
+  defp autonomy_delegation_expansion_cooldown_line(_snapshot), do: nil
 
   defp autonomy_delegation_pending_summary(%{"pending_count" => count})
        when is_integer(count) and count > 0 do

@@ -379,7 +379,11 @@ defmodule HydraX.Report do
                 |> then(&" constrained=#{&1}")
             end
 
-          "- #{entry.agent_name || entry.role || "planner"}: batches=#{entry.active_batches} pending=#{entry.pending_children} active=#{entry.active_children} terminal=#{entry.terminal_children} priority=#{entry.highest_priority}#{constrained || ""}"
+          "- #{entry.agent_name || entry.role || "planner"}: batches=#{entry.active_batches} pending=#{entry.pending_children} active=#{entry.active_children} terminal=#{entry.terminal_children} priority=#{entry.highest_priority}#{constrained || ""}" <>
+            if((entry.deferred_batches || 0) > 0,
+              do: " deferred=#{entry.deferred_batches}",
+              else: ""
+            )
         end)
     end
   end
@@ -867,6 +871,7 @@ defmodule HydraX.Report do
         [
           delegation_roles_detail(snapshot),
           delegation_pending_roles_detail(snapshot),
+          delegation_expansion_cooldown_detail(snapshot),
           "delegation_strategy=#{snapshot["batch_strategy"] || "ordered"}",
           "delegation_concurrency=#{snapshot["batch_concurrency"] || 1}",
           "delegation_completed=#{snapshot["completed_count"] || 0}",
@@ -897,6 +902,13 @@ defmodule HydraX.Report do
   end
 
   defp delegation_pending_roles_detail(_snapshot), do: nil
+
+  defp delegation_expansion_cooldown_detail(%{"expansion_deferred_until" => value})
+       when not is_nil(value) do
+    "delegation_expansion_cooldown=#{format_datetime(value)}"
+  end
+
+  defp delegation_expansion_cooldown_detail(_snapshot), do: nil
 
   defp report_delegation_pending_summary(%{"pending_count" => count})
        when is_integer(count) and count > 0 do

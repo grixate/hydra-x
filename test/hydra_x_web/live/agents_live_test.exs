@@ -226,7 +226,10 @@ defmodule HydraXWeb.AgentsLiveTest do
           "delegation_batch" => %{
             "mode" => "parallel",
             "expected_count" => 2,
-            "roles" => ["researcher", "operator"]
+            "roles" => ["researcher", "operator"],
+            "expansion_deferred_until" => "2099-03-18T10:25:00Z",
+            "expansion_deferred_reason" => "role_capacity_constrained",
+            "expansion_capacity_score" => -2.5
           }
         }
       })
@@ -368,6 +371,9 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "strategy ordered"
     assert html =~ "delegation roles researcher, operator"
     assert html =~ "delegation supervision 1 batches"
+    assert html =~ "deferred 1"
+    assert html =~ "expansion deferred"
+    assert html =~ "cooldown until 2099-03-18 10:25:00 UTC"
 
     assert html =~ "assignment Research Agent:"
     assert html =~ "exact role match"

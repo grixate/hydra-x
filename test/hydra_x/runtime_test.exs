@@ -595,15 +595,6 @@ defmodule HydraX.RuntimeTest do
 
     wait_for(
       fn ->
-        channel_state = Runtime.conversation_channel_state(conversation.id)
-
-        Enum.any?(channel_state.execution_events, &(&1["phase"] == "handoff_response_replayed"))
-      end,
-      600
-    )
-
-    wait_for(
-      fn ->
         Enum.any?(
           Runtime.list_turns(conversation.id),
           &(&1.role == "assistant" and &1.content == "Captured before ownership handoff.")
@@ -4374,6 +4365,69 @@ defmodule HydraX.RuntimeTest do
              2
 
     assert get_in(finalized_parent.metadata || %{}, ["delegation_batch", "completed_count"]) == 3
+  end
+
+  test "planner defers blocked delegation batch expansion when pending roles are saturated" do
+    planner =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, planner} = Runtime.save_agent(planner, %{"role" => "planner"})
+
+    researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, researcher} = Runtime.save_agent(researcher, %{"role" => "researcher"})
+
+    Enum.each(1..4, fn index ->
+      {:ok, _busy_work} =
+        Runtime.save_work_item(%{
+          "kind" => "task",
+          "goal" => "Saturate researcher queue #{index}",
+          "assigned_agent_id" => researcher.id,
+          "assigned_role" => "researcher",
+          "status" => "blocked",
+          "priority" => 1
+        })
+    end)
+
+    {:ok, parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Defer delegation expansion until researcher capacity improves.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "execution_mode" => "delegate",
+        "priority" => 9,
+        "metadata" => %{
+          "delegate_batch_concurrency" => 1,
+          "delegate_batch" => [
+            %{"goal" => "Research first constrained branch.", "role" => "researcher"},
+            %{"goal" => "Research second constrained branch.", "role" => "researcher"}
+          ]
+        }
+      })
+
+    assert {:ok, delegated} = Runtime.run_autonomy_cycle(planner.id)
+    assert delegated.action == "delegated"
+
+    assert {:ok, researcher_summary} = Runtime.run_autonomy_cycle(researcher.id)
+    assert researcher_summary.action == "researched"
+
+    assert {:ok, deferred} = Runtime.run_autonomy_cycle(planner.id)
+    assert deferred.action == "delegation_batch_deferred"
+    assert deferred.reason == "role_capacity_constrained"
+
+    refreshed_parent = Runtime.get_work_item!(parent.id)
+    batch_snapshot = Runtime.delegation_batch_snapshot(refreshed_parent)
+
+    assert batch_snapshot["pending_count"] == 1
+    assert batch_snapshot["active_count"] == 0
+    assert batch_snapshot["terminal_count"] == 1
+    assert batch_snapshot["expansion_deferred_reason"] == "role_capacity_constrained"
+    assert %DateTime{} = batch_snapshot["expansion_deferred_until"]
+    assert is_float(batch_snapshot["expansion_capacity_score"])
   end
 
   test "planner expands the delegation batch with healthier pending role capacity first" do

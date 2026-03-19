@@ -385,7 +385,10 @@ defmodule HydraXWeb.HealthLiveTest do
           "delegation_batch" => %{
             "mode" => "parallel",
             "expected_count" => 2,
-            "roles" => ["researcher", "operator"]
+            "roles" => ["researcher", "operator"],
+            "expansion_deferred_until" => "2099-03-18T10:25:00Z",
+            "expansion_deferred_reason" => "role_capacity_constrained",
+            "expansion_capacity_score" => -2.5
           }
         }
       })
@@ -463,6 +466,7 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "strategy ordered"
     assert html =~ "delegation roles researcher, operator"
     assert html =~ "pending 0 · active 1 · terminal 1"
+    assert html =~ "expansion deferred · cooldown until 2099-03-18 10:25:00 UTC"
     assert html =~ "Operator confirmed the rollout."
     assert html =~ "ownership #{local_owner} · completed"
     assert html =~ "ownership node:remote-health · claimed_remote"

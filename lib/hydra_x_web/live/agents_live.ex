@@ -1409,6 +1409,7 @@ defmodule HydraXWeb.AgentsLive do
 
     [
       "delegation supervision #{active_batches} batches",
+      delegation_deferred_batches_label(summary[:deferred_batches] || 0),
       "pending #{summary[:pending_children] || 0}",
       "active #{summary[:active_children] || 0}",
       "terminal #{summary[:terminal_children] || 0}",
@@ -1419,6 +1420,11 @@ defmodule HydraXWeb.AgentsLive do
   end
 
   defp delegation_supervision_detail(_summary), do: nil
+
+  defp delegation_deferred_batches_label(count) when is_integer(count) and count > 0,
+    do: "deferred #{count}"
+
+  defp delegation_deferred_batches_label(_count), do: nil
 
   defp recent_role_dispatch_summary(results, agent_id) do
     agent_results = Enum.filter(results, &((&1[:agent_id] || &1["agent_id"]) == agent_id))
@@ -1839,7 +1845,8 @@ defmodule HydraXWeb.AgentsLive do
         [
           "delegation #{snapshot["mode"]} · strategy #{snapshot["batch_strategy"] || "ordered"} · concurrency #{snapshot["batch_concurrency"] || 1} · completed #{snapshot["completed_count"] || 0} · failed #{snapshot["failed_count"] || 0} · canceled #{snapshot["canceled_count"] || 0}",
           delegation_roles_line(snapshot),
-          delegation_pending_roles_line(snapshot)
+          delegation_pending_roles_line(snapshot),
+          delegation_expansion_cooldown_line(snapshot)
         ]
         |> Enum.reject(&(&1 in [nil, ""]))
         |> case do
@@ -1869,6 +1876,16 @@ defmodule HydraXWeb.AgentsLive do
   end
 
   defp delegation_pending_roles_line(_snapshot), do: nil
+
+  defp delegation_expansion_cooldown_line(%{"expansion_deferred_until" => value})
+       when not is_nil(value) do
+    case recovery_deferred_label(value) do
+      nil -> nil
+      label -> "expansion deferred · #{label}"
+    end
+  end
+
+  defp delegation_expansion_cooldown_line(_snapshot), do: nil
 
   defp delegation_pending_summary(%{"pending_count" => count})
        when is_integer(count) and count > 0,

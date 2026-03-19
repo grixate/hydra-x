@@ -874,12 +874,14 @@ defmodule HydraX.Runtime.WorkItems do
       agent = Map.get(agents_by_id, agent_id)
       snapshots = Enum.map(entries, fn {_work_item, snapshot} -> snapshot end)
       constrained_roles = aggregate_constrained_pending_roles(snapshots, role_capacity)
+      deferred_batches = Enum.count(snapshots, &delegation_batch_expansion_deferred?/1)
 
       %{
         agent_id: agent_id,
         agent_name: agent && agent.name,
         role: role || (agent && agent.role),
         active_batches: length(entries),
+        deferred_batches: deferred_batches,
         pending_children: Enum.reduce(snapshots, 0, &((&1["pending_count"] || 0) + &2)),
         active_children: Enum.reduce(snapshots, 0, &((&1["active_count"] || 0) + &2)),
         terminal_children: Enum.reduce(snapshots, 0, &((&1["terminal_count"] || 0) + &2)),
@@ -1033,7 +1035,7 @@ defmodule HydraX.Runtime.WorkItems do
   defp maybe_expand_blocked_delegation_batch(agent, _opts) do
     role_capacity = delegation_role_capacity()
 
-    expandable_parent =
+    blocked_batches =
       WorkItem
       |> where(
         [work_item],
@@ -1047,6 +1049,15 @@ defmodule HydraX.Runtime.WorkItems do
       |> Repo.all()
       |> Enum.map(fn work_item -> {work_item, delegation_batch_snapshot(work_item)} end)
       |> Enum.filter(fn {_work_item, snapshot} -> delegation_batch_expandable?(snapshot) end)
+      |> Enum.reject(fn {_work_item, snapshot} ->
+        delegation_batch_expansion_deferred?(snapshot)
+      end)
+
+    expandable_parent =
+      blocked_batches
+      |> Enum.filter(fn {_work_item, snapshot} ->
+        delegation_batch_ready_for_expansion?(snapshot, role_capacity)
+      end)
       |> Enum.max_by(
         fn {work_item, snapshot} ->
           delegation_batch_expansion_priority(work_item, snapshot, role_capacity)
@@ -1058,12 +1069,33 @@ defmodule HydraX.Runtime.WorkItems do
         nil -> nil
       end
 
-    case expandable_parent do
-      nil ->
-        {:idle, nil}
+    constrained_parent =
+      blocked_batches
+      |> Enum.reject(fn {_work_item, snapshot} ->
+        delegation_batch_ready_for_expansion?(snapshot, role_capacity)
+      end)
+      |> Enum.max_by(
+        fn {work_item, snapshot} ->
+          delegation_batch_expansion_priority(work_item, snapshot, role_capacity)
+        end,
+        fn -> nil end
+      )
+      |> case do
+        {work_item, snapshot} -> {work_item, snapshot}
+        nil -> nil
+      end
 
-      %WorkItem{} = work_item ->
+    cond do
+      match?(%WorkItem{}, expandable_parent) ->
+        work_item = expandable_parent
         expand_blocked_delegation_batch(agent, work_item)
+
+      match?({%WorkItem{}, %{}}, constrained_parent) ->
+        {work_item, snapshot} = constrained_parent
+        defer_blocked_delegation_batch(work_item, snapshot, role_capacity)
+
+      true ->
+        {:idle, nil}
     end
   end
 
@@ -1234,7 +1266,11 @@ defmodule HydraX.Runtime.WorkItems do
         end)
 
       refreshed_children = delegation_batch_children(refreshed_parent)
-      batch_snapshot = build_delegation_batch_snapshot(refreshed_parent, refreshed_children)
+
+      batch_snapshot =
+        refreshed_parent
+        |> build_delegation_batch_snapshot(refreshed_children)
+        |> clear_delegation_batch_expansion_deferral()
 
       {:ok, artifact} =
         create_artifact(%{
@@ -1292,6 +1328,49 @@ defmodule HydraX.Runtime.WorkItems do
          delegated_work_items: Enum.map(delegated_children, & &1.child)
        }}
       |> finalize_claimed_summary(claimed)
+    end
+  end
+
+  defp defer_blocked_delegation_batch(%WorkItem{} = work_item, %{} = snapshot, role_capacity) do
+    observed_at = DateTime.utc_now()
+
+    deferred_until =
+      DateTime.add(observed_at, delegation_batch_expansion_delay_seconds(), :second)
+
+    capacity_score = delegation_pending_role_capacity_score(snapshot, role_capacity)
+
+    metadata =
+      work_item.metadata
+      |> Helpers.normalize_string_keys()
+      |> Map.put(
+        "delegation_batch",
+        snapshot
+        |> Map.put("expansion_deferred_until", deferred_until)
+        |> Map.put("expansion_deferred_reason", "role_capacity_constrained")
+        |> Map.put("expansion_capacity_score", Float.round(capacity_score, 2))
+      )
+
+    with {:ok, deferred} <-
+           save_work_item(work_item, %{
+             "metadata" => metadata,
+             "runtime_state" =>
+               append_history(work_item.runtime_state, work_item.status || "blocked", %{
+                 "observed_at" => observed_at,
+                 "phase" => "delegation_batch_expansion",
+                 "reason" => "role_capacity_constrained",
+                 "deferred_until" => deferred_until,
+                 "capacity_score" => capacity_score
+               })
+           }) do
+      {:processed,
+       %{
+         status: deferred.status,
+         processed_count: 0,
+         action: "delegation_batch_deferred",
+         work_item: deferred,
+         deferred_until: deferred_until,
+         reason: "role_capacity_constrained"
+       }}
     end
   end
 
@@ -4673,6 +4752,10 @@ defmodule HydraX.Runtime.WorkItems do
         "completed_count" => completed_count,
         "failed_count" => failed_count,
         "canceled_count" => canceled_count,
+        "expansion_deferred_until" =>
+          parse_datetime(metadata_snapshot["expansion_deferred_until"]),
+        "expansion_deferred_reason" => metadata_snapshot["expansion_deferred_reason"],
+        "expansion_capacity_score" => metadata_snapshot["expansion_capacity_score"],
         "roles" => roles,
         "items" => child_entries,
         "child_work_item_ids" =>
@@ -4684,6 +4767,13 @@ defmodule HydraX.Runtime.WorkItems do
             if(expected_count > 1, do: "parallel delegation batch", else: "delegation")
       }
     end
+  end
+
+  defp clear_delegation_batch_expansion_deferral(%{} = snapshot) do
+    snapshot
+    |> Map.put("expansion_deferred_until", nil)
+    |> Map.put("expansion_deferred_reason", nil)
+    |> Map.put("expansion_capacity_score", nil)
   end
 
   defp delegation_batch_child_entry(%{child: child, spec: spec}) do
@@ -4853,6 +4943,31 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp clamp_delegation_batch_concurrency(_value, expected_count), do: max(expected_count, 1)
 
+  defp delegation_batch_expansion_deferred?(%WorkItem{} = work_item) do
+    work_item
+    |> delegation_batch_snapshot()
+    |> delegation_batch_expansion_deferred?()
+  end
+
+  defp delegation_batch_expansion_deferred?(%{} = snapshot) do
+    case parse_datetime(snapshot["expansion_deferred_until"]) do
+      %DateTime{} = deferred_until ->
+        DateTime.compare(deferred_until, DateTime.utc_now()) == :gt
+
+      _ ->
+        false
+    end
+  end
+
+  defp delegation_batch_expansion_deferred?(_snapshot), do: false
+
+  defp delegation_batch_ready_for_expansion?(%{} = snapshot, role_capacity) do
+    pending_roles = Map.get(snapshot, "pending_roles", %{})
+    pending_roles == %{} or delegation_pending_role_capacity_score(snapshot, role_capacity) > 0
+  end
+
+  defp delegation_batch_ready_for_expansion?(_snapshot, _role_capacity), do: true
+
   defp delegation_batch_expandable?(%WorkItem{} = work_item) do
     work_item
     |> delegation_batch_snapshot()
@@ -4894,6 +5009,10 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp delegation_batch_available_slots(%{} = snapshot) do
     max((snapshot["batch_concurrency"] || 1) - (snapshot["active_count"] || 0), 0)
+  end
+
+  defp delegation_batch_expansion_delay_seconds do
+    max(div(Config.scheduler_poll_ms() * 2, 1000), 5)
   end
 
   defp pending_delegation_batch_items(%{} = snapshot) do
