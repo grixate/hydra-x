@@ -7745,6 +7745,118 @@ defmodule HydraX.RuntimeTest do
     assert get_in(child.metadata || %{}, ["assignment_resolution", "strategy"]) == "worker_claim"
   end
 
+  test "role queue dispatch prioritizes delegated children that satisfy missing required roles" do
+    planner =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, planner} =
+      Runtime.save_agent(planner, %{
+        "role" => "planner",
+        "name" => "Planner Urgent Dispatch",
+        "slug" => "planner-urgent-dispatch-#{System.unique_integer([:positive])}"
+      })
+
+    researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, researcher} =
+      Runtime.save_agent(researcher, %{
+        "role" => "researcher",
+        "name" => "Researcher Urgent Dispatch",
+        "slug" => "researcher-urgent-dispatch-#{System.unique_integer([:positive])}"
+      })
+
+    {:ok, plain_role_work} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Generic queued research work.",
+        "assigned_role" => "researcher",
+        "status" => "planned",
+        "priority" => 50,
+        "metadata" => %{"assignment_mode" => "role_claim"}
+      })
+
+    {:ok, parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Route the missing researcher role before generic queued work.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "status" => "blocked",
+        "execution_mode" => "delegate",
+        "priority" => 5,
+        "metadata" => %{
+          "delegation_batch" => %{
+            "mode" => "parallel",
+            "expected_count" => 2,
+            "items" => [
+              %{
+                "child_key" => "researcher-urgent",
+                "goal" => "Urgent delegated research work.",
+                "assigned_role" => "researcher",
+                "status" => "pending_dispatch"
+              },
+              %{
+                "child_key" => "operator-complete",
+                "goal" => "Operator side already completed.",
+                "assigned_role" => "operator",
+                "status" => "pending_dispatch"
+              }
+            ],
+            "completion_quorum" => 2,
+            "completion_role_requirements" => %{"researcher" => 1, "operator" => 1}
+          }
+        }
+      })
+
+    {:ok, urgent_child} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Urgent delegated research work.",
+        "assigned_role" => "researcher",
+        "status" => "planned",
+        "priority" => 100,
+        "parent_work_item_id" => parent.id,
+        "metadata" => %{
+          "assignment_mode" => "role_claim",
+          "claim_scope" => "role_pool",
+          "delegation_batch_key" => "researcher-urgent",
+          "delegation_role_urgency" => 1
+        }
+      })
+
+    {:ok, _completed_operator_child} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "The operator side of the batch already completed.",
+        "assigned_role" => "operator",
+        "status" => "completed",
+        "priority" => 4,
+        "parent_work_item_id" => parent.id,
+        "metadata" => %{"delegation_batch_key" => "operator-complete"}
+      })
+
+    summary = Runtime.process_role_queued_work(limit: 1)
+
+    assert summary.processed_count == 1
+
+    urgent_child = Runtime.get_work_item!(urgent_child.id)
+    plain_role_work = Runtime.get_work_item!(plain_role_work.id)
+
+    assert urgent_child.status == "completed"
+    assert urgent_child.assigned_agent_id == researcher.id
+
+    assert Enum.any?(
+             summary.results,
+             &(&1[:agent_id] == researcher.id and &1[:action] == "researched")
+           )
+
+    assert plain_role_work.status == "planned"
+    assert is_nil(plain_role_work.assigned_agent_id)
+  end
+
   test "role queue dispatch skips saturated workers until capacity is available" do
     saturated_researcher =
       create_agent()

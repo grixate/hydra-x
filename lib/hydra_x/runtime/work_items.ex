@@ -26,6 +26,7 @@ defmodule HydraX.Runtime.WorkItems do
   }
 
   @claim_ttl_seconds 180
+  @delegation_required_role_priority_boost 100
   @terminal_work_item_statuses ~w(completed failed canceled)
 
   def list_work_items(opts \\ []) do
@@ -2100,6 +2101,7 @@ defmodule HydraX.Runtime.WorkItems do
   defp role_queue_dispatch_candidates(limit) do
     list_work_items(limit: max(limit * 3, limit), preload: false)
     |> Enum.filter(&role_queue_candidate?/1)
+    |> prioritize_role_queue_candidates()
     |> Enum.take(limit)
   end
 
@@ -2134,8 +2136,57 @@ defmodule HydraX.Runtime.WorkItems do
     |> limit(10)
     |> Repo.all()
     |> Enum.map(&get_work_item!(&1.id))
-    |> Enum.find(&role_queue_candidate?/1)
+    |> Enum.filter(&role_queue_candidate?/1)
+    |> prioritize_role_queue_candidates()
+    |> List.first()
   end
+
+  defp prioritize_role_queue_candidates(work_items) when is_list(work_items) do
+    Enum.sort_by(
+      work_items,
+      fn work_item ->
+        {
+          -role_queue_missing_role_urgency(work_item),
+          -(work_item.priority || 0),
+          work_item.inserted_at || ~N[9999-12-31 23:59:59]
+        }
+      end
+    )
+  end
+
+  defp prioritize_role_queue_candidates(_work_items), do: []
+
+  defp role_queue_missing_role_urgency(%WorkItem{metadata: metadata} = work_item) do
+    metadata = Helpers.normalize_string_keys(metadata || %{})
+
+    case metadata["delegation_role_urgency"] do
+      count when is_integer(count) and count > 0 ->
+        count
+
+      _ ->
+        role_queue_missing_role_urgency_from_parent(work_item)
+    end
+  end
+
+  defp role_queue_missing_role_urgency_from_parent(%WorkItem{
+         assigned_role: role,
+         parent_work_item_id: parent_id
+       })
+       when is_binary(role) and is_integer(parent_id) do
+    case Repo.get(WorkItem, parent_id) do
+      %WorkItem{} = parent ->
+        parent
+        |> delegation_batch_snapshot()
+        |> Kernel.||(%{})
+        |> Map.get("missing_completion_roles", %{})
+        |> Map.get(role, 0)
+
+      _ ->
+        0
+    end
+  end
+
+  defp role_queue_missing_role_urgency_from_parent(_work_item), do: 0
 
   defp drain_role_queued_work(_opts, summary, limit, _round)
        when summary.processed_count >= limit,
@@ -4974,12 +5025,15 @@ defmodule HydraX.Runtime.WorkItems do
       normalized["assigned_role"] || normalized["delegate_role"] || normalized["role"] ||
         Autonomy.role_for_kind(kind) || default_role
 
+    base_priority = normalized["priority"] || default_priority
+    urgency = delegation_required_role_urgency(work_item, role)
+
     %{
       "goal" => normalized["goal"] || default_goal,
       "kind" => kind,
       "assigned_role" => Autonomy.normalize_role(role),
       "assigned_agent_id" => normalized["assigned_agent_id"],
-      "priority" => normalized["priority"] || default_priority,
+      "priority" => min(base_priority + urgency * @delegation_required_role_priority_boost, 100),
       "autonomy_level" => normalized["autonomy_level"] || work_item.autonomy_level,
       "approval_stage" => normalized["approval_stage"] || work_item.approval_stage,
       "review_required" => Map.get(normalized, "review_required", work_item.review_required),
@@ -4997,6 +5051,8 @@ defmodule HydraX.Runtime.WorkItems do
          %AgentProfile{} = agent,
          entry
        ) do
+    role = entry["assigned_role"] || entry["role"]
+
     Map.merge(
       Helpers.normalize_string_keys(metadata || %{}),
       %{
@@ -5004,10 +5060,22 @@ defmodule HydraX.Runtime.WorkItems do
         "claim_scope" => "role_pool",
         "delegated_from_role" => agent.role,
         "delegated_from_work_item_id" => work_item.id,
-        "delegation_batch_key" => entry["child_key"]
+        "delegation_batch_key" => entry["child_key"],
+        "delegation_role_urgency" =>
+          delegation_batch_completion_role_requirements(work_item_metadata(work_item))
+          |> Map.get(role, 0)
       }
     )
   end
+
+  defp delegation_required_role_urgency(%WorkItem{} = work_item, role) when is_binary(role) do
+    work_item
+    |> work_item_metadata()
+    |> delegation_batch_completion_role_requirements()
+    |> Map.get(role, 0)
+  end
+
+  defp delegation_required_role_urgency(_work_item, _role), do: 0
 
   defp build_delegation_batch_snapshot(work_item, children, delegated_children \\ nil)
 
