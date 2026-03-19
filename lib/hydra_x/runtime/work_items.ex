@@ -1706,11 +1706,12 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp defer_blocked_delegation_batch(%WorkItem{} = work_item, %{} = snapshot, reason, attrs) do
     observed_at = DateTime.utc_now()
+    attrs = Helpers.normalize_string_keys(attrs)
+    delay_seconds = delegation_batch_expansion_delay_seconds(attrs["pressure_snapshot"])
+    pressure_severity = delegation_batch_expansion_pressure_severity(attrs["pressure_snapshot"])
 
     deferred_until =
-      DateTime.add(observed_at, delegation_batch_expansion_delay_seconds(), :second)
-
-    attrs = Helpers.normalize_string_keys(attrs)
+      DateTime.add(observed_at, delay_seconds, :second)
 
     metadata =
       work_item.metadata
@@ -1721,6 +1722,8 @@ defmodule HydraX.Runtime.WorkItems do
         |> Map.put("expansion_deferred_until", deferred_until)
         |> Map.put("expansion_deferred_reason", reason)
         |> maybe_put_snapshot_metric("expansion_capacity_score", attrs["capacity_score"])
+        |> maybe_put_snapshot_metric("expansion_delay_seconds", delay_seconds)
+        |> maybe_put_snapshot_metric("expansion_pressure_severity", pressure_severity)
         |> maybe_put_snapshot_metric("expansion_pressure_snapshot", attrs["pressure_snapshot"])
         |> maybe_put_snapshot_metric("supervision_budget", attrs["supervision_budget"])
         |> maybe_put_snapshot_metric("supervision_active_children", attrs["active_children"])
@@ -1741,6 +1744,8 @@ defmodule HydraX.Runtime.WorkItems do
                  "reason" => reason,
                  "deferred_until" => deferred_until,
                  "capacity_score" => attrs["capacity_score"],
+                 "delay_seconds" => delay_seconds,
+                 "pressure_severity" => pressure_severity,
                  "pressure_snapshot" => attrs["pressure_snapshot"],
                  "supervision_budget" => attrs["supervision_budget"],
                  "active_children" => attrs["active_children"],
@@ -5357,6 +5362,8 @@ defmodule HydraX.Runtime.WorkItems do
           parse_datetime(metadata_snapshot["expansion_deferred_until"]),
         "expansion_deferred_reason" => metadata_snapshot["expansion_deferred_reason"],
         "expansion_capacity_score" => metadata_snapshot["expansion_capacity_score"],
+        "expansion_delay_seconds" => metadata_snapshot["expansion_delay_seconds"],
+        "expansion_pressure_severity" => metadata_snapshot["expansion_pressure_severity"],
         "expansion_pressure_snapshot" => metadata_snapshot["expansion_pressure_snapshot"],
         "roles" => roles,
         "items" => child_entries,
@@ -5376,6 +5383,8 @@ defmodule HydraX.Runtime.WorkItems do
     |> Map.put("expansion_deferred_until", nil)
     |> Map.put("expansion_deferred_reason", nil)
     |> Map.put("expansion_capacity_score", nil)
+    |> Map.put("expansion_delay_seconds", nil)
+    |> Map.put("expansion_pressure_severity", nil)
     |> Map.put("expansion_pressure_snapshot", nil)
     |> Map.put("supervision_active_children", nil)
   end
@@ -5878,6 +5887,45 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp delegation_batch_expansion_delay_seconds do
     max(div(Config.scheduler_poll_ms() * 2, 1000), 5)
+  end
+
+  defp delegation_batch_expansion_delay_seconds(pressure_snapshot)
+       when is_map(pressure_snapshot) and map_size(pressure_snapshot) > 0 do
+    base_delay = delegation_batch_expansion_delay_seconds()
+
+    case delegation_batch_expansion_pressure_severity(pressure_snapshot) do
+      "high" -> base_delay * 3
+      "medium" -> base_delay * 2
+      _ -> base_delay
+    end
+  end
+
+  defp delegation_batch_expansion_delay_seconds(_pressure_snapshot),
+    do: delegation_batch_expansion_delay_seconds()
+
+  defp delegation_batch_expansion_pressure_severity(pressure_snapshot)
+       when is_map(pressure_snapshot) and map_size(pressure_snapshot) > 0 do
+    case delegation_batch_expansion_pressure_score(pressure_snapshot) do
+      score when score >= 6 -> "high"
+      score when score >= 3 -> "medium"
+      _ -> "low"
+    end
+  end
+
+  defp delegation_batch_expansion_pressure_severity(_pressure_snapshot), do: nil
+
+  defp delegation_batch_expansion_pressure_score(pressure_snapshot)
+       when is_map(pressure_snapshot) do
+    pressure_snapshot
+    |> Enum.reduce(0, fn {_role, pressure}, acc ->
+      urgent_queued = pressure["urgent_queued_count"] || 0
+      urgent_deferred = pressure["urgent_deferred_count"] || 0
+      saturated = pressure["saturated_workers"] || 0
+      available = (pressure["idle_workers"] || 0) + (pressure["available_workers"] || 0)
+
+      acc + urgent_queued * 2 + urgent_deferred + saturated * 2 - available
+    end)
+    |> max(0)
   end
 
   defp maybe_defer_initial_delegation_batch(

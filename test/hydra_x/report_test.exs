@@ -1467,6 +1467,8 @@ defmodule HydraX.ReportTest do
             "expansion_deferred_until" => "2099-03-18T10:25:00Z",
             "expansion_deferred_reason" => "role_capacity_constrained",
             "expansion_capacity_score" => -2.5,
+            "expansion_delay_seconds" => 15,
+            "expansion_pressure_severity" => "medium",
             "expansion_pressure_snapshot" => %{
               "operator" => %{
                 "pending_count" => 1,
@@ -1552,6 +1554,7 @@ defmodule HydraX.ReportTest do
     assert markdown =~ "delegation_supervision_budget=2 delegation_active_children=1"
     assert markdown =~ "delegation_expansions=1 delegation_last_expanded=2099-03-18 10:05:00 UTC"
     assert markdown =~ "delegation_expansion_pressure=operator:pending=1:urgent=0/0:sat=0:avail=1"
+    assert markdown =~ "delegation_expansion_severity=medium delegation_expansion_delay=15"
     assert markdown =~ "delegation_expansion_cooldown=2099-03-18 10:25:00 UTC"
     assert markdown =~ "Delegation Supervision"
     assert markdown =~ "urgent_delegation_batches=1"

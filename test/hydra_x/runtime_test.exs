@@ -4428,6 +4428,9 @@ defmodule HydraX.RuntimeTest do
     assert batch_snapshot["expansion_deferred_reason"] == "role_capacity_constrained"
     assert %DateTime{} = batch_snapshot["expansion_deferred_until"]
     assert is_float(batch_snapshot["expansion_capacity_score"])
+    assert is_integer(batch_snapshot["expansion_delay_seconds"])
+    assert batch_snapshot["expansion_delay_seconds"] >= 5
+    assert batch_snapshot["expansion_pressure_severity"] in ["low", "medium", "high"]
     assert %{"researcher" => pressure} = batch_snapshot["expansion_pressure_snapshot"]
     assert pressure["pending_count"] == 1
     assert pressure["available_workers"] == 0

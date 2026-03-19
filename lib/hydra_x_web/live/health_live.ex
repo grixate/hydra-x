@@ -2500,6 +2500,7 @@ defmodule HydraXWeb.HealthLive do
           autonomy_delegation_batch_budget_line(snapshot),
           autonomy_delegation_expansion_history_line(snapshot),
           autonomy_delegation_expansion_pressure_line(snapshot),
+          autonomy_delegation_expansion_severity_line(snapshot),
           autonomy_delegation_expansion_cooldown_line(snapshot)
         ]
         |> Enum.reject(&is_nil_or_empty/1)
@@ -2664,6 +2665,16 @@ defmodule HydraXWeb.HealthLive do
   end
 
   defp autonomy_delegation_expansion_pressure_line(_snapshot), do: nil
+
+  defp autonomy_delegation_expansion_severity_line(%{
+         "expansion_pressure_severity" => severity,
+         "expansion_delay_seconds" => delay_seconds
+       })
+       when is_binary(severity) and is_integer(delay_seconds) do
+    "expansion severity #{severity} · delay #{delay_seconds}s"
+  end
+
+  defp autonomy_delegation_expansion_severity_line(_snapshot), do: nil
 
   defp autonomy_delegation_expansion_cooldown_line(%{"expansion_deferred_until" => value})
        when not is_nil(value) do

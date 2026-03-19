@@ -2039,6 +2039,7 @@ defmodule HydraXWeb.AgentsLive do
           delegation_batch_budget_line(snapshot),
           delegation_expansion_history_line(snapshot),
           delegation_expansion_pressure_line(snapshot),
+          delegation_expansion_severity_line(snapshot),
           delegation_expansion_cooldown_line(snapshot)
         ]
         |> Enum.reject(&(&1 in [nil, ""]))
@@ -2172,6 +2173,16 @@ defmodule HydraXWeb.AgentsLive do
   end
 
   defp delegation_expansion_pressure_line(_snapshot), do: nil
+
+  defp delegation_expansion_severity_line(%{
+         "expansion_pressure_severity" => severity,
+         "expansion_delay_seconds" => delay_seconds
+       })
+       when is_binary(severity) and is_integer(delay_seconds) do
+    "expansion severity #{severity} · delay #{delay_seconds}s"
+  end
+
+  defp delegation_expansion_severity_line(_snapshot), do: nil
 
   defp delegation_expansion_cooldown_line(%{"expansion_deferred_until" => value})
        when not is_nil(value) do

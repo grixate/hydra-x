@@ -253,6 +253,8 @@ defmodule HydraXWeb.AgentsLiveTest do
             "expansion_deferred_until" => "2099-03-18T10:25:00Z",
             "expansion_deferred_reason" => "role_capacity_constrained",
             "expansion_capacity_score" => -2.5,
+            "expansion_delay_seconds" => 15,
+            "expansion_pressure_severity" => "medium",
             "expansion_pressure_snapshot" => %{
               "operator" => %{
                 "pending_count" => 1,
@@ -452,6 +454,7 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "last expanded 2099-03-18 10:05:00 UTC"
     assert html =~ "supervision budget 2 · active children 1"
     assert html =~ "expansion pressure operator x1 (urgent 0/0, sat 0, avail 1)"
+    assert html =~ "expansion severity medium · delay 15s"
     assert html =~ "expansion deferred"
     assert html =~ "cooldown until 2099-03-18 10:25:00 UTC"
 

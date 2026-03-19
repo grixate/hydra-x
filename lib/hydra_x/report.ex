@@ -935,6 +935,7 @@ defmodule HydraX.Report do
           delegation_batch_budget_detail(snapshot),
           delegation_expansion_history_detail(snapshot),
           delegation_expansion_pressure_detail(snapshot),
+          delegation_expansion_severity_detail(snapshot),
           delegation_expansion_cooldown_detail(snapshot),
           "delegation_strategy=#{snapshot["batch_strategy"] || "ordered"}",
           "delegation_concurrency=#{snapshot["batch_concurrency"] || 1}",
@@ -1066,6 +1067,16 @@ defmodule HydraX.Report do
   end
 
   defp delegation_expansion_pressure_detail(_snapshot), do: nil
+
+  defp delegation_expansion_severity_detail(%{
+         "expansion_pressure_severity" => severity,
+         "expansion_delay_seconds" => delay_seconds
+       })
+       when is_binary(severity) and is_integer(delay_seconds) do
+    "delegation_expansion_severity=#{severity} delegation_expansion_delay=#{delay_seconds}"
+  end
+
+  defp delegation_expansion_severity_detail(_snapshot), do: nil
 
   defp delegation_expansion_cooldown_detail(%{"expansion_deferred_until" => value})
        when not is_nil(value) do
