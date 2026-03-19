@@ -311,6 +311,8 @@ defmodule HydraX.Report do
 
   defp render_role_queue_dispatch_pass(pass) do
     processed = render_scheduler_count(pass, "processed_count")
+    delegation_expanded = render_scheduler_count(pass, "delegation_expanded_count")
+    delegation_deferred = render_scheduler_count(pass, "delegation_deferred_count")
     required_role_prioritized = render_scheduler_count(pass, "required_role_prioritized_count")
     pressure_skipped = render_scheduler_count(pass, "pressure_skipped_count")
     remote_owned = render_scheduler_count(pass, "remote_owned_count")
@@ -318,7 +320,7 @@ defmodule HydraX.Report do
     errors = render_scheduler_count(pass, "error_count")
     owner = render_scheduler_owner(pass) || "unknown"
 
-    "processed=#{processed}; required_role_prioritized=#{required_role_prioritized}; pressure_skipped=#{pressure_skipped}; remote_owned=#{remote_owned}; skipped=#{skipped}; errors=#{errors}; owner=#{owner}"
+    "processed=#{processed}; delegation_expanded=#{delegation_expanded}; delegation_deferred=#{delegation_deferred}; required_role_prioritized=#{required_role_prioritized}; pressure_skipped=#{pressure_skipped}; remote_owned=#{remote_owned}; skipped=#{skipped}; errors=#{errors}; owner=#{owner}"
   end
 
   defp render_role_queue_backlog_summary(entries) do

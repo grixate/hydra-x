@@ -2414,6 +2414,8 @@ defmodule HydraX.Runtime.WorkItems do
     %{
       owner: owner,
       processed_count: 0,
+      delegation_expanded_count: 0,
+      delegation_deferred_count: 0,
       pressure_skipped_count: 0,
       required_role_prioritized_count: 0,
       remote_owned_count: 0,
@@ -2686,6 +2688,12 @@ defmodule HydraX.Runtime.WorkItems do
     %{
       acc
       | processed_count: acc.processed_count + processed_increment,
+        delegation_expanded_count:
+          acc.delegation_expanded_count +
+            if(action == "delegated_batch_expanded", do: 1, else: 0),
+        delegation_deferred_count:
+          acc.delegation_deferred_count +
+            if(action == "delegation_batch_deferred", do: 1, else: 0),
         required_role_prioritized_count:
           acc.required_role_prioritized_count +
             if(priority[:priority_reason] == "required_role", do: 1, else: 0),

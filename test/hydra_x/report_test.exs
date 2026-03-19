@@ -276,6 +276,8 @@ defmodule HydraX.ReportTest do
     Runtime.Jobs.record_scheduler_pass(:role_queue_dispatches, %{
       owner: "node:report",
       processed_count: 3,
+      delegation_expanded_count: 1,
+      delegation_deferred_count: 1,
       required_role_prioritized_count: 1,
       pressure_skipped_count: 1,
       remote_owned_count: 2,
@@ -316,6 +318,8 @@ defmodule HydraX.ReportTest do
     assert snapshot.scheduler.assignment_recoveries.executed_count == 1
     assert snapshot.scheduler.assignment_recoveries.queued_count == 1
     assert snapshot.scheduler.role_queue_dispatches.processed_count == 3
+    assert snapshot.scheduler.role_queue_dispatches.delegation_expanded_count == 1
+    assert snapshot.scheduler.role_queue_dispatches.delegation_deferred_count == 1
     assert snapshot.scheduler.role_queue_dispatches.required_role_prioritized_count == 1
     assert snapshot.scheduler.role_queue_dispatches.pressure_skipped_count == 1
     assert snapshot.scheduler.role_queue_dispatches.remote_owned_count == 2
@@ -1304,6 +1308,7 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "Ingress replay:"
     assert File.read!(export.markdown_path) =~ "Stale claim cleanup:"
     assert File.read!(export.markdown_path) =~ "Assignment recovery:"
+    assert File.read!(export.markdown_path) =~ "Role queue dispatch:"
     assert File.read!(export.markdown_path) =~ "Work item replay:"
     assert File.read!(export.markdown_path) =~ "Ownership replay:"
     assert File.read!(export.markdown_path) =~ "Deferred delivery replay:"

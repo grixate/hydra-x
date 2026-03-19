@@ -8087,6 +8087,62 @@ defmodule HydraX.RuntimeTest do
     assert is_nil(plain_role_work.assigned_agent_id)
   end
 
+  test "role queue dispatch reports planner delegation expansions" do
+    planner =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, planner} = Runtime.save_agent(planner, %{"role" => "planner"})
+
+    researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, researcher} = Runtime.save_agent(researcher, %{"role" => "researcher"})
+
+    {:ok, parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Expand a blocked delegation batch through role queue dispatch.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "execution_mode" => "delegate",
+        "priority" => 12,
+        "metadata" => %{
+          "delegate_batch_concurrency" => 1,
+          "delegate_batch" => [
+            %{"goal" => "Gather the first required research finding.", "role" => "researcher"},
+            %{"goal" => "Gather the second required research finding.", "role" => "researcher"}
+          ]
+        }
+      })
+
+    assert {:ok, initial} = Runtime.run_autonomy_cycle(planner.id)
+    assert initial.action == "delegated"
+    assert length(initial.delegated_work_items) == 1
+
+    assert {:ok, researcher_result} = Runtime.run_autonomy_cycle(researcher.id)
+    assert researcher_result.action == "researched"
+
+    summary = Runtime.process_role_queued_work(limit: 1)
+
+    assert summary.processed_count == 1
+    assert summary.delegation_expanded_count == 1
+    assert summary.delegation_deferred_count == 0
+
+    assert Enum.any?(
+             summary.results,
+             &(&1[:agent_id] == planner.id and &1[:action] == "delegated_batch_expanded")
+           )
+
+    parent = Runtime.get_work_item!(parent.id)
+    batch = Runtime.delegation_batch_snapshot(parent)
+
+    assert batch["expansion_count"] >= 1
+    assert batch["active_count"] == 1
+    assert batch["pending_count"] == 0
+  end
+
   test "role queue dispatch skips saturated workers until capacity is available" do
     saturated_researcher =
       create_agent()
