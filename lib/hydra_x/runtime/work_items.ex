@@ -918,6 +918,21 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp delegation_role_capacity_from_worker_pressure(_entries), do: %{}
 
+  defp blocked_delegation_batches_for_agent(%AgentProfile{} = agent) do
+    WorkItem
+    |> where(
+      [work_item],
+      work_item.status == "blocked" and
+        work_item.execution_mode == "delegate" and
+        (work_item.assigned_agent_id == ^agent.id or
+           (is_nil(work_item.assigned_agent_id) and work_item.assigned_role == ^agent.role))
+    )
+    |> order_by([work_item], desc: work_item.priority, asc: work_item.inserted_at)
+    |> limit(20)
+    |> Repo.all()
+    |> Enum.map(fn work_item -> {work_item, delegation_batch_snapshot(work_item)} end)
+  end
+
   defp list_autonomy_agents do
     Agents.list_agents()
     |> Enum.filter(&(Map.get(capability_profile(&1), "max_autonomy_level") != "observe"))
@@ -964,6 +979,25 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp delegation_batch_supervision_budget(_work_item), do: nil
+
+  defp delegation_initial_dispatch_budget(%AgentProfile{} = agent, %WorkItem{} = work_item) do
+    blocked_batches = blocked_delegation_batches_for_agent(agent)
+    seeded_snapshot = build_delegation_batch_snapshot(work_item, [])
+
+    supervision_budget =
+      delegation_supervision_budget(
+        agent,
+        blocked_batches ++ [{work_item, seeded_snapshot}],
+        list_autonomy_agents()
+      )
+
+    active_children =
+      Enum.reduce(blocked_batches, 0, fn {_blocked_work_item, snapshot}, acc ->
+        acc + (snapshot["active_count"] || 0)
+      end)
+
+    {supervision_budget, active_children, max(supervision_budget - active_children, 0)}
+  end
 
   defp aggregate_constrained_pending_roles(snapshots, role_capacity) do
     snapshots
@@ -1086,19 +1120,7 @@ defmodule HydraX.Runtime.WorkItems do
   defp maybe_expand_blocked_delegation_batch(agent, _opts) do
     role_capacity = delegation_role_capacity()
 
-    all_blocked_batches =
-      WorkItem
-      |> where(
-        [work_item],
-        work_item.status == "blocked" and
-          work_item.execution_mode == "delegate" and
-          (work_item.assigned_agent_id == ^agent.id or
-             (is_nil(work_item.assigned_agent_id) and work_item.assigned_role == ^agent.role))
-      )
-      |> order_by([work_item], desc: work_item.priority, asc: work_item.inserted_at)
-      |> limit(20)
-      |> Repo.all()
-      |> Enum.map(fn work_item -> {work_item, delegation_batch_snapshot(work_item)} end)
+    all_blocked_batches = blocked_delegation_batches_for_agent(agent)
 
     blocked_batches =
       all_blocked_batches
@@ -2413,15 +2435,23 @@ defmodule HydraX.Runtime.WorkItems do
 
     seeded_work_item = %{work_item | metadata: seeded_metadata}
 
+    {supervision_budget, active_children, remaining_budget} =
+      delegation_initial_dispatch_budget(agent, seeded_work_item)
+
     delegated_children =
       seeded_work_item
-      |> select_delegation_batch_entries_for_dispatch(entries, concurrency)
+      |> select_delegation_batch_entries_for_dispatch(entries, min(concurrency, remaining_budget))
       |> Enum.map(&dispatch_delegated_batch_item(seeded_work_item, agent, &1))
 
     children = Enum.map(delegated_children, & &1.child)
 
     batch_snapshot =
       build_delegation_batch_snapshot(seeded_work_item, children, delegated_children)
+      |> maybe_defer_initial_delegation_batch(
+        supervision_budget,
+        active_children,
+        remaining_budget
+      )
 
     first_child = List.first(children)
 
@@ -5166,6 +5196,37 @@ defmodule HydraX.Runtime.WorkItems do
   defp delegation_batch_expansion_delay_seconds do
     max(div(Config.scheduler_poll_ms() * 2, 1000), 5)
   end
+
+  defp maybe_defer_initial_delegation_batch(
+         %{} = snapshot,
+         supervision_budget,
+         active_children,
+         remaining_budget
+       )
+       when is_integer(supervision_budget) and is_integer(active_children) and
+              remaining_budget <= 0 do
+    if (snapshot["pending_count"] || 0) > 0 and (snapshot["active_count"] || 0) == 0 do
+      deferred_until =
+        DateTime.utc_now()
+        |> DateTime.add(delegation_batch_expansion_delay_seconds(), :second)
+
+      snapshot
+      |> Map.put("expansion_deferred_until", deferred_until)
+      |> Map.put("expansion_deferred_reason", "planner_budget_constrained")
+      |> Map.put("supervision_budget", supervision_budget)
+      |> Map.put("supervision_active_children", active_children)
+    else
+      snapshot
+    end
+  end
+
+  defp maybe_defer_initial_delegation_batch(
+         snapshot,
+         _budget,
+         _active_children,
+         _remaining_budget
+       ),
+       do: snapshot
 
   defp maybe_put_snapshot_metric(snapshot, _key, nil), do: snapshot
 

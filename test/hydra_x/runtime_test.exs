@@ -3972,7 +3972,7 @@ defmodule HydraX.RuntimeTest do
       create_agent()
       |> then(&Runtime.get_agent!(&1.id))
 
-    {:ok, researcher} = Runtime.save_agent(researcher, %{"role" => "researcher"})
+    {:ok, _researcher} = Runtime.save_agent(researcher, %{"role" => "researcher"})
 
     {:ok, _memory} =
       Memory.create_memory(%{
@@ -4521,7 +4521,7 @@ defmodule HydraX.RuntimeTest do
     assert %DateTime{} = refreshed_second["last_expanded_at"]
   end
 
-  test "planner defers expansion when another blocked batch already consumes the shared supervision budget" do
+  test "planner seeds a blocked delegation batch without dispatching children when the shared supervision budget is already exhausted" do
     planner =
       create_agent()
       |> then(&Runtime.get_agent!(&1.id))
@@ -4532,12 +4532,12 @@ defmodule HydraX.RuntimeTest do
       create_agent()
       |> then(&Runtime.get_agent!(&1.id))
 
-    {:ok, researcher} = Runtime.save_agent(researcher, %{"role" => "researcher"})
+    {:ok, _researcher} = Runtime.save_agent(researcher, %{"role" => "researcher"})
 
-    {:ok, first_parent} =
+    {:ok, active_parent} =
       Runtime.save_work_item(%{
         "kind" => "research",
-        "goal" => "Supervise the first budget-constrained branch.",
+        "goal" => "Supervise the already active branch.",
         "assigned_agent_id" => planner.id,
         "assigned_role" => "planner",
         "execution_mode" => "delegate",
@@ -4546,16 +4546,16 @@ defmodule HydraX.RuntimeTest do
           "delegate_supervision_budget" => 1,
           "delegate_batch_concurrency" => 1,
           "delegate_batch" => [
-            %{"goal" => "Research first constrained branch A.", "role" => "researcher"},
-            %{"goal" => "Research second constrained branch A.", "role" => "researcher"}
+            %{"goal" => "Research active branch A.", "role" => "researcher"},
+            %{"goal" => "Research active branch B.", "role" => "researcher"}
           ]
         }
       })
 
-    {:ok, second_parent} =
+    {:ok, queued_parent} =
       Runtime.save_work_item(%{
         "kind" => "research",
-        "goal" => "Supervise the second budget-constrained branch.",
+        "goal" => "Supervise the queued branch.",
         "assigned_agent_id" => planner.id,
         "assigned_role" => "planner",
         "execution_mode" => "delegate",
@@ -4564,35 +4564,33 @@ defmodule HydraX.RuntimeTest do
           "delegate_supervision_budget" => 1,
           "delegate_batch_concurrency" => 1,
           "delegate_batch" => [
-            %{"goal" => "Research first constrained branch B.", "role" => "researcher"},
-            %{"goal" => "Research second constrained branch B.", "role" => "researcher"}
+            %{"goal" => "Research queued branch A.", "role" => "researcher"},
+            %{"goal" => "Research queued branch B.", "role" => "researcher"}
           ]
         }
       })
 
-    assert {:ok, delegated_first} = Runtime.run_autonomy_cycle(planner.id)
-    assert delegated_first.action == "delegated"
+    assert {:ok, delegated_active} = Runtime.run_autonomy_cycle(planner.id)
+    assert delegated_active.action == "delegated"
+    assert length(delegated_active.delegated_work_items) == 1
 
-    assert {:ok, delegated_second} = Runtime.run_autonomy_cycle(planner.id)
-    assert delegated_second.action == "delegated"
+    assert {:ok, delegated_queued} = Runtime.run_autonomy_cycle(planner.id)
+    assert delegated_queued.action == "delegated"
+    assert delegated_queued.delegated_work_items == []
 
-    assert {:ok, researcher_cycle} = Runtime.run_autonomy_cycle(researcher.id)
-    assert researcher_cycle.action == "researched"
+    active_snapshot = Runtime.delegation_batch_snapshot(Runtime.get_work_item!(active_parent.id))
+    queued_work_item = Runtime.get_work_item!(queued_parent.id)
+    queued_snapshot = Runtime.delegation_batch_snapshot(queued_work_item)
 
-    assert {:ok, deferred} = Runtime.run_autonomy_cycle(planner.id)
-    assert deferred.action == "delegation_batch_deferred"
-    assert deferred.reason == "planner_budget_constrained"
-
-    refreshed_parent = Runtime.get_work_item!(first_parent.id)
-    sibling_parent = Runtime.get_work_item!(second_parent.id)
-    batch_snapshot = Runtime.delegation_batch_snapshot(refreshed_parent)
-    sibling_snapshot = Runtime.delegation_batch_snapshot(sibling_parent)
-
-    assert batch_snapshot["pending_count"] == 1
-    assert batch_snapshot["expansion_deferred_reason"] == "planner_budget_constrained"
-    assert batch_snapshot["supervision_budget"] == 1
-    assert batch_snapshot["supervision_active_children"] == 1
-    assert sibling_snapshot["active_count"] == 1
+    assert active_snapshot["active_count"] == 1
+    assert queued_work_item.status == "blocked"
+    assert queued_work_item.result_refs["child_work_item_ids"] == []
+    assert queued_snapshot["pending_count"] == 2
+    assert queued_snapshot["active_count"] == 0
+    assert queued_snapshot["expansion_deferred_reason"] == "planner_budget_constrained"
+    assert queued_snapshot["supervision_budget"] == 1
+    assert queued_snapshot["supervision_active_children"] == 1
+    assert %DateTime{} = queued_snapshot["expansion_deferred_until"]
   end
 
   test "planner expands the delegation batch with healthier pending role capacity first" do
