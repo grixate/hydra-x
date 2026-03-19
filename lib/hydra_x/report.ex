@@ -934,6 +934,7 @@ defmodule HydraX.Report do
           delegation_supervision_budget_detail(snapshot),
           delegation_batch_budget_detail(snapshot),
           delegation_expansion_history_detail(snapshot),
+          delegation_expansion_pressure_detail(snapshot),
           delegation_expansion_cooldown_detail(snapshot),
           "delegation_strategy=#{snapshot["batch_strategy"] || "ordered"}",
           "delegation_concurrency=#{snapshot["batch_concurrency"] || 1}",
@@ -1045,6 +1046,26 @@ defmodule HydraX.Report do
   end
 
   defp delegation_expansion_history_detail(_snapshot), do: nil
+
+  defp delegation_expansion_pressure_detail(%{"expansion_pressure_snapshot" => pressure_map})
+       when is_map(pressure_map) and map_size(pressure_map) > 0 do
+    pressure_map =
+      pressure_map
+      |> Enum.sort_by(fn {role, _pressure} -> role end)
+      |> Enum.map_join(",", fn {role, pressure} ->
+        pending = pressure["pending_count"] || 0
+        urgent_queued = pressure["urgent_queued_count"] || 0
+        urgent_deferred = pressure["urgent_deferred_count"] || 0
+        available = (pressure["idle_workers"] || 0) + (pressure["available_workers"] || 0)
+        saturated = pressure["saturated_workers"] || 0
+
+        "#{role}:pending=#{pending}:urgent=#{urgent_queued}/#{urgent_deferred}:sat=#{saturated}:avail=#{available}"
+      end)
+
+    "delegation_expansion_pressure=#{pressure_map}"
+  end
+
+  defp delegation_expansion_pressure_detail(_snapshot), do: nil
 
   defp delegation_expansion_cooldown_detail(%{"expansion_deferred_until" => value})
        when not is_nil(value) do

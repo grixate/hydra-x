@@ -2499,6 +2499,7 @@ defmodule HydraXWeb.HealthLive do
           autonomy_delegation_supervision_budget_line(snapshot),
           autonomy_delegation_batch_budget_line(snapshot),
           autonomy_delegation_expansion_history_line(snapshot),
+          autonomy_delegation_expansion_pressure_line(snapshot),
           autonomy_delegation_expansion_cooldown_line(snapshot)
         ]
         |> Enum.reject(&is_nil_or_empty/1)
@@ -2641,6 +2642,28 @@ defmodule HydraXWeb.HealthLive do
   end
 
   defp autonomy_delegation_expansion_history_line(_snapshot), do: nil
+
+  defp autonomy_delegation_expansion_pressure_line(%{
+         "expansion_pressure_snapshot" => pressure_map
+       })
+       when is_map(pressure_map) and map_size(pressure_map) > 0 do
+    pressure_map =
+      pressure_map
+      |> Enum.sort_by(fn {role, _pressure} -> role end)
+      |> Enum.map_join(", ", fn {role, pressure} ->
+        pending = pressure["pending_count"] || 0
+        urgent_queued = pressure["urgent_queued_count"] || 0
+        urgent_deferred = pressure["urgent_deferred_count"] || 0
+        available = (pressure["idle_workers"] || 0) + (pressure["available_workers"] || 0)
+        saturated = pressure["saturated_workers"] || 0
+
+        "#{role} x#{pending} (urgent #{urgent_queued}/#{urgent_deferred}, sat #{saturated}, avail #{available})"
+      end)
+
+    "expansion pressure #{pressure_map}"
+  end
+
+  defp autonomy_delegation_expansion_pressure_line(_snapshot), do: nil
 
   defp autonomy_delegation_expansion_cooldown_line(%{"expansion_deferred_until" => value})
        when not is_nil(value) do

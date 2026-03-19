@@ -1439,12 +1439,16 @@ defmodule HydraX.Runtime.WorkItems do
       match?({%WorkItem{}, %{}}, constrained_parent) ->
         {work_item, snapshot} = constrained_parent
         capacity_score = delegation_pending_role_capacity_score(snapshot, role_capacity)
+        pressure_snapshot = delegation_pending_role_pressure_snapshot(snapshot, role_capacity)
 
         defer_blocked_delegation_batch(
           work_item,
           snapshot,
           "role_capacity_constrained",
-          %{"capacity_score" => capacity_score}
+          %{
+            "capacity_score" => capacity_score,
+            "pressure_snapshot" => pressure_snapshot
+          }
         )
 
       true ->
@@ -1717,6 +1721,7 @@ defmodule HydraX.Runtime.WorkItems do
         |> Map.put("expansion_deferred_until", deferred_until)
         |> Map.put("expansion_deferred_reason", reason)
         |> maybe_put_snapshot_metric("expansion_capacity_score", attrs["capacity_score"])
+        |> maybe_put_snapshot_metric("expansion_pressure_snapshot", attrs["pressure_snapshot"])
         |> maybe_put_snapshot_metric("supervision_budget", attrs["supervision_budget"])
         |> maybe_put_snapshot_metric("supervision_active_children", attrs["active_children"])
         |> maybe_put_snapshot_metric(
@@ -1736,6 +1741,7 @@ defmodule HydraX.Runtime.WorkItems do
                  "reason" => reason,
                  "deferred_until" => deferred_until,
                  "capacity_score" => attrs["capacity_score"],
+                 "pressure_snapshot" => attrs["pressure_snapshot"],
                  "supervision_budget" => attrs["supervision_budget"],
                  "active_children" => attrs["active_children"],
                  "supervision_batch_budget" => attrs["supervision_batch_budget"],
@@ -5351,6 +5357,7 @@ defmodule HydraX.Runtime.WorkItems do
           parse_datetime(metadata_snapshot["expansion_deferred_until"]),
         "expansion_deferred_reason" => metadata_snapshot["expansion_deferred_reason"],
         "expansion_capacity_score" => metadata_snapshot["expansion_capacity_score"],
+        "expansion_pressure_snapshot" => metadata_snapshot["expansion_pressure_snapshot"],
         "roles" => roles,
         "items" => child_entries,
         "child_work_item_ids" =>
@@ -5369,6 +5376,7 @@ defmodule HydraX.Runtime.WorkItems do
     |> Map.put("expansion_deferred_until", nil)
     |> Map.put("expansion_deferred_reason", nil)
     |> Map.put("expansion_capacity_score", nil)
+    |> Map.put("expansion_pressure_snapshot", nil)
     |> Map.put("supervision_active_children", nil)
   end
 
@@ -5839,6 +5847,28 @@ defmodule HydraX.Runtime.WorkItems do
           ) * 0.25
 
       acc + count * available_workers
+    end)
+  end
+
+  defp delegation_pending_role_pressure_snapshot(%{} = snapshot, role_capacity) do
+    snapshot
+    |> Map.get("pending_roles", %{})
+    |> Enum.reduce(%{}, fn {role, count}, acc ->
+      pressure = Map.get(role_capacity, role, %{})
+
+      Map.put(acc, role, %{
+        "pending_count" => count,
+        "idle_workers" => pressure[:idle_workers] || pressure["idle_workers"] || 0,
+        "available_workers" => pressure[:available_workers] || pressure["available_workers"] || 0,
+        "busy_workers" => pressure[:busy_workers] || pressure["busy_workers"] || 0,
+        "saturated_workers" => pressure[:saturated_workers] || pressure["saturated_workers"] || 0,
+        "urgent_queued_count" =>
+          pressure[:urgent_shared_role_queue_count] ||
+            pressure["urgent_shared_role_queue_count"] || 0,
+        "urgent_deferred_count" =>
+          pressure[:urgent_deferred_role_queue_count] ||
+            pressure["urgent_deferred_role_queue_count"] || 0
+      })
     end)
   end
 
