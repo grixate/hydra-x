@@ -708,6 +708,11 @@ defmodule HydraX.Runtime.WorkItems do
         acc + delegation_pressure_batch_count(entry, :medium)
       end)
 
+    delegation_repeatedly_deferred_batch_count =
+      Enum.reduce(delegation_supervision, 0, fn entry, acc ->
+        acc + (entry.repeatedly_deferred_batches || 0)
+      end)
+
     capability_drifts =
       autonomy_agents
       |> Enum.map(fn agent ->
@@ -750,6 +755,7 @@ defmodule HydraX.Runtime.WorkItems do
       delegation_required_role_gap_count: delegation_required_role_gap_count,
       delegation_high_pressure_batch_count: delegation_high_pressure_batch_count,
       delegation_medium_pressure_batch_count: delegation_medium_pressure_batch_count,
+      delegation_repeatedly_deferred_batch_count: delegation_repeatedly_deferred_batch_count,
       autonomy_agent_count: length(autonomy_agents),
       active_roles: autonomy_agents |> Enum.map(& &1.role) |> Enum.frequencies(),
       role_queue_backlog: role_queue_backlog,
@@ -944,6 +950,18 @@ defmodule HydraX.Runtime.WorkItems do
       constrained_role_pressure = constrained_role_pressure(constrained_roles, role_capacity)
       missing_required_roles = aggregate_missing_completion_roles(snapshots)
       deferred_batches = Enum.count(snapshots, &delegation_batch_expansion_deferred?/1)
+
+      repeatedly_deferred_batches =
+        Enum.count(snapshots, &delegation_batch_repeatedly_deferred?/1)
+
+      total_expansion_deferrals =
+        Enum.reduce(snapshots, 0, &((&1["expansion_deferred_count"] || 0) + &2))
+
+      max_expansion_deferrals =
+        snapshots
+        |> Enum.map(&(&1["expansion_deferred_count"] || 0))
+        |> Enum.max(fn -> 0 end)
+
       pressure_batches = delegation_pressure_batch_counts(snapshots)
 
       urgent_batches =
@@ -969,6 +987,9 @@ defmodule HydraX.Runtime.WorkItems do
         terminal_children: Enum.reduce(snapshots, 0, &((&1["terminal_count"] || 0) + &2)),
         constrained_roles: constrained_roles,
         constrained_role_pressure: constrained_role_pressure,
+        repeatedly_deferred_batches: repeatedly_deferred_batches,
+        total_expansion_deferrals: total_expansion_deferrals,
+        max_expansion_deferrals: max_expansion_deferrals,
         missing_required_roles: missing_required_roles,
         required_role_gap_count:
           Enum.reduce(missing_required_roles, 0, fn {_role, count}, acc -> acc + count end),
@@ -988,6 +1009,8 @@ defmodule HydraX.Runtime.WorkItems do
       {
         -delegation_pressure_batch_count(entry, :high),
         -delegation_pressure_batch_count(entry, :medium),
+        -(entry.repeatedly_deferred_batches || 0),
+        -(entry.max_expansion_deferrals || 0),
         -(entry.urgent_batches || 0),
         -(entry.active_batches || 0),
         -(entry.pending_children || 0),
@@ -1012,6 +1035,12 @@ defmodule HydraX.Runtime.WorkItems do
       end
     end)
   end
+
+  defp delegation_batch_repeatedly_deferred?(%{} = snapshot) do
+    (snapshot["expansion_deferred_count"] || 0) > 1
+  end
+
+  defp delegation_batch_repeatedly_deferred?(_snapshot), do: false
 
   defp delegation_role_capacity_from_worker_pressure(entries) when is_list(entries) do
     entries

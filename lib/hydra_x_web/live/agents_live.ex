@@ -1393,6 +1393,13 @@ defmodule HydraXWeb.AgentsLive do
           ),
         pressure_batches:
           merge_pressure_batch_counts(acc[:pressure_batches], entry[:pressure_batches]),
+        repeatedly_deferred_batches:
+          (acc[:repeatedly_deferred_batches] || 0) +
+            (entry[:repeatedly_deferred_batches] || 0),
+        total_expansion_deferrals:
+          (acc[:total_expansion_deferrals] || 0) + (entry[:total_expansion_deferrals] || 0),
+        max_expansion_deferrals:
+          max(acc[:max_expansion_deferrals] || 0, entry[:max_expansion_deferrals] || 0),
         required_role_gap_count:
           (acc[:required_role_gap_count] || 0) + (entry[:required_role_gap_count] || 0),
         urgent_batches: (acc[:urgent_batches] || 0) + (entry[:urgent_batches] || 0),
@@ -1536,6 +1543,7 @@ defmodule HydraXWeb.AgentsLive do
       delegation_supervision_urgent_batches_label(summary),
       delegation_supervision_missing_roles_label(summary),
       delegation_supervision_pressure_label(summary),
+      delegation_supervision_deferral_pressure_label(summary),
       delegation_deferred_batches_label(summary[:deferred_batches] || 0),
       "pending #{summary[:pending_children] || 0}",
       "active #{summary[:active_children] || 0}",
@@ -1621,6 +1629,17 @@ defmodule HydraXWeb.AgentsLive do
   end
 
   defp delegation_supervision_pressure_label(_summary), do: nil
+
+  defp delegation_supervision_deferral_pressure_label(summary) when is_map(summary) do
+    repeated = summary[:repeatedly_deferred_batches] || 0
+    max_deferrals = summary[:max_expansion_deferrals] || 0
+
+    if repeated > 0 or max_deferrals > 1 do
+      "repeat deferrals #{repeated} · max #{max_deferrals}"
+    end
+  end
+
+  defp delegation_supervision_deferral_pressure_label(_summary), do: nil
 
   defp delegation_deferred_batches_label(count) when is_integer(count) and count > 0,
     do: "deferred #{count}"

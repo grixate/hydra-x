@@ -1343,7 +1343,8 @@ defmodule HydraXWeb.HealthLive do
             <p class="mt-1 text-xs text-[var(--hx-mute)]">
               urgent batches {@autonomy_status.delegation_urgent_batch_count || 0} · high pressure{" "}
               {@autonomy_status.delegation_high_pressure_batch_count || 0} · medium pressure{" "}
-              {@autonomy_status.delegation_medium_pressure_batch_count || 0}
+              {@autonomy_status.delegation_medium_pressure_batch_count || 0} · repeat
+              deferrals {@autonomy_status.delegation_repeatedly_deferred_batch_count || 0}
             </p>
           </article>
         </div>
@@ -1530,6 +1531,9 @@ defmodule HydraXWeb.HealthLive do
                   </span>
                   <span :if={autonomy_delegation_pressure_label(entry)}>
                     {" "}· {autonomy_delegation_pressure_label(entry)}
+                  </span>
+                  <span :if={autonomy_delegation_deferral_pressure_label(entry)}>
+                    {" "}· {autonomy_delegation_deferral_pressure_label(entry)}
                   </span>
                   <span :if={
                     is_integer(entry.supervision_budget) and
@@ -2726,6 +2730,17 @@ defmodule HydraXWeb.HealthLive do
   end
 
   defp autonomy_delegation_pressure_label(_entry), do: nil
+
+  defp autonomy_delegation_deferral_pressure_label(entry) when is_map(entry) do
+    repeated = entry[:repeatedly_deferred_batches] || 0
+    max_deferrals = entry[:max_expansion_deferrals] || 0
+
+    if repeated > 0 or max_deferrals > 1 do
+      "repeat deferrals #{repeated} · max #{max_deferrals}"
+    end
+  end
+
+  defp autonomy_delegation_deferral_pressure_label(_entry), do: nil
 
   defp assignment_strategy_label("role_capability_match"), do: "role capability match"
   defp assignment_strategy_label("capability_fallback"), do: "capability fallback"
