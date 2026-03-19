@@ -218,12 +218,15 @@ defmodule HydraX.Report do
     #{render_conversations(snapshot.conversations)}
 
     ## Autonomous Work Items
-    - active_jobs=#{snapshot.autonomy.active_autonomy_job_count} unsafe_requests=#{snapshot.autonomy.unsafe_request_count} budget_blocked=#{snapshot.autonomy.budget_blocked_count} auto_assigned=#{snapshot.autonomy.auto_assigned_count} fallback_assigned=#{snapshot.autonomy.capability_fallback_count} role_only_open=#{snapshot.autonomy.role_only_open_count} active_claimed=#{snapshot.autonomy.active_claimed_count} stale_claimed=#{snapshot.autonomy.stale_claimed_count} remote_claimed=#{snapshot.autonomy.remote_claimed_count} orphaned_assignments=#{snapshot.autonomy.orphaned_assignment_count} deferred_role_backlog=#{snapshot.autonomy.deferred_role_queue_count || 0} role_backlog=#{render_role_queue_backlog_summary(snapshot.autonomy.role_queue_backlog)} saturated_workers=#{Enum.count(snapshot.autonomy.worker_pressure, &(&1.capacity_posture == "saturated"))} capability_drift=#{length(snapshot.autonomy.capability_drifts)}
+    - active_jobs=#{snapshot.autonomy.active_autonomy_job_count} unsafe_requests=#{snapshot.autonomy.unsafe_request_count} budget_blocked=#{snapshot.autonomy.budget_blocked_count} auto_assigned=#{snapshot.autonomy.auto_assigned_count} fallback_assigned=#{snapshot.autonomy.capability_fallback_count} role_only_open=#{snapshot.autonomy.role_only_open_count} active_claimed=#{snapshot.autonomy.active_claimed_count} stale_claimed=#{snapshot.autonomy.stale_claimed_count} remote_claimed=#{snapshot.autonomy.remote_claimed_count} orphaned_assignments=#{snapshot.autonomy.orphaned_assignment_count} deferred_role_backlog=#{snapshot.autonomy.deferred_role_queue_count || 0} role_backlog=#{render_role_queue_backlog_summary(snapshot.autonomy.role_queue_backlog)} saturated_workers=#{Enum.count(snapshot.autonomy.worker_pressure, &(&1.capacity_posture == "saturated"))} delegation_batches=#{Enum.reduce(snapshot.autonomy.delegation_supervision || [], 0, &(&1.active_batches + &2))} capability_drift=#{length(snapshot.autonomy.capability_drifts)}
     ### Role Queue Backlog
     #{render_role_queue_backlog(snapshot.autonomy.role_queue_backlog)}
 
     ### Worker Pressure
     #{render_worker_pressure(snapshot.autonomy.worker_pressure)}
+
+    ### Delegation Supervision
+    #{render_delegation_supervision(snapshot.autonomy.delegation_supervision)}
     #{render_work_items(snapshot.work_items)}
 
     ## Observability
@@ -353,6 +356,30 @@ defmodule HydraX.Report do
       items ->
         Enum.map_join(items, "\n", fn entry ->
           "- #{entry.agent_name} (#{entry.role}): posture=#{entry.capacity_posture} open=#{entry.assigned_open_count} claims=#{entry.active_claimed_count} stale=#{entry.stale_claimed_count} blocked=#{entry.blocked_count} failed=#{entry.failed_count} shared_backlog=#{entry.shared_role_queue_count}"
+        end)
+    end
+  end
+
+  defp render_delegation_supervision(entries) do
+    case List.wrap(entries) do
+      [] ->
+        "- none"
+
+      entries ->
+        Enum.map_join(entries, "\n", fn entry ->
+          constrained =
+            case entry.constrained_roles || %{} do
+              constrained when constrained == %{} ->
+                nil
+
+              constrained ->
+                constrained
+                |> Enum.sort_by(fn {role, _count} -> role end)
+                |> Enum.map_join(",", fn {role, count} -> "#{role}:#{count}" end)
+                |> then(&" constrained=#{&1}")
+            end
+
+          "- #{entry.agent_name || entry.role || "planner"}: batches=#{entry.active_batches} pending=#{entry.pending_children} active=#{entry.active_children} terminal=#{entry.terminal_children} priority=#{entry.highest_priority}#{constrained || ""}"
         end)
     end
   end
@@ -1589,6 +1616,7 @@ defmodule HydraX.Report do
         active_roles: snapshot.autonomy.active_roles,
         role_queue_backlog: snapshot.autonomy.role_queue_backlog,
         worker_pressure: snapshot.autonomy.worker_pressure,
+        delegation_supervision: snapshot.autonomy.delegation_supervision,
         capability_drifts: snapshot.autonomy.capability_drifts
       },
       default_agent: %{

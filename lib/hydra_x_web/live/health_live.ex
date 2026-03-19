@@ -927,7 +927,7 @@ defmodule HydraXWeb.HealthLive do
                     · expiry {event.expired_by}
                   </span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip                                    {event.ip}</span>
+                  <span :if={event.ip}> · ip                                      {event.ip}</span>
                 </div>
               </div>
             </div>
@@ -1318,6 +1318,25 @@ defmodule HydraXWeb.HealthLive do
               )}
             </div>
           </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Delegation batches
+            </div>
+            <div class="mt-3 font-display text-4xl">
+              {Enum.reduce(
+                @autonomy_status.delegation_supervision || [],
+                0,
+                &(&1.active_batches + &2)
+              )}
+            </div>
+            <p class="mt-2 text-xs text-[var(--hx-mute)]">
+              pending children {Enum.reduce(
+                @autonomy_status.delegation_supervision || [],
+                0,
+                &(&1.pending_children + &2)
+              )}
+            </p>
+          </article>
         </div>
         <div class="mt-4 grid gap-3 lg:grid-cols-2">
           <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
@@ -1453,6 +1472,41 @@ defmodule HydraXWeb.HealthLive do
                 </div>
                 <div class="mt-2 text-xs text-[var(--hx-mute)]">
                   open {entry.assigned_open_count} · claims {entry.active_claimed_count} · stale {entry.stale_claimed_count} · blocked {entry.blocked_count} · failed {entry.failed_count} · shared backlog {entry.shared_role_queue_count}
+                </div>
+              </div>
+            </div>
+          </article>
+          <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4 lg:col-span-2">
+            <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
+              Delegation supervision
+            </div>
+            <div class="mt-3 space-y-2">
+              <p
+                :if={(@autonomy_status.delegation_supervision || []) == []}
+                class="text-sm text-[var(--hx-mute)]"
+              >
+                No blocked delegation batches are active.
+              </p>
+              <div
+                :for={entry <- @autonomy_status.delegation_supervision || []}
+                class="rounded-xl border border-white/10 bg-black/10 px-3 py-3"
+              >
+                <div class="flex items-center justify-between gap-3">
+                  <div class="text-sm text-[var(--hx-accent)]">
+                    {entry.agent_name || entry.role || "planner"}
+                  </div>
+                  <div class="text-xs text-[var(--hx-mute)]">
+                    {entry.active_batches} batches · priority {entry.highest_priority}
+                  </div>
+                </div>
+                <div class="mt-2 text-xs text-[var(--hx-mute)]">
+                  pending {entry.pending_children} · active {entry.active_children} · terminal {entry.terminal_children}
+                </div>
+                <div
+                  :if={(entry.constrained_roles || %{}) != %{}}
+                  class="mt-2 text-xs text-[var(--hx-mute)]"
+                >
+                  constrained {autonomy_delegation_constrained_roles(entry.constrained_roles)}
                 </div>
               </div>
             </div>
@@ -2415,6 +2469,15 @@ defmodule HydraXWeb.HealthLive do
   end
 
   defp autonomy_delegation_roles_line(_snapshot), do: nil
+
+  defp autonomy_delegation_constrained_roles(constrained_roles)
+       when is_map(constrained_roles) and map_size(constrained_roles) > 0 do
+    constrained_roles
+    |> Enum.sort_by(fn {role, _count} -> role end)
+    |> Enum.map_join(", ", fn {role, count} -> "#{role} x#{count}" end)
+  end
+
+  defp autonomy_delegation_constrained_roles(_constrained_roles), do: nil
 
   defp autonomy_delegation_pending_roles_line(%{"pending_roles" => pending_roles})
        when is_map(pending_roles) and map_size(pending_roles) > 0 do

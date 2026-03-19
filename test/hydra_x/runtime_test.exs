@@ -6369,6 +6369,45 @@ defmodule HydraX.RuntimeTest do
         enabled: true
       })
 
+    {:ok, delegation_parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Supervise delegation pressure for autonomy posture.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "planner",
+        "status" => "blocked",
+        "execution_mode" => "delegate",
+        "priority" => 91,
+        "metadata" => %{
+          "delegation_batch" => %{
+            "mode" => "parallel",
+            "expected_count" => 2,
+            "batch_strategy" => "balance_roles",
+            "pending_roles" => %{"researcher" => 1}
+          }
+        }
+      })
+
+    {:ok, _delegation_child_one} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Assess delegation posture evidence.",
+        "assigned_role" => "researcher",
+        "status" => "planned",
+        "priority" => 90,
+        "parent_work_item_id" => delegation_parent.id
+      })
+
+    {:ok, _delegation_child_two} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Prepare the operator-facing delegation note.",
+        "assigned_role" => "operator",
+        "status" => "completed",
+        "priority" => 89,
+        "parent_work_item_id" => delegation_parent.id
+      })
+
     status = Runtime.autonomy_status()
 
     assert status.autonomy_agent_count >= 1
@@ -6385,6 +6424,11 @@ defmodule HydraX.RuntimeTest do
     assert Enum.any?(
              status.worker_pressure,
              &(&1.agent_id == agent.id and &1.stale_claimed_count >= 1)
+           )
+
+    assert Enum.any?(
+             status.delegation_supervision,
+             &(&1.agent_id == agent.id and &1.active_batches >= 1 and &1.active_children >= 1)
            )
 
     assert Enum.any?(status.capability_drifts, &(&1.agent_id == agent.id))

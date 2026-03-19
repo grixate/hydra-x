@@ -545,6 +545,9 @@ defmodule HydraXWeb.AgentsLive do
                   <p :if={detail = worker_pressure_detail(agent.worker_pressure)}>
                     {detail}
                   </p>
+                  <p :if={detail = delegation_supervision_detail(agent.delegation_supervision)}>
+                    {detail}
+                  </p>
                   <p :if={dispatch = agent.recent_role_dispatch}>
                     {dispatch}
                   </p>
@@ -1276,6 +1279,10 @@ defmodule HydraXWeb.AgentsLive do
     autonomy_status = Runtime.autonomy_status()
     worker_pressure = Map.new(autonomy_status.worker_pressure || [], &{&1.agent_id, &1})
     role_queue_backlog = Map.new(autonomy_status.role_queue_backlog || [], &{&1.role, &1})
+
+    delegation_supervision =
+      Map.new(autonomy_status.delegation_supervision || [], &{&1.agent_id, &1})
+
     scheduler_status = Runtime.scheduler_status()
     dispatch_results = List.wrap(scheduler_status.role_queue_dispatches[:results] || [])
 
@@ -1329,6 +1336,7 @@ defmodule HydraXWeb.AgentsLive do
       )
       |> Map.put(:role_queue_backlog, role_backlog)
       |> Map.put(:worker_pressure, pressure)
+      |> Map.put(:delegation_supervision, Map.get(delegation_supervision, agent.id, %{}))
       |> Map.put(:orphaned_role_count, orphaned_role_count)
       |> Map.put(:recent_role_dispatch, recent_role_dispatch_summary(dispatch_results, agent.id))
       |> Map.put(
@@ -1384,6 +1392,33 @@ defmodule HydraXWeb.AgentsLive do
       "worker pressure open #{pressure[:assigned_open_count] || 0} · claims #{pressure[:active_claimed_count] || 0} · stale #{pressure[:stale_claimed_count] || 0} · blocked #{pressure[:blocked_count] || 0} · failed #{pressure[:failed_count] || 0}"
     end
   end
+
+  defp delegation_supervision_detail(%{active_batches: active_batches} = summary)
+       when is_integer(active_batches) and active_batches > 0 do
+    constrained_line =
+      case summary[:constrained_roles] || %{} do
+        constrained when constrained == %{} ->
+          nil
+
+        constrained ->
+          constrained
+          |> Enum.sort_by(fn {role, _count} -> role end)
+          |> Enum.map_join(", ", fn {role, count} -> "#{role} x#{count}" end)
+          |> then(&"constrained #{&1}")
+      end
+
+    [
+      "delegation supervision #{active_batches} batches",
+      "pending #{summary[:pending_children] || 0}",
+      "active #{summary[:active_children] || 0}",
+      "terminal #{summary[:terminal_children] || 0}",
+      constrained_line
+    ]
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> Enum.join(" · ")
+  end
+
+  defp delegation_supervision_detail(_summary), do: nil
 
   defp recent_role_dispatch_summary(results, agent_id) do
     agent_results = Enum.filter(results, &((&1[:agent_id] || &1["agent_id"]) == agent_id))

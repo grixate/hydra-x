@@ -367,6 +367,7 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "delegation batch 2"
     assert html =~ "strategy ordered"
     assert html =~ "delegation roles researcher, operator"
+    assert html =~ "delegation supervision 1 batches"
 
     assert html =~ "assignment Research Agent:"
     assert html =~ "exact role match"

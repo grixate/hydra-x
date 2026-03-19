@@ -666,6 +666,9 @@ defmodule HydraX.Runtime.WorkItems do
     worker_pressure =
       build_worker_pressure(all_work_items, autonomy_agents, role_queue_backlog)
 
+    delegation_supervision =
+      build_delegation_supervision(all_work_items, autonomy_agents, worker_pressure)
+
     capability_drifts =
       autonomy_agents
       |> Enum.map(fn agent ->
@@ -706,6 +709,7 @@ defmodule HydraX.Runtime.WorkItems do
       active_roles: autonomy_agents |> Enum.map(& &1.role) |> Enum.frequencies(),
       role_queue_backlog: role_queue_backlog,
       worker_pressure: worker_pressure,
+      delegation_supervision: delegation_supervision,
       capability_drifts: capability_drifts,
       recent_work_items: list_work_items(limit: 6, preload: true),
       recent_approvals: list_approval_records(limit: 6)
@@ -848,6 +852,85 @@ defmodule HydraX.Runtime.WorkItems do
     |> Enum.sort_by(fn entry ->
       {worker_capacity_rank(entry.capacity_posture), -(entry.shared_role_queue_count || 0),
        -(entry.assigned_open_count || 0), entry.agent_name || ""}
+    end)
+  end
+
+  defp build_delegation_supervision(all_work_items, autonomy_agents, worker_pressure) do
+    agents_by_id = Map.new(autonomy_agents, &{&1.id, &1})
+    role_capacity = delegation_role_capacity_from_worker_pressure(worker_pressure)
+
+    all_work_items
+    |> Enum.filter(fn work_item ->
+      work_item.status == "blocked" and work_item.execution_mode == "delegate"
+    end)
+    |> Enum.map(fn work_item ->
+      {work_item, delegation_batch_snapshot(work_item)}
+    end)
+    |> Enum.reject(fn {_work_item, snapshot} -> snapshot in [nil, %{}] end)
+    |> Enum.group_by(fn {work_item, _snapshot} ->
+      {work_item.assigned_agent_id, work_item.assigned_role}
+    end)
+    |> Enum.map(fn {{agent_id, role}, entries} ->
+      agent = Map.get(agents_by_id, agent_id)
+      snapshots = Enum.map(entries, fn {_work_item, snapshot} -> snapshot end)
+      constrained_roles = aggregate_constrained_pending_roles(snapshots, role_capacity)
+
+      %{
+        agent_id: agent_id,
+        agent_name: agent && agent.name,
+        role: role || (agent && agent.role),
+        active_batches: length(entries),
+        pending_children: Enum.reduce(snapshots, 0, &((&1["pending_count"] || 0) + &2)),
+        active_children: Enum.reduce(snapshots, 0, &((&1["active_count"] || 0) + &2)),
+        terminal_children: Enum.reduce(snapshots, 0, &((&1["terminal_count"] || 0) + &2)),
+        constrained_roles: constrained_roles,
+        highest_priority:
+          entries
+          |> Enum.map(fn {work_item, _snapshot} -> work_item.priority || 0 end)
+          |> Enum.max(fn -> 0 end)
+      }
+    end)
+    |> Enum.sort_by(fn entry ->
+      {-(entry.active_batches || 0), -(entry.pending_children || 0), entry.agent_name || "",
+       entry.role || ""}
+    end)
+  end
+
+  defp delegation_role_capacity_from_worker_pressure(entries) when is_list(entries) do
+    entries
+    |> Enum.group_by(& &1.role)
+    |> Map.new(fn {role, workers} ->
+      {role,
+       %{
+         idle_workers: Enum.count(workers, &(&1.capacity_posture == "idle")),
+         available_workers: Enum.count(workers, &(&1.capacity_posture == "available")),
+         busy_workers: Enum.count(workers, &(&1.capacity_posture == "busy")),
+         saturated_workers: Enum.count(workers, &(&1.capacity_posture == "saturated"))
+       }}
+    end)
+  end
+
+  defp delegation_role_capacity_from_worker_pressure(_entries), do: %{}
+
+  defp aggregate_constrained_pending_roles(snapshots, role_capacity) do
+    snapshots
+    |> Enum.flat_map(fn snapshot ->
+      snapshot
+      |> Map.get("pending_roles", %{})
+      |> Enum.to_list()
+    end)
+    |> Enum.reduce(%{}, fn {role, count}, acc ->
+      pressure = Map.get(role_capacity, role, %{})
+
+      available_workers =
+        (pressure[:idle_workers] || pressure["idle_workers"] || 0) +
+          (pressure[:available_workers] || pressure["available_workers"] || 0)
+
+      if count > 0 and available_workers <= 0 do
+        Map.update(acc, role, count, &(&1 + count))
+      else
+        acc
+      end
     end)
   end
 
