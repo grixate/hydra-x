@@ -1431,8 +1431,23 @@ defmodule HydraX.ReportTest do
             "mode" => "parallel",
             "expected_count" => 2,
             "roles" => ["researcher", "operator"],
+            "items" => [
+              %{
+                "child_key" => "researcher-report-routing",
+                "goal" => "Assess report export routing.",
+                "assigned_role" => "researcher",
+                "status" => "quorum_skipped"
+              },
+              %{
+                "child_key" => "operator-report-fallback",
+                "goal" => "Prepare an internal report fallback note.",
+                "assigned_role" => "operator",
+                "status" => "pending_dispatch"
+              }
+            ],
             "completion_quorum" => 1,
             "quorum_met" => true,
+            "quorum_skipped_count" => 1,
             "supervision_budget" => 2,
             "supervision_active_children" => 1,
             "expansion_count" => 1,
@@ -1444,16 +1459,6 @@ defmodule HydraX.ReportTest do
         }
       })
 
-    {:ok, _child_one} =
-      Runtime.save_work_item(%{
-        "kind" => "research",
-        "goal" => "Assess report export routing.",
-        "assigned_role" => "researcher",
-        "status" => "planned",
-        "priority" => 90,
-        "parent_work_item_id" => parent.id
-      })
-
     {:ok, _child_two} =
       Runtime.save_work_item(%{
         "kind" => "task",
@@ -1461,7 +1466,8 @@ defmodule HydraX.ReportTest do
         "assigned_role" => "operator",
         "status" => "completed",
         "priority" => 89,
-        "parent_work_item_id" => parent.id
+        "parent_work_item_id" => parent.id,
+        "metadata" => %{"delegation_batch_key" => "operator-report-fallback"}
       })
 
     {:ok, export} = Report.export_snapshot(output_root)
@@ -1469,17 +1475,18 @@ defmodule HydraX.ReportTest do
     markdown = File.read!(export.markdown_path)
     json = File.read!(Path.join(export.bundle_dir, "work_items.json"))
 
-    assert markdown =~ "delegation=parallel:2:active=1:terminal=1"
+    assert markdown =~ "delegation=parallel:2:active=0:terminal=2"
     assert markdown =~ "delegation_roles=researcher,operator"
     assert markdown =~ "delegation_completion_quorum=1 delegation_quorum_met=true"
+    assert markdown =~ "delegation_quorum_skipped=1"
     assert markdown =~ "delegation_strategy=ordered"
     assert markdown =~ "delegation_supervision_budget=2 delegation_active_children=1"
     assert markdown =~ "delegation_expansions=1 delegation_last_expanded=2099-03-18 10:05:00 UTC"
     assert markdown =~ "delegation_expansion_cooldown=2099-03-18 10:25:00 UTC"
     assert markdown =~ "Delegation Supervision"
     assert markdown =~ "deferred=1"
-    assert markdown =~ "budget=2 remaining=1"
-    assert json =~ "\"delegation_batch_summary\": \"parallel:2:active=1:terminal=1\""
+    assert markdown =~ "budget=2 remaining=2"
+    assert json =~ "\"delegation_batch_summary\": \"parallel:2:active=0:terminal=2\""
     assert File.read!(export.json_path) =~ "\"delegation_supervision\""
     assert json =~ "\"expected_count\": 2"
   end

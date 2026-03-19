@@ -4645,8 +4645,9 @@ defmodule HydraX.RuntimeTest do
 
     assert snapshot["completion_quorum"] == 1
     assert snapshot["quorum_met"] == true
-    assert snapshot["pending_count"] == 1
+    assert snapshot["pending_count"] == 0
     assert snapshot["active_count"] == 0
+    assert snapshot["quorum_skipped_count"] == 1
   end
 
   test "planner expands the delegation batch with healthier pending role capacity first" do

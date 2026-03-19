@@ -386,8 +386,23 @@ defmodule HydraXWeb.HealthLiveTest do
             "mode" => "parallel",
             "expected_count" => 2,
             "roles" => ["researcher", "operator"],
+            "items" => [
+              %{
+                "child_key" => "researcher-evidence-export",
+                "goal" => "Assess operator-facing evidence exports.",
+                "assigned_role" => "researcher",
+                "status" => "quorum_skipped"
+              },
+              %{
+                "child_key" => "operator-fallback-brief",
+                "goal" => "Prepare an internal operator fallback brief.",
+                "assigned_role" => "operator",
+                "status" => "pending_dispatch"
+              }
+            ],
             "completion_quorum" => 1,
             "quorum_met" => true,
+            "quorum_skipped_count" => 1,
             "supervision_budget" => 2,
             "supervision_active_children" => 1,
             "expansion_count" => 1,
@@ -399,16 +414,6 @@ defmodule HydraXWeb.HealthLiveTest do
         }
       })
 
-    {:ok, _delegation_child_one} =
-      Runtime.save_work_item(%{
-        "kind" => "research",
-        "goal" => "Assess operator-facing evidence exports.",
-        "assigned_role" => "researcher",
-        "status" => "planned",
-        "priority" => 90,
-        "parent_work_item_id" => delegation_parent.id
-      })
-
     {:ok, _delegation_child_two} =
       Runtime.save_work_item(%{
         "kind" => "task",
@@ -416,7 +421,8 @@ defmodule HydraXWeb.HealthLiveTest do
         "assigned_role" => "operator",
         "status" => "completed",
         "priority" => 89,
-        "parent_work_item_id" => delegation_parent.id
+        "parent_work_item_id" => delegation_parent.id,
+        "metadata" => %{"delegation_batch_key" => "operator-fallback-brief"}
       })
 
     {:ok, _job} =
@@ -468,13 +474,14 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "assignment recovery queued: worker saturated"
     assert html =~ "cooldown until 2026-03-18 10:15:00 UTC"
     assert html =~ delegation_parent.goal
-    assert html =~ "delegation batch 2 · active 1 · terminal 1"
+    assert html =~ "delegation batch 2 · active 0 · terminal 2"
     assert html =~ "strategy ordered"
     assert html =~ "delegation roles researcher, operator"
     assert html =~ "completion quorum 1 met"
-    assert html =~ "budget 2 · remaining 1"
+    assert html =~ "quorum skipped 1"
+    assert html =~ "budget 2 · remaining 2"
     assert html =~ "supervision budget 2 · active children 1"
-    assert html =~ "pending 0 · active 1 · terminal 1"
+    assert html =~ "pending 0 · active 0 · terminal 2"
     assert html =~ "expanded 1 · last expanded 2099-03-18 10:05:00 UTC"
     assert html =~ "expansion deferred · cooldown until 2099-03-18 10:25:00 UTC"
     assert html =~ "Operator confirmed the rollout."

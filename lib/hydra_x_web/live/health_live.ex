@@ -2463,6 +2463,7 @@ defmodule HydraXWeb.HealthLive do
           autonomy_delegation_roles_line(snapshot),
           autonomy_delegation_pending_roles_line(snapshot),
           autonomy_delegation_quorum_line(snapshot),
+          autonomy_delegation_quorum_skip_line(snapshot),
           autonomy_delegation_supervision_budget_line(snapshot),
           autonomy_delegation_expansion_history_line(snapshot),
           autonomy_delegation_expansion_cooldown_line(snapshot)
@@ -2516,6 +2517,13 @@ defmodule HydraXWeb.HealthLive do
   end
 
   defp autonomy_delegation_quorum_line(_snapshot), do: nil
+
+  defp autonomy_delegation_quorum_skip_line(%{"quorum_skipped_count" => count})
+       when is_integer(count) and count > 0 do
+    "quorum skipped #{count}"
+  end
+
+  defp autonomy_delegation_quorum_skip_line(_snapshot), do: nil
 
   defp autonomy_delegation_supervision_budget_line(%{
          "supervision_budget" => budget,

@@ -1859,6 +1859,7 @@ defmodule HydraXWeb.AgentsLive do
           delegation_roles_line(snapshot),
           delegation_pending_roles_line(snapshot),
           delegation_quorum_line(snapshot),
+          delegation_quorum_skip_line(snapshot),
           delegation_supervision_budget_line(snapshot),
           delegation_expansion_history_line(snapshot),
           delegation_expansion_cooldown_line(snapshot)
@@ -1903,6 +1904,13 @@ defmodule HydraXWeb.AgentsLive do
   end
 
   defp delegation_quorum_line(_snapshot), do: nil
+
+  defp delegation_quorum_skip_line(%{"quorum_skipped_count" => count})
+       when is_integer(count) and count > 0 do
+    "quorum skipped #{count}"
+  end
+
+  defp delegation_quorum_skip_line(_snapshot), do: nil
 
   defp delegation_supervision_budget_line(%{
          "supervision_budget" => budget,

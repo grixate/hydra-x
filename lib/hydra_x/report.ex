@@ -881,6 +881,7 @@ defmodule HydraX.Report do
           delegation_roles_detail(snapshot),
           delegation_pending_roles_detail(snapshot),
           delegation_quorum_detail(snapshot),
+          delegation_quorum_skip_detail(snapshot),
           delegation_supervision_budget_detail(snapshot),
           delegation_expansion_history_detail(snapshot),
           delegation_expansion_cooldown_detail(snapshot),
@@ -926,6 +927,13 @@ defmodule HydraX.Report do
   end
 
   defp delegation_quorum_detail(_snapshot), do: nil
+
+  defp delegation_quorum_skip_detail(%{"quorum_skipped_count" => count})
+       when is_integer(count) and count > 0 do
+    "delegation_quorum_skipped=#{count}"
+  end
+
+  defp delegation_quorum_skip_detail(_snapshot), do: nil
 
   defp delegation_supervision_budget_detail(%{
          "supervision_budget" => budget,

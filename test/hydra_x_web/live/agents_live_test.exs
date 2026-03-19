@@ -227,8 +227,23 @@ defmodule HydraXWeb.AgentsLiveTest do
             "mode" => "parallel",
             "expected_count" => 2,
             "roles" => ["researcher", "operator"],
+            "items" => [
+              %{
+                "child_key" => "researcher-memory-export",
+                "goal" => "Assess operator-facing memory exports.",
+                "assigned_role" => "researcher",
+                "status" => "quorum_skipped"
+              },
+              %{
+                "child_key" => "operator-delivery-fallback",
+                "goal" => "Prepare the operator delivery fallback note.",
+                "assigned_role" => "operator",
+                "status" => "pending_dispatch"
+              }
+            ],
             "completion_quorum" => 1,
             "quorum_met" => true,
+            "quorum_skipped_count" => 1,
             "supervision_budget" => 2,
             "supervision_active_children" => 1,
             "expansion_count" => 1,
@@ -240,16 +255,6 @@ defmodule HydraXWeb.AgentsLiveTest do
         }
       })
 
-    {:ok, _batch_child_one} =
-      Runtime.save_work_item(%{
-        "kind" => "research",
-        "goal" => "Assess operator-facing memory exports.",
-        "assigned_role" => "researcher",
-        "status" => "planned",
-        "priority" => 95,
-        "parent_work_item_id" => batch_parent.id
-      })
-
     {:ok, _batch_child_two} =
       Runtime.save_work_item(%{
         "kind" => "task",
@@ -257,7 +262,8 @@ defmodule HydraXWeb.AgentsLiveTest do
         "assigned_role" => "operator",
         "status" => "completed",
         "priority" => 94,
-        "parent_work_item_id" => batch_parent.id
+        "parent_work_item_id" => batch_parent.id,
+        "metadata" => %{"delegation_batch_key" => "operator-delivery-fallback"}
       })
 
     {:ok, _delivery_brief} =
@@ -377,8 +383,9 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "strategy ordered"
     assert html =~ "delegation roles researcher, operator"
     assert html =~ "completion quorum 1 met"
+    assert html =~ "quorum skipped 1"
     assert html =~ "delegation supervision 1 batches"
-    assert html =~ "budget 2 · remaining 1"
+    assert html =~ "budget 2 · remaining 2"
     assert html =~ "deferred 1"
     assert html =~ "expanded 1"
     assert html =~ "last expanded 2099-03-18 10:05:00 UTC"

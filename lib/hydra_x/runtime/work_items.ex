@@ -136,6 +136,7 @@ defmodule HydraX.Runtime.WorkItems do
   def delegation_batch_snapshot(%WorkItem{} = work_item) do
     work_item
     |> build_delegation_batch_snapshot(delegation_batch_children(work_item))
+    |> finalize_delegation_batch_snapshot()
     |> case do
       %{"expected_count" => expected_count} = snapshot when expected_count > 1 ->
         snapshot
@@ -148,6 +149,7 @@ defmodule HydraX.Runtime.WorkItems do
   def delegation_batch_snapshot(work_item) when is_map(work_item) do
     work_item
     |> build_delegation_batch_snapshot(delegation_batch_children(work_item))
+    |> finalize_delegation_batch_snapshot()
     |> case do
       %{"expected_count" => expected_count} = snapshot when expected_count > 1 ->
         snapshot
@@ -1557,7 +1559,10 @@ defmodule HydraX.Runtime.WorkItems do
         decision_scope: "planner"
       )
 
-    delegation_batch = build_delegation_batch_snapshot(claimed, children)
+    delegation_batch =
+      claimed
+      |> build_delegation_batch_snapshot(children)
+      |> finalize_delegation_batch_snapshot()
 
     {:ok, summary_artifact} =
       create_artifact(%{
@@ -1565,7 +1570,8 @@ defmodule HydraX.Runtime.WorkItems do
         "type" => "decision_ledger",
         "title" => "Delegation synthesis",
         "summary" => delegation_summary_line(claimed, children, supporting_memories),
-        "body" => delegation_summary_body(claimed, children, supporting_memories),
+        "body" =>
+          delegation_summary_body(claimed, children, supporting_memories, delegation_batch),
         "payload" => %{
           "decision_type" => "delegation_synthesis",
           "summary_source" => "planner",
@@ -4413,7 +4419,7 @@ defmodule HydraX.Runtime.WorkItems do
     end
   end
 
-  defp delegation_summary_body(parent, children, supporting_memories) do
+  defp delegation_summary_body(parent, children, supporting_memories, delegation_batch) do
     delivery_decisions = delivery_decision_findings(supporting_memories)
 
     findings_without_delivery =
@@ -4468,11 +4474,22 @@ defmodule HydraX.Runtime.WorkItems do
           end)
       end
 
+    quorum_skip_block =
+      case delegation_batch["quorum_skipped_count"] || 0 do
+        count when is_integer(count) and count > 0 ->
+          "Skipped #{count} pending delegated item(s) because the completion quorum was already met."
+
+        _ ->
+          nil
+      end
+
     """
     Parent goal: #{parent.goal}
 
     Delegated work outcomes:
     #{Enum.map_join(children, "\n", &delegated_child_summary/1)}
+
+    #{if(quorum_skip_block, do: "Quorum skip posture:\n#{quorum_skip_block}\n", else: "")}
 
     Promoted findings shaping this synthesis:
     #{findings_block}
@@ -4856,7 +4873,7 @@ defmodule HydraX.Runtime.WorkItems do
       |> Enum.uniq()
 
     terminal_count =
-      Enum.count(child_entries, &(&1["status"] in @terminal_work_item_statuses))
+      Enum.count(child_entries, &delegation_batch_terminal_status?(&1["status"]))
 
     pending_count =
       Enum.count(child_entries, fn item ->
@@ -4875,6 +4892,7 @@ defmodule HydraX.Runtime.WorkItems do
     completed_count = Enum.count(child_entries, &(&1["status"] == "completed"))
     failed_count = Enum.count(child_entries, &(&1["status"] == "failed"))
     canceled_count = Enum.count(child_entries, &(&1["status"] == "canceled"))
+    quorum_skipped_count = Enum.count(child_entries, &(&1["status"] == "quorum_skipped"))
     dispatched_count = Enum.count(child_entries, &is_integer(&1["id"]))
 
     active_count =
@@ -4884,7 +4902,8 @@ defmodule HydraX.Runtime.WorkItems do
 
         _ ->
           Enum.count(child_entries, fn item ->
-            item["status"] not in (@terminal_work_item_statuses ++ ["pending_dispatch"])
+            not delegation_batch_terminal_status?(item["status"]) and
+              item["status"] != "pending_dispatch"
           end)
       end
 
@@ -4916,6 +4935,7 @@ defmodule HydraX.Runtime.WorkItems do
         "quorum_met" => quorum_met,
         "failed_count" => failed_count,
         "canceled_count" => canceled_count,
+        "quorum_skipped_count" => quorum_skipped_count,
         "supervision_budget" =>
           delegation_batch_supervision_budget(work_item) ||
             metadata_snapshot["supervision_budget"],
@@ -5141,6 +5161,55 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp delegation_batch_quorum_met?(_snapshot), do: false
+
+  defp finalize_delegation_batch_snapshot(%{} = snapshot) do
+    if delegation_batch_quorum_met?(snapshot) and (snapshot["pending_count"] || 0) > 0 do
+      items =
+        snapshot
+        |> Map.get("items", [])
+        |> Enum.map(fn item ->
+          if item["status"] == "pending_dispatch" or is_nil(item["id"]) do
+            Map.put(item, "status", "quorum_skipped")
+          else
+            item
+          end
+        end)
+
+      terminal_count = Enum.count(items, &delegation_batch_terminal_status?(&1["status"]))
+      completed_count = Enum.count(items, &(&1["status"] == "completed"))
+      failed_count = Enum.count(items, &(&1["status"] == "failed"))
+      canceled_count = Enum.count(items, &(&1["status"] == "canceled"))
+      quorum_skipped_count = Enum.count(items, &(&1["status"] == "quorum_skipped"))
+
+      active_count =
+        Enum.count(items, fn item ->
+          not delegation_batch_terminal_status?(item["status"]) and
+            item["status"] != "pending_dispatch"
+        end)
+
+      snapshot
+      |> Map.put("items", items)
+      |> Map.put("pending_count", 0)
+      |> Map.put("pending_roles", %{})
+      |> Map.put("active_count", active_count)
+      |> Map.put("terminal_count", terminal_count)
+      |> Map.put("completed_count", completed_count)
+      |> Map.put("failed_count", failed_count)
+      |> Map.put("canceled_count", canceled_count)
+      |> Map.put("quorum_skipped_count", quorum_skipped_count)
+      |> Map.put(
+        "child_work_item_ids",
+        items |> Enum.map(& &1["id"]) |> Enum.filter(&is_integer/1)
+      )
+    else
+      snapshot
+    end
+  end
+
+  defp finalize_delegation_batch_snapshot(snapshot), do: snapshot
+
+  defp delegation_batch_terminal_status?(status),
+    do: status in @terminal_work_item_statuses or status == "quorum_skipped"
 
   defp delegation_batch_strategy(work_item), do: delegation_batch_strategy(work_item, nil)
 
@@ -8152,7 +8221,10 @@ defmodule HydraX.Runtime.WorkItems do
     follow_up_context =
       build_follow_up_context(claimed, supporting_memories, summary_artifact, constraint_findings)
 
-    delegation_batch = build_delegation_batch_snapshot(claimed, children)
+    delegation_batch =
+      claimed
+      |> build_delegation_batch_snapshot(children)
+      |> finalize_delegation_batch_snapshot()
 
     {status, approval_stage} =
       case latest_decision do
