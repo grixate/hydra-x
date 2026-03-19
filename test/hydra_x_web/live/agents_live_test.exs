@@ -227,6 +227,8 @@ defmodule HydraXWeb.AgentsLiveTest do
             "mode" => "parallel",
             "expected_count" => 2,
             "roles" => ["researcher", "operator"],
+            "completion_quorum" => 1,
+            "quorum_met" => true,
             "supervision_budget" => 2,
             "supervision_active_children" => 1,
             "expansion_count" => 1,
@@ -374,6 +376,7 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "delegation batch 2"
     assert html =~ "strategy ordered"
     assert html =~ "delegation roles researcher, operator"
+    assert html =~ "completion quorum 1 met"
     assert html =~ "delegation supervision 1 batches"
     assert html =~ "budget 2 · remaining 1"
     assert html =~ "deferred 1"

@@ -1858,6 +1858,7 @@ defmodule HydraXWeb.AgentsLive do
           "delegation #{snapshot["mode"]} · strategy #{snapshot["batch_strategy"] || "ordered"} · concurrency #{snapshot["batch_concurrency"] || 1} · completed #{snapshot["completed_count"] || 0} · failed #{snapshot["failed_count"] || 0} · canceled #{snapshot["canceled_count"] || 0}",
           delegation_roles_line(snapshot),
           delegation_pending_roles_line(snapshot),
+          delegation_quorum_line(snapshot),
           delegation_supervision_budget_line(snapshot),
           delegation_expansion_history_line(snapshot),
           delegation_expansion_cooldown_line(snapshot)
@@ -1890,6 +1891,18 @@ defmodule HydraXWeb.AgentsLive do
   end
 
   defp delegation_pending_roles_line(_snapshot), do: nil
+
+  defp delegation_quorum_line(%{"completion_quorum" => quorum, "quorum_met" => true})
+       when is_integer(quorum) and quorum > 0 do
+    "completion quorum #{quorum} met"
+  end
+
+  defp delegation_quorum_line(%{"completion_quorum" => quorum})
+       when is_integer(quorum) and quorum > 0 do
+    "completion quorum #{quorum}"
+  end
+
+  defp delegation_quorum_line(_snapshot), do: nil
 
   defp delegation_supervision_budget_line(%{
          "supervision_budget" => budget,

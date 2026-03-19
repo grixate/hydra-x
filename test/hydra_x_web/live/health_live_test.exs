@@ -386,6 +386,8 @@ defmodule HydraXWeb.HealthLiveTest do
             "mode" => "parallel",
             "expected_count" => 2,
             "roles" => ["researcher", "operator"],
+            "completion_quorum" => 1,
+            "quorum_met" => true,
             "supervision_budget" => 2,
             "supervision_active_children" => 1,
             "expansion_count" => 1,
@@ -469,6 +471,7 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "delegation batch 2 · active 1 · terminal 1"
     assert html =~ "strategy ordered"
     assert html =~ "delegation roles researcher, operator"
+    assert html =~ "completion quorum 1 met"
     assert html =~ "budget 2 · remaining 1"
     assert html =~ "supervision budget 2 · active children 1"
     assert html =~ "pending 0 · active 1 · terminal 1"

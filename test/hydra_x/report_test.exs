@@ -1431,6 +1431,8 @@ defmodule HydraX.ReportTest do
             "mode" => "parallel",
             "expected_count" => 2,
             "roles" => ["researcher", "operator"],
+            "completion_quorum" => 1,
+            "quorum_met" => true,
             "supervision_budget" => 2,
             "supervision_active_children" => 1,
             "expansion_count" => 1,
@@ -1469,6 +1471,7 @@ defmodule HydraX.ReportTest do
 
     assert markdown =~ "delegation=parallel:2:active=1:terminal=1"
     assert markdown =~ "delegation_roles=researcher,operator"
+    assert markdown =~ "delegation_completion_quorum=1 delegation_quorum_met=true"
     assert markdown =~ "delegation_strategy=ordered"
     assert markdown =~ "delegation_supervision_budget=2 delegation_active_children=1"
     assert markdown =~ "delegation_expansions=1 delegation_last_expanded=2099-03-18 10:05:00 UTC"

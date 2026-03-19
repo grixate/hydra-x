@@ -2462,6 +2462,7 @@ defmodule HydraXWeb.HealthLive do
           "delegation #{snapshot["mode"]} · strategy #{snapshot["batch_strategy"] || "ordered"} · concurrency #{snapshot["batch_concurrency"] || 1} · completed #{snapshot["completed_count"] || 0} · failed #{snapshot["failed_count"] || 0} · canceled #{snapshot["canceled_count"] || 0}",
           autonomy_delegation_roles_line(snapshot),
           autonomy_delegation_pending_roles_line(snapshot),
+          autonomy_delegation_quorum_line(snapshot),
           autonomy_delegation_supervision_budget_line(snapshot),
           autonomy_delegation_expansion_history_line(snapshot),
           autonomy_delegation_expansion_cooldown_line(snapshot)
@@ -2503,6 +2504,18 @@ defmodule HydraXWeb.HealthLive do
   end
 
   defp autonomy_delegation_pending_roles_line(_snapshot), do: nil
+
+  defp autonomy_delegation_quorum_line(%{"completion_quorum" => quorum, "quorum_met" => true})
+       when is_integer(quorum) and quorum > 0 do
+    "completion quorum #{quorum} met"
+  end
+
+  defp autonomy_delegation_quorum_line(%{"completion_quorum" => quorum})
+       when is_integer(quorum) and quorum > 0 do
+    "completion quorum #{quorum}"
+  end
+
+  defp autonomy_delegation_quorum_line(_snapshot), do: nil
 
   defp autonomy_delegation_supervision_budget_line(%{
          "supervision_budget" => budget,

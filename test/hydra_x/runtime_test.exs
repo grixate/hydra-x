@@ -4593,6 +4593,62 @@ defmodule HydraX.RuntimeTest do
     assert %DateTime{} = queued_snapshot["expansion_deferred_until"]
   end
 
+  test "planner finalizes a delegation batch once the completion quorum is met" do
+    planner =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, planner} = Runtime.save_agent(planner, %{"role" => "planner"})
+
+    researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, _researcher} = Runtime.save_agent(researcher, %{"role" => "researcher"})
+
+    {:ok, parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Supervise a quorum-based research batch.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "execution_mode" => "delegate",
+        "priority" => 8,
+        "metadata" => %{
+          "delegate_batch_concurrency" => 1,
+          "delegate_batch_completion_quorum" => 1,
+          "delegate_batch" => [
+            %{"goal" => "Research quorum branch A.", "role" => "researcher"},
+            %{"goal" => "Research quorum branch B.", "role" => "researcher"}
+          ]
+        }
+      })
+
+    assert {:ok, delegated} = Runtime.run_autonomy_cycle(planner.id)
+    assert delegated.action == "delegated"
+    assert length(delegated.delegated_work_items) == 1
+
+    assert {:ok, researcher_cycle} = Runtime.run_autonomy_cycle(researcher.id)
+    assert researcher_cycle.action == "researched"
+
+    assert {:ok, finalized} = Runtime.run_autonomy_cycle(planner.id)
+    assert finalized.action == "finalized_blocked_parent"
+
+    updated_parent = Runtime.get_work_item!(parent.id)
+    snapshot = Runtime.delegation_batch_snapshot(updated_parent)
+
+    assert updated_parent.status == "completed"
+
+    assert updated_parent.result_refs["child_work_item_ids"] == [
+             hd(delegated.delegated_work_items).id
+           ]
+
+    assert snapshot["completion_quorum"] == 1
+    assert snapshot["quorum_met"] == true
+    assert snapshot["pending_count"] == 1
+    assert snapshot["active_count"] == 0
+  end
+
   test "planner expands the delegation batch with healthier pending role capacity first" do
     planner =
       create_agent()

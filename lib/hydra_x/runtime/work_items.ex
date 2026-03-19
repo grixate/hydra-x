@@ -1228,17 +1228,16 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp blocked_parent_ready?(%WorkItem{} = work_item) do
-    children =
-      list_work_items(
-        parent_work_item_id: work_item.id,
-        limit: delegated_child_limit(work_item),
-        preload: false
-      )
+    children = delegation_batch_children(work_item)
+    snapshot = build_delegation_batch_snapshot(work_item, children)
+    expected_count = snapshot["expected_count"] || delegation_expected_count(work_item)
+    quorum_met = delegation_batch_quorum_met?(snapshot)
+    active_count = snapshot["active_count"] || 0
 
-    expected_count = delegation_expected_count(work_item)
-
-    children != [] and length(children) >= expected_count and
-      Enum.all?(children, &terminal_work_item?/1)
+    active_count == 0 and
+      children != [] and
+      (quorum_met or
+         (length(children) >= expected_count and Enum.all?(children, &terminal_work_item?/1)))
   end
 
   defp terminal_work_item?(%WorkItem{status: status}), do: status in @terminal_work_item_statuses
@@ -4550,6 +4549,7 @@ defmodule HydraX.Runtime.WorkItems do
       "expected_count" => length(entries),
       "batch_concurrency" => concurrency,
       "batch_strategy" => delegation_batch_strategy(metadata),
+      "completion_quorum" => delegation_batch_completion_quorum(metadata, length(entries)),
       "items" => Enum.map(entries, &delegation_batch_planned_item/1)
     })
   end
@@ -4888,6 +4888,11 @@ defmodule HydraX.Runtime.WorkItems do
           end)
       end
 
+    completion_quorum =
+      delegation_batch_completion_quorum(work_item, expected_count, metadata_snapshot)
+
+    quorum_met = completed_count >= completion_quorum
+
     if expected_count <= 0 do
       %{}
     else
@@ -4907,6 +4912,8 @@ defmodule HydraX.Runtime.WorkItems do
         "active_count" => active_count,
         "terminal_count" => terminal_count,
         "completed_count" => completed_count,
+        "completion_quorum" => completion_quorum,
+        "quorum_met" => quorum_met,
         "failed_count" => failed_count,
         "canceled_count" => canceled_count,
         "supervision_budget" =>
@@ -5086,6 +5093,55 @@ defmodule HydraX.Runtime.WorkItems do
     clamp_delegation_batch_concurrency(value, expected_count)
   end
 
+  defp delegation_batch_completion_quorum(metadata, expected_count)
+       when is_map(metadata) and is_integer(expected_count) do
+    value =
+      metadata["delegate_batch_completion_quorum"] ||
+        get_in(metadata, ["delegation_batch", "completion_quorum"])
+
+    clamp_delegation_batch_completion_quorum(value, expected_count)
+  end
+
+  defp delegation_batch_completion_quorum(
+         %WorkItem{} = work_item,
+         expected_count,
+         metadata_snapshot
+       ) do
+    metadata_snapshot["completion_quorum"] ||
+      delegation_batch_completion_quorum(work_item.metadata || %{}, expected_count)
+  end
+
+  defp delegation_batch_completion_quorum(work_item, expected_count, _metadata_snapshot)
+       when is_map(work_item) do
+    delegation_batch_completion_quorum(work_item_metadata(work_item), expected_count)
+  end
+
+  defp delegation_batch_completion_quorum(_work_item, expected_count, _metadata_snapshot)
+       when is_integer(expected_count) do
+    clamp_delegation_batch_completion_quorum(nil, expected_count)
+  end
+
+  defp clamp_delegation_batch_completion_quorum(value, expected_count)
+       when is_integer(expected_count) and expected_count > 0 do
+    case value do
+      quorum when is_integer(quorum) and quorum > 0 ->
+        min(quorum, expected_count)
+
+      _ ->
+        expected_count
+    end
+  end
+
+  defp clamp_delegation_batch_completion_quorum(_value, _expected_count), do: 0
+
+  defp delegation_batch_quorum_met?(%{} = snapshot) do
+    completed = snapshot["completed_count"] || 0
+    quorum = snapshot["completion_quorum"] || 0
+    quorum > 0 and completed >= quorum
+  end
+
+  defp delegation_batch_quorum_met?(_snapshot), do: false
+
   defp delegation_batch_strategy(work_item), do: delegation_batch_strategy(work_item, nil)
 
   defp delegation_batch_strategy(%WorkItem{} = work_item, seeded_snapshot) do
@@ -5145,7 +5201,9 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp delegation_batch_expandable?(%{} = snapshot) do
-    (snapshot["pending_count"] || 0) > 0 and delegation_batch_available_slots(snapshot) > 0
+    not delegation_batch_quorum_met?(snapshot) and
+      (snapshot["pending_count"] || 0) > 0 and
+      delegation_batch_available_slots(snapshot) > 0
   end
 
   defp delegation_batch_expandable?(_snapshot), do: false
