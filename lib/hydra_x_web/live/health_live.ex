@@ -2504,6 +2504,7 @@ defmodule HydraXWeb.HealthLive do
           autonomy_delegation_supervision_budget_line(snapshot),
           autonomy_delegation_batch_budget_line(snapshot),
           autonomy_delegation_expansion_history_line(snapshot),
+          autonomy_delegation_deferral_history_line(snapshot),
           autonomy_delegation_expansion_pressure_line(snapshot),
           autonomy_delegation_expansion_severity_line(snapshot),
           autonomy_delegation_expansion_cooldown_line(snapshot)
@@ -2648,6 +2649,24 @@ defmodule HydraXWeb.HealthLive do
   end
 
   defp autonomy_delegation_expansion_history_line(_snapshot), do: nil
+
+  defp autonomy_delegation_deferral_history_line(
+         %{"expansion_deferred_count" => count} = snapshot
+       )
+       when is_integer(count) and count > 0 do
+    suffix =
+      case snapshot["last_deferred_at"] do
+        %DateTime{} = value ->
+          " · last deferred #{autonomy_recovery_deferred_label(value) |> String.replace_prefix("cooldown until ", "")}"
+
+        _ ->
+          ""
+      end
+
+    "deferred #{count}#{suffix}"
+  end
+
+  defp autonomy_delegation_deferral_history_line(_snapshot), do: nil
 
   defp autonomy_delegation_expansion_pressure_line(%{
          "expansion_pressure_snapshot" => pressure_map

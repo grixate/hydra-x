@@ -410,6 +410,8 @@ defmodule HydraXWeb.HealthLiveTest do
             "supervision_budget" => 2,
             "supervision_active_children" => 1,
             "expansion_count" => 1,
+            "expansion_deferred_count" => 2,
+            "last_deferred_at" => "2099-03-18T10:15:00Z",
             "last_expanded_at" => "2099-03-18T10:05:00Z",
             "expansion_deferred_until" => "2099-03-18T10:25:00Z",
             "expansion_deferred_reason" => "role_capacity_constrained",
@@ -554,6 +556,7 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "pressure h0 m1 l0"
     assert html =~ "pending 1 · active 1 · terminal 2"
     assert html =~ "expanded 1 · last expanded 2099-03-18 10:05:00 UTC"
+    assert html =~ "deferred 2 · last deferred 2099-03-18 10:15:00 UTC"
     assert html =~ "expansion pressure operator x1 (urgent 0/0, sat 0, avail 1)"
     assert html =~ "expansion severity medium · delay 15s"
     assert html =~ "expansion deferred · cooldown until 2099-03-18 10:25:00 UTC"

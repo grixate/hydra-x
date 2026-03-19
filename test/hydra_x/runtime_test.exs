@@ -4427,6 +4427,8 @@ defmodule HydraX.RuntimeTest do
     assert batch_snapshot["terminal_count"] == 1
     assert batch_snapshot["expansion_deferred_reason"] == "role_capacity_constrained"
     assert %DateTime{} = batch_snapshot["expansion_deferred_until"]
+    assert batch_snapshot["expansion_deferred_count"] == 1
+    assert %DateTime{} = batch_snapshot["last_deferred_at"]
     assert is_float(batch_snapshot["expansion_capacity_score"])
     assert is_integer(batch_snapshot["expansion_delay_seconds"])
     assert batch_snapshot["expansion_delay_seconds"] >= 5

@@ -948,6 +948,7 @@ defmodule HydraX.Report do
           delegation_supervision_budget_detail(snapshot),
           delegation_batch_budget_detail(snapshot),
           delegation_expansion_history_detail(snapshot),
+          delegation_deferral_history_detail(snapshot),
           delegation_expansion_pressure_detail(snapshot),
           delegation_expansion_severity_detail(snapshot),
           delegation_expansion_cooldown_detail(snapshot),
@@ -1061,6 +1062,19 @@ defmodule HydraX.Report do
   end
 
   defp delegation_expansion_history_detail(_snapshot), do: nil
+
+  defp delegation_deferral_history_detail(%{"expansion_deferred_count" => count} = snapshot)
+       when is_integer(count) and count > 0 do
+    last_deferred =
+      case snapshot["last_deferred_at"] do
+        %DateTime{} = value -> " delegation_last_deferred=#{format_datetime(value)}"
+        _ -> ""
+      end
+
+    "delegation_expansion_deferrals=#{count}#{last_deferred}"
+  end
+
+  defp delegation_deferral_history_detail(_snapshot), do: nil
 
   defp delegation_expansion_pressure_detail(%{"expansion_pressure_snapshot" => pressure_map})
        when is_map(pressure_map) and map_size(pressure_map) > 0 do

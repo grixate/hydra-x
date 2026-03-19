@@ -2062,6 +2062,7 @@ defmodule HydraXWeb.AgentsLive do
           delegation_supervision_budget_line(snapshot),
           delegation_batch_budget_line(snapshot),
           delegation_expansion_history_line(snapshot),
+          delegation_deferral_history_line(snapshot),
           delegation_expansion_pressure_line(snapshot),
           delegation_expansion_severity_line(snapshot),
           delegation_expansion_cooldown_line(snapshot)
@@ -2177,6 +2178,22 @@ defmodule HydraXWeb.AgentsLive do
   end
 
   defp delegation_expansion_history_line(_snapshot), do: nil
+
+  defp delegation_deferral_history_line(%{"expansion_deferred_count" => count} = snapshot)
+       when is_integer(count) and count > 0 do
+    suffix =
+      case snapshot["last_deferred_at"] do
+        %DateTime{} = value ->
+          " · last deferred #{Calendar.strftime(value, "%Y-%m-%d %H:%M:%S UTC")}"
+
+        _ ->
+          ""
+      end
+
+    "deferred #{count}#{suffix}"
+  end
+
+  defp delegation_deferral_history_line(_snapshot), do: nil
 
   defp delegation_expansion_pressure_line(%{"expansion_pressure_snapshot" => pressure_map})
        when is_map(pressure_map) and map_size(pressure_map) > 0 do

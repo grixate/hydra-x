@@ -85,9 +85,11 @@ defmodule HydraX.Runtime.WorkItems do
   def save_work_item(attrs) when is_map(attrs), do: save_work_item(%WorkItem{}, attrs)
 
   def save_work_item(%WorkItem{} = work_item, attrs) do
-    work_item
-    |> WorkItem.changeset(normalize_work_item_attrs(attrs, work_item))
-    |> Repo.insert_or_update()
+    retry_on_busy(fn ->
+      work_item
+      |> WorkItem.changeset(normalize_work_item_attrs(attrs, work_item))
+      |> Repo.insert_or_update()
+    end)
   end
 
   def list_artifacts(opts \\ []) do
@@ -174,7 +176,9 @@ defmodule HydraX.Runtime.WorkItems do
 
     %Artifact{}
     |> Artifact.changeset(normalized)
-    |> Repo.insert()
+    |> then(fn changeset ->
+      retry_on_busy(fn -> Repo.insert(changeset) end)
+    end)
   end
 
   def list_approval_records(opts \\ []) do
@@ -212,7 +216,9 @@ defmodule HydraX.Runtime.WorkItems do
     |> then(fn normalized ->
       %ApprovalRecord{}
       |> ApprovalRecord.changeset(normalized)
-      |> Repo.insert()
+      |> then(fn changeset ->
+        retry_on_busy(fn -> Repo.insert(changeset) end)
+      end)
     end)
   end
 
@@ -1746,6 +1752,7 @@ defmodule HydraX.Runtime.WorkItems do
     attrs = Helpers.normalize_string_keys(attrs)
     delay_seconds = delegation_batch_expansion_delay_seconds(attrs["pressure_snapshot"])
     pressure_severity = delegation_batch_expansion_pressure_severity(attrs["pressure_snapshot"])
+    deferred_count = (snapshot["expansion_deferred_count"] || 0) + 1
 
     deferred_until =
       DateTime.add(observed_at, delay_seconds, :second)
@@ -1756,8 +1763,10 @@ defmodule HydraX.Runtime.WorkItems do
       |> Map.put(
         "delegation_batch",
         snapshot
+        |> Map.put("last_deferred_at", observed_at)
         |> Map.put("expansion_deferred_until", deferred_until)
         |> Map.put("expansion_deferred_reason", reason)
+        |> Map.put("expansion_deferred_count", deferred_count)
         |> maybe_put_snapshot_metric("expansion_capacity_score", attrs["capacity_score"])
         |> maybe_put_snapshot_metric("expansion_delay_seconds", delay_seconds)
         |> maybe_put_snapshot_metric("expansion_pressure_severity", pressure_severity)
@@ -1780,6 +1789,7 @@ defmodule HydraX.Runtime.WorkItems do
                  "phase" => "delegation_batch_expansion",
                  "reason" => reason,
                  "deferred_until" => deferred_until,
+                 "deferred_count" => deferred_count,
                  "capacity_score" => attrs["capacity_score"],
                  "delay_seconds" => delay_seconds,
                  "pressure_severity" => pressure_severity,
@@ -5395,9 +5405,11 @@ defmodule HydraX.Runtime.WorkItems do
         "supervision_active_batches" => metadata_snapshot["supervision_active_batches"],
         "expansion_count" => metadata_snapshot["expansion_count"] || 0,
         "last_expanded_at" => parse_datetime(metadata_snapshot["last_expanded_at"]),
+        "last_deferred_at" => parse_datetime(metadata_snapshot["last_deferred_at"]),
         "expansion_deferred_until" =>
           parse_datetime(metadata_snapshot["expansion_deferred_until"]),
         "expansion_deferred_reason" => metadata_snapshot["expansion_deferred_reason"],
+        "expansion_deferred_count" => metadata_snapshot["expansion_deferred_count"] || 0,
         "expansion_capacity_score" => metadata_snapshot["expansion_capacity_score"],
         "expansion_delay_seconds" => metadata_snapshot["expansion_delay_seconds"],
         "expansion_pressure_severity" => metadata_snapshot["expansion_pressure_severity"],
@@ -5843,6 +5855,7 @@ defmodule HydraX.Runtime.WorkItems do
       work_item.priority || 0,
       delegation_missing_role_urgency_score(snapshot),
       delegation_pending_role_capacity_score(snapshot, role_capacity),
+      snapshot["expansion_deferred_count"] || 0,
       -delegation_batch_expansion_pressure_weight(snapshot),
       -(snapshot["expansion_count"] || 0),
       delegation_batch_expansion_age_score(snapshot),
@@ -9400,4 +9413,18 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp maybe_filter_approval_decision(query, decision),
     do: where(query, [record], record.decision == ^decision)
+
+  defp retry_on_busy(fun, attempts \\ 5)
+
+  defp retry_on_busy(fun, attempts) do
+    fun.()
+  rescue
+    error in Exqlite.Error ->
+      if attempts > 1 and String.contains?(Exception.message(error), "Database busy") do
+        Process.sleep(50)
+        retry_on_busy(fun, attempts - 1)
+      else
+        reraise error, __STACKTRACE__
+      end
+  end
 end
