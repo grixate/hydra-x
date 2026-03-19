@@ -218,7 +218,7 @@ defmodule HydraX.Report do
     #{render_conversations(snapshot.conversations)}
 
     ## Autonomous Work Items
-    - active_jobs=#{snapshot.autonomy.active_autonomy_job_count} unsafe_requests=#{snapshot.autonomy.unsafe_request_count} budget_blocked=#{snapshot.autonomy.budget_blocked_count} auto_assigned=#{snapshot.autonomy.auto_assigned_count} fallback_assigned=#{snapshot.autonomy.capability_fallback_count} role_only_open=#{snapshot.autonomy.role_only_open_count} active_claimed=#{snapshot.autonomy.active_claimed_count} stale_claimed=#{snapshot.autonomy.stale_claimed_count} remote_claimed=#{snapshot.autonomy.remote_claimed_count} orphaned_assignments=#{snapshot.autonomy.orphaned_assignment_count} deferred_role_backlog=#{snapshot.autonomy.deferred_role_queue_count || 0} role_backlog=#{render_role_queue_backlog_summary(snapshot.autonomy.role_queue_backlog)} saturated_workers=#{Enum.count(snapshot.autonomy.worker_pressure, &(&1.capacity_posture == "saturated"))} delegation_batches=#{Enum.reduce(snapshot.autonomy.delegation_supervision || [], 0, &(&1.active_batches + &2))} urgent_delegation_batches=#{snapshot.autonomy.delegation_urgent_batch_count || 0} delegation_role_gaps=#{snapshot.autonomy.delegation_required_role_gap_count || 0} capability_drift=#{length(snapshot.autonomy.capability_drifts)}
+    - active_jobs=#{snapshot.autonomy.active_autonomy_job_count} unsafe_requests=#{snapshot.autonomy.unsafe_request_count} budget_blocked=#{snapshot.autonomy.budget_blocked_count} auto_assigned=#{snapshot.autonomy.auto_assigned_count} fallback_assigned=#{snapshot.autonomy.capability_fallback_count} role_only_open=#{snapshot.autonomy.role_only_open_count} active_claimed=#{snapshot.autonomy.active_claimed_count} stale_claimed=#{snapshot.autonomy.stale_claimed_count} remote_claimed=#{snapshot.autonomy.remote_claimed_count} orphaned_assignments=#{snapshot.autonomy.orphaned_assignment_count} deferred_role_backlog=#{snapshot.autonomy.deferred_role_queue_count || 0} urgent_role_backlog=#{snapshot.autonomy.urgent_role_queue_count || 0} urgent_deferred_role_backlog=#{snapshot.autonomy.urgent_deferred_role_queue_count || 0} role_backlog=#{render_role_queue_backlog_summary(snapshot.autonomy.role_queue_backlog)} saturated_workers=#{Enum.count(snapshot.autonomy.worker_pressure, &(&1.capacity_posture == "saturated"))} delegation_batches=#{Enum.reduce(snapshot.autonomy.delegation_supervision || [], 0, &(&1.active_batches + &2))} urgent_delegation_batches=#{snapshot.autonomy.delegation_urgent_batch_count || 0} delegation_role_gaps=#{snapshot.autonomy.delegation_required_role_gap_count || 0} capability_drift=#{length(snapshot.autonomy.capability_drifts)}
     ### Role Queue Backlog
     #{render_role_queue_backlog(snapshot.autonomy.role_queue_backlog)}
 
@@ -325,7 +325,7 @@ defmodule HydraX.Report do
     entries
     |> List.wrap()
     |> Enum.map_join(", ", fn entry ->
-      "#{entry.role}:#{entry.queued_count}/deferred=#{entry.deferred_count || 0}"
+      "#{entry.role}:#{entry.queued_count}/deferred=#{entry.deferred_count || 0}/urgent=#{entry.required_role_queued_count || 0}/#{entry.required_role_deferred_count || 0}"
     end)
     |> case do
       "" -> "none"
@@ -342,7 +342,7 @@ defmodule HydraX.Report do
 
       items ->
         Enum.map_join(items, "\n", fn entry ->
-          "- #{entry.role}: queued=#{entry.queued_count} deferred=#{entry.deferred_count || 0} workers=#{entry.worker_count} active_claims=#{entry.active_claimed_count} stale_claims=#{entry.stale_claimed_count} top_priority=#{entry.highest_priority}"
+          "- #{entry.role}: queued=#{entry.queued_count} deferred=#{entry.deferred_count || 0} urgent=#{entry.required_role_queued_count || 0}/#{entry.required_role_deferred_count || 0} highest_urgent_need=#{entry.highest_required_role_urgency || 0} workers=#{entry.worker_count} active_claims=#{entry.active_claimed_count} stale_claims=#{entry.stale_claimed_count} top_priority=#{entry.highest_priority}"
         end)
     end
   end

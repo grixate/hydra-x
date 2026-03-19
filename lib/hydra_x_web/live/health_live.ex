@@ -1306,7 +1306,9 @@ defmodule HydraXWeb.HealthLive do
               {Enum.reduce(@autonomy_status.role_queue_backlog || [], 0, &(&1.queued_count + &2))}
             </div>
             <p class="mt-2 text-xs text-[var(--hx-mute)]">
-              deferred {@autonomy_status.deferred_role_queue_count || 0}
+              deferred {@autonomy_status.deferred_role_queue_count || 0} · urgent{" "}
+              {@autonomy_status.urgent_role_queue_count || 0}/ {@autonomy_status.urgent_deferred_role_queue_count ||
+                0}
             </p>
           </article>
           <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
@@ -1445,11 +1447,18 @@ defmodule HydraXWeb.HealthLive do
                 <div class="flex items-center justify-between gap-3">
                   <div class="text-sm text-[var(--hx-accent)]">{entry.role}</div>
                   <div class="text-xs text-[var(--hx-mute)]">
-                    {entry.queued_count} queued · {entry.deferred_count || 0} deferred
+                    {entry.queued_count} queued · {entry.deferred_count || 0} deferred ·{" "}
+                    {entry.required_role_queued_count || 0}/ {entry.required_role_deferred_count || 0} urgent
                   </div>
                 </div>
                 <div class="mt-2 text-xs text-[var(--hx-mute)]">
                   workers {entry.worker_count} · active claims {entry.active_claimed_count} · stale claims {entry.stale_claimed_count} · top priority {entry.highest_priority}
+                </div>
+                <div
+                  :if={(entry.highest_required_role_urgency || 0) > 0}
+                  class="mt-1 text-xs text-[var(--hx-mute)]"
+                >
+                  highest urgent role need {entry.highest_required_role_urgency}
                 </div>
               </div>
             </div>

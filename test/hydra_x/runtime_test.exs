@@ -7030,7 +7030,10 @@ defmodule HydraX.RuntimeTest do
         "goal" => "Queued planner role work awaiting a concrete worker claim.",
         "assigned_role" => "planner",
         "status" => "planned",
-        "metadata" => %{"assignment_mode" => "role_claim"}
+        "metadata" => %{
+          "assignment_mode" => "role_claim",
+          "delegation_role_urgency" => 1
+        }
       })
 
     {:ok, _job} =
@@ -7095,6 +7098,7 @@ defmodule HydraX.RuntimeTest do
     assert status.stale_claimed_count >= 1
     assert status.remote_claimed_count == 1
     assert Enum.any?(status.role_queue_backlog, &(&1.role == "planner"))
+    assert status.urgent_role_queue_count >= 1
 
     assert Enum.any?(
              status.worker_pressure,
@@ -7121,6 +7125,11 @@ defmodule HydraX.RuntimeTest do
 
     assert status.delegation_urgent_batch_count >= 1
     assert status.delegation_required_role_gap_count >= 1
+
+    assert Enum.any?(
+             status.role_queue_backlog,
+             &(&1.role == "planner" and &1.required_role_queued_count >= 1)
+           )
 
     assert Enum.any?(status.capability_drifts, &(&1.agent_id == agent.id))
     assert Enum.any?(status.recent_work_items, &(&1.id == work_item.id))
@@ -7915,6 +7924,8 @@ defmodule HydraX.RuntimeTest do
 
     assert backlog_entry.queued_count == 0
     assert backlog_entry.deferred_count == 1
+    assert backlog_entry.required_role_queued_count == 0
+    assert backlog_entry.required_role_deferred_count == 0
 
     second_summary = Runtime.process_role_queued_work(limit: 10)
 
@@ -7980,6 +7991,8 @@ defmodule HydraX.RuntimeTest do
 
     assert backlog_entry.queued_count == 0
     assert backlog_entry.deferred_count == 1
+    assert backlog_entry.required_role_queued_count == 0
+    assert backlog_entry.required_role_deferred_count == 0
 
     second_summary = Runtime.process_role_queued_work(limit: 10)
 

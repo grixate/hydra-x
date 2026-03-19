@@ -366,6 +366,7 @@ defmodule HydraXWeb.HealthLiveTest do
         "priority" => 92,
         "metadata" => %{
           "assignment_mode" => "role_claim",
+          "delegation_role_urgency" => 2,
           "role_queue_dispatch" => %{
             "reason" => "worker_saturated",
             "deferred_until" => "2099-03-18T10:20:00Z"
@@ -515,6 +516,7 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "required role gaps 1"
     assert html =~ "urgent batches 1"
     assert html =~ "0 queued · 1 deferred"
+    assert html =~ "highest urgent role need 2"
     assert html =~ "Role queue backlog"
     assert html =~ "Worker pressure"
     assert html =~ "Delegation supervision"

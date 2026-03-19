@@ -1065,6 +1065,7 @@ defmodule HydraX.ReportTest do
         "priority" => 96,
         "metadata" => %{
           "assignment_mode" => "role_claim",
+          "delegation_role_urgency" => 2,
           "role_queue_dispatch" => %{
             "reason" => "worker_saturated",
             "deferred_until" => "2099-03-18T10:20:00Z"
@@ -1275,6 +1276,10 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.json_path) =~ "\"deferred_role_queue_count\": 1"
     assert File.read!(export.json_path) =~ "\"role_queue_backlog\":"
     assert File.read!(export.json_path) =~ "\"deferred_count\": 1"
+    assert Regex.match?(~r/"required_role_deferred_count"\s*:\s*1/, File.read!(export.json_path))
+    assert File.read!(export.markdown_path) =~ "urgent_role_backlog=0"
+    assert File.read!(export.markdown_path) =~ "urgent_deferred_role_backlog=1"
+    assert File.read!(export.markdown_path) =~ "urgent=0/1"
     assert File.read!(export.json_path) =~ "\"worker_pressure\":"
     assert File.read!(export.json_path) =~ "\"active_claimed_count\": 1"
     assert File.read!(export.json_path) =~ "\"stale_claimed_count\": 1"

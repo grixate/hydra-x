@@ -666,6 +666,16 @@ defmodule HydraX.Runtime.WorkItems do
         acc + (entry.deferred_count || 0)
       end)
 
+    urgent_role_queue_count =
+      Enum.reduce(role_queue_backlog, 0, fn entry, acc ->
+        acc + (entry.required_role_queued_count || 0)
+      end)
+
+    urgent_deferred_role_queue_count =
+      Enum.reduce(role_queue_backlog, 0, fn entry, acc ->
+        acc + (entry.required_role_deferred_count || 0)
+      end)
+
     worker_pressure =
       build_worker_pressure(all_work_items, autonomy_agents, role_queue_backlog)
 
@@ -718,6 +728,8 @@ defmodule HydraX.Runtime.WorkItems do
       remote_claimed_count: remote_claimed_count,
       orphaned_assignment_count: orphaned_assignment_count,
       deferred_role_queue_count: deferred_role_queue_count,
+      urgent_role_queue_count: urgent_role_queue_count,
+      urgent_deferred_role_queue_count: urgent_deferred_role_queue_count,
       delegation_urgent_batch_count: delegation_urgent_batch_count,
       delegation_required_role_gap_count: delegation_required_role_gap_count,
       autonomy_agent_count: length(autonomy_agents),
@@ -812,16 +824,28 @@ defmodule HydraX.Runtime.WorkItems do
       deferred_items = Map.get(deferred_by_role, role, [])
       items = queued_items ++ deferred_items
 
+      required_role_queued_count =
+        Enum.count(queued_items, &(role_queue_missing_role_urgency(&1) > 0))
+
+      required_role_deferred_count =
+        Enum.count(deferred_items, &(role_queue_missing_role_urgency(&1) > 0))
+
       %{
         role: role,
         queued_count: length(queued_items),
         deferred_count: length(deferred_items),
+        required_role_queued_count: required_role_queued_count,
+        required_role_deferred_count: required_role_deferred_count,
         worker_count: Map.get(worker_counts, role, 0),
         active_claimed_count: Map.get(claimed_counts, role, 0),
         stale_claimed_count: Map.get(stale_claimed_counts, role, 0),
         highest_priority:
           items
           |> Enum.map(&(&1.priority || 0))
+          |> Enum.max(fn -> 0 end),
+        highest_required_role_urgency:
+          items
+          |> Enum.map(&role_queue_missing_role_urgency/1)
           |> Enum.max(fn -> 0 end)
       }
     end)
