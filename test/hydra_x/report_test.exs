@@ -1431,6 +1431,8 @@ defmodule HydraX.ReportTest do
             "mode" => "parallel",
             "expected_count" => 2,
             "roles" => ["researcher", "operator"],
+            "supervision_budget" => 2,
+            "supervision_active_children" => 1,
             "expansion_count" => 1,
             "last_expanded_at" => "2099-03-18T10:05:00Z",
             "expansion_deferred_until" => "2099-03-18T10:25:00Z",
@@ -1468,10 +1470,12 @@ defmodule HydraX.ReportTest do
     assert markdown =~ "delegation=parallel:2:active=1:terminal=1"
     assert markdown =~ "delegation_roles=researcher,operator"
     assert markdown =~ "delegation_strategy=ordered"
+    assert markdown =~ "delegation_supervision_budget=2 delegation_active_children=1"
     assert markdown =~ "delegation_expansions=1 delegation_last_expanded=2099-03-18 10:05:00 UTC"
     assert markdown =~ "delegation_expansion_cooldown=2099-03-18 10:25:00 UTC"
     assert markdown =~ "Delegation Supervision"
     assert markdown =~ "deferred=1"
+    assert markdown =~ "budget=2 remaining=1"
     assert json =~ "\"delegation_batch_summary\": \"parallel:2:active=1:terminal=1\""
     assert File.read!(export.json_path) =~ "\"delegation_supervision\""
     assert json =~ "\"expected_count\": 2"

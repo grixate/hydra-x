@@ -383,6 +383,15 @@ defmodule HydraX.Report do
             if((entry.deferred_batches || 0) > 0,
               do: " deferred=#{entry.deferred_batches}",
               else: ""
+            ) <>
+            if(is_integer(entry.supervision_budget),
+              do: " budget=#{entry.supervision_budget}",
+              else: ""
+            ) <>
+            if(
+              is_integer(entry.supervision_budget_remaining),
+              do: " remaining=#{entry.supervision_budget_remaining}",
+              else: ""
             )
         end)
     end
@@ -871,6 +880,7 @@ defmodule HydraX.Report do
         [
           delegation_roles_detail(snapshot),
           delegation_pending_roles_detail(snapshot),
+          delegation_supervision_budget_detail(snapshot),
           delegation_expansion_history_detail(snapshot),
           delegation_expansion_cooldown_detail(snapshot),
           "delegation_strategy=#{snapshot["batch_strategy"] || "ordered"}",
@@ -903,6 +913,16 @@ defmodule HydraX.Report do
   end
 
   defp delegation_pending_roles_detail(_snapshot), do: nil
+
+  defp delegation_supervision_budget_detail(%{
+         "supervision_budget" => budget,
+         "supervision_active_children" => active_children
+       })
+       when is_integer(budget) and is_integer(active_children) do
+    "delegation_supervision_budget=#{budget} delegation_active_children=#{active_children}"
+  end
+
+  defp delegation_supervision_budget_detail(_snapshot), do: nil
 
   defp delegation_expansion_history_detail(%{"expansion_count" => count} = snapshot)
        when is_integer(count) and count > 0 do

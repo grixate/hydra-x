@@ -928,7 +928,7 @@ defmodule HydraXWeb.HealthLive do
                   </span>
                   <span :if={event.reauth?}> · reauth</span>
                   <span :if={event.ip}>
-                     · ip                                          {event.ip}
+                    · ip {event.ip}
                   </span>
                 </div>
               </div>
@@ -1505,6 +1505,12 @@ defmodule HydraXWeb.HealthLive do
                   pending {entry.pending_children} · active {entry.active_children} · terminal {entry.terminal_children}<span :if={
                     (entry.deferred_batches || 0) > 0
                   }> · deferred {entry.deferred_batches}</span>
+                  <span :if={
+                    is_integer(entry.supervision_budget) and
+                      is_integer(entry.supervision_budget_remaining)
+                  }>
+                    {" "}· budget {entry.supervision_budget} · remaining {entry.supervision_budget_remaining}
+                  </span>
                 </div>
                 <div
                   :if={(entry.constrained_roles || %{}) != %{}}
@@ -2456,6 +2462,7 @@ defmodule HydraXWeb.HealthLive do
           "delegation #{snapshot["mode"]} · strategy #{snapshot["batch_strategy"] || "ordered"} · concurrency #{snapshot["batch_concurrency"] || 1} · completed #{snapshot["completed_count"] || 0} · failed #{snapshot["failed_count"] || 0} · canceled #{snapshot["canceled_count"] || 0}",
           autonomy_delegation_roles_line(snapshot),
           autonomy_delegation_pending_roles_line(snapshot),
+          autonomy_delegation_supervision_budget_line(snapshot),
           autonomy_delegation_expansion_history_line(snapshot),
           autonomy_delegation_expansion_cooldown_line(snapshot)
         ]
@@ -2496,6 +2503,16 @@ defmodule HydraXWeb.HealthLive do
   end
 
   defp autonomy_delegation_pending_roles_line(_snapshot), do: nil
+
+  defp autonomy_delegation_supervision_budget_line(%{
+         "supervision_budget" => budget,
+         "supervision_active_children" => active_children
+       })
+       when is_integer(budget) and is_integer(active_children) do
+    "supervision budget #{budget} · active children #{active_children}"
+  end
+
+  defp autonomy_delegation_supervision_budget_line(_snapshot), do: nil
 
   defp autonomy_delegation_expansion_history_line(%{"expansion_count" => count} = snapshot)
        when is_integer(count) and count > 0 do

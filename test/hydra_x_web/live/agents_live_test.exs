@@ -227,6 +227,8 @@ defmodule HydraXWeb.AgentsLiveTest do
             "mode" => "parallel",
             "expected_count" => 2,
             "roles" => ["researcher", "operator"],
+            "supervision_budget" => 2,
+            "supervision_active_children" => 1,
             "expansion_count" => 1,
             "last_expanded_at" => "2099-03-18T10:05:00Z",
             "expansion_deferred_until" => "2099-03-18T10:25:00Z",
@@ -373,9 +375,11 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "strategy ordered"
     assert html =~ "delegation roles researcher, operator"
     assert html =~ "delegation supervision 1 batches"
+    assert html =~ "budget 2 · remaining 1"
     assert html =~ "deferred 1"
     assert html =~ "expanded 1"
     assert html =~ "last expanded 2099-03-18 10:05:00 UTC"
+    assert html =~ "supervision budget 2 · active children 1"
     assert html =~ "expansion deferred"
     assert html =~ "cooldown until 2099-03-18 10:25:00 UTC"
 

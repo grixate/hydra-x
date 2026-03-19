@@ -1409,6 +1409,7 @@ defmodule HydraXWeb.AgentsLive do
 
     [
       "delegation supervision #{active_batches} batches",
+      delegation_supervision_budget_label(summary),
       delegation_deferred_batches_label(summary[:deferred_batches] || 0),
       "pending #{summary[:pending_children] || 0}",
       "active #{summary[:active_children] || 0}",
@@ -1420,6 +1421,17 @@ defmodule HydraXWeb.AgentsLive do
   end
 
   defp delegation_supervision_detail(_summary), do: nil
+
+  defp delegation_supervision_budget_label(summary) when is_map(summary) do
+    budget = summary[:supervision_budget]
+    remaining = summary[:supervision_budget_remaining]
+
+    if is_integer(budget) and is_integer(remaining) do
+      "budget #{budget} · remaining #{remaining}"
+    end
+  end
+
+  defp delegation_supervision_budget_label(_summary), do: nil
 
   defp delegation_deferred_batches_label(count) when is_integer(count) and count > 0,
     do: "deferred #{count}"
@@ -1846,6 +1858,7 @@ defmodule HydraXWeb.AgentsLive do
           "delegation #{snapshot["mode"]} · strategy #{snapshot["batch_strategy"] || "ordered"} · concurrency #{snapshot["batch_concurrency"] || 1} · completed #{snapshot["completed_count"] || 0} · failed #{snapshot["failed_count"] || 0} · canceled #{snapshot["canceled_count"] || 0}",
           delegation_roles_line(snapshot),
           delegation_pending_roles_line(snapshot),
+          delegation_supervision_budget_line(snapshot),
           delegation_expansion_history_line(snapshot),
           delegation_expansion_cooldown_line(snapshot)
         ]
@@ -1877,6 +1890,16 @@ defmodule HydraXWeb.AgentsLive do
   end
 
   defp delegation_pending_roles_line(_snapshot), do: nil
+
+  defp delegation_supervision_budget_line(%{
+         "supervision_budget" => budget,
+         "supervision_active_children" => active_children
+       })
+       when is_integer(budget) and is_integer(active_children) do
+    "supervision budget #{budget} · active children #{active_children}"
+  end
+
+  defp delegation_supervision_budget_line(_snapshot), do: nil
 
   defp delegation_expansion_history_line(%{"expansion_count" => count} = snapshot)
        when is_integer(count) and count > 0 do
