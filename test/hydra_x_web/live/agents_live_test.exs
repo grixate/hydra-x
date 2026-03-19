@@ -381,6 +381,7 @@ defmodule HydraXWeb.AgentsLiveTest do
     Runtime.Jobs.record_scheduler_pass(:role_queue_dispatches, %{
       owner: "node:agents-test",
       processed_count: 1,
+      required_role_prioritized_count: 1,
       skipped_count: 0,
       error_count: 0,
       results: [
@@ -390,7 +391,9 @@ defmodule HydraXWeb.AgentsLiveTest do
           role: agent.role,
           work_item_id: publish_item.id,
           status: "completed",
-          action: "delivered_publish_summary"
+          action: "delivered_publish_summary",
+          priority_reason: "required_role",
+          priority_urgency: 1
         }
       ]
     })
@@ -449,6 +452,7 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "orphaned role 1"
     assert html =~ "worker pressure open"
     assert html =~ "recent role dispatch delivered_publish_summary"
+    assert html =~ "required role x1"
     assert html =~ "recent assignment recovery researched"
 
     assert html =~ "execute_with_review"

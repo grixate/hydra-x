@@ -1554,20 +1554,28 @@ defmodule HydraXWeb.AgentsLive do
         work_item_id = result[:work_item_id] || result["work_item_id"]
         posture = result[:capacity_posture] || result["capacity_posture"]
         lease_owner = result[:lease_owner] || result["lease_owner"]
+        priority_reason = result[:priority_reason] || result["priority_reason"]
+        priority_urgency = result[:priority_urgency] || result["priority_urgency"]
 
         deferred_until =
           result[:deferred_until] || result["deferred_until"] || result[:lease_expires_at] ||
             result["lease_expires_at"]
 
+        priority_detail =
+          if priority_reason == "required_role" and is_integer(priority_urgency) and
+               priority_urgency > 0 do
+            " · required role x#{priority_urgency}"
+          end
+
         case action do
           "worker_saturated" ->
-            "recent role dispatch saturated#{if is_binary(posture), do: " (#{posture})", else: ""}#{if cooldown = recovery_deferred_label(deferred_until), do: " · #{cooldown}", else: ""}"
+            "recent role dispatch saturated#{if is_binary(posture), do: " (#{posture})", else: ""}#{priority_detail || ""}#{if cooldown = recovery_deferred_label(deferred_until), do: " · #{cooldown}", else: ""}"
 
           "claimed_remote" ->
-            "recent role dispatch claimed remotely#{if work_item_id, do: " ##{work_item_id}", else: ""}#{if is_binary(lease_owner), do: " by #{lease_owner}", else: ""}#{if cooldown = recovery_deferred_label(deferred_until), do: " · #{cooldown}", else: ""}"
+            "recent role dispatch claimed remotely#{if work_item_id, do: " ##{work_item_id}", else: ""}#{if is_binary(lease_owner), do: " by #{lease_owner}", else: ""}#{priority_detail || ""}#{if cooldown = recovery_deferred_label(deferred_until), do: " · #{cooldown}", else: ""}"
 
           _ ->
-            "recent role dispatch #{action}#{if work_item_id, do: " ##{work_item_id}", else: ""}"
+            "recent role dispatch #{action}#{if work_item_id, do: " ##{work_item_id}", else: ""}#{priority_detail || ""}"
         end
     end
   end

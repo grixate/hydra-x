@@ -276,6 +276,7 @@ defmodule HydraX.ReportTest do
     Runtime.Jobs.record_scheduler_pass(:role_queue_dispatches, %{
       owner: "node:report",
       processed_count: 3,
+      required_role_prioritized_count: 1,
       pressure_skipped_count: 1,
       remote_owned_count: 2,
       skipped_count: 1,
@@ -315,6 +316,7 @@ defmodule HydraX.ReportTest do
     assert snapshot.scheduler.assignment_recoveries.executed_count == 1
     assert snapshot.scheduler.assignment_recoveries.queued_count == 1
     assert snapshot.scheduler.role_queue_dispatches.processed_count == 3
+    assert snapshot.scheduler.role_queue_dispatches.required_role_prioritized_count == 1
     assert snapshot.scheduler.role_queue_dispatches.pressure_skipped_count == 1
     assert snapshot.scheduler.role_queue_dispatches.remote_owned_count == 2
     assert snapshot.scheduler.work_item_replays.resumed_count == 4

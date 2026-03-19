@@ -7841,6 +7841,7 @@ defmodule HydraX.RuntimeTest do
     summary = Runtime.process_role_queued_work(limit: 1)
 
     assert summary.processed_count == 1
+    assert summary.required_role_prioritized_count == 1
 
     urgent_child = Runtime.get_work_item!(urgent_child.id)
     plain_role_work = Runtime.get_work_item!(plain_role_work.id)
@@ -7850,7 +7851,8 @@ defmodule HydraX.RuntimeTest do
 
     assert Enum.any?(
              summary.results,
-             &(&1[:agent_id] == researcher.id and &1[:action] == "researched")
+             &(&1[:agent_id] == researcher.id and &1[:action] == "researched" and
+                 &1[:priority_reason] == "required_role" and &1[:priority_urgency] == 1)
            )
 
     assert plain_role_work.status == "planned"

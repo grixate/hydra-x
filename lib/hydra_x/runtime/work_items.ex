@@ -2263,6 +2263,7 @@ defmodule HydraX.Runtime.WorkItems do
       owner: owner,
       processed_count: 0,
       pressure_skipped_count: 0,
+      required_role_prioritized_count: 0,
       remote_owned_count: 0,
       skipped_count: 0,
       error_count: 0,
@@ -2442,6 +2443,7 @@ defmodule HydraX.Runtime.WorkItems do
   defp defer_role_queue_dispatch(%WorkItem{} = work_item, reason, attrs) do
     observed_at = DateTime.utc_now()
     attrs = Helpers.normalize_string_keys(attrs)
+    priority = role_queue_dispatch_priority_detail(work_item)
 
     deferred_until =
       case parse_datetime(attrs["lease_expires_at"]) do
@@ -2464,7 +2466,9 @@ defmodule HydraX.Runtime.WorkItems do
           "lease_owner" => attrs["lease_owner"],
           "lease_expires_at" =>
             parse_datetime(attrs["lease_expires_at"]) || attrs["lease_expires_at"],
-          "capacity_posture" => attrs["capacity_posture"]
+          "capacity_posture" => attrs["capacity_posture"],
+          "priority_reason" => priority[:priority_reason],
+          "priority_urgency" => priority[:priority_urgency]
         }
         |> Enum.reject(fn {_key, value} -> is_nil(value) end)
         |> Map.new()
@@ -2480,10 +2484,24 @@ defmodule HydraX.Runtime.WorkItems do
           "deferred_until" => deferred_until,
           "lease_owner" => attrs["lease_owner"],
           "lease_expires_at" => attrs["lease_expires_at"],
-          "capacity_posture" => attrs["capacity_posture"]
+          "capacity_posture" => attrs["capacity_posture"],
+          "priority_reason" => priority[:priority_reason],
+          "priority_urgency" => priority[:priority_urgency]
         })
     })
   end
+
+  defp role_queue_dispatch_priority_detail(%WorkItem{} = work_item) do
+    case role_queue_missing_role_urgency(work_item) do
+      count when is_integer(count) and count > 0 ->
+        %{priority_reason: "required_role", priority_urgency: count}
+
+      _ ->
+        %{}
+    end
+  end
+
+  defp role_queue_dispatch_priority_detail(_work_item), do: %{}
 
   defp queued_recovery_delay_seconds do
     max(div(Config.scheduler_poll_ms() * 2, 1000), 5)
@@ -2497,6 +2515,7 @@ defmodule HydraX.Runtime.WorkItems do
     work_item = result[:work_item]
     action = result[:action] || "processed"
     processed_increment = role_queue_processed_increment(result)
+    priority = role_queue_dispatch_priority_detail(work_item)
 
     entry = %{
       agent_id: agent.id,
@@ -2507,12 +2526,17 @@ defmodule HydraX.Runtime.WorkItems do
       action: action,
       lease_owner: result[:lease_owner],
       lease_expires_at: result[:lease_expires_at],
-      deferred_until: result[:deferred_until]
+      deferred_until: result[:deferred_until],
+      priority_reason: priority[:priority_reason],
+      priority_urgency: priority[:priority_urgency]
     }
 
     %{
       acc
       | processed_count: acc.processed_count + processed_increment,
+        required_role_prioritized_count:
+          acc.required_role_prioritized_count +
+            if(priority[:priority_reason] == "required_role", do: 1, else: 0),
         remote_owned_count:
           acc.remote_owned_count + if(action == "claimed_remote", do: 1, else: 0),
         rounds: acc.rounds + 1,
@@ -2528,12 +2552,16 @@ defmodule HydraX.Runtime.WorkItems do
          work_item \\ nil
        ) do
     dispatch = get_in((work_item && work_item.metadata) || %{}, ["role_queue_dispatch"]) || %{}
+    priority = role_queue_dispatch_priority_detail(work_item)
 
     %{
       acc
       | skipped_count: acc.skipped_count + 1,
         pressure_skipped_count:
           acc.pressure_skipped_count + if(reason == "worker_saturated", do: 1, else: 0),
+        required_role_prioritized_count:
+          acc.required_role_prioritized_count +
+            if(priority[:priority_reason] == "required_role", do: 1, else: 0),
         results: [
           %{
             agent_id: agent.id,
@@ -2546,7 +2574,9 @@ defmodule HydraX.Runtime.WorkItems do
             capacity_posture: pressure[:capacity_posture] || pressure["capacity_posture"],
             deferred_until: dispatch["deferred_until"],
             lease_owner: dispatch["lease_owner"],
-            lease_expires_at: dispatch["lease_expires_at"]
+            lease_expires_at: dispatch["lease_expires_at"],
+            priority_reason: priority[:priority_reason],
+            priority_urgency: priority[:priority_urgency]
           }
           | acc.results
         ]

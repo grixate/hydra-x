@@ -2212,7 +2212,7 @@ defmodule HydraXWeb.HealthLive do
   end
 
   defp role_queue_dispatch_detail(pass) do
-    "processed #{scheduler_count_value(pass, "processed_count")} · pressure skipped #{scheduler_count_value(pass, "pressure_skipped_count")} · remote claimed #{scheduler_count_value(pass, "remote_owned_count")} · skipped #{scheduler_count_value(pass, "skipped_count")} · errors #{scheduler_count_value(pass, "error_count")} · owner #{scheduler_owner_value(pass) || "unknown"}"
+    "processed #{scheduler_count_value(pass, "processed_count")} · required-role prioritized #{scheduler_count_value(pass, "required_role_prioritized_count")} · pressure skipped #{scheduler_count_value(pass, "pressure_skipped_count")} · remote claimed #{scheduler_count_value(pass, "remote_owned_count")} · skipped #{scheduler_count_value(pass, "skipped_count")} · errors #{scheduler_count_value(pass, "error_count")} · owner #{scheduler_owner_value(pass) || "unknown"}"
   end
 
   defp assignment_recovery_label(pass) do
