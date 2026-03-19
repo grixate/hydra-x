@@ -5843,6 +5843,7 @@ defmodule HydraX.Runtime.WorkItems do
       work_item.priority || 0,
       delegation_missing_role_urgency_score(snapshot),
       delegation_pending_role_capacity_score(snapshot, role_capacity),
+      -delegation_batch_expansion_pressure_weight(snapshot),
       -(snapshot["expansion_count"] || 0),
       delegation_batch_expansion_age_score(snapshot),
       snapshot["pending_count"] || 0,
@@ -5850,6 +5851,15 @@ defmodule HydraX.Runtime.WorkItems do
       -(snapshot["active_count"] || 0),
       -(snapshot["terminal_count"] || 0)
     }
+  end
+
+  defp delegation_batch_expansion_pressure_weight(%{} = snapshot) do
+    case snapshot["expansion_pressure_severity"] do
+      "high" -> 3
+      "medium" -> 2
+      "low" -> 1
+      _ -> 0
+    end
   end
 
   defp delegation_missing_role_urgency_score(%{} = snapshot) do
