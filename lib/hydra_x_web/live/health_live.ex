@@ -1336,7 +1336,10 @@ defmodule HydraXWeb.HealthLive do
                 @autonomy_status.delegation_supervision || [],
                 0,
                 &(&1.pending_children + &2)
-              )}
+              )} · required role gaps {@autonomy_status.delegation_required_role_gap_count || 0}
+            </p>
+            <p class="mt-1 text-xs text-[var(--hx-mute)]">
+              urgent batches {@autonomy_status.delegation_urgent_batch_count || 0}
             </p>
           </article>
         </div>
@@ -1505,6 +1508,14 @@ defmodule HydraXWeb.HealthLive do
                   pending {entry.pending_children} · active {entry.active_children} · terminal {entry.terminal_children}<span :if={
                     (entry.deferred_batches || 0) > 0
                   }> · deferred {entry.deferred_batches}</span>
+                  <span :if={(entry.urgent_batches || 0) > 0}>
+                    {" "}· urgent {entry.urgent_batches}
+                  </span>
+                  <span :if={map_size(entry.missing_required_roles || %{}) > 0}>
+                    {" "}· required roles {autonomy_delegation_role_requirements(
+                      entry.missing_required_roles
+                    )}
+                  </span>
                   <span :if={
                     is_integer(entry.supervision_budget) and
                       is_integer(entry.supervision_budget_remaining)

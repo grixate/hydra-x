@@ -7057,7 +7057,8 @@ defmodule HydraX.RuntimeTest do
             "mode" => "parallel",
             "expected_count" => 2,
             "batch_strategy" => "balance_roles",
-            "pending_roles" => %{"researcher" => 1}
+            "pending_roles" => %{"researcher" => 1},
+            "completion_role_requirements" => %{"operator" => 1, "researcher" => 1}
           }
         }
       })
@@ -7110,6 +7111,16 @@ defmodule HydraX.RuntimeTest do
              &(&1.agent_id == agent.id and is_integer(&1.supervision_batch_budget) and
                  is_integer(&1.supervision_batch_budget_remaining))
            )
+
+    assert Enum.any?(
+             status.delegation_supervision,
+             &(&1.agent_id == agent.id and &1.urgent_batches >= 1 and
+                 &1.required_role_gap_count >= 1 and
+                 (&1.missing_required_roles || %{}) == %{"researcher" => 1})
+           )
+
+    assert status.delegation_urgent_batch_count >= 1
+    assert status.delegation_required_role_gap_count >= 1
 
     assert Enum.any?(status.capability_drifts, &(&1.agent_id == agent.id))
     assert Enum.any?(status.recent_work_items, &(&1.id == work_item.id))

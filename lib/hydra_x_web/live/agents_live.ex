@@ -1281,7 +1281,12 @@ defmodule HydraXWeb.AgentsLive do
     role_queue_backlog = Map.new(autonomy_status.role_queue_backlog || [], &{&1.role, &1})
 
     delegation_supervision =
-      Map.new(autonomy_status.delegation_supervision || [], &{&1.agent_id, &1})
+      autonomy_status.delegation_supervision
+      |> List.wrap()
+      |> Enum.group_by(& &1.agent_id)
+      |> Map.new(fn {agent_id, entries} ->
+        {agent_id, merge_agent_delegation_supervision(entries)}
+      end)
 
     scheduler_status = Runtime.scheduler_status()
     dispatch_results = List.wrap(scheduler_status.role_queue_dispatches[:results] || [])
@@ -1357,6 +1362,62 @@ defmodule HydraXWeb.AgentsLive do
     end)
   end
 
+  defp merge_agent_delegation_supervision([entry]), do: entry
+
+  defp merge_agent_delegation_supervision(entries) when is_list(entries) do
+    Enum.reduce(entries, %{}, fn entry, acc ->
+      %{
+        agent_id: entry[:agent_id] || acc[:agent_id],
+        agent_name: entry[:agent_name] || acc[:agent_name],
+        role: acc[:role] || entry[:role],
+        active_batches: (acc[:active_batches] || 0) + (entry[:active_batches] || 0),
+        occupied_batches: (acc[:occupied_batches] || 0) + (entry[:occupied_batches] || 0),
+        deferred_batches: (acc[:deferred_batches] || 0) + (entry[:deferred_batches] || 0),
+        pending_children: (acc[:pending_children] || 0) + (entry[:pending_children] || 0),
+        active_children: (acc[:active_children] || 0) + (entry[:active_children] || 0),
+        terminal_children: (acc[:terminal_children] || 0) + (entry[:terminal_children] || 0),
+        constrained_roles:
+          merge_role_frequency_maps(acc[:constrained_roles], entry[:constrained_roles]),
+        missing_required_roles:
+          merge_role_frequency_maps(
+            acc[:missing_required_roles],
+            entry[:missing_required_roles]
+          ),
+        required_role_gap_count:
+          (acc[:required_role_gap_count] || 0) + (entry[:required_role_gap_count] || 0),
+        urgent_batches: (acc[:urgent_batches] || 0) + (entry[:urgent_batches] || 0),
+        supervision_budget: max(acc[:supervision_budget] || 0, entry[:supervision_budget] || 0),
+        supervision_budget_remaining:
+          min_remaining_budget(
+            acc[:supervision_budget_remaining],
+            entry[:supervision_budget_remaining]
+          ),
+        supervision_batch_budget:
+          max(acc[:supervision_batch_budget] || 0, entry[:supervision_batch_budget] || 0),
+        supervision_batch_budget_remaining:
+          min_remaining_budget(
+            acc[:supervision_batch_budget_remaining],
+            entry[:supervision_batch_budget_remaining]
+          ),
+        highest_priority: max(acc[:highest_priority] || 0, entry[:highest_priority] || 0)
+      }
+    end)
+  end
+
+  defp merge_agent_delegation_supervision(_entries), do: %{}
+
+  defp merge_role_frequency_maps(left, right) do
+    [left || %{}, right || %{}]
+    |> Enum.flat_map(&Enum.to_list/1)
+    |> Enum.reduce(%{}, fn {role, count}, acc ->
+      Map.update(acc, role, count, &(&1 + count))
+    end)
+  end
+
+  defp min_remaining_budget(nil, value), do: value
+  defp min_remaining_budget(value, nil), do: value
+  defp min_remaining_budget(left, right), do: min(left, right)
+
   defp compaction_policy_form(agent) do
     %{
       "soft" => agent.compaction_policy.soft,
@@ -1411,6 +1472,8 @@ defmodule HydraXWeb.AgentsLive do
       "delegation supervision #{active_batches} batches",
       delegation_supervision_budget_label(summary),
       delegation_supervision_batch_budget_label(summary),
+      delegation_supervision_urgent_batches_label(summary),
+      delegation_supervision_missing_roles_label(summary),
       delegation_deferred_batches_label(summary[:deferred_batches] || 0),
       "pending #{summary[:pending_children] || 0}",
       "active #{summary[:active_children] || 0}",
@@ -1444,6 +1507,28 @@ defmodule HydraXWeb.AgentsLive do
   end
 
   defp delegation_supervision_batch_budget_label(_summary), do: nil
+
+  defp delegation_supervision_urgent_batches_label(summary) when is_map(summary) do
+    count = summary[:urgent_batches]
+
+    if is_integer(count) and count > 0 do
+      "urgent #{count}"
+    end
+  end
+
+  defp delegation_supervision_urgent_batches_label(_summary), do: nil
+
+  defp delegation_supervision_missing_roles_label(summary) when is_map(summary) do
+    case summary[:missing_required_roles] || %{} do
+      requirements when requirements == %{} ->
+        nil
+
+      requirements ->
+        "required roles #{format_delegation_role_requirements(requirements)}"
+    end
+  end
+
+  defp delegation_supervision_missing_roles_label(_summary), do: nil
 
   defp delegation_deferred_batches_label(count) when is_integer(count) and count > 0,
     do: "deferred #{count}"

@@ -671,6 +671,16 @@ defmodule HydraX.Runtime.WorkItems do
     delegation_supervision =
       build_delegation_supervision(all_work_items, autonomy_agents, worker_pressure)
 
+    delegation_urgent_batch_count =
+      Enum.reduce(delegation_supervision, 0, fn entry, acc ->
+        acc + (entry.urgent_batches || 0)
+      end)
+
+    delegation_required_role_gap_count =
+      Enum.reduce(delegation_supervision, 0, fn entry, acc ->
+        acc + (entry.required_role_gap_count || 0)
+      end)
+
     capability_drifts =
       autonomy_agents
       |> Enum.map(fn agent ->
@@ -707,6 +717,8 @@ defmodule HydraX.Runtime.WorkItems do
       remote_claimed_count: remote_claimed_count,
       orphaned_assignment_count: orphaned_assignment_count,
       deferred_role_queue_count: deferred_role_queue_count,
+      delegation_urgent_batch_count: delegation_urgent_batch_count,
+      delegation_required_role_gap_count: delegation_required_role_gap_count,
       autonomy_agent_count: length(autonomy_agents),
       active_roles: autonomy_agents |> Enum.map(& &1.role) |> Enum.frequencies(),
       role_queue_backlog: role_queue_backlog,
@@ -876,7 +888,12 @@ defmodule HydraX.Runtime.WorkItems do
       agent = Map.get(agents_by_id, agent_id)
       snapshots = Enum.map(entries, fn {_work_item, snapshot} -> snapshot end)
       constrained_roles = aggregate_constrained_pending_roles(snapshots, role_capacity)
+      missing_required_roles = aggregate_missing_completion_roles(snapshots)
       deferred_batches = Enum.count(snapshots, &delegation_batch_expansion_deferred?/1)
+
+      urgent_batches =
+        Enum.count(snapshots, &(map_size(Map.get(&1, "missing_completion_roles", %{})) > 0))
+
       supervision_budget = delegation_supervision_budget(agent, entries, autonomy_agents)
 
       supervision_batch_budget =
@@ -896,6 +913,10 @@ defmodule HydraX.Runtime.WorkItems do
         active_children: active_children,
         terminal_children: Enum.reduce(snapshots, 0, &((&1["terminal_count"] || 0) + &2)),
         constrained_roles: constrained_roles,
+        missing_required_roles: missing_required_roles,
+        required_role_gap_count:
+          Enum.reduce(missing_required_roles, 0, fn {_role, count}, acc -> acc + count end),
+        urgent_batches: urgent_batches,
         supervision_budget: supervision_budget,
         supervision_budget_remaining: max(supervision_budget - active_children, 0),
         supervision_batch_budget: supervision_batch_budget,
@@ -907,8 +928,8 @@ defmodule HydraX.Runtime.WorkItems do
       }
     end)
     |> Enum.sort_by(fn entry ->
-      {-(entry.active_batches || 0), -(entry.pending_children || 0), entry.agent_name || "",
-       entry.role || ""}
+      {-(entry.urgent_batches || 0), -(entry.active_batches || 0), -(entry.pending_children || 0),
+       entry.agent_name || "", entry.role || ""}
     end)
   end
 
@@ -1083,6 +1104,22 @@ defmodule HydraX.Runtime.WorkItems do
           (pressure[:available_workers] || pressure["available_workers"] || 0)
 
       if count > 0 and available_workers <= 0 do
+        Map.update(acc, role, count, &(&1 + count))
+      else
+        acc
+      end
+    end)
+  end
+
+  defp aggregate_missing_completion_roles(snapshots) do
+    snapshots
+    |> Enum.flat_map(fn snapshot ->
+      snapshot
+      |> Map.get("missing_completion_roles", %{})
+      |> Enum.to_list()
+    end)
+    |> Enum.reduce(%{}, fn {role, count}, acc ->
+      if count > 0 do
         Map.update(acc, role, count, &(&1 + count))
       else
         acc

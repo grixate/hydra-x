@@ -427,6 +427,51 @@ defmodule HydraXWeb.HealthLiveTest do
         "metadata" => %{"delegation_batch_key" => "operator-fallback-brief"}
       })
 
+    {:ok, missing_role_parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Hold a delegation slot until an operator review is available.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "planner",
+        "status" => "blocked",
+        "execution_mode" => "delegate",
+        "priority" => 88,
+        "metadata" => %{
+          "delegation_batch" => %{
+            "mode" => "parallel",
+            "expected_count" => 2,
+            "roles" => ["researcher", "operator"],
+            "items" => [
+              %{
+                "child_key" => "researcher-context-pass",
+                "goal" => "Capture the remaining research context.",
+                "assigned_role" => "researcher",
+                "status" => "pending_dispatch"
+              },
+              %{
+                "child_key" => "operator-review-pass",
+                "goal" => "Wait for the operator review pass.",
+                "assigned_role" => "operator",
+                "status" => "pending_dispatch"
+              }
+            ],
+            "completion_quorum" => 1,
+            "completion_role_requirements" => %{"operator" => 1}
+          }
+        }
+      })
+
+    {:ok, _missing_role_child} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Capture the remaining research context.",
+        "assigned_role" => "researcher",
+        "status" => "planned",
+        "priority" => 87,
+        "parent_work_item_id" => missing_role_parent.id,
+        "metadata" => %{"delegation_batch_key" => "researcher-context-pass"}
+      })
+
     {:ok, _job} =
       Runtime.save_scheduled_job(%{
         agent_id: agent.id,
@@ -466,6 +511,8 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "deferred 1"
     assert html =~ "Saturated workers"
     assert html =~ "Delegation batches"
+    assert html =~ "required role gaps 1"
+    assert html =~ "urgent batches 1"
     assert html =~ "0 queued · 1 deferred"
     assert html =~ "Role queue backlog"
     assert html =~ "Worker pressure"
@@ -482,10 +529,12 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "completion quorum 1 met"
     assert html =~ "role quorum operator x1 met"
     assert html =~ "quorum skipped 1"
-    assert html =~ "budget 2 · remaining 2"
-    assert html =~ "batch budget 1 · remaining 1"
+    assert html =~ "budget 2 · remaining 1"
+    assert html =~ "batch budget 1 · remaining 0"
     assert html =~ "supervision budget 2 · active children 1"
-    assert html =~ "pending 0 · active 0 · terminal 2"
+    assert html =~ "urgent 1"
+    assert html =~ "required roles operator x1"
+    assert html =~ "pending 1 · active 1 · terminal 2"
     assert html =~ "expanded 1 · last expanded 2099-03-18 10:05:00 UTC"
     assert html =~ "expansion deferred · cooldown until 2099-03-18 10:25:00 UTC"
     assert html =~ "Operator confirmed the rollout."
