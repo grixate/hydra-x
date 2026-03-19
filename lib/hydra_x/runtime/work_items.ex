@@ -1245,6 +1245,7 @@ defmodule HydraX.Runtime.WorkItems do
     snapshot = delegation_batch_snapshot(claimed) || %{}
     available_slots = delegation_batch_available_slots(snapshot)
     pending_items = pending_delegation_batch_items(snapshot)
+    expanded_at = DateTime.utc_now()
 
     if available_slots <= 0 or pending_items == [] do
       {:idle, nil}
@@ -1271,6 +1272,7 @@ defmodule HydraX.Runtime.WorkItems do
         refreshed_parent
         |> build_delegation_batch_snapshot(refreshed_children)
         |> clear_delegation_batch_expansion_deferral()
+        |> mark_delegation_batch_expanded(expanded_at)
 
       {:ok, artifact} =
         create_artifact(%{
@@ -1312,9 +1314,11 @@ defmodule HydraX.Runtime.WorkItems do
             Map.put(refreshed_parent.metadata || %{}, "delegation_batch", batch_snapshot),
           "runtime_state" =>
             append_history(refreshed_parent.runtime_state, "blocked", %{
-              "blocked_at" => DateTime.utc_now(),
+              "blocked_at" => expanded_at,
               "reason" => "delegated_batch_expanded",
-              "child_work_item_ids" => Enum.map(delegated_children, & &1.child.id)
+              "child_work_item_ids" => Enum.map(delegated_children, & &1.child.id),
+              "expanded_at" => expanded_at,
+              "expansion_count" => batch_snapshot["expansion_count"] || 0
             })
         })
 
@@ -4752,6 +4756,8 @@ defmodule HydraX.Runtime.WorkItems do
         "completed_count" => completed_count,
         "failed_count" => failed_count,
         "canceled_count" => canceled_count,
+        "expansion_count" => metadata_snapshot["expansion_count"] || 0,
+        "last_expanded_at" => parse_datetime(metadata_snapshot["last_expanded_at"]),
         "expansion_deferred_until" =>
           parse_datetime(metadata_snapshot["expansion_deferred_until"]),
         "expansion_deferred_reason" => metadata_snapshot["expansion_deferred_reason"],
@@ -4774,6 +4780,12 @@ defmodule HydraX.Runtime.WorkItems do
     |> Map.put("expansion_deferred_until", nil)
     |> Map.put("expansion_deferred_reason", nil)
     |> Map.put("expansion_capacity_score", nil)
+  end
+
+  defp mark_delegation_batch_expanded(%{} = snapshot, %DateTime{} = expanded_at) do
+    snapshot
+    |> Map.put("last_expanded_at", expanded_at)
+    |> Map.put("expansion_count", (snapshot["expansion_count"] || 0) + 1)
   end
 
   defp delegation_batch_child_entry(%{child: child, spec: spec}) do
@@ -4984,11 +4996,23 @@ defmodule HydraX.Runtime.WorkItems do
     {
       work_item.priority || 0,
       delegation_pending_role_capacity_score(snapshot, role_capacity),
+      -(snapshot["expansion_count"] || 0),
+      delegation_batch_expansion_age_score(snapshot),
       snapshot["pending_count"] || 0,
       delegation_batch_available_slots(snapshot),
       -(snapshot["active_count"] || 0),
       -(snapshot["terminal_count"] || 0)
     }
+  end
+
+  defp delegation_batch_expansion_age_score(%{} = snapshot) do
+    case parse_datetime(snapshot["last_expanded_at"]) do
+      %DateTime{} = last_expanded_at ->
+        max(DateTime.diff(DateTime.utc_now(), last_expanded_at, :second), 0)
+
+      _ ->
+        0
+    end
   end
 
   defp delegation_pending_role_capacity_score(%{} = snapshot, role_capacity) do

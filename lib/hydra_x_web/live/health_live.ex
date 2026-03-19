@@ -927,7 +927,9 @@ defmodule HydraXWeb.HealthLive do
                     · expiry {event.expired_by}
                   </span>
                   <span :if={event.reauth?}> · reauth</span>
-                  <span :if={event.ip}> · ip                                        {event.ip}</span>
+                  <span :if={event.ip}>
+                     · ip                                          {event.ip}
+                  </span>
                 </div>
               </div>
             </div>
@@ -2454,6 +2456,7 @@ defmodule HydraXWeb.HealthLive do
           "delegation #{snapshot["mode"]} · strategy #{snapshot["batch_strategy"] || "ordered"} · concurrency #{snapshot["batch_concurrency"] || 1} · completed #{snapshot["completed_count"] || 0} · failed #{snapshot["failed_count"] || 0} · canceled #{snapshot["canceled_count"] || 0}",
           autonomy_delegation_roles_line(snapshot),
           autonomy_delegation_pending_roles_line(snapshot),
+          autonomy_delegation_expansion_history_line(snapshot),
           autonomy_delegation_expansion_cooldown_line(snapshot)
         ]
         |> Enum.reject(&is_nil_or_empty/1)
@@ -2493,6 +2496,22 @@ defmodule HydraXWeb.HealthLive do
   end
 
   defp autonomy_delegation_pending_roles_line(_snapshot), do: nil
+
+  defp autonomy_delegation_expansion_history_line(%{"expansion_count" => count} = snapshot)
+       when is_integer(count) and count > 0 do
+    suffix =
+      case snapshot["last_expanded_at"] do
+        %DateTime{} = value ->
+          " · last expanded #{autonomy_recovery_deferred_label(value) |> String.replace_prefix("cooldown until ", "")}"
+
+        _ ->
+          ""
+      end
+
+    "expanded #{count}#{suffix}"
+  end
+
+  defp autonomy_delegation_expansion_history_line(_snapshot), do: nil
 
   defp autonomy_delegation_expansion_cooldown_line(%{"expansion_deferred_until" => value})
        when not is_nil(value) do

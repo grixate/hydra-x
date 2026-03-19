@@ -4430,6 +4430,97 @@ defmodule HydraX.RuntimeTest do
     assert is_float(batch_snapshot["expansion_capacity_score"])
   end
 
+  test "planner prefers the older waiting delegation batch when capacity is otherwise equal" do
+    planner =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, planner} = Runtime.save_agent(planner, %{"role" => "planner"})
+
+    researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, researcher} = Runtime.save_agent(researcher, %{"role" => "researcher"})
+
+    {:ok, first_parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Supervise the first equal-capacity branch.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "execution_mode" => "delegate",
+        "priority" => 8,
+        "metadata" => %{
+          "delegate_batch_concurrency" => 1,
+          "delegate_batch" => [
+            %{"goal" => "Research first branch A.", "role" => "researcher"},
+            %{"goal" => "Research second branch A.", "role" => "researcher"}
+          ]
+        }
+      })
+
+    {:ok, second_parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Supervise the second equal-capacity branch.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "execution_mode" => "delegate",
+        "priority" => 8,
+        "metadata" => %{
+          "delegate_batch_concurrency" => 1,
+          "delegate_batch" => [
+            %{"goal" => "Research first branch B.", "role" => "researcher"},
+            %{"goal" => "Research second branch B.", "role" => "researcher"}
+          ]
+        }
+      })
+
+    assert {:ok, delegated_first} = Runtime.run_autonomy_cycle(planner.id)
+    assert delegated_first.action == "delegated"
+
+    assert {:ok, delegated_second} = Runtime.run_autonomy_cycle(planner.id)
+    assert delegated_second.action == "delegated"
+
+    assert {:ok, first_research} = Runtime.run_autonomy_cycle(researcher.id)
+    assert first_research.action == "researched"
+
+    assert {:ok, second_research} = Runtime.run_autonomy_cycle(researcher.id)
+    assert second_research.action == "researched"
+
+    first_parent_state = Runtime.get_work_item!(first_parent.id)
+
+    {:ok, first_parent_with_history} =
+      Runtime.save_work_item(first_parent_state, %{
+        "metadata" => %{
+          "delegation_batch" => %{
+            "expected_count" => 2,
+            "batch_concurrency" => 1,
+            "expansion_count" => 1,
+            "last_expanded_at" => DateTime.utc_now(),
+            "items" =>
+              Runtime.delegation_batch_snapshot(first_parent_state)
+              |> Map.get("items", [])
+          }
+        }
+      })
+
+    assert {:ok, expansion_summary} = Runtime.run_autonomy_cycle(planner.id)
+    assert expansion_summary.action == "delegated_batch_expanded"
+
+    assert Enum.map(expansion_summary.delegated_work_items, & &1.parent_work_item_id) == [
+             second_parent.id
+           ]
+
+    refreshed_first = Runtime.delegation_batch_snapshot(first_parent_with_history)
+    refreshed_second = Runtime.delegation_batch_snapshot(Runtime.get_work_item!(second_parent.id))
+
+    assert refreshed_first["expansion_count"] == 1
+    assert refreshed_second["expansion_count"] == 1
+    assert %DateTime{} = refreshed_second["last_expanded_at"]
+  end
+
   test "planner expands the delegation batch with healthier pending role capacity first" do
     planner =
       create_agent()

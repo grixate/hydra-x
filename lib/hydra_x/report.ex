@@ -871,6 +871,7 @@ defmodule HydraX.Report do
         [
           delegation_roles_detail(snapshot),
           delegation_pending_roles_detail(snapshot),
+          delegation_expansion_history_detail(snapshot),
           delegation_expansion_cooldown_detail(snapshot),
           "delegation_strategy=#{snapshot["batch_strategy"] || "ordered"}",
           "delegation_concurrency=#{snapshot["batch_concurrency"] || 1}",
@@ -902,6 +903,19 @@ defmodule HydraX.Report do
   end
 
   defp delegation_pending_roles_detail(_snapshot), do: nil
+
+  defp delegation_expansion_history_detail(%{"expansion_count" => count} = snapshot)
+       when is_integer(count) and count > 0 do
+    last_expanded =
+      case snapshot["last_expanded_at"] do
+        %DateTime{} = value -> " delegation_last_expanded=#{format_datetime(value)}"
+        _ -> ""
+      end
+
+    "delegation_expansions=#{count}#{last_expanded}"
+  end
+
+  defp delegation_expansion_history_detail(_snapshot), do: nil
 
   defp delegation_expansion_cooldown_detail(%{"expansion_deferred_until" => value})
        when not is_nil(value) do

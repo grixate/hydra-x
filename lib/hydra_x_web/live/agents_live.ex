@@ -1846,6 +1846,7 @@ defmodule HydraXWeb.AgentsLive do
           "delegation #{snapshot["mode"]} · strategy #{snapshot["batch_strategy"] || "ordered"} · concurrency #{snapshot["batch_concurrency"] || 1} · completed #{snapshot["completed_count"] || 0} · failed #{snapshot["failed_count"] || 0} · canceled #{snapshot["canceled_count"] || 0}",
           delegation_roles_line(snapshot),
           delegation_pending_roles_line(snapshot),
+          delegation_expansion_history_line(snapshot),
           delegation_expansion_cooldown_line(snapshot)
         ]
         |> Enum.reject(&(&1 in [nil, ""]))
@@ -1876,6 +1877,22 @@ defmodule HydraXWeb.AgentsLive do
   end
 
   defp delegation_pending_roles_line(_snapshot), do: nil
+
+  defp delegation_expansion_history_line(%{"expansion_count" => count} = snapshot)
+       when is_integer(count) and count > 0 do
+    last_expanded =
+      case snapshot["last_expanded_at"] do
+        %DateTime{} = value ->
+          " · last expanded #{Calendar.strftime(value, "%Y-%m-%d %H:%M:%S UTC")}"
+
+        _ ->
+          ""
+      end
+
+    "expanded #{count}#{last_expanded}"
+  end
+
+  defp delegation_expansion_history_line(_snapshot), do: nil
 
   defp delegation_expansion_cooldown_line(%{"expansion_deferred_until" => value})
        when not is_nil(value) do
