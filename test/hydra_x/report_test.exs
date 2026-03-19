@@ -1559,6 +1559,7 @@ defmodule HydraX.ReportTest do
     assert markdown =~ "Delegation Supervision"
     assert markdown =~ "urgent_delegation_batches=1"
     assert markdown =~ "delegation_role_gaps=1"
+    assert markdown =~ "pressure=h0/m1/l0"
     assert markdown =~ "deferred=1"
     assert markdown =~ "urgent=1"
     assert markdown =~ "required_roles=operator:1"

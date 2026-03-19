@@ -1391,6 +1391,8 @@ defmodule HydraXWeb.AgentsLive do
             acc[:missing_required_roles],
             entry[:missing_required_roles]
           ),
+        pressure_batches:
+          merge_pressure_batch_counts(acc[:pressure_batches], entry[:pressure_batches]),
         required_role_gap_count:
           (acc[:required_role_gap_count] || 0) + (entry[:required_role_gap_count] || 0),
         urgent_batches: (acc[:urgent_batches] || 0) + (entry[:urgent_batches] || 0),
@@ -1456,6 +1458,14 @@ defmodule HydraXWeb.AgentsLive do
         }
       end)
     end)
+  end
+
+  defp merge_pressure_batch_counts(left, right) do
+    %{
+      high: ((left || %{})[:high] || 0) + ((right || %{})[:high] || 0),
+      medium: ((left || %{})[:medium] || 0) + ((right || %{})[:medium] || 0),
+      low: ((left || %{})[:low] || 0) + ((right || %{})[:low] || 0)
+    }
   end
 
   defp min_remaining_budget(nil, value), do: value
@@ -1525,6 +1535,7 @@ defmodule HydraXWeb.AgentsLive do
       delegation_supervision_batch_budget_label(summary),
       delegation_supervision_urgent_batches_label(summary),
       delegation_supervision_missing_roles_label(summary),
+      delegation_supervision_pressure_label(summary),
       delegation_deferred_batches_label(summary[:deferred_batches] || 0),
       "pending #{summary[:pending_children] || 0}",
       "active #{summary[:active_children] || 0}",
@@ -1597,6 +1608,19 @@ defmodule HydraXWeb.AgentsLive do
   end
 
   defp delegation_supervision_missing_roles_label(_summary), do: nil
+
+  defp delegation_supervision_pressure_label(summary) when is_map(summary) do
+    counts = summary[:pressure_batches] || %{}
+    high = counts[:high] || 0
+    medium = counts[:medium] || 0
+    low = counts[:low] || 0
+
+    if high > 0 or medium > 0 or low > 0 do
+      "pressure h#{high} m#{medium} l#{low}"
+    end
+  end
+
+  defp delegation_supervision_pressure_label(_summary), do: nil
 
   defp delegation_deferred_batches_label(count) when is_integer(count) and count > 0,
     do: "deferred #{count}"

@@ -401,6 +401,7 @@ defmodule HydraX.Report do
               else: ""
             ) <>
             (required_roles || "") <>
+            report_delegation_pressure_batches(entry) <>
             if((entry.deferred_batches || 0) > 0,
               do: " deferred=#{entry.deferred_batches}",
               else: ""
@@ -424,6 +425,19 @@ defmodule HydraX.Report do
               else: ""
             )
         end)
+    end
+  end
+
+  defp report_delegation_pressure_batches(entry) when is_map(entry) do
+    counts = entry.pressure_batches || %{}
+    high = counts[:high] || 0
+    medium = counts[:medium] || 0
+    low = counts[:low] || 0
+
+    if high > 0 or medium > 0 or low > 0 do
+      " pressure=h#{high}/m#{medium}/l#{low}"
+    else
+      ""
     end
   end
 

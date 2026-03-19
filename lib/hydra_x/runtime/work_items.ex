@@ -926,6 +926,7 @@ defmodule HydraX.Runtime.WorkItems do
       constrained_role_pressure = constrained_role_pressure(constrained_roles, role_capacity)
       missing_required_roles = aggregate_missing_completion_roles(snapshots)
       deferred_batches = Enum.count(snapshots, &delegation_batch_expansion_deferred?/1)
+      pressure_batches = delegation_pressure_batch_counts(snapshots)
 
       urgent_batches =
         Enum.count(snapshots, &(map_size(Map.get(&1, "missing_completion_roles", %{})) > 0))
@@ -953,6 +954,7 @@ defmodule HydraX.Runtime.WorkItems do
         missing_required_roles: missing_required_roles,
         required_role_gap_count:
           Enum.reduce(missing_required_roles, 0, fn {_role, count}, acc -> acc + count end),
+        pressure_batches: pressure_batches,
         urgent_batches: urgent_batches,
         supervision_budget: supervision_budget,
         supervision_budget_remaining: max(supervision_budget - active_children, 0),
@@ -967,6 +969,17 @@ defmodule HydraX.Runtime.WorkItems do
     |> Enum.sort_by(fn entry ->
       {-(entry.urgent_batches || 0), -(entry.active_batches || 0), -(entry.pending_children || 0),
        entry.agent_name || "", entry.role || ""}
+    end)
+  end
+
+  defp delegation_pressure_batch_counts(snapshots) when is_list(snapshots) do
+    Enum.reduce(snapshots, %{high: 0, medium: 0, low: 0}, fn snapshot, acc ->
+      case snapshot["expansion_pressure_severity"] do
+        "high" -> %{acc | high: acc.high + 1}
+        "medium" -> %{acc | medium: acc.medium + 1}
+        "low" -> %{acc | low: acc.low + 1}
+        _ -> acc
+      end
     end)
   end
 

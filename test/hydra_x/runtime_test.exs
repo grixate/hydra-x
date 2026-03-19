@@ -7230,6 +7230,11 @@ defmodule HydraX.RuntimeTest do
                  (&1.missing_required_roles || %{}) == %{"researcher" => 1})
            )
 
+    assert Enum.any?(
+             status.delegation_supervision,
+             &(&1.agent_id == agent.id and is_map(&1.pressure_batches))
+           )
+
     assert status.delegation_urgent_batch_count >= 1
     assert status.delegation_required_role_gap_count >= 1
 

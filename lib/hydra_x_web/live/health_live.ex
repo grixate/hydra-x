@@ -1526,6 +1526,9 @@ defmodule HydraXWeb.HealthLive do
                       entry.missing_required_roles
                     )}
                   </span>
+                  <span :if={autonomy_delegation_pressure_label(entry)}>
+                    {" "}· {autonomy_delegation_pressure_label(entry)}
+                  </span>
                   <span :if={
                     is_integer(entry.supervision_budget) and
                       is_integer(entry.supervision_budget_remaining)
@@ -2689,6 +2692,19 @@ defmodule HydraXWeb.HealthLive do
   end
 
   defp autonomy_delegation_pending_summary(_snapshot), do: nil
+
+  defp autonomy_delegation_pressure_label(entry) when is_map(entry) do
+    counts = entry[:pressure_batches] || %{}
+    high = counts[:high] || 0
+    medium = counts[:medium] || 0
+    low = counts[:low] || 0
+
+    if high > 0 or medium > 0 or low > 0 do
+      "pressure h#{high} m#{medium} l#{low}"
+    end
+  end
+
+  defp autonomy_delegation_pressure_label(_entry), do: nil
 
   defp assignment_strategy_label("role_capability_match"), do: "role capability match"
   defp assignment_strategy_label("capability_fallback"), do: "capability fallback"

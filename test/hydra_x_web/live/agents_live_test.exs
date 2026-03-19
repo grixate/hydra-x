@@ -449,6 +449,7 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "quorum skipped 1"
     assert html =~ "urgent 1"
     assert html =~ "required roles operator x1"
+    assert html =~ "pressure h0 m1 l0"
     assert html =~ "deferred 1"
     assert html =~ "expanded 1"
     assert html =~ "last expanded 2099-03-18 10:05:00 UTC"
