@@ -28,6 +28,7 @@ defmodule HydraX.Runtime.WorkItems do
   @claim_ttl_seconds 180
   @delegation_required_role_priority_boost 100
   @terminal_work_item_statuses ~w(completed failed canceled)
+  @delegation_pressure_replan_threshold 3
 
   def list_work_items(opts \\ []) do
     limit = Keyword.get(opts, :limit, 50)
@@ -1828,16 +1829,137 @@ defmodule HydraX.Runtime.WorkItems do
                  "supervision_batch_budget" => attrs["supervision_batch_budget"],
                  "active_batches" => attrs["active_batches"]
                })
-           }) do
+           }),
+         {:ok, deferred, follow_up_work_item} <-
+           maybe_enqueue_delegation_pressure_follow_up(
+             deferred,
+             reason,
+             deferred_count,
+             attrs,
+             observed_at
+           ) do
       {:processed,
        %{
          status: deferred.status,
          processed_count: 0,
          action: "delegation_batch_deferred",
          work_item: deferred,
+         follow_up_work_item: follow_up_work_item,
          deferred_until: deferred_until,
          reason: reason
        }}
+    end
+  end
+
+  defp maybe_enqueue_delegation_pressure_follow_up(
+         %WorkItem{} = parent,
+         reason,
+         deferred_count,
+         attrs,
+         observed_at
+       ) do
+    if parent.assigned_role == "planner" and
+         deferred_count >= @delegation_pressure_replan_threshold do
+      existing_follow_up =
+        existing_follow_up_work_item(parent, "delegation_pressure_replan", fn item ->
+          get_in(item.metadata || %{}, ["reason"]) == reason
+        end)
+
+      if existing_follow_up do
+        {:ok, parent, existing_follow_up}
+      else
+        pressure_artifact_payload = %{
+          "deferred_count" => deferred_count,
+          "reason" => reason,
+          "observed_at" => observed_at,
+          "pressure_severity" =>
+            delegation_batch_expansion_pressure_severity(attrs["pressure_snapshot"]),
+          "pressure_snapshot" => attrs["pressure_snapshot"] || %{},
+          "capacity_score" => attrs["capacity_score"],
+          "supervision_budget" => attrs["supervision_budget"],
+          "active_children" => attrs["active_children"],
+          "supervision_batch_budget" => attrs["supervision_batch_budget"],
+          "active_batches" => attrs["active_batches"]
+        }
+
+        {:ok, pressure_artifact} =
+          create_artifact(%{
+            "work_item_id" => parent.id,
+            "type" => "note",
+            "title" => "Delegation pressure alert",
+            "summary" => "Delegation expansion deferred #{deferred_count} times",
+            "body" => delegation_pressure_artifact_body(parent, pressure_artifact_payload),
+            "payload" => pressure_artifact_payload,
+            "provenance" => %{"source" => "autonomy", "phase" => "delegation_pressure"},
+            "confidence" => 0.64
+          })
+
+        constraint_finding =
+          delegation_pressure_constraint_finding(
+            parent,
+            pressure_artifact,
+            pressure_artifact_payload
+          )
+
+        constraint_strategy = derive_constraint_strategy([constraint_finding])
+
+        follow_up_context =
+          build_follow_up_context(
+            parent,
+            [],
+            pressure_artifact,
+            [constraint_finding],
+            constraint_strategy
+          )
+
+        {:ok, follow_up_work_item} =
+          ensure_follow_up_work_item(
+            parent,
+            "delegation_pressure_replan",
+            fn item ->
+              get_in(item.metadata || %{}, ["reason"]) == reason
+            end,
+            %{
+              "kind" => parent.kind,
+              "goal" => "Re-plan #{parent.goal} after repeated delegation expansion deferrals.",
+              "status" => "planned",
+              "execution_mode" => "delegate",
+              "assigned_role" => "planner",
+              "assigned_agent_id" => parent.assigned_agent_id,
+              "delegated_by_agent_id" => parent.assigned_agent_id || parent.delegated_by_agent_id,
+              "parent_work_item_id" => parent.id,
+              "priority" => max(parent.priority - 1, 0),
+              "autonomy_level" => parent.autonomy_level,
+              "approval_stage" => parent.approval_stage,
+              "deliverables" => parent.deliverables,
+              "input_artifact_refs" => %{"summary_artifact_id" => pressure_artifact.id},
+              "required_outputs" => parent.required_outputs,
+              "review_required" => parent.review_required,
+              "metadata" => %{
+                "task_type" => "delegation_pressure_replan",
+                "delegate_goal" => parent.goal,
+                "summary_artifact_id" => pressure_artifact.id,
+                "reason" => reason,
+                "constraint_findings" => [constraint_finding],
+                "constraint_strategy" => constraint_strategy,
+                "follow_up_context" => follow_up_context
+              }
+            }
+          )
+
+        {:ok, updated_parent} =
+          save_work_item(parent, %{
+            "result_refs" =>
+              append_follow_up_result_refs(parent.result_refs, follow_up_work_item, "replan"),
+            "metadata" =>
+              (parent.metadata || %{})
+              |> Map.put("follow_up_context", follow_up_context)
+          })
+
+        {:ok, updated_parent, follow_up_work_item}
+      end
+    else
+      {:ok, parent, nil}
     end
   end
 
@@ -5525,45 +5647,79 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp delegation_batch_children(%WorkItem{} = work_item) do
-    case Map.get(work_item, :child_work_items) do
-      children when is_list(children) ->
-        children
+    children =
+      case Map.get(work_item, :child_work_items) do
+        children when is_list(children) ->
+          children
 
-      %Ecto.Association.NotLoaded{} ->
-        list_work_items(
-          parent_work_item_id: work_item.id,
-          limit: delegated_child_limit(work_item),
-          preload: false
-        )
+        %Ecto.Association.NotLoaded{} ->
+          list_work_items(
+            parent_work_item_id: work_item.id,
+            limit: delegated_child_limit(work_item),
+            preload: false
+          )
 
-      _ ->
-        list_work_items(
-          parent_work_item_id: work_item.id,
-          limit: delegated_child_limit(work_item),
-          preload: false
-        )
-    end
+        _ ->
+          list_work_items(
+            parent_work_item_id: work_item.id,
+            limit: delegated_child_limit(work_item),
+            preload: false
+          )
+      end
+
+    filter_delegation_batch_children(work_item, children)
   end
 
   defp delegation_batch_children(work_item) when is_map(work_item) do
-    case Map.get(work_item, :child_work_items) || Map.get(work_item, "child_work_items") do
-      children when is_list(children) ->
-        children
+    children =
+      case Map.get(work_item, :child_work_items) || Map.get(work_item, "child_work_items") do
+        children when is_list(children) ->
+          children
 
-      _ ->
-        case Map.get(work_item, :id) || Map.get(work_item, "id") do
-          id when is_integer(id) ->
-            list_work_items(
-              parent_work_item_id: id,
-              limit: delegated_child_limit(work_item),
-              preload: false
-            )
+        _ ->
+          case Map.get(work_item, :id) || Map.get(work_item, "id") do
+            id when is_integer(id) ->
+              list_work_items(
+                parent_work_item_id: id,
+                limit: delegated_child_limit(work_item),
+                preload: false
+              )
 
-          _ ->
-            []
-        end
+            _ ->
+              []
+          end
+      end
+
+    filter_delegation_batch_children(work_item, children)
+  end
+
+  defp filter_delegation_batch_children(work_item, children) when is_list(children) do
+    if delegation_batch_scoped_children?(work_item) do
+      Enum.filter(children, fn child ->
+        present_text?(get_in(child.metadata || %{}, ["delegation_batch_key"]))
+      end)
+    else
+      children
     end
   end
+
+  defp filter_delegation_batch_children(_work_item, children), do: children
+
+  defp delegation_batch_scoped_children?(%WorkItem{} = work_item) do
+    metadata = work_item.metadata || %{}
+
+    Map.get(metadata, "delegation_batch", %{}) != %{} or
+      List.wrap(metadata["delegate_batch"]) != []
+  end
+
+  defp delegation_batch_scoped_children?(work_item) when is_map(work_item) do
+    metadata = work_item_metadata(work_item)
+
+    Map.get(metadata, "delegation_batch", %{}) != %{} or
+      List.wrap(metadata["delegate_batch"]) != []
+  end
+
+  defp delegation_batch_scoped_children?(_work_item), do: false
 
   defp delegation_expected_count(%WorkItem{} = work_item) do
     metadata = work_item.metadata || %{}
@@ -8294,6 +8450,54 @@ defmodule HydraX.Runtime.WorkItems do
     }
   end
 
+  defp delegation_pressure_constraint_finding(
+         %WorkItem{} = parent,
+         %Artifact{} = artifact,
+         payload
+       ) do
+    payload = Helpers.normalize_string_keys(payload || %{})
+    reason = payload["reason"] || "delegation_pressure"
+    deferred_count = payload["deferred_count"] || 0
+    severity = payload["pressure_severity"] || "unknown"
+
+    %{
+      "memory_id" => nil,
+      "type" => "Constraint",
+      "content" =>
+        "Re-plan #{parent.goal} because delegation expansion has been deferred #{deferred_count} times under #{reason} pressure.",
+      "score" => 0.92,
+      "summary_reason" => "delegation_pressure",
+      "pressure_reason" => reason,
+      "pressure_severity" => severity,
+      "deferred_count" => deferred_count,
+      "source_work_item_id" => parent.id,
+      "source_goal" => parent.goal,
+      "source_kind" => parent.kind,
+      "source_role" => parent.assigned_role,
+      "source_artifact_id" => artifact.id,
+      "source_artifact_type" => artifact.type,
+      "reasons" => ["constraint_backpressure", "delegation_pressure"]
+    }
+  end
+
+  defp delegation_pressure_artifact_body(%WorkItem{} = parent, payload) do
+    payload = Helpers.normalize_string_keys(payload || %{})
+
+    """
+    Delegation pressure detected for #{parent.goal}
+
+    Reason: #{payload["reason"] || "unknown"}
+    Deferred count: #{payload["deferred_count"] || 0}
+    Pressure severity: #{payload["pressure_severity"] || "unknown"}
+    Capacity score: #{payload["capacity_score"] || "n/a"}
+    Supervision budget: #{payload["supervision_budget"] || "n/a"}
+    Active children: #{payload["active_children"] || "n/a"}
+    Batch budget: #{payload["supervision_batch_budget"] || "n/a"}
+    Active batches: #{payload["active_batches"] || "n/a"}
+    """
+    |> String.trim()
+  end
+
   defp derive_constraint_strategy(constraint_findings) do
     constraint_findings
     |> Enum.map(&constraint_strategy_line/1)
@@ -8339,6 +8543,31 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp constraint_strategy_line(%{"summary_reason" => "delivery_rejected"}) do
     "Strengthen confidence with clearer evidence, revise the summary for review, and avoid external delivery until the revised brief is explicitly approved."
+  end
+
+  defp constraint_strategy_line(%{
+         "summary_reason" => "delegation_pressure",
+         "pressure_reason" => "role_capacity_constrained"
+       }) do
+    "Reduce parallel fan-out, wait for healthier worker capacity, and re-plan the next delegation step around the constrained role."
+  end
+
+  defp constraint_strategy_line(%{
+         "summary_reason" => "delegation_pressure",
+         "pressure_reason" => "planner_budget_constrained"
+       }) do
+    "Reduce concurrent delegated children and sequence the remaining work through a smaller planner budget."
+  end
+
+  defp constraint_strategy_line(%{
+         "summary_reason" => "delegation_pressure",
+         "pressure_reason" => "planner_batch_budget_constrained"
+       }) do
+    "Consolidate active delegation batches before opening another branch of planner work."
+  end
+
+  defp constraint_strategy_line(%{"summary_reason" => "delegation_pressure"}) do
+    "Re-plan the blocked delegation tree with a narrower scope and a healthier worker-capacity path."
   end
 
   defp constraint_strategy_line(_finding), do: nil
