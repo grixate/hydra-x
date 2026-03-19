@@ -692,6 +692,16 @@ defmodule HydraX.Runtime.WorkItems do
         acc + (entry.required_role_gap_count || 0)
       end)
 
+    delegation_high_pressure_batch_count =
+      Enum.reduce(delegation_supervision, 0, fn entry, acc ->
+        acc + delegation_pressure_batch_count(entry, :high)
+      end)
+
+    delegation_medium_pressure_batch_count =
+      Enum.reduce(delegation_supervision, 0, fn entry, acc ->
+        acc + delegation_pressure_batch_count(entry, :medium)
+      end)
+
     capability_drifts =
       autonomy_agents
       |> Enum.map(fn agent ->
@@ -732,6 +742,8 @@ defmodule HydraX.Runtime.WorkItems do
       urgent_deferred_role_queue_count: urgent_deferred_role_queue_count,
       delegation_urgent_batch_count: delegation_urgent_batch_count,
       delegation_required_role_gap_count: delegation_required_role_gap_count,
+      delegation_high_pressure_batch_count: delegation_high_pressure_batch_count,
+      delegation_medium_pressure_batch_count: delegation_medium_pressure_batch_count,
       autonomy_agent_count: length(autonomy_agents),
       active_roles: autonomy_agents |> Enum.map(& &1.role) |> Enum.frequencies(),
       role_queue_backlog: role_queue_backlog,
@@ -967,9 +979,21 @@ defmodule HydraX.Runtime.WorkItems do
       }
     end)
     |> Enum.sort_by(fn entry ->
-      {-(entry.urgent_batches || 0), -(entry.active_batches || 0), -(entry.pending_children || 0),
-       entry.agent_name || "", entry.role || ""}
+      {
+        -delegation_pressure_batch_count(entry, :high),
+        -delegation_pressure_batch_count(entry, :medium),
+        -(entry.urgent_batches || 0),
+        -(entry.active_batches || 0),
+        -(entry.pending_children || 0),
+        entry.agent_name || "",
+        entry.role || ""
+      }
     end)
+  end
+
+  defp delegation_pressure_batch_count(entry, severity) when is_map(entry) do
+    counts = entry[:pressure_batches] || entry["pressure_batches"] || %{}
+    counts[severity] || counts[to_string(severity)] || 0
   end
 
   defp delegation_pressure_batch_counts(snapshots) when is_list(snapshots) do

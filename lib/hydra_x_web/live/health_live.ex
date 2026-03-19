@@ -1341,7 +1341,9 @@ defmodule HydraXWeb.HealthLive do
               )} · required role gaps {@autonomy_status.delegation_required_role_gap_count || 0}
             </p>
             <p class="mt-1 text-xs text-[var(--hx-mute)]">
-              urgent batches {@autonomy_status.delegation_urgent_batch_count || 0}
+              urgent batches {@autonomy_status.delegation_urgent_batch_count || 0} · high pressure{" "}
+              {@autonomy_status.delegation_high_pressure_batch_count || 0} · medium pressure{" "}
+              {@autonomy_status.delegation_medium_pressure_batch_count || 0}
             </p>
           </article>
         </div>

@@ -7236,6 +7236,8 @@ defmodule HydraX.RuntimeTest do
            )
 
     assert status.delegation_urgent_batch_count >= 1
+    assert status.delegation_high_pressure_batch_count >= 0
+    assert status.delegation_medium_pressure_batch_count >= 0
     assert status.delegation_required_role_gap_count >= 1
 
     assert Enum.any?(
