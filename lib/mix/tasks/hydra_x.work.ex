@@ -75,6 +75,9 @@ defmodule Mix.Tasks.HydraX.Work do
     Mix.shell().info("artifacts=#{length(artifacts)}")
     Mix.shell().info("approvals=#{length(approvals)}")
 
+    work_item_follow_up_lines(work_item)
+    |> Enum.each(fn line -> Mix.shell().info(line) end)
+
     Enum.each(artifacts, fn artifact ->
       Mix.shell().info(
         Enum.join(
@@ -305,4 +308,54 @@ defmodule Mix.Tasks.HydraX.Work do
        do: "review"
 
   defp artifact_delivery_decision_kind(_payload), do: "artifact"
+
+  defp work_item_follow_up_lines(work_item) do
+    summary = get_in(work_item.result_refs || %{}, ["follow_up_summary"]) || %{}
+
+    types =
+      summary
+      |> Map.get("types", [])
+      |> List.wrap()
+
+    strategies =
+      summary
+      |> Map.get("strategies", [])
+      |> List.wrap()
+
+    summaries =
+      summary
+      |> Map.get("summaries", [])
+      |> List.wrap()
+
+    count =
+      summary
+      |> Map.get("count")
+      |> case do
+        value when is_integer(value) and value > 0 -> value
+        _ -> nil
+      end
+
+    base_lines =
+      []
+      |> maybe_prepend_follow_up_line("follow_up_count", count)
+      |> maybe_prepend_follow_up_line("follow_up_types", Enum.join(types, ","))
+      |> maybe_prepend_follow_up_line("follow_up_strategies", Enum.join(strategies, ","))
+      |> maybe_prepend_follow_up_line("follow_up_summaries", Enum.join(summaries, ","))
+
+    detail_lines =
+      summaries
+      |> Enum.with_index(1)
+      |> Enum.map(fn {summary, index} ->
+        "follow_up_detail\t#{work_item.id}\trecovery_summary_#{index}\t#{summary}"
+      end)
+
+    base_lines ++ detail_lines
+  end
+
+  defp maybe_prepend_follow_up_line(lines, _label, nil), do: lines
+  defp maybe_prepend_follow_up_line(lines, _label, ""), do: lines
+
+  defp maybe_prepend_follow_up_line(lines, label, value) do
+    lines ++ ["#{label}=#{value}"]
+  end
 end

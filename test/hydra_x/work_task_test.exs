@@ -15,7 +15,15 @@ defmodule HydraX.WorkTaskTest do
         "assigned_agent_id" => agent.id,
         "assigned_role" => "builder",
         "status" => "completed",
-        "approval_stage" => "validated"
+        "approval_stage" => "validated",
+        "result_refs" => %{
+          "follow_up_summary" => %{
+            "count" => 1,
+            "types" => ["replan"],
+            "strategies" => ["operator_guided_replan"],
+            "summaries" => ["Operator-guided recovery"]
+          }
+        }
       })
 
     {:ok, _artifact} =
@@ -96,6 +104,14 @@ defmodule HydraX.WorkTaskTest do
 
     assert show_output =~ "work_item=#{work_item.id}"
     assert show_output =~ "kind=engineering"
+    assert show_output =~ "follow_up_count=1"
+    assert show_output =~ "follow_up_types=replan"
+    assert show_output =~ "follow_up_strategies=operator_guided_replan"
+    assert show_output =~ "follow_up_summaries=Operator-guided recovery"
+
+    assert show_output =~
+             "follow_up_detail\t#{work_item.id}\trecovery_summary_1\tOperator-guided recovery"
+
     assert show_output =~ "artifact\tcode_change_set"
     assert show_output =~ "artifact_detail"
     assert show_output =~ "review_delivery_decision_1"
