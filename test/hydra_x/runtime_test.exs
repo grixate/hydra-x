@@ -4071,6 +4071,14 @@ defmodule HydraX.RuntimeTest do
     [follow_up_child_id] = follow_up_parent.result_refs["child_work_item_ids"]
     follow_up_child = Runtime.get_work_item!(follow_up_child_id)
 
+    assert follow_up_child.review_required == true
+
+    assert get_in(follow_up_child.metadata || %{}, ["preferred_recovery_strategy"]) ==
+             "operator_guided_replan"
+
+    assert get_in(follow_up_child.metadata || %{}, ["recovery_strategy_behavior"]) ==
+             "operator_review_after_execution"
+
     follow_up_context =
       get_in(follow_up_child.metadata || %{}, ["delegation_context", "promoted_memories"]) || []
 

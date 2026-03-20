@@ -5856,13 +5856,15 @@ defmodule HydraX.Runtime.WorkItems do
         delegation_limit
       )
 
+    preferred_recovery_strategy = delegation_preferred_recovery_strategy(delegation_context)
+
     child_metadata =
       entry["metadata"]
       |> delegation_child_metadata(work_item, agent, entry)
       |> maybe_put_delegation_context(delegation_context, agent.id, child_goal)
 
-    {:ok, child} =
-      save_work_item(%{
+    child_attrs =
+      %{
         "kind" => entry["kind"],
         "goal" => child_goal,
         "status" => "planned",
@@ -5879,10 +5881,56 @@ defmodule HydraX.Runtime.WorkItems do
         "required_outputs" => entry["required_outputs"],
         "deliverables" => entry["deliverables"],
         "metadata" => child_metadata
-      })
+      }
+      |> apply_preferred_recovery_strategy_to_child_attrs(preferred_recovery_strategy)
+
+    {:ok, child} = save_work_item(child_attrs)
 
     %{child: child, spec: entry, delegation_context: delegation_context}
   end
+
+  defp delegation_preferred_recovery_strategy(delegation_context) do
+    delegation_context
+    |> List.wrap()
+    |> Enum.filter(fn memory ->
+      memory["type"] == "RecoveryStrategy" and is_binary(memory["content"])
+    end)
+    |> Enum.max_by(
+      fn memory -> memory["score"] || 0.0 end,
+      fn -> nil end
+    )
+    |> case do
+      %{"strategy" => strategy} when is_binary(strategy) and strategy != "" -> strategy
+      _ -> nil
+    end
+  end
+
+  defp apply_preferred_recovery_strategy_to_child_attrs(attrs, nil), do: attrs
+
+  defp apply_preferred_recovery_strategy_to_child_attrs(attrs, strategy)
+       when is_binary(strategy) do
+    metadata =
+      attrs
+      |> Map.get("metadata", %{})
+      |> Helpers.normalize_string_keys()
+      |> Map.put("preferred_recovery_strategy", strategy)
+      |> Map.put("recovery_strategy_behavior", recovery_strategy_behavior(strategy))
+
+    attrs = Map.put(attrs, "metadata", metadata)
+
+    if strategy in ["operator_guided_replan", "review_guided_replan", "request_review"] do
+      Map.put(attrs, "review_required", true)
+    else
+      attrs
+    end
+  end
+
+  defp recovery_strategy_behavior("operator_guided_replan"), do: "operator_review_after_execution"
+  defp recovery_strategy_behavior("review_guided_replan"), do: "review_after_execution"
+  defp recovery_strategy_behavior("request_review"), do: "review_after_execution"
+  defp recovery_strategy_behavior("narrow_delegate_batch"), do: "narrow_scope"
+  defp recovery_strategy_behavior("constraint_replan"), do: "constraint_first"
+  defp recovery_strategy_behavior(_strategy), do: "strategy_guided"
 
   defp normalize_delegation_batch_entry(
          entry,
@@ -7094,6 +7142,8 @@ defmodule HydraX.Runtime.WorkItems do
           "finalized_finding_fit" => delegation_goal_score(content, goal),
           "source_score" => base_follow_up_score(entry["score"])
         },
+        "strategy" => entry["strategy"],
+        "alternative_strategies" => entry["alternative_strategies"] || [],
         "source_work_item_id" => work_item.id,
         "source_artifact_type" => entry["source_artifact_type"] || "decision_ledger"
       }
