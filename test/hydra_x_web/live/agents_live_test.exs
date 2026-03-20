@@ -504,7 +504,8 @@ defmodule HydraXWeb.AgentsLiveTest do
           "follow_up_summary" => %{
             "count" => 1,
             "types" => ["replan"],
-            "strategies" => ["operator_guided_replan"]
+            "strategies" => ["operator_guided_replan"],
+            "summaries" => ["Operator-guided recovery"]
           }
         }
       })
@@ -512,7 +513,7 @@ defmodule HydraXWeb.AgentsLiveTest do
     {:ok, _view, html} = live(conn, ~p"/agents")
 
     assert html =~ replan_parent.goal
-    assert html =~ "replan follow-up queued 1 (operator-guided)"
+    assert html =~ "replan follow-up queued 1 (Operator-guided recovery)"
   end
 
   test "agents page shows queued assignment recoveries with saturation detail", %{conn: conn} do

@@ -2848,11 +2848,11 @@ defmodule HydraXWeb.HealthLive do
 
       List.wrap(get_in(item.result_refs || %{}, ["follow_up_work_item_ids"])) != [] ->
         count = autonomy_follow_up_count(item)
-        strategy = autonomy_follow_up_strategy(item)
+        strategy = autonomy_follow_up_strategy_detail(item)
 
         case autonomy_follow_up_type(item) do
           "replan" ->
-            ["replan queued #{count}", strategy && "(#{humanize_follow_up_strategy(strategy)})"]
+            ["replan queued #{count}", strategy && "(#{strategy})"]
             |> Enum.reject(&is_nil_or_empty/1)
             |> Enum.join(" ")
 
@@ -2931,6 +2931,24 @@ defmodule HydraXWeb.HealthLive do
       |> Map.get("follow_up_work_item_ids", [])
       |> List.wrap()
       |> length()
+  end
+
+  defp autonomy_follow_up_strategy_detail(item) do
+    summary =
+      item
+      |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "summaries"]))
+      |> List.wrap()
+      |> List.first()
+
+    if is_binary(summary) and summary != "" do
+      summary
+    else
+      autonomy_follow_up_strategy(item)
+      |> case do
+        value when is_binary(value) -> humanize_follow_up_strategy(value)
+        _ -> nil
+      end
+    end
   end
 
   defp autonomy_follow_up_strategy(item) do

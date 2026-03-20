@@ -2027,13 +2027,13 @@ defmodule HydraXWeb.AgentsLive do
 
       List.wrap(get_in(work_item.result_refs || %{}, ["follow_up_work_item_ids"])) != [] ->
         count = follow_up_queue_count(work_item)
-        strategy = follow_up_queue_strategy(work_item)
+        strategy = follow_up_queue_strategy_detail(work_item)
 
         case follow_up_queue_type(work_item) do
           "replan" ->
             [
               "replan follow-up queued #{count}",
-              strategy && "(#{humanize_follow_up_strategy(strategy)})"
+              strategy && "(#{strategy})"
             ]
             |> Enum.reject(&(&1 in [nil, ""]))
             |> Enum.join(" ")
@@ -2359,6 +2359,24 @@ defmodule HydraXWeb.AgentsLive do
       |> Map.get("follow_up_work_item_ids", [])
       |> List.wrap()
       |> length()
+  end
+
+  defp follow_up_queue_strategy_detail(work_item) do
+    summary =
+      work_item
+      |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "summaries"]))
+      |> List.wrap()
+      |> List.first()
+
+    if is_binary(summary) and summary != "" do
+      summary
+    else
+      follow_up_queue_strategy(work_item)
+      |> case do
+        value when is_binary(value) -> humanize_follow_up_strategy(value)
+        _ -> nil
+      end
+    end
   end
 
   defp follow_up_queue_strategy(work_item) do

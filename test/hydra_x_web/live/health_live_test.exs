@@ -584,7 +584,8 @@ defmodule HydraXWeb.HealthLiveTest do
           "follow_up_summary" => %{
             "count" => 1,
             "types" => ["replan"],
-            "strategies" => ["operator_guided_replan"]
+            "strategies" => ["operator_guided_replan"],
+            "summaries" => ["Operator-guided recovery"]
           }
         }
       })
@@ -592,7 +593,7 @@ defmodule HydraXWeb.HealthLiveTest do
     {:ok, _view, html} = live(conn, ~p"/health")
 
     assert html =~ replan_parent.goal
-    assert html =~ "replan queued 1 (operator-guided)"
+    assert html =~ "replan queued 1 (Operator-guided recovery)"
   end
 
   test "health page shows degraded publish posture", %{conn: conn} do

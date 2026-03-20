@@ -1107,7 +1107,8 @@ defmodule HydraX.ReportTest do
           "follow_up_summary" => %{
             "count" => 1,
             "types" => ["replan"],
-            "strategies" => ["operator_guided_replan"]
+            "strategies" => ["operator_guided_replan"],
+            "summaries" => ["Operator-guided recovery"]
           }
         }
       })
@@ -1154,7 +1155,7 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "Readiness"
     assert File.read!(export.markdown_path) =~ "Total items:"
     assert File.read!(export.markdown_path) =~ "Required warnings:"
-    assert File.read!(export.markdown_path) =~ "replan queued 1 (operator-guided)"
+    assert File.read!(export.markdown_path) =~ "replan queued 1 (Operator-guided recovery)"
 
     assert File.read!(export.markdown_path) =~
              "operator_intervention_prepared role_capacity_constrained"

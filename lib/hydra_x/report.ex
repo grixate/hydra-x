@@ -2266,7 +2266,7 @@ defmodule HydraX.Report do
         |> Enum.join(" ")
 
       %{type: "queued_replan_follow_up", count: count, strategy: strategy} ->
-        ["replan queued #{count}", strategy && "(#{humanize_follow_up_strategy(strategy)})"]
+        ["replan queued #{count}", strategy && "(#{strategy})"]
         |> Enum.reject(&is_nil_or_empty/1)
         |> Enum.join(" ")
 
@@ -2465,9 +2465,17 @@ defmodule HydraX.Report do
       count: count,
       strategy:
         item
-        |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "strategies"]))
+        |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "summaries"]))
         |> List.wrap()
-        |> List.first()
+        |> List.first() ||
+          item
+          |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "strategies"]))
+          |> List.wrap()
+          |> List.first()
+          |> case do
+            value when is_binary(value) -> humanize_follow_up_strategy(value)
+            _ -> nil
+          end
     }
   end
 

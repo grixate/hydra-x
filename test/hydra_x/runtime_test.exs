@@ -4825,6 +4825,12 @@ defmodule HydraX.RuntimeTest do
 
     assert replan_item.review_required == true
 
+    parent = Runtime.get_work_item!(parent.id)
+
+    assert "Reviewer-guided recovery" in List.wrap(
+             get_in(parent.result_refs || %{}, ["follow_up_summary", "summaries"])
+           )
+
     assert {:ok, replan_summary} = Runtime.run_autonomy_cycle(planner.id)
     assert replan_summary.action == "delegated"
     assert length(replan_summary.delegated_work_items) == 1
@@ -4973,6 +4979,10 @@ defmodule HydraX.RuntimeTest do
     assert replan_item.review_required == true
 
     parent = Runtime.get_work_item!(parent.id)
+
+    assert "Operator-guided recovery" in List.wrap(
+             get_in(parent.result_refs || %{}, ["follow_up_summary", "summaries"])
+           )
 
     assert "operator_guided_replan" in List.wrap(
              get_in(parent.result_refs || %{}, ["follow_up_summary", "strategies"])
