@@ -311,6 +311,10 @@ defmodule HydraX.Runtime.Conversations do
       |> Map.merge(%{
         "conversation_id" => conversation.id,
         "sequence" => sequence,
+        "content" =>
+          attrs
+          |> Map.get(:content, Map.get(attrs, "content"))
+          |> normalize_turn_content(),
         "metadata" => Map.get(attrs, :metadata, Map.get(attrs, "metadata", %{}))
       })
 
@@ -1274,6 +1278,12 @@ defmodule HydraX.Runtime.Conversations do
       payload
     end
   end
+
+  defp normalize_turn_content(content) when is_binary(content), do: content
+  defp normalize_turn_content(content) when is_atom(content), do: Atom.to_string(content)
+  defp normalize_turn_content(content) when is_number(content), do: to_string(content)
+  defp normalize_turn_content(content) when is_nil(content), do: nil
+  defp normalize_turn_content(content), do: inspect(content)
 
   defp conversation_lease_name(conversation_id), do: "conversation:#{conversation_id}"
   defp ingress_lease_name(channel, external_ref), do: "ingress:#{channel}:#{external_ref}"

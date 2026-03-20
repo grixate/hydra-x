@@ -93,6 +93,28 @@ defmodule HydraX.RuntimeTest do
            end)
   end
 
+  test "append_turn normalizes atom content markers" do
+    agent = create_agent()
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{channel: "cli", title: "normalized-turn-content"})
+
+    assert {:ok, turn} =
+             Runtime.append_turn(conversation, %{
+               role: "assistant",
+               kind: "message",
+               content: :tool_execution,
+               metadata: %{"source" => "test"}
+             })
+
+    assert turn.content == "tool_execution"
+
+    assert Enum.any?(
+             Runtime.list_turns(conversation.id),
+             &(&1.id == turn.id and &1.content == "tool_execution")
+           )
+  end
+
   test "planner captures enabled skill hints from workspace metadata" do
     agent = create_agent()
     skill_dir = Path.join([agent.workspace_root, "skills", "deploy-checks"])
