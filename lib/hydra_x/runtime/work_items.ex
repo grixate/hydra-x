@@ -1860,11 +1860,19 @@ defmodule HydraX.Runtime.WorkItems do
        ) do
     if parent.assigned_role == "planner" and
          deferred_count >= @delegation_pressure_replan_threshold do
+      follow_up_strategy =
+        delegation_pressure_follow_up_strategy(reason, deferred_count, attrs)
+
+      follow_up_task_type =
+        if follow_up_strategy == "request_review",
+          do: "delegation_pressure_review",
+          else: "delegation_pressure_replan"
+
       {delegate_batch, delegate_batch_metadata} =
         delegation_pressure_replan_batch(parent, reason)
 
       existing_follow_up =
-        existing_follow_up_work_item(parent, "delegation_pressure_replan", fn item ->
+        existing_follow_up_work_item(parent, follow_up_task_type, fn item ->
           get_in(item.metadata || %{}, ["reason"]) == reason
         end)
 
@@ -1916,47 +1924,91 @@ defmodule HydraX.Runtime.WorkItems do
           )
 
         {:ok, follow_up_work_item} =
-          ensure_follow_up_work_item(
-            parent,
-            "delegation_pressure_replan",
-            fn item ->
-              get_in(item.metadata || %{}, ["reason"]) == reason
-            end,
-            %{
-              "kind" => parent.kind,
-              "goal" => "Re-plan #{parent.goal} after repeated delegation expansion deferrals.",
-              "status" => "planned",
-              "execution_mode" => "delegate",
-              "assigned_role" => "planner",
-              "assigned_agent_id" => parent.assigned_agent_id,
-              "delegated_by_agent_id" => parent.assigned_agent_id || parent.delegated_by_agent_id,
-              "parent_work_item_id" => parent.id,
-              "priority" => max(parent.priority - 1, 0),
-              "autonomy_level" => parent.autonomy_level,
-              "approval_stage" => parent.approval_stage,
-              "deliverables" => parent.deliverables,
-              "input_artifact_refs" => %{"summary_artifact_id" => pressure_artifact.id},
-              "required_outputs" => parent.required_outputs,
-              "review_required" => parent.review_required,
-              "metadata" =>
+          case follow_up_strategy do
+            "request_review" ->
+              ensure_follow_up_work_item(
+                parent,
+                "delegation_pressure_review",
+                fn item ->
+                  get_in(item.metadata || %{}, ["reason"]) == reason
+                end,
                 %{
-                  "task_type" => "delegation_pressure_replan",
-                  "delegate_goal" => parent.goal,
-                  "delegate_batch" => delegate_batch,
-                  "summary_artifact_id" => pressure_artifact.id,
-                  "reason" => reason,
-                  "constraint_findings" => [constraint_finding],
-                  "constraint_strategy" => constraint_strategy,
-                  "follow_up_context" => follow_up_context
+                  "kind" => "review",
+                  "goal" =>
+                    "Review delegation strategy for blocked work item ##{parent.id}: #{parent.goal}",
+                  "status" => "planned",
+                  "execution_mode" => "review",
+                  "assigned_role" => "reviewer",
+                  "parent_work_item_id" => parent.id,
+                  "priority" => max(parent.priority, 1),
+                  "autonomy_level" => "execute_with_review",
+                  "approval_stage" => parent.approval_stage,
+                  "required_outputs" => %{"artifact_types" => ["review_report"]},
+                  "metadata" => %{
+                    "task_type" => "delegation_pressure_review",
+                    "review_target_work_item_id" => parent.id,
+                    "requested_action" => "review_delegation_strategy",
+                    "report_artifact_id" => pressure_artifact.id,
+                    "summary_artifact_id" => pressure_artifact.id,
+                    "reason" => reason,
+                    "pressure_follow_up_strategy" => follow_up_strategy,
+                    "constraint_findings" => [constraint_finding],
+                    "constraint_strategy" => constraint_strategy,
+                    "follow_up_context" => follow_up_context
+                  }
                 }
-                |> Map.merge(delegate_batch_metadata)
-            }
-          )
+              )
+
+            _ ->
+              ensure_follow_up_work_item(
+                parent,
+                "delegation_pressure_replan",
+                fn item ->
+                  get_in(item.metadata || %{}, ["reason"]) == reason
+                end,
+                %{
+                  "kind" => parent.kind,
+                  "goal" =>
+                    "Re-plan #{parent.goal} after repeated delegation expansion deferrals.",
+                  "status" => "planned",
+                  "execution_mode" => "delegate",
+                  "assigned_role" => "planner",
+                  "assigned_agent_id" => parent.assigned_agent_id,
+                  "delegated_by_agent_id" =>
+                    parent.assigned_agent_id || parent.delegated_by_agent_id,
+                  "parent_work_item_id" => parent.id,
+                  "priority" => max(parent.priority - 1, 0),
+                  "autonomy_level" => parent.autonomy_level,
+                  "approval_stage" => parent.approval_stage,
+                  "deliverables" => parent.deliverables,
+                  "input_artifact_refs" => %{"summary_artifact_id" => pressure_artifact.id},
+                  "required_outputs" => parent.required_outputs,
+                  "review_required" => parent.review_required,
+                  "metadata" =>
+                    %{
+                      "task_type" => "delegation_pressure_replan",
+                      "delegate_goal" => parent.goal,
+                      "delegate_batch" => delegate_batch,
+                      "summary_artifact_id" => pressure_artifact.id,
+                      "reason" => reason,
+                      "pressure_follow_up_strategy" => follow_up_strategy,
+                      "constraint_findings" => [constraint_finding],
+                      "constraint_strategy" => constraint_strategy,
+                      "follow_up_context" => follow_up_context
+                    }
+                    |> Map.merge(delegate_batch_metadata)
+                }
+              )
+          end
 
         {:ok, updated_parent} =
           save_work_item(parent, %{
             "result_refs" =>
-              append_follow_up_result_refs(parent.result_refs, follow_up_work_item, "replan"),
+              append_follow_up_result_refs(
+                parent.result_refs,
+                follow_up_work_item,
+                delegation_pressure_follow_up_type(follow_up_strategy)
+              ),
             "metadata" =>
               (parent.metadata || %{})
               |> Map.put("follow_up_context", follow_up_context)
@@ -1968,6 +2020,20 @@ defmodule HydraX.Runtime.WorkItems do
       {:ok, parent, nil}
     end
   end
+
+  defp delegation_pressure_follow_up_strategy(reason, deferred_count, _attrs) do
+    cond do
+      reason == "role_capacity_constrained" and
+          deferred_count >= @delegation_pressure_replan_threshold + 1 ->
+        "request_review"
+
+      true ->
+        "narrow_delegate_batch"
+    end
+  end
+
+  defp delegation_pressure_follow_up_type("request_review"), do: "review"
+  defp delegation_pressure_follow_up_type(_strategy), do: "replan"
 
   defp delegation_pressure_replan_batch(%WorkItem{} = parent, reason) do
     snapshot = delegation_batch_snapshot(parent) || %{}
@@ -3962,10 +4028,11 @@ defmodule HydraX.Runtime.WorkItems do
     requested_action = work_item.metadata["requested_action"] || "promote_work_item"
     delegated_context = delegated_context_memories(target || work_item)
     delegated_context_block = render_delegated_context_block(delegated_context)
+    target_metadata = if(match?(%WorkItem{}, target), do: target.metadata || %{}, else: %{})
 
     inherited_delivery_decisions =
       merge_supporting_findings(
-        List.wrap(get_in(target.metadata || %{}, ["follow_up_context", "delivery_decisions"])) ++
+        List.wrap(get_in(target_metadata, ["follow_up_context", "delivery_decisions"])) ++
           List.wrap(
             get_in(work_item.metadata || %{}, ["follow_up_context", "delivery_decisions"])
           )
@@ -3994,7 +4061,8 @@ defmodule HydraX.Runtime.WorkItems do
         test_commands,
         target && target.kind,
         source_payload,
-        source_artifact
+        source_artifact,
+        requested_action
       )
 
     decision = if(findings == [], do: "approved", else: "rejected")
@@ -4069,6 +4137,14 @@ defmodule HydraX.Runtime.WorkItems do
         "delegation_context" => get_in(target.metadata || %{}, ["delegation_context"])
       }
     })
+  end
+
+  defp review_source_artifact(nil, metadata) when is_map(metadata) do
+    artifact_id = metadata["report_artifact_id"] || metadata["change_artifact_id"]
+
+    if is_integer(artifact_id) do
+      get_artifact!(artifact_id)
+    end
   end
 
   defp review_source_artifact(nil, _metadata), do: nil
@@ -4888,9 +4964,31 @@ defmodule HydraX.Runtime.WorkItems do
     "Revert the #{work_item.kind} patch, restore changed files from git history, and rerun validation commands."
   end
 
-  defp review_findings(changed_files, test_commands, target_kind, source_payload, source_artifact) do
-    case target_kind do
-      kind when kind in ["engineering", "extension"] ->
+  defp review_findings(
+         changed_files,
+         test_commands,
+         target_kind,
+         source_payload,
+         source_artifact,
+         requested_action
+       ) do
+    case {target_kind, requested_action} do
+      {_, "review_delegation_strategy"} ->
+        []
+        |> maybe_add_finding(
+          is_nil(source_artifact),
+          "No delegation pressure summary artifact was prepared for review."
+        )
+        |> maybe_add_finding(
+          not present_text?(source_payload["reason"]),
+          "Delegation pressure reviews must describe the blocking reason."
+        )
+        |> maybe_add_finding(
+          not is_integer(source_payload["deferred_count"]) or source_payload["deferred_count"] < 1,
+          "Delegation pressure reviews must record how many expansion deferrals occurred."
+        )
+
+      {kind, _requested_action} when kind in ["engineering", "extension"] ->
         []
         |> maybe_add_finding(
           changed_files == [],
@@ -4910,7 +5008,7 @@ defmodule HydraX.Runtime.WorkItems do
           "Generated extensions must remain approval-gated until an operator enables them."
         )
 
-      "research" ->
+      {"research", _requested_action} ->
         []
         |> maybe_add_finding(
           is_nil(source_artifact) or source_artifact.type != "research_report",
@@ -4925,7 +5023,7 @@ defmodule HydraX.Runtime.WorkItems do
           "Research reports must include recommended actions for reviewer approval."
         )
 
-      _ ->
+      {_target_kind, _requested_action} ->
         []
         |> maybe_add_finding(
           is_nil(source_artifact),

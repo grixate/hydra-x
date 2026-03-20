@@ -4648,6 +4648,108 @@ defmodule HydraX.RuntimeTest do
     assert replan_child.assigned_role == "researcher"
   end
 
+  test "severe repeated delegation pressure escalates into reviewer follow-up" do
+    planner =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, planner} = Runtime.save_agent(planner, %{"role" => "planner"})
+
+    researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, researcher} = Runtime.save_agent(researcher, %{"role" => "researcher"})
+
+    reviewer =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, reviewer} = Runtime.save_agent(reviewer, %{"role" => "reviewer"})
+
+    Enum.each(1..4, fn index ->
+      {:ok, _busy_work} =
+        Runtime.save_work_item(%{
+          "kind" => "task",
+          "goal" => "Saturate researcher queue #{index}",
+          "assigned_agent_id" => researcher.id,
+          "assigned_role" => "researcher",
+          "status" => "blocked",
+          "priority" => 1
+        })
+    end)
+
+    {:ok, parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Escalate a delegation branch after repeated pressure.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "execution_mode" => "delegate",
+        "priority" => 9,
+        "metadata" => %{
+          "delegate_batch_concurrency" => 1,
+          "delegate_batch" => [
+            %{"goal" => "Research first constrained branch.", "role" => "researcher"},
+            %{"goal" => "Research second constrained branch.", "role" => "researcher"}
+          ]
+        }
+      })
+
+    assert {:ok, delegated} = Runtime.run_autonomy_cycle(planner.id)
+    assert delegated.action == "delegated"
+
+    assert {:ok, researcher_summary} = Runtime.run_autonomy_cycle(researcher.id)
+    assert researcher_summary.action == "researched"
+
+    assert {:ok, _first_deferred} = Runtime.run_autonomy_cycle(planner.id)
+
+    parent = Runtime.get_work_item!(parent.id)
+    batch_snapshot = Runtime.delegation_batch_snapshot(parent)
+
+    stale_snapshot =
+      batch_snapshot
+      |> Map.put("expansion_deferred_count", 3)
+      |> Map.put("last_deferred_at", DateTime.add(DateTime.utc_now(), -120, :second))
+      |> Map.put("expansion_deferred_until", DateTime.add(DateTime.utc_now(), -120, :second))
+
+    {:ok, _parent} =
+      Runtime.save_work_item(parent, %{
+        "metadata" =>
+          (parent.metadata || %{})
+          |> Map.put("delegation_batch", stale_snapshot)
+      })
+
+    assert {:ok, second_deferred} = Runtime.run_autonomy_cycle(planner.id)
+    assert second_deferred.action == "delegation_batch_deferred"
+    assert %HydraX.Runtime.WorkItem{} = second_deferred.follow_up_work_item
+
+    parent = Runtime.get_work_item!(parent.id)
+    review_item = Runtime.get_work_item!(second_deferred.follow_up_work_item.id)
+
+    assert review_item.kind == "review"
+    assert review_item.assigned_role == "reviewer"
+    assert review_item.execution_mode == "review"
+    assert get_in(review_item.metadata || %{}, ["task_type"]) == "delegation_pressure_review"
+
+    assert get_in(review_item.metadata || %{}, ["pressure_follow_up_strategy"]) ==
+             "request_review"
+
+    assert get_in(parent.result_refs || %{}, ["follow_up_summary", "types"]) == ["review"]
+    assert is_integer(get_in(review_item.metadata || %{}, ["report_artifact_id"]))
+
+    assert {:ok, reviewer_summary} = Runtime.run_autonomy_cycle(reviewer.id)
+    assert reviewer_summary.action == "review_completed"
+
+    review_item = Runtime.get_work_item!(review_item.id)
+    review_artifacts = Runtime.work_item_artifacts(review_item.id)
+    review_report = Enum.find(review_artifacts, &(&1.type == "review_report"))
+
+    assert review_item.status == "completed"
+    assert review_report
+    assert review_report.review_status == "approved"
+  end
+
   test "planner prefers the older waiting delegation batch when capacity is otherwise equal" do
     planner =
       create_agent()
