@@ -9807,72 +9807,110 @@ defmodule HydraX.Runtime.WorkItems do
   defp follow_up_summary_artifact_findings(parent, %Artifact{} = artifact) do
     payload = artifact.payload || %{}
 
-    if artifact.type == "delivery_brief" do
-      score = artifact.confidence || 0.0
-      source_role = payload["memory_origin_role"] || parent.assigned_role
-      decision_snapshot = payload["delivery_decision_snapshot"] || %{}
+    case artifact.type do
+      "delivery_brief" ->
+        score = artifact.confidence || 0.0
+        source_role = payload["memory_origin_role"] || parent.assigned_role
+        decision_snapshot = payload["delivery_decision_snapshot"] || %{}
 
-      [
-        payload["publish_objective"] &&
-          %{
-            "memory_id" => nil,
-            "type" => "DeliveryDecision",
-            "content" => payload["publish_objective"],
-            "score" => score,
-            "summary_reason" => "delivery_brief",
-            "source_work_item_id" => parent.id,
-            "source_goal" => parent.goal,
-            "source_kind" => parent.kind,
-            "source_role" => source_role,
-            "source_artifact_type" => artifact.type,
-            "reasons" => ["summary artifact delivery decision"]
-          },
-        payload["destination_rationale"] &&
-          %{
-            "memory_id" => nil,
-            "type" => "DeliveryDecision",
-            "content" => payload["destination_rationale"],
-            "score" => score,
-            "summary_reason" => "delivery_brief",
-            "source_work_item_id" => parent.id,
-            "source_goal" => parent.goal,
-            "source_kind" => parent.kind,
-            "source_role" => source_role,
-            "source_artifact_type" => artifact.type,
-            "reasons" => ["summary artifact delivery rationale"]
-          },
-        decision_snapshot["prior_summary"] &&
-          %{
-            "memory_id" => nil,
-            "type" => "DeliveryDecision",
-            "content" => decision_snapshot["prior_summary"],
-            "score" => score,
-            "summary_reason" => "delivery_brief",
-            "source_work_item_id" => parent.id,
-            "source_goal" => parent.goal,
-            "source_kind" => parent.kind,
-            "source_role" => source_role,
-            "source_artifact_type" => artifact.type,
-            "reasons" => ["summary artifact prior delivery decision"]
-          },
-        decision_snapshot["comparison_summary"] &&
-          %{
-            "memory_id" => nil,
-            "type" => "DeliveryDecision",
-            "content" => decision_snapshot["comparison_summary"],
-            "score" => score,
-            "summary_reason" => "delivery_brief",
-            "source_work_item_id" => parent.id,
-            "source_goal" => parent.goal,
-            "source_kind" => parent.kind,
-            "source_role" => source_role,
-            "source_artifact_type" => artifact.type,
-            "reasons" => ["summary artifact delivery decision comparison"]
-          }
-      ]
-      |> Enum.reject(&is_nil/1)
-    else
-      []
+        [
+          payload["publish_objective"] &&
+            %{
+              "memory_id" => nil,
+              "type" => "DeliveryDecision",
+              "content" => payload["publish_objective"],
+              "score" => score,
+              "summary_reason" => "delivery_brief",
+              "source_work_item_id" => parent.id,
+              "source_goal" => parent.goal,
+              "source_kind" => parent.kind,
+              "source_role" => source_role,
+              "source_artifact_type" => artifact.type,
+              "reasons" => ["summary artifact delivery decision"]
+            },
+          payload["destination_rationale"] &&
+            %{
+              "memory_id" => nil,
+              "type" => "DeliveryDecision",
+              "content" => payload["destination_rationale"],
+              "score" => score,
+              "summary_reason" => "delivery_brief",
+              "source_work_item_id" => parent.id,
+              "source_goal" => parent.goal,
+              "source_kind" => parent.kind,
+              "source_role" => source_role,
+              "source_artifact_type" => artifact.type,
+              "reasons" => ["summary artifact delivery rationale"]
+            },
+          decision_snapshot["prior_summary"] &&
+            %{
+              "memory_id" => nil,
+              "type" => "DeliveryDecision",
+              "content" => decision_snapshot["prior_summary"],
+              "score" => score,
+              "summary_reason" => "delivery_brief",
+              "source_work_item_id" => parent.id,
+              "source_goal" => parent.goal,
+              "source_kind" => parent.kind,
+              "source_role" => source_role,
+              "source_artifact_type" => artifact.type,
+              "reasons" => ["summary artifact prior delivery decision"]
+            },
+          decision_snapshot["comparison_summary"] &&
+            %{
+              "memory_id" => nil,
+              "type" => "DeliveryDecision",
+              "content" => decision_snapshot["comparison_summary"],
+              "score" => score,
+              "summary_reason" => "delivery_brief",
+              "source_work_item_id" => parent.id,
+              "source_goal" => parent.goal,
+              "source_kind" => parent.kind,
+              "source_role" => source_role,
+              "source_artifact_type" => artifact.type,
+              "reasons" => ["summary artifact delivery decision comparison"]
+            }
+        ]
+        |> Enum.reject(&is_nil/1)
+
+      "note" ->
+        score = artifact.confidence || 0.0
+        source_role = payload["memory_origin_role"] || parent.assigned_role
+
+        [
+          artifact.summary &&
+            %{
+              "memory_id" => nil,
+              "type" => "PlanningNote",
+              "content" => artifact.summary,
+              "score" => score,
+              "summary_reason" => "operator_follow_up",
+              "source_work_item_id" => parent.id,
+              "source_goal" => parent.goal,
+              "source_kind" => parent.kind,
+              "source_role" => source_role,
+              "source_artifact_type" => artifact.type,
+              "reasons" => ["operator intervention note"]
+            },
+          payload["constraint_strategy"] &&
+            %{
+              "memory_id" => nil,
+              "type" => "Constraint",
+              "content" => payload["constraint_strategy"],
+              "score" => score,
+              "summary_reason" => "delegation_pressure",
+              "source_work_item_id" => parent.id,
+              "source_goal" => parent.goal,
+              "source_kind" => parent.kind,
+              "source_role" => source_role,
+              "source_artifact_type" => artifact.type,
+              "reasons" => ["operator intervention strategy"]
+            }
+        ]
+        |> Enum.reject(&is_nil/1)
+
+      _ ->
+        []
     end
   end
 

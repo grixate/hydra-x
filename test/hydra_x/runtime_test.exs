@@ -4889,6 +4889,15 @@ defmodule HydraX.RuntimeTest do
     assert get_in(replan_item.metadata || %{}, ["pressure_follow_up_strategy"]) ==
              "operator_guided_replan"
 
+    assert Enum.any?(
+             get_in(replan_item.metadata || %{}, ["follow_up_context", "promoted_findings"]) || [],
+             fn finding ->
+               finding["content"] == "Operator intervention required for delegation pressure" or
+                 finding["content"] ==
+                   "Reduce parallel fan-out, wait for healthier worker capacity, and re-plan the next delegation step around the constrained role."
+             end
+           )
+
     assert {:ok, replan_summary} = Runtime.run_autonomy_cycle(planner.id)
     assert replan_summary.action == "delegated"
     assert length(replan_summary.delegated_work_items) == 1
