@@ -4199,6 +4199,11 @@ defmodule HydraX.RuntimeTest do
     assert get_in(replan_item.metadata || %{}, ["recovery_strategy_behavior"]) ==
              "narrow_scope"
 
+    assert get_in(replan_item.metadata || %{}, ["recovery_strategy_summary"]) ==
+             "Narrowed delegation batch"
+
+    assert replan_item.goal =~ "narrowed delegation batch"
+
     assert get_in(replan_item.metadata || %{}, ["delegate_batch_concurrency"]) == 1
     assert get_in(replan_item.metadata || %{}, ["delegate_batch_completion_quorum"]) == 1
 
@@ -4813,6 +4818,11 @@ defmodule HydraX.RuntimeTest do
     assert get_in(replan_item.metadata || %{}, ["recovery_strategy_behavior"]) ==
              "review_after_execution"
 
+    assert get_in(replan_item.metadata || %{}, ["recovery_strategy_summary"]) ==
+             "Reviewer-guided recovery"
+
+    assert replan_item.goal =~ "reviewer-guided delegation recovery"
+
     assert replan_item.review_required == true
 
     assert {:ok, replan_summary} = Runtime.run_autonomy_cycle(planner.id)
@@ -4954,6 +4964,11 @@ defmodule HydraX.RuntimeTest do
 
     assert get_in(replan_item.metadata || %{}, ["recovery_strategy_behavior"]) ==
              "operator_review_after_execution"
+
+    assert get_in(replan_item.metadata || %{}, ["recovery_strategy_summary"]) ==
+             "Operator-guided recovery"
+
+    assert replan_item.goal =~ "operator-guided delegation recovery"
 
     assert replan_item.review_required == true
 

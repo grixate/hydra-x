@@ -4007,7 +4007,7 @@ defmodule HydraX.Runtime.WorkItems do
           end,
           %{
             "kind" => target.kind,
-            "goal" => "Re-plan #{target.goal} after approved delegation strategy review.",
+            "goal" => follow_up_replan_goal(target.goal, "review_guided_replan"),
             "status" => "planned",
             "execution_mode" => "delegate",
             "assigned_role" => "planner",
@@ -4274,7 +4274,7 @@ defmodule HydraX.Runtime.WorkItems do
           end,
           %{
             "kind" => target.kind,
-            "goal" => "Re-plan #{target.goal} after operator delegation intervention.",
+            "goal" => follow_up_replan_goal(target.goal, "operator_guided_replan"),
             "status" => "planned",
             "execution_mode" => "delegate",
             "assigned_role" => "planner",
@@ -9783,7 +9783,7 @@ defmodule HydraX.Runtime.WorkItems do
           end,
           %{
             "kind" => parent.kind,
-            "goal" => "Re-plan #{parent.goal} within the current autonomy constraints.",
+            "goal" => follow_up_replan_goal(parent.goal, preferred_strategy),
             "status" => "planned",
             "execution_mode" => "delegate",
             "assigned_role" => "planner",
@@ -10330,6 +10330,7 @@ defmodule HydraX.Runtime.WorkItems do
       |> Helpers.normalize_string_keys()
       |> Map.put("preferred_recovery_strategy", strategy)
       |> Map.put("recovery_strategy_behavior", recovery_strategy_behavior(strategy))
+      |> Map.put("recovery_strategy_summary", recovery_strategy_summary(strategy))
 
     if strategy == "narrow_delegate_batch" do
       metadata
@@ -10339,6 +10340,42 @@ defmodule HydraX.Runtime.WorkItems do
       metadata
     end
   end
+
+  defp follow_up_replan_goal(goal, "narrow_delegate_batch") do
+    "Re-plan #{goal} with a narrowed delegation batch under the current autonomy constraints."
+  end
+
+  defp follow_up_replan_goal(goal, "review_guided_replan") do
+    "Re-plan #{goal} with reviewer-guided delegation recovery."
+  end
+
+  defp follow_up_replan_goal(goal, "operator_guided_replan") do
+    "Re-plan #{goal} with operator-guided delegation recovery."
+  end
+
+  defp follow_up_replan_goal(goal, _strategy) do
+    "Re-plan #{goal} within the current autonomy constraints."
+  end
+
+  defp recovery_strategy_summary("narrow_delegate_batch"),
+    do: "Narrowed delegation batch"
+
+  defp recovery_strategy_summary("review_guided_replan"),
+    do: "Reviewer-guided recovery"
+
+  defp recovery_strategy_summary("operator_guided_replan"),
+    do: "Operator-guided recovery"
+
+  defp recovery_strategy_summary("request_review"), do: "Review-requested recovery"
+  defp recovery_strategy_summary("constraint_replan"), do: "Constraint-first recovery"
+
+  defp recovery_strategy_summary(strategy) when is_binary(strategy) do
+    strategy
+    |> String.replace("_", " ")
+    |> String.capitalize()
+  end
+
+  defp recovery_strategy_summary(_strategy), do: "Strategy-guided recovery"
 
   defp ensure_follow_up_work_item(%WorkItem{} = parent, task_type, matcher, attrs)
        when is_binary(task_type) and is_function(matcher, 1) and is_map(attrs) do
