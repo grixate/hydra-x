@@ -4807,6 +4807,14 @@ defmodule HydraX.RuntimeTest do
     assert get_in(replan_item.metadata || %{}, ["pressure_follow_up_strategy"]) ==
              "review_guided_replan"
 
+    assert get_in(replan_item.metadata || %{}, ["preferred_recovery_strategy"]) ==
+             "review_guided_replan"
+
+    assert get_in(replan_item.metadata || %{}, ["recovery_strategy_behavior"]) ==
+             "review_after_execution"
+
+    assert replan_item.review_required == true
+
     assert {:ok, replan_summary} = Runtime.run_autonomy_cycle(planner.id)
     assert replan_summary.action == "delegated"
     assert length(replan_summary.delegated_work_items) == 1
@@ -4940,6 +4948,14 @@ defmodule HydraX.RuntimeTest do
 
     assert get_in(replan_item.metadata || %{}, ["pressure_follow_up_strategy"]) ==
              "operator_guided_replan"
+
+    assert get_in(replan_item.metadata || %{}, ["preferred_recovery_strategy"]) ==
+             "operator_guided_replan"
+
+    assert get_in(replan_item.metadata || %{}, ["recovery_strategy_behavior"]) ==
+             "operator_review_after_execution"
+
+    assert replan_item.review_required == true
 
     parent = Runtime.get_work_item!(parent.id)
 

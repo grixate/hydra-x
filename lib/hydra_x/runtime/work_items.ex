@@ -4034,6 +4034,7 @@ defmodule HydraX.Runtime.WorkItems do
                 "follow_up_context" => follow_up_context
               }
               |> Map.merge(delegate_batch_metadata)
+              |> apply_follow_up_strategy_to_follow_up_metadata("review_guided_replan")
           }
         )
 
@@ -4301,6 +4302,7 @@ defmodule HydraX.Runtime.WorkItems do
                 "follow_up_context" => follow_up_context
               }
               |> Map.merge(delegate_batch_metadata)
+              |> apply_follow_up_strategy_to_follow_up_metadata("operator_guided_replan")
           }
         )
 
