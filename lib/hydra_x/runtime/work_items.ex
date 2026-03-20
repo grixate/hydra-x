@@ -9756,6 +9756,7 @@ defmodule HydraX.Runtime.WorkItems do
        ) do
     if parent.assigned_role == "planner" and constraint_findings != [] do
       constraint_strategy = derive_constraint_strategy(constraint_findings)
+      preferred_strategy = preferred_work_item_follow_up_strategy(parent)
 
       follow_up_context =
         build_follow_up_context(
@@ -9794,15 +9795,19 @@ defmodule HydraX.Runtime.WorkItems do
             "input_artifact_refs" => %{"summary_artifact_id" => summary_artifact.id},
             "required_outputs" => parent.required_outputs,
             "review_required" => parent.review_required,
-            "metadata" => %{
-              "task_type" => "constraint_replan",
-              "delegate_goal" => parent.goal,
-              "summary_artifact_id" => summary_artifact.id,
-              "constraint_findings" => Enum.take(constraint_findings, 5),
-              "constraint_strategy" => constraint_strategy,
-              "delivery_recovery" => delivery_recovery,
-              "follow_up_context" => follow_up_context
-            }
+            "metadata" =>
+              apply_follow_up_strategy_to_follow_up_metadata(
+                %{
+                  "task_type" => "constraint_replan",
+                  "delegate_goal" => parent.goal,
+                  "summary_artifact_id" => summary_artifact.id,
+                  "constraint_findings" => Enum.take(constraint_findings, 5),
+                  "constraint_strategy" => constraint_strategy,
+                  "delivery_recovery" => delivery_recovery,
+                  "follow_up_context" => follow_up_context
+                },
+                preferred_strategy
+              )
           }
         )
 
@@ -9874,20 +9879,29 @@ defmodule HydraX.Runtime.WorkItems do
         _ -> {"completed", claimed.approval_stage}
       end
 
+    preserved_follow_up_refs =
+      claimed.result_refs
+      |> case do
+        refs when is_map(refs) -> Map.take(refs, ["follow_up_summary", "follow_up_work_item_ids"])
+        _ -> %{}
+      end
+
     %{
       "status" => status,
       "approval_stage" => approval_stage,
-      "result_refs" => %{
-        "artifact_ids" => Enum.uniq([summary_artifact.id | artifact_ids]),
-        "child_work_item_ids" => Enum.map(children, & &1.id),
-        "approval_record_ids" => Enum.map(approval_records, & &1.id),
-        "supporting_memory_ids" =>
-          supporting_memories
-          |> Enum.map(& &1["memory_id"])
-          |> Enum.filter(&is_integer/1)
-          |> Enum.uniq(),
-        "follow_up_context" => follow_up_context
-      },
+      "result_refs" =>
+        preserved_follow_up_refs
+        |> Map.merge(%{
+          "artifact_ids" => Enum.uniq([summary_artifact.id | artifact_ids]),
+          "child_work_item_ids" => Enum.map(children, & &1.id),
+          "approval_record_ids" => Enum.map(approval_records, & &1.id),
+          "supporting_memory_ids" =>
+            supporting_memories
+            |> Enum.map(& &1["memory_id"])
+            |> Enum.filter(&is_integer/1)
+            |> Enum.uniq(),
+          "follow_up_context" => follow_up_context
+        }),
       "metadata" =>
         (claimed.metadata || %{})
         |> Map.put("delegation_batch", delegation_batch)
@@ -10295,6 +10309,33 @@ defmodule HydraX.Runtime.WorkItems do
   defp follow_up_summary_strategy(%WorkItem{} = follow_up_work_item) do
     get_in(follow_up_work_item.metadata || %{}, ["pressure_follow_up_strategy"]) ||
       get_in(follow_up_work_item.metadata || %{}, ["task_type"])
+  end
+
+  defp preferred_work_item_follow_up_strategy(%WorkItem{} = work_item) do
+    work_item
+    |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "strategies"]))
+    |> List.wrap()
+    |> preferred_follow_up_strategy()
+  end
+
+  defp apply_follow_up_strategy_to_follow_up_metadata(metadata, nil),
+    do: Helpers.normalize_string_keys(metadata || %{})
+
+  defp apply_follow_up_strategy_to_follow_up_metadata(metadata, strategy)
+       when is_binary(strategy) do
+    metadata =
+      metadata
+      |> Helpers.normalize_string_keys()
+      |> Map.put("preferred_recovery_strategy", strategy)
+      |> Map.put("recovery_strategy_behavior", recovery_strategy_behavior(strategy))
+
+    if strategy == "narrow_delegate_batch" do
+      metadata
+      |> Map.put("delegate_batch_concurrency", 1)
+      |> Map.put("delegate_batch_completion_quorum", 1)
+    else
+      metadata
+    end
   end
 
   defp ensure_follow_up_work_item(%WorkItem{} = parent, task_type, matcher, attrs)

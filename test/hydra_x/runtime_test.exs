@@ -4151,6 +4151,17 @@ defmodule HydraX.RuntimeTest do
     assert child.status == "failed"
     assert get_in(child.result_refs || %{}, ["policy_failure", "type"]) == "token_budget"
 
+    {:ok, parent} =
+      Runtime.save_work_item(parent, %{
+        "result_refs" =>
+          (parent.result_refs || %{})
+          |> Map.put("follow_up_summary", %{
+            "count" => 1,
+            "types" => ["replan"],
+            "strategies" => ["narrow_delegate_batch"]
+          })
+      })
+
     assert {:ok, finalize_summary} = Runtime.run_autonomy_cycle(planner.id)
     assert finalize_summary.action == "finalized_blocked_parent"
     assert %HydraX.Runtime.WorkItem{} = finalize_summary.follow_up_work_item
@@ -4181,6 +4192,15 @@ defmodule HydraX.RuntimeTest do
 
     assert get_in(replan_item.metadata || %{}, ["constraint_strategy"]) =~
              "Keep scope narrow"
+
+    assert get_in(replan_item.metadata || %{}, ["preferred_recovery_strategy"]) ==
+             "narrow_delegate_batch"
+
+    assert get_in(replan_item.metadata || %{}, ["recovery_strategy_behavior"]) ==
+             "narrow_scope"
+
+    assert get_in(replan_item.metadata || %{}, ["delegate_batch_concurrency"]) == 1
+    assert get_in(replan_item.metadata || %{}, ["delegate_batch_completion_quorum"]) == 1
 
     assert {:ok, replan_summary} = Runtime.run_autonomy_cycle(planner.id)
     assert replan_summary.action == "delegated"
