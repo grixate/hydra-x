@@ -6987,19 +6987,76 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp follow_up_strategy_entries(%WorkItem{} = work_item) do
-    work_item
-    |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "strategies"]))
-    |> List.wrap()
-    |> Enum.map(fn strategy ->
-      %{
-        "memory_id" => nil,
-        "type" => "RecoveryStrategy",
-        "content" => follow_up_strategy_context_content(strategy),
-        "score" => 1.0,
-        "reasons" => ["follow-up strategy"],
-        "source_artifact_type" => "follow_up_summary"
-      }
-    end)
+    strategies =
+      work_item
+      |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "strategies"]))
+      |> List.wrap()
+      |> Enum.reject(&(&1 in [nil, ""]))
+      |> Enum.uniq()
+
+    case preferred_follow_up_strategy(strategies) do
+      nil ->
+        []
+
+      strategy ->
+        alternative_strategies = Enum.reject(strategies, &(&1 == strategy))
+
+        [
+          %{
+            "memory_id" => nil,
+            "type" => "RecoveryStrategy",
+            "content" => follow_up_strategy_context_content(strategy),
+            "score" => preferred_follow_up_strategy_score(strategy),
+            "reasons" => preferred_follow_up_strategy_reasons(strategy, alternative_strategies),
+            "source_artifact_type" => "follow_up_summary",
+            "strategy" => strategy,
+            "alternative_strategies" => alternative_strategies
+          }
+        ]
+    end
+  end
+
+  defp preferred_follow_up_strategy(strategies) when is_list(strategies) do
+    strategies
+    |> Enum.map(&{&1, preferred_follow_up_strategy_rank(&1)})
+    |> Enum.reject(fn {strategy, _rank} -> strategy in [nil, ""] end)
+    |> Enum.max_by(
+      fn {_strategy, rank} -> rank end,
+      fn -> nil end
+    )
+    |> case do
+      {strategy, _rank} -> strategy
+      nil -> nil
+    end
+  end
+
+  defp preferred_follow_up_strategy(_strategies), do: nil
+
+  defp preferred_follow_up_strategy_rank("operator_guided_replan"), do: 90
+  defp preferred_follow_up_strategy_rank("review_guided_replan"), do: 80
+  defp preferred_follow_up_strategy_rank("request_review"), do: 70
+  defp preferred_follow_up_strategy_rank("constraint_replan"), do: 60
+  defp preferred_follow_up_strategy_rank("narrow_delegate_batch"), do: 50
+
+  defp preferred_follow_up_strategy_rank(strategy) when is_binary(strategy) do
+    cond do
+      String.ends_with?(strategy, "_guided_replan") -> 75
+      String.ends_with?(strategy, "_replan") -> 55
+      true -> 40
+    end
+  end
+
+  defp preferred_follow_up_strategy_rank(_strategy), do: 0
+
+  defp preferred_follow_up_strategy_score(strategy),
+    do: 1.0 + preferred_follow_up_strategy_rank(strategy) / 100.0
+
+  defp preferred_follow_up_strategy_reasons(strategy, alternative_strategies) do
+    [
+      "follow-up strategy",
+      "preferred recovery strategy: #{strategy}"
+      | if(alternative_strategies != [], do: ["multiple recovery strategies observed"], else: [])
+    ]
   end
 
   defp follow_up_strategy_context_content("operator_guided_replan"),

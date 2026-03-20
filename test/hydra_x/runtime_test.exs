@@ -4046,7 +4046,7 @@ defmodule HydraX.RuntimeTest do
           |> Map.put("follow_up_summary", %{
             "count" => 1,
             "types" => ["replan"],
-            "strategies" => ["operator_guided_replan"]
+            "strategies" => ["narrow_delegate_batch", "operator_guided_replan"]
           })
       })
 
@@ -4086,6 +4086,14 @@ defmodule HydraX.RuntimeTest do
     assert Enum.any?(follow_up_context, fn memory ->
              memory["content"] == "Recovery strategy: operator-guided replan" and
                "follow-up strategy" in (memory["reasons"] || [])
+           end)
+
+    refute Enum.any?(follow_up_context, fn memory ->
+             memory["content"] == "Recovery strategy: narrowed delegation batch"
+           end)
+
+    assert Enum.any?(follow_up_context, fn memory ->
+             "multiple recovery strategies observed" in (memory["reasons"] || [])
            end)
   end
 
