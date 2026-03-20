@@ -2265,8 +2265,10 @@ defmodule HydraX.Report do
         |> Enum.reject(&is_nil_or_empty/1)
         |> Enum.join(" ")
 
-      %{type: "queued_replan_follow_up", count: count} ->
-        "replan queued #{count}"
+      %{type: "queued_replan_follow_up", count: count, strategy: strategy} ->
+        ["replan queued #{count}", strategy && "(#{humanize_follow_up_strategy(strategy)})"]
+        |> Enum.reject(&is_nil_or_empty/1)
+        |> Enum.join(" ")
 
       %{type: "queued_review", count: count, degraded: true} ->
         "degraded review queued #{count}"
@@ -2458,8 +2460,23 @@ defmodule HydraX.Report do
         true -> "queued_follow_up"
       end
 
-    %{type: type, count: count}
+    %{
+      type: type,
+      count: count,
+      strategy:
+        item
+        |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "strategies"]))
+        |> List.wrap()
+        |> List.first()
+    }
   end
+
+  defp humanize_follow_up_strategy("review_guided_replan"), do: "review-guided"
+  defp humanize_follow_up_strategy("operator_guided_replan"), do: "operator-guided"
+  defp humanize_follow_up_strategy("narrow_delegate_batch"), do: "narrowed"
+  defp humanize_follow_up_strategy("request_review"), do: "review requested"
+  defp humanize_follow_up_strategy(strategy) when is_binary(strategy), do: strategy
+  defp humanize_follow_up_strategy(_strategy), do: "follow-up"
 
   defp publish_replan_summary(item) do
     snapshot = work_item_publish_snapshot(item)

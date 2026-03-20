@@ -2027,11 +2027,22 @@ defmodule HydraXWeb.AgentsLive do
 
       List.wrap(get_in(work_item.result_refs || %{}, ["follow_up_work_item_ids"])) != [] ->
         count = follow_up_queue_count(work_item)
+        strategy = follow_up_queue_strategy(work_item)
 
         case follow_up_queue_type(work_item) do
-          "replan" -> "replan follow-up queued #{count}"
-          "publish" -> "publish follow-up queued #{count}"
-          _ -> "follow-up queued #{count}"
+          "replan" ->
+            [
+              "replan follow-up queued #{count}",
+              strategy && "(#{humanize_follow_up_strategy(strategy)})"
+            ]
+            |> Enum.reject(&(&1 in [nil, ""]))
+            |> Enum.join(" ")
+
+          "publish" ->
+            "publish follow-up queued #{count}"
+
+          _ ->
+            "follow-up queued #{count}"
         end
 
       true ->
@@ -2349,6 +2360,20 @@ defmodule HydraXWeb.AgentsLive do
       |> List.wrap()
       |> length()
   end
+
+  defp follow_up_queue_strategy(work_item) do
+    work_item
+    |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "strategies"]))
+    |> List.wrap()
+    |> List.first()
+  end
+
+  defp humanize_follow_up_strategy("review_guided_replan"), do: "review-guided"
+  defp humanize_follow_up_strategy("operator_guided_replan"), do: "operator-guided"
+  defp humanize_follow_up_strategy("narrow_delegate_batch"), do: "narrowed"
+  defp humanize_follow_up_strategy("request_review"), do: "review requested"
+  defp humanize_follow_up_strategy(strategy) when is_binary(strategy), do: strategy
+  defp humanize_follow_up_strategy(_strategy), do: "follow-up"
 
   defp work_item_publish_delivery_result(work_item) do
     get_in(work_item.result_refs || %{}, ["delivery"]) ||

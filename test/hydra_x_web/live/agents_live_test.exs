@@ -501,14 +501,18 @@ defmodule HydraXWeb.AgentsLiveTest do
         "priority" => 99,
         "result_refs" => %{
           "follow_up_work_item_ids" => [9_101],
-          "follow_up_summary" => %{"count" => 1, "types" => ["replan"]}
+          "follow_up_summary" => %{
+            "count" => 1,
+            "types" => ["replan"],
+            "strategies" => ["operator_guided_replan"]
+          }
         }
       })
 
     {:ok, _view, html} = live(conn, ~p"/agents")
 
     assert html =~ replan_parent.goal
-    assert html =~ "replan follow-up queued 1"
+    assert html =~ "replan follow-up queued 1 (operator-guided)"
   end
 
   test "agents page shows queued assignment recoveries with saturation detail", %{conn: conn} do

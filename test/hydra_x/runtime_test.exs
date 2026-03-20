@@ -4889,6 +4889,12 @@ defmodule HydraX.RuntimeTest do
     assert get_in(replan_item.metadata || %{}, ["pressure_follow_up_strategy"]) ==
              "operator_guided_replan"
 
+    parent = Runtime.get_work_item!(parent.id)
+
+    assert "operator_guided_replan" in List.wrap(
+             get_in(parent.result_refs || %{}, ["follow_up_summary", "strategies"])
+           )
+
     assert Enum.any?(
              get_in(replan_item.metadata || %{}, ["follow_up_context", "promoted_findings"]) || [],
              fn finding ->

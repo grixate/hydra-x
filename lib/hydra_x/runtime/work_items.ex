@@ -10134,9 +10134,26 @@ defmodule HydraX.Runtime.WorkItems do
       |> Kernel.++([type])
       |> Enum.uniq()
 
+    strategies =
+      result_refs
+      |> Kernel.||(%{})
+      |> get_in(["follow_up_summary", "strategies"])
+      |> List.wrap()
+      |> Kernel.++([follow_up_summary_strategy(follow_up_work_item)])
+      |> Enum.reject(&(&1 in [nil, ""]))
+      |> Enum.uniq()
+
     (result_refs || %{})
     |> Map.put("follow_up_work_item_ids", ids)
-    |> Map.put("follow_up_summary", %{"count" => length(ids), "types" => types})
+    |> Map.put(
+      "follow_up_summary",
+      %{"count" => length(ids), "types" => types, "strategies" => strategies}
+    )
+  end
+
+  defp follow_up_summary_strategy(%WorkItem{} = follow_up_work_item) do
+    get_in(follow_up_work_item.metadata || %{}, ["pressure_follow_up_strategy"]) ||
+      get_in(follow_up_work_item.metadata || %{}, ["task_type"])
   end
 
   defp ensure_follow_up_work_item(%WorkItem{} = parent, task_type, matcher, attrs)

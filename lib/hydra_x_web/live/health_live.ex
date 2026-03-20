@@ -2848,11 +2848,19 @@ defmodule HydraXWeb.HealthLive do
 
       List.wrap(get_in(item.result_refs || %{}, ["follow_up_work_item_ids"])) != [] ->
         count = autonomy_follow_up_count(item)
+        strategy = autonomy_follow_up_strategy(item)
 
         case autonomy_follow_up_type(item) do
-          "replan" -> "replan queued #{count}"
-          "publish" -> "publish queued #{count}"
-          _ -> "follow-up queued #{count}"
+          "replan" ->
+            ["replan queued #{count}", strategy && "(#{humanize_follow_up_strategy(strategy)})"]
+            |> Enum.reject(&is_nil_or_empty/1)
+            |> Enum.join(" ")
+
+          "publish" ->
+            "publish queued #{count}"
+
+          _ ->
+            "follow-up queued #{count}"
         end
 
       true ->
@@ -2924,6 +2932,20 @@ defmodule HydraXWeb.HealthLive do
       |> List.wrap()
       |> length()
   end
+
+  defp autonomy_follow_up_strategy(item) do
+    item
+    |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "strategies"]))
+    |> List.wrap()
+    |> List.first()
+  end
+
+  defp humanize_follow_up_strategy("review_guided_replan"), do: "review-guided"
+  defp humanize_follow_up_strategy("operator_guided_replan"), do: "operator-guided"
+  defp humanize_follow_up_strategy("narrow_delegate_batch"), do: "narrowed"
+  defp humanize_follow_up_strategy("request_review"), do: "review requested"
+  defp humanize_follow_up_strategy(strategy) when is_binary(strategy), do: strategy
+  defp humanize_follow_up_strategy(_strategy), do: "follow-up"
 
   defp publish_replan_summary(item) do
     if autonomy_follow_up_type(item) == "replan" do
