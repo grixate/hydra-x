@@ -4260,6 +4260,83 @@ defmodule HydraX.RuntimeTest do
            end)
   end
 
+  test "guided constraint replans inherit narrowed fallback fan-out" do
+    planner =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, planner} = Runtime.save_agent(planner, %{"role" => "planner"})
+
+    researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, researcher} = Runtime.save_agent(researcher, %{"role" => "researcher"})
+
+    {:ok, parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Recover a constrained delegated branch with a guided fallback.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "execution_mode" => "delegate",
+        "priority" => 7,
+        "metadata" => %{"delegate_role" => "researcher"},
+        "budget" => %{"token_budget" => 5}
+      })
+
+    assert {:ok, planner_summary} = Runtime.run_autonomy_cycle(planner.id)
+    assert planner_summary.action == "delegated"
+
+    parent = Runtime.get_work_item!(parent.id)
+    [child_id] = parent.result_refs["child_work_item_ids"]
+    child = Runtime.get_work_item!(child_id)
+
+    {:ok, _usage} =
+      Budget.record_usage(researcher.id, nil,
+        tokens_in: 4,
+        tokens_out: 2,
+        metadata: %{purpose: "autonomy_research", work_item_id: child.id}
+      )
+
+    assert {:ok, researcher_summary} = Runtime.run_autonomy_cycle(researcher.id)
+    assert researcher_summary.action == "policy_blocked"
+
+    parent = Runtime.get_work_item!(parent.id)
+
+    {:ok, _parent} =
+      Runtime.save_work_item(parent, %{
+        "result_refs" =>
+          (parent.result_refs || %{})
+          |> Map.put("follow_up_summary", %{
+            "count" => 1,
+            "types" => ["replan"],
+            "strategies" => ["narrow_delegate_batch", "operator_guided_replan"]
+          })
+      })
+
+    assert {:ok, finalize_summary} = Runtime.run_autonomy_cycle(planner.id)
+    assert finalize_summary.action == "finalized_blocked_parent"
+
+    replan_item = Runtime.get_work_item!(finalize_summary.follow_up_work_item.id)
+
+    assert get_in(replan_item.metadata || %{}, ["preferred_recovery_strategy"]) ==
+             "operator_guided_replan"
+
+    assert get_in(replan_item.metadata || %{}, ["recovery_strategy_alternatives"]) == [
+             "narrow_delegate_batch"
+           ]
+
+    assert get_in(
+             replan_item.metadata || %{},
+             ["recovery_strategy_alternative_summaries"]
+           ) == ["Narrowed delegation batch"]
+
+    assert get_in(replan_item.metadata || %{}, ["delegate_batch_concurrency"]) == 1
+    assert get_in(replan_item.metadata || %{}, ["delegate_batch_completion_quorum"]) == 1
+    assert replan_item.goal =~ "operator-guided delegation recovery"
+  end
+
   test "planner delegate batches create multiple child work items and batch snapshots" do
     planner =
       create_agent()

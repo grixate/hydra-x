@@ -10388,17 +10388,18 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp apply_follow_up_strategy_to_follow_up_metadata(metadata, strategy)
        when is_binary(strategy) do
+    normalized_metadata = Helpers.normalize_string_keys(metadata || %{})
+    alternatives = Map.get(normalized_metadata, "recovery_strategy_alternatives")
+
     metadata =
-      metadata
-      |> Helpers.normalize_string_keys()
+      normalized_metadata
       |> Map.put("preferred_recovery_strategy", strategy)
       |> Map.put("recovery_strategy_behavior", recovery_strategy_behavior(strategy))
       |> Map.put("recovery_strategy_summary", recovery_strategy_summary(strategy))
-      |> maybe_put_recovery_strategy_alternatives(
-        Map.get(metadata || %{}, "recovery_strategy_alternatives")
-      )
+      |> maybe_put_recovery_strategy_alternatives(alternatives)
 
-    if strategy == "narrow_delegate_batch" do
+    if strategy == "narrow_delegate_batch" or
+         Enum.member?(List.wrap(alternatives), "narrow_delegate_batch") do
       metadata
       |> Map.put("delegate_batch_concurrency", 1)
       |> Map.put("delegate_batch_completion_quorum", 1)
