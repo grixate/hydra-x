@@ -4740,14 +4740,24 @@ defmodule HydraX.RuntimeTest do
 
     assert {:ok, reviewer_summary} = Runtime.run_autonomy_cycle(reviewer.id)
     assert reviewer_summary.action == "review_completed"
+    assert %HydraX.Runtime.WorkItem{} = reviewer_summary.follow_up_work_item
 
     review_item = Runtime.get_work_item!(review_item.id)
     review_artifacts = Runtime.work_item_artifacts(review_item.id)
     review_report = Enum.find(review_artifacts, &(&1.type == "review_report"))
+    replan_item = Runtime.get_work_item!(reviewer_summary.follow_up_work_item.id)
 
     assert review_item.status == "completed"
+    assert review_item.result_refs["linked_follow_up_work_item_id"] == replan_item.id
     assert review_report
     assert review_report.review_status == "approved"
+
+    assert get_in(replan_item.metadata || %{}, ["pressure_follow_up_strategy"]) ==
+             "review_guided_replan"
+
+    assert {:ok, replan_summary} = Runtime.run_autonomy_cycle(planner.id)
+    assert replan_summary.action == "delegated"
+    assert length(replan_summary.delegated_work_items) == 1
   end
 
   test "planner prefers the older waiting delegation batch when capacity is otherwise equal" do

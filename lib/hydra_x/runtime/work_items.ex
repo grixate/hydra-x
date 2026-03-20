@@ -3887,6 +3887,15 @@ defmodule HydraX.Runtime.WorkItems do
           })
       })
 
+    {updated, follow_up_work_item} =
+      maybe_enqueue_delegation_pressure_review_replan(
+        updated,
+        target,
+        review_artifact,
+        decision_artifact,
+        decision
+      )
+
     updated =
       if decision == "approved" do
         promoted_memory_ids =
@@ -3914,8 +3923,112 @@ defmodule HydraX.Runtime.WorkItems do
        processed_count: 1,
        work_item: updated,
        artifacts: [review_artifact, decision_artifact],
-       action: "review_completed"
+       action: "review_completed",
+       follow_up_work_item: follow_up_work_item
      }}
+  end
+
+  defp maybe_enqueue_delegation_pressure_review_replan(
+         %WorkItem{} = review_work_item,
+         %WorkItem{} = target,
+         %Artifact{} = review_artifact,
+         %Artifact{} = decision_artifact,
+         "approved"
+       ) do
+    if get_in(review_work_item.metadata || %{}, ["requested_action"]) ==
+         "review_delegation_strategy" do
+      reason = get_in(review_work_item.metadata || %{}, ["reason"]) || "delegation_pressure"
+      {delegate_batch, delegate_batch_metadata} = delegation_pressure_replan_batch(target, reason)
+
+      supporting_memories =
+        finalized_child_artifact_findings(review_work_item, review_artifact) ++
+          finalized_child_artifact_findings(review_work_item, decision_artifact)
+
+      constraint_findings =
+        List.wrap(get_in(review_work_item.metadata || %{}, ["constraint_findings"]))
+
+      constraint_strategy =
+        get_in(review_work_item.metadata || %{}, ["constraint_strategy"]) ||
+          derive_constraint_strategy(constraint_findings)
+
+      follow_up_context =
+        build_follow_up_context(
+          target,
+          supporting_memories,
+          decision_artifact,
+          constraint_findings,
+          constraint_strategy
+        )
+
+      {:ok, follow_up_work_item} =
+        ensure_follow_up_work_item(
+          target,
+          "delegation_pressure_replan",
+          fn item ->
+            get_in(item.metadata || %{}, ["reason"]) == reason
+          end,
+          %{
+            "kind" => target.kind,
+            "goal" => "Re-plan #{target.goal} after approved delegation strategy review.",
+            "status" => "planned",
+            "execution_mode" => "delegate",
+            "assigned_role" => "planner",
+            "assigned_agent_id" => target.assigned_agent_id,
+            "delegated_by_agent_id" => target.assigned_agent_id || target.delegated_by_agent_id,
+            "parent_work_item_id" => target.id,
+            "priority" => max(target.priority - 1, 0),
+            "autonomy_level" => target.autonomy_level,
+            "approval_stage" => target.approval_stage,
+            "deliverables" => target.deliverables,
+            "input_artifact_refs" => %{"summary_artifact_id" => decision_artifact.id},
+            "required_outputs" => target.required_outputs,
+            "review_required" => target.review_required,
+            "metadata" =>
+              %{
+                "task_type" => "delegation_pressure_replan",
+                "delegate_goal" => target.goal,
+                "delegate_batch" => delegate_batch,
+                "summary_artifact_id" => decision_artifact.id,
+                "reason" => reason,
+                "pressure_follow_up_strategy" => "review_guided_replan",
+                "constraint_findings" => constraint_findings,
+                "constraint_strategy" => constraint_strategy,
+                "follow_up_context" => follow_up_context
+              }
+              |> Map.merge(delegate_batch_metadata)
+          }
+        )
+
+      {:ok, _target} =
+        save_work_item(target, %{
+          "result_refs" =>
+            append_follow_up_result_refs(target.result_refs, follow_up_work_item, "replan"),
+          "metadata" =>
+            (target.metadata || %{})
+            |> Map.put("follow_up_context", follow_up_context)
+        })
+
+      {:ok, updated_review_work_item} =
+        save_work_item(review_work_item, %{
+          "result_refs" =>
+            (review_work_item.result_refs || %{})
+            |> Map.put("linked_follow_up_work_item_id", follow_up_work_item.id)
+        })
+
+      {updated_review_work_item, follow_up_work_item}
+    else
+      {review_work_item, nil}
+    end
+  end
+
+  defp maybe_enqueue_delegation_pressure_review_replan(
+         %WorkItem{} = review_work_item,
+         _target,
+         _review_artifact,
+         _decision_artifact,
+         _decision
+       ) do
+    {review_work_item, nil}
   end
 
   defp fallback_research_body(work_item, evidence) do
