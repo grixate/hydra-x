@@ -246,4 +246,52 @@ defmodule HydraX.WorkTaskTest do
     assert show_output =~ "Hold the publish brief on the control plane"
     assert show_output =~ "decision_comparison"
   end
+
+  test "work task list shows recovery summaries" do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, guided_item} =
+      Runtime.save_work_item(%{
+        "kind" => "plan",
+        "goal" => "Recover a constrained planner branch.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "planner",
+        "status" => "planned",
+        "approval_stage" => "proposal_only",
+        "metadata" => %{
+          "recovery_strategy_summary" => "Operator-guided recovery"
+        }
+      })
+
+    {:ok, follow_up_item} =
+      Runtime.save_work_item(%{
+        "kind" => "plan",
+        "goal" => "Finalize the parent planner tree.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "planner",
+        "status" => "blocked",
+        "approval_stage" => "validated",
+        "result_refs" => %{
+          "follow_up_summary" => %{
+            "count" => 1,
+            "types" => ["replan"],
+            "strategies" => ["review_guided_replan"],
+            "summaries" => ["Reviewer-guided recovery"]
+          }
+        }
+      })
+
+    Mix.Task.reenable("hydra_x.work")
+
+    output =
+      capture_io(fn ->
+        Mix.Tasks.HydraX.Work.run(["--limit", "10"])
+      end)
+
+    assert output =~
+             "#{guided_item.id}\tplan\tplanned\tplanner\tproposal_only\tRecover a constrained planner branch.\tOperator-guided recovery"
+
+    assert output =~
+             "#{follow_up_item.id}\tplan\tblocked\tplanner\tvalidated\tFinalize the parent planner tree.\tReviewer-guided recovery"
+  end
 end

@@ -52,7 +52,8 @@ defmodule Mix.Tasks.HydraX.Work do
             item.status,
             item.assigned_role,
             item.approval_stage,
-            item.goal
+            item.goal,
+            work_item_list_detail(item)
           ],
           "\t"
         )
@@ -357,5 +358,19 @@ defmodule Mix.Tasks.HydraX.Work do
 
   defp maybe_prepend_follow_up_line(lines, label, value) do
     lines ++ ["#{label}=#{value}"]
+  end
+
+  defp work_item_list_detail(work_item) do
+    [
+      get_in(work_item.metadata || %{}, ["recovery_strategy_summary"]),
+      work_item
+      |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "summaries"]))
+      |> List.wrap()
+      |> List.first()
+    ]
+    |> Enum.find("", fn
+      value when is_binary(value) -> value != ""
+      _ -> false
+    end)
   end
 end
