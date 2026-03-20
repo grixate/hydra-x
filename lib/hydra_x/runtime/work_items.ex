@@ -2036,11 +2036,14 @@ defmodule HydraX.Runtime.WorkItems do
   defp delegation_pressure_follow_up_type(_strategy), do: "replan"
 
   defp delegation_pressure_replan_batch(%WorkItem{} = parent, reason) do
-    snapshot = delegation_batch_snapshot(parent) || %{}
+    snapshot =
+      delegation_batch_snapshot(parent) ||
+        parent
+        |> build_delegation_batch_snapshot([])
+        |> finalize_delegation_batch_snapshot()
 
     pending_entries =
-      snapshot
-      |> pending_delegation_batch_items()
+      delegation_pressure_pending_entries(parent, snapshot)
       |> prioritize_required_delegation_batch_entries(
         Map.get(snapshot, "missing_completion_roles", %{})
       )
@@ -2069,6 +2072,35 @@ defmodule HydraX.Runtime.WorkItems do
       end
 
     {selected_entries, metadata}
+  end
+
+  defp delegation_pressure_pending_entries(%WorkItem{} = parent, %{} = snapshot) do
+    case pending_delegation_batch_items(snapshot) do
+      [] ->
+        parent
+        |> work_item_metadata()
+        |> Map.get("delegate_batch", [])
+        |> List.wrap()
+        |> Enum.with_index()
+        |> Enum.map(fn {entry, index} ->
+          normalized = Helpers.normalize_string_keys(entry)
+
+          normalized
+          |> Map.put_new("goal", parent.goal)
+          |> Map.put_new(
+            "assigned_role",
+            normalized["role"] || Autonomy.role_for_kind(normalized["kind"] || parent.kind)
+          )
+          |> Map.put_new(
+            "child_key",
+            normalized["child_key"] || normalized["key"] || "delegate-#{index}"
+          )
+          |> Map.put_new("status", "pending_dispatch")
+        end)
+
+      entries ->
+        entries
+    end
   end
 
   defp do_finalize_blocked_parent(%WorkItem{} = claimed) do
@@ -4161,10 +4193,23 @@ defmodule HydraX.Runtime.WorkItems do
         "confidence" => 0.57
       })
 
+    parent =
+      case work_item.parent_work_item_id do
+        id when is_integer(id) -> get_work_item!(id)
+        _ -> nil
+      end
+
+    {updated_parent, follow_up_work_item} =
+      maybe_enqueue_delegation_pressure_operator_replan(work_item, parent, artifact)
+
+    result_refs =
+      %{"artifact_ids" => [artifact.id]}
+      |> maybe_put_linked_follow_up_work_item_id(follow_up_work_item)
+
     {:ok, updated} =
       save_work_item(work_item, %{
         "status" => "completed",
-        "result_refs" => %{"artifact_ids" => [artifact.id]},
+        "result_refs" => result_refs,
         "runtime_state" =>
           append_history(work_item.runtime_state, "completed", %{
             "completed_at" => DateTime.utc_now(),
@@ -4178,9 +4223,107 @@ defmodule HydraX.Runtime.WorkItems do
        processed_count: 1,
        work_item: updated,
        artifacts: [artifact],
-       action: "delegation_pressure_operator_follow_up_prepared"
+       action: "delegation_pressure_operator_follow_up_prepared",
+       follow_up_work_item: follow_up_work_item,
+       parent_work_item: updated_parent
      }}
   end
+
+  defp maybe_enqueue_delegation_pressure_operator_replan(
+         %WorkItem{} = operator_work_item,
+         %WorkItem{} = target,
+         %Artifact{} = artifact
+       ) do
+    reason = get_in(operator_work_item.metadata || %{}, ["reason"]) || "delegation_pressure"
+    {delegate_batch, delegate_batch_metadata} = delegation_pressure_replan_batch(target, reason)
+
+    if delegate_batch == [] do
+      {target, nil}
+    else
+      constraint_findings =
+        List.wrap(get_in(operator_work_item.metadata || %{}, ["constraint_findings"]))
+
+      constraint_strategy =
+        get_in(operator_work_item.metadata || %{}, ["constraint_strategy"]) ||
+          derive_constraint_strategy(constraint_findings)
+
+      supporting_memories =
+        merge_supporting_findings(
+          List.wrap(
+            get_in(operator_work_item.metadata || %{}, ["follow_up_context", "promoted_findings"])
+          )
+        )
+
+      follow_up_context =
+        build_follow_up_context(
+          target,
+          supporting_memories,
+          artifact,
+          constraint_findings,
+          constraint_strategy
+        )
+
+      {:ok, follow_up_work_item} =
+        ensure_follow_up_work_item(
+          target,
+          "delegation_pressure_replan",
+          fn item ->
+            get_in(item.metadata || %{}, ["delegation_pressure_operator_work_item_id"]) ==
+              operator_work_item.id
+          end,
+          %{
+            "kind" => target.kind,
+            "goal" => "Re-plan #{target.goal} after operator delegation intervention.",
+            "status" => "planned",
+            "execution_mode" => "delegate",
+            "assigned_role" => "planner",
+            "assigned_agent_id" => target.assigned_agent_id,
+            "delegated_by_agent_id" => target.assigned_agent_id || target.delegated_by_agent_id,
+            "parent_work_item_id" => target.id,
+            "priority" => max(target.priority - 1, 0),
+            "autonomy_level" => target.autonomy_level,
+            "approval_stage" => target.approval_stage,
+            "deliverables" => target.deliverables,
+            "input_artifact_refs" => %{"summary_artifact_id" => artifact.id},
+            "required_outputs" => target.required_outputs,
+            "review_required" => target.review_required,
+            "metadata" =>
+              %{
+                "task_type" => "delegation_pressure_replan",
+                "delegate_goal" => target.goal,
+                "delegate_batch" => delegate_batch,
+                "summary_artifact_id" => artifact.id,
+                "reason" => reason,
+                "pressure_follow_up_strategy" => "operator_guided_replan",
+                "constraint_findings" => constraint_findings,
+                "constraint_strategy" => constraint_strategy,
+                "delegation_pressure_operator_work_item_id" => operator_work_item.id,
+                "follow_up_context" => follow_up_context
+              }
+              |> Map.merge(delegate_batch_metadata)
+          }
+        )
+
+      {:ok, updated_target} =
+        save_work_item(target, %{
+          "result_refs" =>
+            append_follow_up_result_refs(target.result_refs, follow_up_work_item, "replan"),
+          "metadata" =>
+            (target.metadata || %{})
+            |> Map.put("follow_up_context", follow_up_context)
+        })
+
+      {updated_target, follow_up_work_item}
+    end
+  end
+
+  defp maybe_enqueue_delegation_pressure_operator_replan(_operator_work_item, target, _artifact),
+    do: {target, nil}
+
+  defp maybe_put_linked_follow_up_work_item_id(result_refs, %WorkItem{} = follow_up_work_item),
+    do: Map.put(result_refs, "linked_follow_up_work_item_id", follow_up_work_item.id)
+
+  defp maybe_put_linked_follow_up_work_item_id(result_refs, _follow_up_work_item), do: result_refs
 
   defp fallback_research_body(work_item, evidence) do
     delegated_context = delegated_context_memories(work_item)

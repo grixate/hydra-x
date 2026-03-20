@@ -4787,7 +4787,16 @@ defmodule HydraX.RuntimeTest do
         "assigned_role" => "planner",
         "status" => "blocked",
         "execution_mode" => "delegate",
-        "priority" => 9
+        "priority" => 9,
+        "metadata" => %{
+          "delegate_batch_concurrency" => 1,
+          "delegate_batch" => [
+            %{
+              "goal" => "Research the constrained branch after operator intervention.",
+              "role" => "researcher"
+            }
+          ]
+        }
       })
 
     {:ok, pressure_artifact} =
@@ -4866,12 +4875,23 @@ defmodule HydraX.RuntimeTest do
 
     assert {:ok, operator_summary} = Runtime.run_autonomy_cycle(operator.id)
     assert operator_summary.action == "delegation_pressure_operator_follow_up_prepared"
+    assert %HydraX.Runtime.WorkItem{} = operator_summary.follow_up_work_item
 
     operator_follow_up = Runtime.get_work_item!(operator_follow_up.id)
+    replan_item = Runtime.get_work_item!(operator_summary.follow_up_work_item.id)
     [artifact] = Runtime.work_item_artifacts(operator_follow_up.id)
+
     assert operator_follow_up.status == "completed"
+    assert operator_follow_up.result_refs["linked_follow_up_work_item_id"] == replan_item.id
     assert artifact.type == "note"
     assert artifact.body =~ "operator intervention"
+
+    assert get_in(replan_item.metadata || %{}, ["pressure_follow_up_strategy"]) ==
+             "operator_guided_replan"
+
+    assert {:ok, replan_summary} = Runtime.run_autonomy_cycle(planner.id)
+    assert replan_summary.action == "delegated"
+    assert length(replan_summary.delegated_work_items) == 1
   end
 
   test "planner prefers the older waiting delegation batch when capacity is otherwise equal" do
