@@ -4760,6 +4760,120 @@ defmodule HydraX.RuntimeTest do
     assert length(replan_summary.delegated_work_items) == 1
   end
 
+  test "rejected delegation pressure reviews queue operator intervention follow-up" do
+    planner =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, planner} = Runtime.save_agent(planner, %{"role" => "planner"})
+
+    reviewer =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, reviewer} = Runtime.save_agent(reviewer, %{"role" => "reviewer"})
+
+    operator =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, operator} = Runtime.save_agent(operator, %{"role" => "operator"})
+
+    {:ok, parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Resolve a rejected delegation strategy with operator help.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "status" => "blocked",
+        "execution_mode" => "delegate",
+        "priority" => 9
+      })
+
+    {:ok, pressure_artifact} =
+      Runtime.create_artifact(%{
+        "work_item_id" => parent.id,
+        "type" => "note",
+        "title" => "Delegation pressure alert",
+        "summary" => "Delegation pressure is unresolved",
+        "body" => "The delegation pressure summary is incomplete and should be rejected.",
+        "payload" => %{},
+        "provenance" => %{"source" => "autonomy", "phase" => "delegation_pressure"},
+        "confidence" => 0.41
+      })
+
+    {:ok, review_item} =
+      Runtime.save_work_item(%{
+        "kind" => "review",
+        "goal" => "Review the incomplete delegation pressure summary.",
+        "status" => "planned",
+        "execution_mode" => "review",
+        "assigned_role" => "reviewer",
+        "parent_work_item_id" => parent.id,
+        "priority" => 9,
+        "autonomy_level" => "execute_with_review",
+        "approval_stage" => parent.approval_stage,
+        "required_outputs" => %{"artifact_types" => ["review_report"]},
+        "metadata" => %{
+          "task_type" => "delegation_pressure_review",
+          "review_target_work_item_id" => parent.id,
+          "requested_action" => "review_delegation_strategy",
+          "report_artifact_id" => pressure_artifact.id,
+          "summary_artifact_id" => pressure_artifact.id,
+          "reason" => "role_capacity_constrained",
+          "pressure_follow_up_strategy" => "request_review",
+          "constraint_findings" => [
+            %{
+              "summary_reason" => "delegation_pressure",
+              "pressure_reason" => "role_capacity_constrained",
+              "deferred_count" => 4,
+              "content" => "Repeated delegation pressure needs review."
+            }
+          ],
+          "constraint_strategy" =>
+            "Reduce parallel fan-out, wait for healthier worker capacity, and re-plan the next delegation step around the constrained role."
+        }
+      })
+
+    assert {:ok, reviewer_summary} = Runtime.run_autonomy_cycle(reviewer.id)
+    assert reviewer_summary.action == "review_completed"
+    assert %HydraX.Runtime.WorkItem{} = reviewer_summary.follow_up_work_item
+
+    review_item = Runtime.get_work_item!(review_item.id)
+    operator_follow_up = Runtime.get_work_item!(reviewer_summary.follow_up_work_item.id)
+
+    assert review_item.status == "completed"
+    assert review_item.approval_stage == "proposal_only"
+    assert review_item.result_refs["linked_follow_up_work_item_id"] == operator_follow_up.id
+    assert operator_follow_up.assigned_role == "operator"
+    assert is_nil(operator_follow_up.assigned_agent_id)
+    assert operator_follow_up.execution_mode == "execute"
+    assert operator_follow_up.parent_work_item_id == parent.id
+
+    assert get_in(operator_follow_up.metadata || %{}, ["task_type"]) ==
+             "delegation_pressure_operator_follow_up"
+
+    assert get_in(operator_follow_up.metadata || %{}, ["pressure_follow_up_strategy"]) ==
+             "operator_intervention"
+
+    assert get_in(operator_follow_up.metadata || %{}, ["assignment_mode"]) == "role_claim"
+
+    parent = Runtime.get_work_item!(parent.id)
+
+    assert "operator" in List.wrap(
+             get_in(parent.result_refs || %{}, ["follow_up_summary", "types"])
+           )
+
+    assert {:ok, operator_summary} = Runtime.run_autonomy_cycle(operator.id)
+    assert operator_summary.action == "delegation_pressure_operator_follow_up_prepared"
+
+    operator_follow_up = Runtime.get_work_item!(operator_follow_up.id)
+    [artifact] = Runtime.work_item_artifacts(operator_follow_up.id)
+    assert operator_follow_up.status == "completed"
+    assert artifact.type == "note"
+    assert artifact.body =~ "operator intervention"
+  end
+
   test "planner prefers the older waiting delegation batch when capacity is otherwise equal" do
     planner =
       create_agent()

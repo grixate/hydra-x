@@ -3379,8 +3379,14 @@ defmodule HydraX.Runtime.WorkItems do
   defp process_work_item(agent, %WorkItem{kind: "task", metadata: metadata} = work_item, _opts)
        when is_map(metadata) do
     case metadata["task_type"] do
-      "publish_summary" -> do_publish_summary_work_item(agent, work_item)
-      _ -> process_generic_work_item(agent, work_item)
+      "publish_summary" ->
+        do_publish_summary_work_item(agent, work_item)
+
+      "delegation_pressure_operator_follow_up" ->
+        do_delegation_pressure_operator_follow_up(agent, work_item)
+
+      _ ->
+        process_generic_work_item(agent, work_item)
     end
   end
 
@@ -4023,12 +4029,157 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp maybe_enqueue_delegation_pressure_review_replan(
          %WorkItem{} = review_work_item,
+         %WorkItem{} = target,
+         %Artifact{} = review_artifact,
+         %Artifact{} = decision_artifact,
+         "rejected"
+       ) do
+    if get_in(review_work_item.metadata || %{}, ["requested_action"]) ==
+         "review_delegation_strategy" do
+      reason = get_in(review_work_item.metadata || %{}, ["reason"]) || "delegation_pressure"
+
+      supporting_memories =
+        finalized_child_artifact_findings(review_work_item, review_artifact) ++
+          finalized_child_artifact_findings(review_work_item, decision_artifact)
+
+      constraint_findings =
+        List.wrap(get_in(review_work_item.metadata || %{}, ["constraint_findings"]))
+
+      constraint_strategy =
+        get_in(review_work_item.metadata || %{}, ["constraint_strategy"]) ||
+          derive_constraint_strategy(constraint_findings)
+
+      follow_up_context =
+        build_follow_up_context(
+          target,
+          supporting_memories,
+          decision_artifact,
+          constraint_findings,
+          constraint_strategy
+        )
+
+      {:ok, follow_up_work_item} =
+        ensure_follow_up_work_item(
+          target,
+          "delegation_pressure_operator_follow_up",
+          fn item ->
+            get_in(item.metadata || %{}, ["delegation_pressure_review_work_item_id"]) ==
+              review_work_item.id
+          end,
+          %{
+            "kind" => "task",
+            "goal" =>
+              "Resolve #{target.goal} with operator intervention after delegation strategy rejection.",
+            "status" => "planned",
+            "execution_mode" => "execute",
+            "assigned_role" => "operator",
+            "delegated_by_agent_id" => target.assigned_agent_id || target.delegated_by_agent_id,
+            "parent_work_item_id" => target.id,
+            "priority" => max(target.priority, 1),
+            "autonomy_level" => "execute_with_review",
+            "approval_stage" => target.approval_stage,
+            "input_artifact_refs" => %{"summary_artifact_id" => decision_artifact.id},
+            "required_outputs" => %{"artifact_types" => ["note"]},
+            "metadata" => %{
+              "task_type" => "delegation_pressure_operator_follow_up",
+              "reason" => reason,
+              "delegation_pressure_review_work_item_id" => review_work_item.id,
+              "summary_artifact_id" => decision_artifact.id,
+              "pressure_follow_up_strategy" => "operator_intervention",
+              "constraint_findings" => constraint_findings,
+              "constraint_strategy" => constraint_strategy,
+              "assignment_mode" => "role_claim",
+              "claim_scope" => "role_pool",
+              "follow_up_context" => follow_up_context
+            }
+          }
+        )
+
+      {:ok, _target} =
+        save_work_item(target, %{
+          "result_refs" =>
+            append_follow_up_result_refs(target.result_refs, follow_up_work_item, "operator"),
+          "metadata" =>
+            (target.metadata || %{})
+            |> Map.put("follow_up_context", follow_up_context)
+        })
+
+      {:ok, updated_review_work_item} =
+        save_work_item(review_work_item, %{
+          "result_refs" =>
+            (review_work_item.result_refs || %{})
+            |> Map.put("linked_follow_up_work_item_id", follow_up_work_item.id)
+        })
+
+      {updated_review_work_item, follow_up_work_item}
+    else
+      {review_work_item, nil}
+    end
+  end
+
+  defp maybe_enqueue_delegation_pressure_review_replan(
+         %WorkItem{} = review_work_item,
          _target,
          _review_artifact,
          _decision_artifact,
          _decision
        ) do
     {review_work_item, nil}
+  end
+
+  defp do_delegation_pressure_operator_follow_up(agent, %WorkItem{} = work_item) do
+    follow_up_context = get_in(work_item.metadata || %{}, ["follow_up_context"]) || %{}
+    constraint_strategy = get_in(work_item.metadata || %{}, ["constraint_strategy"])
+    reason = get_in(work_item.metadata || %{}, ["reason"]) || "delegation_pressure"
+
+    body =
+      """
+      Delegation pressure requires operator intervention for #{work_item.goal}
+
+      Reason: #{reason}
+      Constraint strategy: #{constraint_strategy || "none"}
+
+      Promoted findings:
+      #{Enum.map_join(List.wrap(follow_up_context["promoted_findings"]) || [], "\n", fn finding -> "- #{finding["content"]}" end)}
+      """
+      |> String.trim()
+
+    {:ok, artifact} =
+      create_artifact(%{
+        "work_item_id" => work_item.id,
+        "type" => "note",
+        "title" => "Delegation pressure operator handoff",
+        "summary" => "Operator intervention required for delegation pressure",
+        "body" => body,
+        "payload" => %{
+          "reason" => reason,
+          "constraint_strategy" => constraint_strategy,
+          "follow_up_context" => follow_up_context,
+          "operator_agent_id" => agent.id
+        },
+        "provenance" => %{"source" => "autonomy", "phase" => "delegation_pressure_operator"},
+        "confidence" => 0.57
+      })
+
+    {:ok, updated} =
+      save_work_item(work_item, %{
+        "status" => "completed",
+        "result_refs" => %{"artifact_ids" => [artifact.id]},
+        "runtime_state" =>
+          append_history(work_item.runtime_state, "completed", %{
+            "completed_at" => DateTime.utc_now(),
+            "phase" => "delegation_pressure_operator"
+          })
+      })
+
+    {:processed,
+     %{
+       status: "completed",
+       processed_count: 1,
+       work_item: updated,
+       artifacts: [artifact],
+       action: "delegation_pressure_operator_follow_up_prepared"
+     }}
   end
 
   defp fallback_research_body(work_item, evidence) do
