@@ -4039,6 +4039,17 @@ defmodule HydraX.RuntimeTest do
 
     parent = Runtime.get_work_item!(parent.id)
 
+    {:ok, parent} =
+      Runtime.save_work_item(parent, %{
+        "result_refs" =>
+          (parent.result_refs || %{})
+          |> Map.put("follow_up_summary", %{
+            "count" => 1,
+            "types" => ["replan"],
+            "strategies" => ["operator_guided_replan"]
+          })
+      })
+
     assert get_in(parent.metadata || %{}, ["follow_up_context", "promoted_findings"]) != []
 
     {:ok, follow_up_parent} =
@@ -4070,6 +4081,11 @@ defmodule HydraX.RuntimeTest do
     assert Enum.any?(follow_up_context, fn memory ->
              memory["source_work_item_id"] == parent.id and
                memory["source_artifact_type"] == "decision_ledger"
+           end)
+
+    assert Enum.any?(follow_up_context, fn memory ->
+             memory["content"] == "Recovery strategy: operator-guided replan" and
+               "follow-up strategy" in (memory["reasons"] || [])
            end)
   end
 
@@ -4167,8 +4183,8 @@ defmodule HydraX.RuntimeTest do
            end)
 
     assert Enum.any?(delegated_context, fn memory ->
-             "delegated constraint strategy" in (memory["reasons"] || []) and
-               memory["content"] =~ "Keep scope narrow"
+             "follow-up strategy" in (memory["reasons"] || []) and
+               memory["content"] == "Recovery strategy: constraint_replan"
            end)
   end
 

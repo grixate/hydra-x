@@ -6982,8 +6982,42 @@ defmodule HydraX.Runtime.WorkItems do
       end
 
     List.wrap(follow_up_context["promoted_findings"]) ++
-      List.wrap(follow_up_context["delivery_decisions"])
+      List.wrap(follow_up_context["delivery_decisions"]) ++
+      follow_up_strategy_entries(work_item)
   end
+
+  defp follow_up_strategy_entries(%WorkItem{} = work_item) do
+    work_item
+    |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "strategies"]))
+    |> List.wrap()
+    |> Enum.map(fn strategy ->
+      %{
+        "memory_id" => nil,
+        "type" => "RecoveryStrategy",
+        "content" => follow_up_strategy_context_content(strategy),
+        "score" => 1.0,
+        "reasons" => ["follow-up strategy"],
+        "source_artifact_type" => "follow_up_summary"
+      }
+    end)
+  end
+
+  defp follow_up_strategy_context_content("operator_guided_replan"),
+    do: "Recovery strategy: operator-guided replan"
+
+  defp follow_up_strategy_context_content("review_guided_replan"),
+    do: "Recovery strategy: review-guided replan"
+
+  defp follow_up_strategy_context_content("narrow_delegate_batch"),
+    do: "Recovery strategy: narrowed delegation batch"
+
+  defp follow_up_strategy_context_content("request_review"),
+    do: "Recovery strategy: request review"
+
+  defp follow_up_strategy_context_content(strategy) when is_binary(strategy),
+    do: "Recovery strategy: #{strategy}"
+
+  defp follow_up_strategy_context_content(_strategy), do: "Recovery strategy"
 
   defp planner_follow_up_snapshot(entry, work_item, goal) when is_map(entry) do
     content = entry["content"] || entry["action"]
@@ -6997,7 +7031,7 @@ defmodule HydraX.Runtime.WorkItems do
         "type" => entry["type"] || "Decision",
         "content" => content,
         "score" => score,
-        "reasons" => ["finalized planner synthesis"],
+        "reasons" => Enum.uniq(["finalized planner synthesis" | List.wrap(entry["reasons"])]),
         "score_breakdown" => %{
           "finalized_parent_goal_fit" => delegation_goal_score(work_item.goal, goal),
           "finalized_finding_fit" => delegation_goal_score(content, goal),
