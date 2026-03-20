@@ -1422,7 +1422,9 @@ defmodule HydraX.ReportTest do
         "metadata" => %{
           "preferred_recovery_strategy" => "operator_guided_replan",
           "recovery_strategy_summary" => "Operator-guided recovery",
-          "recovery_strategy_behavior" => "operator_review_after_execution"
+          "recovery_strategy_behavior" => "operator_review_after_execution",
+          "recovery_strategy_alternatives" => ["narrow_delegate_batch"],
+          "recovery_strategy_alternative_summaries" => ["Narrowed delegation batch"]
         }
       })
 
@@ -1435,11 +1437,13 @@ defmodule HydraX.ReportTest do
     assert markdown =~ "recovery_strategy=Operator-guided recovery"
     assert markdown =~ "recovery_preferred=operator-guided"
     assert markdown =~ "recovery_behavior=operator review after execution"
+    assert markdown =~ "recovery_alternatives=Narrowed delegation batch"
 
     assert Enum.any?(work_items_json, fn item ->
              item["id"] == work_item.id and
                item["recovery_strategy_summary"] == "Operator-guided recovery" and
-               item["recovery_strategy_behavior"] == "operator_review_after_execution"
+               item["recovery_strategy_behavior"] == "operator_review_after_execution" and
+               item["recovery_strategy_alternatives"] == ["Narrowed delegation batch"]
            end)
   end
 

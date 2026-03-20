@@ -610,7 +610,9 @@ defmodule HydraXWeb.HealthLiveTest do
         "metadata" => %{
           "preferred_recovery_strategy" => "operator_guided_replan",
           "recovery_strategy_summary" => "Operator-guided recovery",
-          "recovery_strategy_behavior" => "operator_review_after_execution"
+          "recovery_strategy_behavior" => "operator_review_after_execution",
+          "recovery_strategy_alternatives" => ["narrow_delegate_batch"],
+          "recovery_strategy_alternative_summaries" => ["Narrowed delegation batch"]
         }
       })
 
@@ -620,6 +622,7 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "Operator-guided recovery"
     assert html =~ "preferred strategy operator-guided"
     assert html =~ "strategy behavior operator review after execution"
+    assert html =~ "alternative strategies Narrowed delegation batch"
   end
 
   test "health page shows degraded publish posture", %{conn: conn} do

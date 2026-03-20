@@ -2427,10 +2427,12 @@ defmodule HydraXWeb.AgentsLive do
     metadata = work_item.metadata || %{}
     strategy = metadata["preferred_recovery_strategy"]
     behavior = metadata["recovery_strategy_behavior"]
+    alternatives = work_item_recovery_alternatives(metadata)
 
     [
       strategy && "preferred strategy #{humanize_follow_up_strategy(strategy)}",
-      behavior && "strategy behavior #{humanize_recovery_strategy_behavior(behavior)}"
+      behavior && "strategy behavior #{humanize_recovery_strategy_behavior(behavior)}",
+      alternatives != [] && "alternative strategies #{Enum.join(alternatives, ", ")}"
     ]
     |> Enum.reject(&is_nil_or_empty/1)
   end
@@ -2446,6 +2448,14 @@ defmodule HydraXWeb.AgentsLive do
   defp humanize_recovery_strategy_behavior("strategy_guided"), do: "strategy guided"
   defp humanize_recovery_strategy_behavior(behavior) when is_binary(behavior), do: behavior
   defp humanize_recovery_strategy_behavior(_behavior), do: nil
+
+  defp work_item_recovery_alternatives(metadata) do
+    metadata["recovery_strategy_alternative_summaries"] ||
+      metadata["recovery_strategy_alternatives"]
+      |> List.wrap()
+      |> Enum.reject(&(&1 in [nil, ""]))
+      |> Enum.map(&humanize_follow_up_strategy/1)
+  end
 
   defp is_nil_or_empty(nil), do: true
   defp is_nil_or_empty(""), do: true

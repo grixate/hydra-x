@@ -1992,6 +1992,8 @@ defmodule HydraX.Runtime.WorkItems do
                       "summary_artifact_id" => pressure_artifact.id,
                       "reason" => reason,
                       "pressure_follow_up_strategy" => follow_up_strategy,
+                      "recovery_strategy_alternatives" =>
+                        preferred_work_item_follow_up_alternatives(parent),
                       "constraint_findings" => [constraint_finding],
                       "constraint_strategy" => constraint_strategy,
                       "follow_up_context" => follow_up_context
@@ -4029,6 +4031,8 @@ defmodule HydraX.Runtime.WorkItems do
                 "summary_artifact_id" => decision_artifact.id,
                 "reason" => reason,
                 "pressure_follow_up_strategy" => "review_guided_replan",
+                "recovery_strategy_alternatives" =>
+                  preferred_work_item_follow_up_alternatives(target),
                 "constraint_findings" => constraint_findings,
                 "constraint_strategy" => constraint_strategy,
                 "follow_up_context" => follow_up_context
@@ -4296,6 +4300,8 @@ defmodule HydraX.Runtime.WorkItems do
                 "summary_artifact_id" => artifact.id,
                 "reason" => reason,
                 "pressure_follow_up_strategy" => "operator_guided_replan",
+                "recovery_strategy_alternatives" =>
+                  preferred_work_item_follow_up_alternatives(target),
                 "constraint_findings" => constraint_findings,
                 "constraint_strategy" => constraint_strategy,
                 "delegation_pressure_operator_work_item_id" => operator_work_item.id,
@@ -5858,7 +5864,7 @@ defmodule HydraX.Runtime.WorkItems do
         delegation_limit
       )
 
-    preferred_recovery_strategy = delegation_preferred_recovery_strategy(delegation_context)
+    recovery_strategy_selection = delegation_recovery_strategy_selection(delegation_context)
 
     child_metadata =
       entry["metadata"]
@@ -5884,14 +5890,14 @@ defmodule HydraX.Runtime.WorkItems do
         "deliverables" => entry["deliverables"],
         "metadata" => child_metadata
       }
-      |> apply_preferred_recovery_strategy_to_child_attrs(preferred_recovery_strategy)
+      |> apply_preferred_recovery_strategy_to_child_attrs(recovery_strategy_selection)
 
     {:ok, child} = save_work_item(child_attrs)
 
     %{child: child, spec: entry, delegation_context: delegation_context}
   end
 
-  defp delegation_preferred_recovery_strategy(delegation_context) do
+  defp delegation_recovery_strategy_selection(delegation_context) do
     delegation_context
     |> List.wrap()
     |> Enum.filter(fn memory ->
@@ -5902,14 +5908,27 @@ defmodule HydraX.Runtime.WorkItems do
       fn -> nil end
     )
     |> case do
-      %{"strategy" => strategy} when is_binary(strategy) and strategy != "" -> strategy
-      _ -> nil
+      %{"strategy" => strategy} = memory when is_binary(strategy) and strategy != "" ->
+        %{
+          strategy: strategy,
+          alternative_strategies:
+            memory["alternative_strategies"]
+            |> List.wrap()
+            |> Enum.reject(&(&1 in [nil, "", strategy]))
+            |> Enum.uniq()
+        }
+
+      _ ->
+        nil
     end
   end
 
   defp apply_preferred_recovery_strategy_to_child_attrs(attrs, nil), do: attrs
 
-  defp apply_preferred_recovery_strategy_to_child_attrs(attrs, strategy)
+  defp apply_preferred_recovery_strategy_to_child_attrs(
+         attrs,
+         %{strategy: strategy, alternative_strategies: alternatives}
+       )
        when is_binary(strategy) do
     metadata =
       attrs
@@ -5917,6 +5936,8 @@ defmodule HydraX.Runtime.WorkItems do
       |> Helpers.normalize_string_keys()
       |> Map.put("preferred_recovery_strategy", strategy)
       |> Map.put("recovery_strategy_behavior", recovery_strategy_behavior(strategy))
+      |> Map.put("recovery_strategy_summary", recovery_strategy_summary(strategy))
+      |> maybe_put_recovery_strategy_alternatives(alternatives)
 
     attrs = Map.put(attrs, "metadata", metadata)
 
@@ -5925,6 +5946,14 @@ defmodule HydraX.Runtime.WorkItems do
     else
       attrs
     end
+  end
+
+  defp apply_preferred_recovery_strategy_to_child_attrs(attrs, strategy)
+       when is_binary(strategy) do
+    apply_preferred_recovery_strategy_to_child_attrs(attrs, %{
+      strategy: strategy,
+      alternative_strategies: []
+    })
   end
 
   defp recovery_strategy_behavior("operator_guided_replan"), do: "operator_review_after_execution"
@@ -9803,6 +9832,8 @@ defmodule HydraX.Runtime.WorkItems do
                   "task_type" => "constraint_replan",
                   "delegate_goal" => parent.goal,
                   "summary_artifact_id" => summary_artifact.id,
+                  "recovery_strategy_alternatives" =>
+                    preferred_work_item_follow_up_alternatives(parent),
                   "constraint_findings" => Enum.take(constraint_findings, 5),
                   "constraint_strategy" => constraint_strategy,
                   "delivery_recovery" => delivery_recovery,
@@ -10333,9 +10364,23 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp preferred_work_item_follow_up_strategy(%WorkItem{} = work_item) do
     work_item
+    |> work_item_follow_up_strategies()
+    |> preferred_follow_up_strategy()
+  end
+
+  defp preferred_work_item_follow_up_alternatives(%WorkItem{} = work_item) do
+    strategies = work_item_follow_up_strategies(work_item)
+    preferred = preferred_follow_up_strategy(strategies)
+
+    Enum.reject(strategies, &(&1 in [nil, "", preferred]))
+  end
+
+  defp work_item_follow_up_strategies(%WorkItem{} = work_item) do
+    work_item
     |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "strategies"]))
     |> List.wrap()
-    |> preferred_follow_up_strategy()
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> Enum.uniq()
   end
 
   defp apply_follow_up_strategy_to_follow_up_metadata(metadata, nil),
@@ -10349,6 +10394,9 @@ defmodule HydraX.Runtime.WorkItems do
       |> Map.put("preferred_recovery_strategy", strategy)
       |> Map.put("recovery_strategy_behavior", recovery_strategy_behavior(strategy))
       |> Map.put("recovery_strategy_summary", recovery_strategy_summary(strategy))
+      |> maybe_put_recovery_strategy_alternatives(
+        Map.get(metadata || %{}, "recovery_strategy_alternatives")
+      )
 
     if strategy == "narrow_delegate_batch" do
       metadata
@@ -10394,6 +10442,25 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp recovery_strategy_summary(_strategy), do: "Strategy-guided recovery"
+
+  defp maybe_put_recovery_strategy_alternatives(metadata, alternatives) do
+    alternatives =
+      alternatives
+      |> List.wrap()
+      |> Enum.reject(&(&1 in [nil, ""]))
+      |> Enum.uniq()
+
+    if alternatives == [] do
+      metadata
+    else
+      metadata
+      |> Map.put("recovery_strategy_alternatives", alternatives)
+      |> Map.put(
+        "recovery_strategy_alternative_summaries",
+        Enum.map(alternatives, &recovery_strategy_summary/1)
+      )
+    end
+  end
 
   defp ensure_follow_up_work_item(%WorkItem{} = parent, task_type, matcher, attrs)
        when is_binary(task_type) and is_function(matcher, 1) and is_map(attrs) do

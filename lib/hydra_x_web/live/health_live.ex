@@ -2996,10 +2996,12 @@ defmodule HydraXWeb.HealthLive do
     metadata = item.metadata || %{}
     strategy = metadata["preferred_recovery_strategy"]
     behavior = metadata["recovery_strategy_behavior"]
+    alternatives = autonomy_recovery_alternatives(metadata)
 
     [
       strategy && "preferred strategy #{humanize_follow_up_strategy(strategy)}",
-      behavior && "strategy behavior #{humanize_recovery_strategy_behavior(behavior)}"
+      behavior && "strategy behavior #{humanize_recovery_strategy_behavior(behavior)}",
+      alternatives != [] && "alternative strategies #{Enum.join(alternatives, ", ")}"
     ]
     |> Enum.reject(&is_nil_or_empty/1)
   end
@@ -3015,6 +3017,14 @@ defmodule HydraXWeb.HealthLive do
   defp humanize_recovery_strategy_behavior("strategy_guided"), do: "strategy guided"
   defp humanize_recovery_strategy_behavior(behavior) when is_binary(behavior), do: behavior
   defp humanize_recovery_strategy_behavior(_behavior), do: nil
+
+  defp autonomy_recovery_alternatives(metadata) do
+    metadata["recovery_strategy_alternative_summaries"] ||
+      metadata["recovery_strategy_alternatives"]
+      |> List.wrap()
+      |> Enum.reject(&(&1 in [nil, ""]))
+      |> Enum.map(&humanize_follow_up_strategy/1)
+  end
 
   defp publish_replan_summary(item) do
     if autonomy_follow_up_type(item) == "replan" do

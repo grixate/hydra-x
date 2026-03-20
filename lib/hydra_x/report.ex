@@ -955,12 +955,22 @@ defmodule HydraX.Report do
     metadata = item.metadata || %{}
     strategy = metadata["preferred_recovery_strategy"]
     behavior = metadata["recovery_strategy_behavior"]
+    alternatives = work_item_recovery_alternatives(metadata)
 
     [
       strategy && "recovery_preferred=#{humanize_follow_up_strategy(strategy)}",
-      behavior && "recovery_behavior=#{humanize_recovery_strategy_behavior(behavior)}"
+      behavior && "recovery_behavior=#{humanize_recovery_strategy_behavior(behavior)}",
+      alternatives != [] && "recovery_alternatives=#{Enum.join(alternatives, ",")}"
     ]
     |> Enum.reject(&is_nil_or_empty/1)
+  end
+
+  defp work_item_recovery_alternatives(metadata) do
+    metadata["recovery_strategy_alternative_summaries"] ||
+      metadata["recovery_strategy_alternatives"]
+      |> List.wrap()
+      |> Enum.reject(&(&1 in [nil, ""]))
+      |> Enum.map(&humanize_follow_up_strategy/1)
   end
 
   defp render_work_item_delegation_summary(item) do
@@ -2206,6 +2216,7 @@ defmodule HydraX.Report do
       assignment_recovery_summary: render_work_item_assignment_recovery(item),
       recovery_strategy_summary: render_work_item_recovery_summary(item),
       recovery_strategy_behavior: get_in(item.metadata || %{}, ["recovery_strategy_behavior"]),
+      recovery_strategy_alternatives: work_item_recovery_alternatives(item.metadata || %{}),
       delegation_batch: Runtime.delegation_batch_snapshot(item),
       delegation_batch_summary: render_work_item_delegation_summary(item),
       ownership: get_in(item.metadata || %{}, ["ownership"]),

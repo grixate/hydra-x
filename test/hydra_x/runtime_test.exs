@@ -4101,6 +4101,15 @@ defmodule HydraX.RuntimeTest do
     assert get_in(follow_up_child.metadata || %{}, ["recovery_strategy_behavior"]) ==
              "operator_review_after_execution"
 
+    assert get_in(follow_up_child.metadata || %{}, ["recovery_strategy_alternatives"]) == [
+             "narrow_delegate_batch"
+           ]
+
+    assert get_in(
+             follow_up_child.metadata || %{},
+             ["recovery_strategy_alternative_summaries"]
+           ) == ["Narrowed delegation batch"]
+
     follow_up_context =
       get_in(follow_up_child.metadata || %{}, ["delegation_context", "promoted_memories"]) || []
 
