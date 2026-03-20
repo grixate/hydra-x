@@ -596,6 +596,32 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "replan queued 1 (Operator-guided recovery)"
   end
 
+  test "health page shows recovery strategy summaries for planner replans", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, work_item} =
+      Runtime.save_work_item(%{
+        "kind" => "plan",
+        "goal" => "Retry the constrained planner branch with operator guidance.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "planner",
+        "status" => "planned",
+        "approval_stage" => "proposal_only",
+        "metadata" => %{
+          "preferred_recovery_strategy" => "operator_guided_replan",
+          "recovery_strategy_summary" => "Operator-guided recovery",
+          "recovery_strategy_behavior" => "operator_review_after_execution"
+        }
+      })
+
+    {:ok, _view, html} = live(conn, ~p"/health")
+
+    assert html =~ work_item.goal
+    assert html =~ "Operator-guided recovery"
+    assert html =~ "preferred strategy operator-guided"
+    assert html =~ "strategy behavior operator review after execution"
+  end
+
   test "health page shows degraded publish posture", %{conn: conn} do
     agent = Runtime.ensure_default_agent!()
 

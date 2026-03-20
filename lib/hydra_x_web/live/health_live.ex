@@ -1394,6 +1394,12 @@ defmodule HydraXWeb.HealthLive do
                   {autonomy_artifact_summary(item)}
                 </p>
                 <div
+                  :if={summary = autonomy_recovery_summary(item)}
+                  class="mt-2 text-[11px] text-[var(--hx-mute)]"
+                >
+                  {summary}
+                </div>
+                <div
                   :if={summary = autonomy_delegation_summary(item)}
                   class="mt-2 text-[11px] text-[var(--hx-mute)]"
                 >
@@ -1419,6 +1425,12 @@ defmodule HydraXWeb.HealthLive do
                 </div>
                 <div
                   :if={detail_lines = autonomy_delegation_detail_lines(item)}
+                  class="mt-2 space-y-1 text-[11px] text-[var(--hx-mute)]"
+                >
+                  <p :for={detail <- detail_lines}>{detail}</p>
+                </div>
+                <div
+                  :if={detail_lines = autonomy_recovery_detail_lines(item)}
                   class="mt-2 space-y-1 text-[11px] text-[var(--hx-mute)]"
                 >
                   <p :for={detail <- detail_lines}>{detail}</p>
@@ -2964,6 +2976,45 @@ defmodule HydraXWeb.HealthLive do
   defp humanize_follow_up_strategy("request_review"), do: "review requested"
   defp humanize_follow_up_strategy(strategy) when is_binary(strategy), do: strategy
   defp humanize_follow_up_strategy(_strategy), do: "follow-up"
+
+  defp autonomy_recovery_summary(item) do
+    case get_in(item.metadata || %{}, ["recovery_strategy_summary"]) do
+      value when is_binary(value) and value != "" ->
+        value
+
+      _ ->
+        item
+        |> get_in([Access.key(:metadata, %{}), "preferred_recovery_strategy"])
+        |> case do
+          value when is_binary(value) and value != "" -> humanize_follow_up_strategy(value)
+          _ -> nil
+        end
+    end
+  end
+
+  defp autonomy_recovery_detail_lines(item) do
+    metadata = item.metadata || %{}
+    strategy = metadata["preferred_recovery_strategy"]
+    behavior = metadata["recovery_strategy_behavior"]
+
+    [
+      strategy && "preferred strategy #{humanize_follow_up_strategy(strategy)}",
+      behavior && "strategy behavior #{humanize_recovery_strategy_behavior(behavior)}"
+    ]
+    |> Enum.reject(&is_nil_or_empty/1)
+  end
+
+  defp humanize_recovery_strategy_behavior("operator_review_after_execution"),
+    do: "operator review after execution"
+
+  defp humanize_recovery_strategy_behavior("review_after_execution"),
+    do: "review after execution"
+
+  defp humanize_recovery_strategy_behavior("narrow_scope"), do: "narrow scope"
+  defp humanize_recovery_strategy_behavior("constraint_first"), do: "constraint first"
+  defp humanize_recovery_strategy_behavior("strategy_guided"), do: "strategy guided"
+  defp humanize_recovery_strategy_behavior(behavior) when is_binary(behavior), do: behavior
+  defp humanize_recovery_strategy_behavior(_behavior), do: nil
 
   defp publish_replan_summary(item) do
     if autonomy_follow_up_type(item) == "replan" do

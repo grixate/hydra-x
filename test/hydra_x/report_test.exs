@@ -1400,6 +1400,49 @@ defmodule HydraX.ReportTest do
              "\"approved_not_enabled\""
   end
 
+  test "report export includes recovery strategy summaries for planner replans" do
+    output_root =
+      Path.join(
+        System.tmp_dir!(),
+        "hydra-x-report-recovery-#{System.unique_integer([:positive])}"
+      )
+
+    on_exit(fn -> File.rm_rf(output_root) end)
+
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, work_item} =
+      Runtime.save_work_item(%{
+        "kind" => "plan",
+        "goal" => "Retry the constrained planner branch with operator guidance.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "planner",
+        "status" => "planned",
+        "approval_stage" => "proposal_only",
+        "metadata" => %{
+          "preferred_recovery_strategy" => "operator_guided_replan",
+          "recovery_strategy_summary" => "Operator-guided recovery",
+          "recovery_strategy_behavior" => "operator_review_after_execution"
+        }
+      })
+
+    {:ok, export} = Report.export_snapshot(output_root)
+
+    markdown = File.read!(export.markdown_path)
+    work_items_json = Jason.decode!(File.read!(Path.join(export.bundle_dir, "work_items.json")))
+
+    assert markdown =~ work_item.goal
+    assert markdown =~ "recovery_strategy=Operator-guided recovery"
+    assert markdown =~ "recovery_preferred=operator-guided"
+    assert markdown =~ "recovery_behavior=operator review after execution"
+
+    assert Enum.any?(work_items_json, fn item ->
+             item["id"] == work_item.id and
+               item["recovery_strategy_summary"] == "Operator-guided recovery" and
+               item["recovery_strategy_behavior"] == "operator_review_after_execution"
+           end)
+  end
+
   test "export_snapshot includes stale streaming recovery markers" do
     output_root =
       Path.join(

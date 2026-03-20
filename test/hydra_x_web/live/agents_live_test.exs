@@ -516,6 +516,40 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "replan follow-up queued 1 (Operator-guided recovery)"
   end
 
+  test "agents page shows recovery strategy summaries for planner replans", %{conn: conn} do
+    {:ok, agent} =
+      Runtime.save_agent(%{
+        name: "Recovery Planner",
+        slug: "recovery-planner-work-item",
+        role: "planner",
+        workspace_root: Path.join(System.tmp_dir!(), "hydra-x-recovery-planner-work-item"),
+        description: "planner",
+        is_default: false
+      })
+
+    {:ok, work_item} =
+      Runtime.save_work_item(%{
+        "kind" => "plan",
+        "goal" => "Retry the constrained planner branch with operator guidance.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "planner",
+        "status" => "planned",
+        "approval_stage" => "proposal_only",
+        "metadata" => %{
+          "preferred_recovery_strategy" => "operator_guided_replan",
+          "recovery_strategy_summary" => "Operator-guided recovery",
+          "recovery_strategy_behavior" => "operator_review_after_execution"
+        }
+      })
+
+    {:ok, _view, html} = live(conn, ~p"/agents")
+
+    assert html =~ work_item.goal
+    assert html =~ "Operator-guided recovery"
+    assert html =~ "preferred strategy operator-guided"
+    assert html =~ "strategy behavior operator review after execution"
+  end
+
   test "agents page shows queued assignment recoveries with saturation detail", %{conn: conn} do
     {:ok, agent} =
       Runtime.save_agent(%{

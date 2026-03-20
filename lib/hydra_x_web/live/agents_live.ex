@@ -592,6 +592,9 @@ defmodule HydraXWeb.AgentsLive do
                       <span :if={summary = work_item_publish_summary(item)}>
                         · {summary}
                       </span>
+                      <span :if={summary = work_item_recovery_summary(item)}>
+                        · {summary}
+                      </span>
                       <span :if={summary = work_item_assignment_summary(item)}>
                         · {summary}
                       </span>
@@ -662,12 +665,24 @@ defmodule HydraXWeb.AgentsLive do
                       >
                         {summary}
                       </span>
+                      <span
+                        :if={summary = work_item_recovery_summary(item)}
+                        class="rounded-full border border-fuchsia-400/20 bg-fuchsia-400/10 px-3 py-1 text-fuchsia-200"
+                      >
+                        {summary}
+                      </span>
                     </div>
                     <div
                       :if={delegation_detail_lines = work_item_delegation_detail_lines(item)}
                       class="mt-2 space-y-1 text-[11px] text-[var(--hx-mute)]"
                     >
                       <p :for={detail <- delegation_detail_lines}>{detail}</p>
+                    </div>
+                    <div
+                      :if={recovery_detail_lines = work_item_recovery_detail_lines(item)}
+                      class="mt-2 space-y-1 text-[11px] text-[var(--hx-mute)]"
+                    >
+                      <p :for={detail <- recovery_detail_lines}>{detail}</p>
                     </div>
                     <div
                       :if={publish_detail_lines = work_item_publish_detail_lines(item)}
@@ -2392,6 +2407,49 @@ defmodule HydraXWeb.AgentsLive do
   defp humanize_follow_up_strategy("request_review"), do: "review requested"
   defp humanize_follow_up_strategy(strategy) when is_binary(strategy), do: strategy
   defp humanize_follow_up_strategy(_strategy), do: "follow-up"
+
+  defp work_item_recovery_summary(work_item) do
+    case get_in(work_item.metadata || %{}, ["recovery_strategy_summary"]) do
+      value when is_binary(value) and value != "" ->
+        value
+
+      _ ->
+        work_item
+        |> get_in([Access.key(:metadata, %{}), "preferred_recovery_strategy"])
+        |> case do
+          value when is_binary(value) and value != "" -> humanize_follow_up_strategy(value)
+          _ -> nil
+        end
+    end
+  end
+
+  defp work_item_recovery_detail_lines(work_item) do
+    metadata = work_item.metadata || %{}
+    strategy = metadata["preferred_recovery_strategy"]
+    behavior = metadata["recovery_strategy_behavior"]
+
+    [
+      strategy && "preferred strategy #{humanize_follow_up_strategy(strategy)}",
+      behavior && "strategy behavior #{humanize_recovery_strategy_behavior(behavior)}"
+    ]
+    |> Enum.reject(&is_nil_or_empty/1)
+  end
+
+  defp humanize_recovery_strategy_behavior("operator_review_after_execution"),
+    do: "operator review after execution"
+
+  defp humanize_recovery_strategy_behavior("review_after_execution"),
+    do: "review after execution"
+
+  defp humanize_recovery_strategy_behavior("narrow_scope"), do: "narrow scope"
+  defp humanize_recovery_strategy_behavior("constraint_first"), do: "constraint first"
+  defp humanize_recovery_strategy_behavior("strategy_guided"), do: "strategy guided"
+  defp humanize_recovery_strategy_behavior(behavior) when is_binary(behavior), do: behavior
+  defp humanize_recovery_strategy_behavior(_behavior), do: nil
+
+  defp is_nil_or_empty(nil), do: true
+  defp is_nil_or_empty(""), do: true
+  defp is_nil_or_empty(_value), do: false
 
   defp work_item_publish_delivery_result(work_item) do
     get_in(work_item.result_refs || %{}, ["delivery"]) ||

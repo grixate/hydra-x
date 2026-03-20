@@ -878,6 +878,8 @@ defmodule HydraX.Report do
 
       publish = render_work_item_publish_summary(item)
       publish_details = render_work_item_publish_details(item)
+      recovery = render_work_item_recovery_summary(item)
+      recovery_details = render_work_item_recovery_details(item)
       delegation = render_work_item_delegation_summary(item)
       delegation_details = render_work_item_delegation_details(item)
       assignment = render_work_item_assignment(item)
@@ -902,9 +904,11 @@ defmodule HydraX.Report do
         assignment_recovery && "recovery=#{assignment_recovery}",
         ownership && "ownership=#{ownership}",
         publish && "publish=#{publish}",
+        recovery && "recovery_strategy=#{recovery}",
         item.goal
       ]
       |> Kernel.++(delegation_details)
+      |> Kernel.++(recovery_details)
       |> Kernel.++(publish_details)
       |> Enum.reject(&is_nil_or_empty/1)
       |> Enum.join(" ")
@@ -930,6 +934,33 @@ defmodule HydraX.Report do
       _ ->
         nil
     end
+  end
+
+  defp render_work_item_recovery_summary(item) do
+    case get_in(item.metadata || %{}, ["recovery_strategy_summary"]) do
+      value when is_binary(value) and value != "" ->
+        value
+
+      _ ->
+        item
+        |> get_in([Access.key(:metadata, %{}), "preferred_recovery_strategy"])
+        |> case do
+          value when is_binary(value) and value != "" -> humanize_follow_up_strategy(value)
+          _ -> nil
+        end
+    end
+  end
+
+  defp render_work_item_recovery_details(item) do
+    metadata = item.metadata || %{}
+    strategy = metadata["preferred_recovery_strategy"]
+    behavior = metadata["recovery_strategy_behavior"]
+
+    [
+      strategy && "recovery_preferred=#{humanize_follow_up_strategy(strategy)}",
+      behavior && "recovery_behavior=#{humanize_recovery_strategy_behavior(behavior)}"
+    ]
+    |> Enum.reject(&is_nil_or_empty/1)
   end
 
   defp render_work_item_delegation_summary(item) do
@@ -2173,6 +2204,8 @@ defmodule HydraX.Report do
       metadata: item.metadata,
       assignment_recovery: get_in(item.metadata || %{}, ["assignment_recovery"]),
       assignment_recovery_summary: render_work_item_assignment_recovery(item),
+      recovery_strategy_summary: render_work_item_recovery_summary(item),
+      recovery_strategy_behavior: get_in(item.metadata || %{}, ["recovery_strategy_behavior"]),
       delegation_batch: Runtime.delegation_batch_snapshot(item),
       delegation_batch_summary: render_work_item_delegation_summary(item),
       ownership: get_in(item.metadata || %{}, ["ownership"]),
@@ -2485,6 +2518,18 @@ defmodule HydraX.Report do
   defp humanize_follow_up_strategy("request_review"), do: "review requested"
   defp humanize_follow_up_strategy(strategy) when is_binary(strategy), do: strategy
   defp humanize_follow_up_strategy(_strategy), do: "follow-up"
+
+  defp humanize_recovery_strategy_behavior("operator_review_after_execution"),
+    do: "operator review after execution"
+
+  defp humanize_recovery_strategy_behavior("review_after_execution"),
+    do: "review after execution"
+
+  defp humanize_recovery_strategy_behavior("narrow_scope"), do: "narrow scope"
+  defp humanize_recovery_strategy_behavior("constraint_first"), do: "constraint first"
+  defp humanize_recovery_strategy_behavior("strategy_guided"), do: "strategy guided"
+  defp humanize_recovery_strategy_behavior(behavior) when is_binary(behavior), do: behavior
+  defp humanize_recovery_strategy_behavior(_behavior), do: nil
 
   defp publish_replan_summary(item) do
     snapshot = work_item_publish_snapshot(item)
