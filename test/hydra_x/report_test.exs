@@ -993,6 +993,23 @@ defmodule HydraX.ReportTest do
         }
       })
 
+    {:ok, _operator_follow_up_item} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Route the rejected delegation strategy through operator intervention.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "operator",
+        "status" => "completed",
+        "priority" => 92,
+        "metadata" => %{
+          "task_type" => "delegation_pressure_operator_follow_up",
+          "reason" => "role_capacity_constrained",
+          "constraint_strategy" =>
+            "Reduce parallel fan-out, wait for healthier worker capacity, and re-plan the next delegation step around the constrained role.",
+          "assignment_mode" => "role_claim"
+        }
+      })
+
     {:ok, _artifact} =
       Runtime.create_artifact(%{
         "work_item_id" => work_item.id,
@@ -1133,6 +1150,13 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "Readiness"
     assert File.read!(export.markdown_path) =~ "Total items:"
     assert File.read!(export.markdown_path) =~ "Required warnings:"
+
+    assert File.read!(export.markdown_path) =~
+             "operator_intervention_prepared role_capacity_constrained"
+
+    assert File.read!(export.markdown_path) =~
+             "delegation_pressure_strategy=Reduce parallel fan-out, wait for healthier worker capacity, and re-plan the next delegation step around the constrained role."
+
     assert File.read!(export.markdown_path) =~ "Next steps:"
     assert File.read!(export.markdown_path) =~ "Provider Route"
     assert File.read!(export.markdown_path) =~ "Secret Posture"

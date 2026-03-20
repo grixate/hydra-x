@@ -782,6 +782,33 @@ defmodule HydraXWeb.AgentsLiveTest do
         }
       })
 
+    {:ok, operator_agent} =
+      Runtime.save_agent(%{
+        name: "Intervention Operator",
+        slug: "intervention-operator",
+        role: "operator",
+        workspace_root: Path.join(System.tmp_dir!(), "hydra-x-intervention-operator"),
+        description: "operator",
+        is_default: false
+      })
+
+    {:ok, _operator_follow_up} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Route the rejected delegation strategy through operator intervention.",
+        "assigned_agent_id" => operator_agent.id,
+        "assigned_role" => "operator",
+        "status" => "completed",
+        "priority" => 100,
+        "metadata" => %{
+          "task_type" => "delegation_pressure_operator_follow_up",
+          "reason" => "role_capacity_constrained",
+          "constraint_strategy" =>
+            "Reduce parallel fan-out, wait for healthier worker capacity, and re-plan the next delegation step around the constrained role.",
+          "assignment_mode" => "role_claim"
+        }
+      })
+
     {:ok, _view, html} = live(conn, ~p"/agents")
 
     assert html =~ degraded_research.goal
@@ -795,6 +822,10 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "explicit-signal"
     assert html =~ "delivery internal"
     assert html =~ "replan queued 1"
+    assert html =~ "operator intervention prepared role_capacity_constrained"
+
+    assert html =~
+             "constraint strategy Reduce parallel fan-out, wait for healthier worker capacity, and re-plan the next delegation step around the constrained role."
   end
 
   test "agents page can approve a merge-ready work item from the control plane", %{conn: conn} do

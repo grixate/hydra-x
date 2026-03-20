@@ -1924,6 +1924,14 @@ defmodule HydraXWeb.AgentsLive do
 
   defp work_item_publish_summary(work_item) do
     cond do
+      get_in(work_item.metadata || %{}, ["task_type"]) == "delegation_pressure_operator_follow_up" ->
+        [
+          delegation_pressure_operator_status_label(work_item.status),
+          delegation_pressure_reason_summary(work_item)
+        ]
+        |> Enum.reject(&(&1 in [nil, ""]))
+        |> Enum.join(" ")
+
       get_in(work_item.metadata || %{}, ["task_type"]) == "publish_approval" ->
         delivery = get_in(work_item.metadata || %{}, ["delivery"]) || %{}
         delivery_result = get_in(work_item.result_refs || %{}, ["delivery"]) || %{}
@@ -2034,6 +2042,8 @@ defmodule HydraXWeb.AgentsLive do
   defp work_item_publish_detail_lines(work_item) do
     [
       work_item_assignment_detail_line(work_item),
+      delegation_pressure_reason_line(work_item),
+      delegation_pressure_strategy_line(work_item),
       publish_objective_line(work_item),
       publish_prior_decision_line(work_item),
       publish_decision_comparison_line(work_item),
@@ -2047,6 +2057,35 @@ defmodule HydraXWeb.AgentsLive do
     |> case do
       [] -> nil
       details -> details
+    end
+  end
+
+  defp delegation_pressure_operator_status_label("completed"),
+    do: "operator intervention prepared"
+
+  defp delegation_pressure_operator_status_label("failed"), do: "operator intervention failed"
+  defp delegation_pressure_operator_status_label("blocked"), do: "operator intervention blocked"
+  defp delegation_pressure_operator_status_label("canceled"), do: "operator intervention canceled"
+  defp delegation_pressure_operator_status_label(_status), do: "operator intervention queued"
+
+  defp delegation_pressure_reason_summary(work_item) do
+    case get_in(work_item.metadata || %{}, ["reason"]) do
+      value when is_binary(value) and value != "" -> value
+      _ -> nil
+    end
+  end
+
+  defp delegation_pressure_reason_line(work_item) do
+    case get_in(work_item.metadata || %{}, ["reason"]) do
+      value when is_binary(value) and value != "" -> "reason #{value}"
+      _ -> nil
+    end
+  end
+
+  defp delegation_pressure_strategy_line(work_item) do
+    case get_in(work_item.metadata || %{}, ["constraint_strategy"]) do
+      value when is_binary(value) and value != "" -> "constraint strategy #{value}"
+      _ -> nil
     end
   end
 

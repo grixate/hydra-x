@@ -2243,6 +2243,11 @@ defmodule HydraX.Report do
       nil ->
         nil
 
+      %{type: "delegation_pressure_operator_follow_up", status: status, reason: reason} ->
+        [status, reason]
+        |> Enum.reject(&is_nil_or_empty/1)
+        |> Enum.join(" ")
+
       %{type: "publish_approval", status: status, channel: channel, target: target} ->
         [status, channel || "report", target && "-> #{target}", publish_recovery_summary(item)]
         |> Enum.reject(&is_nil_or_empty/1)
@@ -2280,6 +2285,14 @@ defmodule HydraX.Report do
     prior_summary = decision_snapshot["prior_summary"] || publish_prior_decision_content(item)
 
     [
+      case get_in(item.metadata || %{}, ["reason"]) do
+        value when is_binary(value) and value != "" -> "delegation_pressure_reason=#{value}"
+        _ -> nil
+      end,
+      case get_in(item.metadata || %{}, ["constraint_strategy"]) do
+        value when is_binary(value) and value != "" -> "delegation_pressure_strategy=#{value}"
+        _ -> nil
+      end,
       case payload["publish_objective"] do
         value when is_binary(value) and value != "" -> "publish_objective=#{value}"
         _ -> nil
@@ -2331,6 +2344,20 @@ defmodule HydraX.Report do
 
   defp work_item_publish_snapshot(item) do
     cond do
+      get_in(item.metadata || %{}, ["task_type"]) == "delegation_pressure_operator_follow_up" ->
+        %{
+          type: "delegation_pressure_operator_follow_up",
+          status:
+            case item.status do
+              "completed" -> "operator_intervention_prepared"
+              "failed" -> "operator_intervention_failed"
+              "blocked" -> "operator_intervention_blocked"
+              "canceled" -> "operator_intervention_canceled"
+              _ -> "operator_intervention_queued"
+            end,
+          reason: get_in(item.metadata || %{}, ["reason"])
+        }
+
       get_in(item.metadata || %{}, ["task_type"]) == "publish_approval" ->
         delivery = get_in(item.metadata || %{}, ["delivery"]) || %{}
         delivery_result = get_in(item.result_refs || %{}, ["delivery"]) || %{}

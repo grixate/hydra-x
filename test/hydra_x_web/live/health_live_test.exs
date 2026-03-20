@@ -777,6 +777,23 @@ defmodule HydraXWeb.HealthLiveTest do
         }
       })
 
+    {:ok, _operator_follow_up} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Route the rejected delegation strategy through operator intervention.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "operator",
+        "status" => "completed",
+        "priority" => 91,
+        "metadata" => %{
+          "task_type" => "delegation_pressure_operator_follow_up",
+          "reason" => "role_capacity_constrained",
+          "constraint_strategy" =>
+            "Reduce parallel fan-out, wait for healthier worker capacity, and re-plan the next delegation step around the constrained role.",
+          "assignment_mode" => "role_claim"
+        }
+      })
+
     {:ok, _view, html} = live(conn, ~p"/health")
 
     assert html =~ degraded_research.goal
@@ -815,6 +832,10 @@ defmodule HydraXWeb.HealthLiveTest do
 
     assert html =~ "delivery internal"
     assert html =~ "replan queued 1"
+    assert html =~ "operator intervention prepared role_capacity_constrained"
+
+    assert html =~
+             "constraint strategy Reduce parallel fan-out, wait for healthier worker capacity, and re-plan the next delegation step around the constrained role."
   end
 
   test "health page shows the unified effective policy surface", %{conn: conn} do

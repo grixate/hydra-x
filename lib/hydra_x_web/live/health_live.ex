@@ -2752,6 +2752,14 @@ defmodule HydraXWeb.HealthLive do
 
   defp autonomy_publish_summary(item) do
     cond do
+      get_in(item.metadata || %{}, ["task_type"]) == "delegation_pressure_operator_follow_up" ->
+        [
+          delegation_pressure_operator_status_label(item.status),
+          delegation_pressure_reason_summary(item)
+        ]
+        |> Enum.reject(&is_nil_or_empty/1)
+        |> Enum.join(" ")
+
       get_in(item.metadata || %{}, ["task_type"]) == "publish_approval" ->
         delivery = get_in(item.metadata || %{}, ["delivery"]) || %{}
         delivery_result = get_in(item.result_refs || %{}, ["delivery"]) || %{}
@@ -2854,6 +2862,8 @@ defmodule HydraXWeb.HealthLive do
 
   defp autonomy_publish_detail_lines(item) do
     [
+      delegation_pressure_reason_line(item),
+      delegation_pressure_strategy_line(item),
       autonomy_publish_objective_line(item),
       autonomy_publish_prior_decision_line(item),
       autonomy_publish_decision_comparison_line(item),
@@ -2867,6 +2877,35 @@ defmodule HydraXWeb.HealthLive do
     |> case do
       [] -> nil
       details -> details
+    end
+  end
+
+  defp delegation_pressure_operator_status_label("completed"),
+    do: "operator intervention prepared"
+
+  defp delegation_pressure_operator_status_label("failed"), do: "operator intervention failed"
+  defp delegation_pressure_operator_status_label("blocked"), do: "operator intervention blocked"
+  defp delegation_pressure_operator_status_label("canceled"), do: "operator intervention canceled"
+  defp delegation_pressure_operator_status_label(_status), do: "operator intervention queued"
+
+  defp delegation_pressure_reason_summary(item) do
+    case get_in(item.metadata || %{}, ["reason"]) do
+      value when is_binary(value) and value != "" -> value
+      _ -> nil
+    end
+  end
+
+  defp delegation_pressure_reason_line(item) do
+    case get_in(item.metadata || %{}, ["reason"]) do
+      value when is_binary(value) and value != "" -> "reason #{value}"
+      _ -> nil
+    end
+  end
+
+  defp delegation_pressure_strategy_line(item) do
+    case get_in(item.metadata || %{}, ["constraint_strategy"]) do
+      value when is_binary(value) and value != "" -> "constraint strategy #{value}"
+      _ -> nil
     end
   end
 
