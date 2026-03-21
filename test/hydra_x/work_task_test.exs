@@ -314,10 +314,27 @@ defmodule HydraX.WorkTaskTest do
         "approval_stage" => "validated",
         "result_refs" => %{
           "follow_up_summary" => %{
-            "count" => 1,
+            "count" => 2,
             "types" => ["replan"],
             "strategies" => ["review_guided_replan"],
-            "priority_boosts" => [2],
+            "entries" => [
+              %{
+                "work_item_id" => 92_001,
+                "type" => "replan",
+                "strategy" => "review_guided_replan",
+                "summary" => "Reviewer-guided recovery",
+                "alternative_summaries" => ["Narrowed delegation batch"],
+                "priority_boost" => 2
+              },
+              %{
+                "work_item_id" => 92_002,
+                "type" => "replan",
+                "strategy" => "request_review",
+                "summary" => "Review-requested recovery",
+                "priority_boost" => 2
+              }
+            ],
+            "priority_boosts" => [2, 2],
             "alternative_summaries" => ["Narrowed delegation batch"]
           }
         }
@@ -334,6 +351,6 @@ defmodule HydraX.WorkTaskTest do
              "#{guided_item.id}\tplan\tplanned\tplanner\tproposal_only\tRecover a constrained planner branch.\tOperator-guided recovery with narrowed delegation fallback (+3)"
 
     assert output =~
-             "#{follow_up_item.id}\tplan\tblocked\tplanner\tvalidated\tFinalize the parent planner tree.\tReviewer-guided recovery; priority +2; alternatives Narrowed delegation batch"
+             "#{follow_up_item.id}\tplan\tblocked\tplanner\tvalidated\tFinalize the parent planner tree.\tReviewer-guided recovery; priority +2; alternatives Narrowed delegation batch; +1 more"
   end
 end

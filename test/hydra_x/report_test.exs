@@ -976,11 +976,29 @@ defmodule HydraX.ReportTest do
         "priority" => 93,
         "result_refs" => %{
           "degraded" => true,
-          "follow_up_work_item_ids" => [8_401],
+          "follow_up_work_item_ids" => [8_401, 8_402],
           "follow_up_summary" => %{
-            "count" => 1,
+            "count" => 2,
             "types" => ["replan"],
             "strategies" => ["operator_guided_replan"],
+            "entries" => [
+              %{
+                "work_item_id" => 8_401,
+                "type" => "replan",
+                "strategy" => "operator_guided_replan",
+                "summary" => "Operator-guided recovery",
+                "alternative_strategies" => ["narrow_delegate_batch"],
+                "alternative_summaries" => ["Narrowed delegation batch"],
+                "priority_boost" => 3
+              },
+              %{
+                "work_item_id" => 8_402,
+                "type" => "replan",
+                "strategy" => "review_guided_replan",
+                "summary" => "Reviewer-guided recovery",
+                "priority_boost" => 2
+              }
+            ],
             "priority_boosts" => [3],
             "alternative_strategies" => ["narrow_delegate_batch"]
           },
@@ -1109,12 +1127,30 @@ defmodule HydraX.ReportTest do
         "status" => "completed",
         "priority" => 99,
         "result_refs" => %{
-          "follow_up_work_item_ids" => [9_201],
+          "follow_up_work_item_ids" => [9_201, 9_202],
           "follow_up_summary" => %{
-            "count" => 1,
+            "count" => 2,
             "types" => ["replan"],
             "strategies" => ["operator_guided_replan"],
-            "priority_boosts" => [3],
+            "entries" => [
+              %{
+                "work_item_id" => 9_201,
+                "type" => "replan",
+                "strategy" => "operator_guided_replan",
+                "summary" => "Operator-guided recovery",
+                "alternative_strategies" => ["narrow_delegate_batch"],
+                "alternative_summaries" => ["Narrowed delegation batch"],
+                "priority_boost" => 3
+              },
+              %{
+                "work_item_id" => 9_202,
+                "type" => "replan",
+                "strategy" => "review_guided_replan",
+                "summary" => "Reviewer-guided recovery",
+                "priority_boost" => 2
+              }
+            ],
+            "priority_boosts" => [3, 2],
             "alternative_strategies" => ["narrow_delegate_batch"]
           }
         }
@@ -1164,29 +1200,29 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "Required warnings:"
 
     assert File.read!(export.markdown_path) =~
-             "replan queued 1 (Operator-guided recovery; priority +3; alternatives Narrowed delegation batch)"
+             "replan queued 2 (Operator-guided recovery; priority +3; alternatives Narrowed delegation batch; +1 more)"
 
     work_items_json = Jason.decode!(File.read!(Path.join(export.bundle_dir, "work_items.json")))
 
     assert Enum.any?(work_items_json, fn item ->
+             follow_up = item["follow_up"] || %{}
+             entries = follow_up["entries"] || []
+
              item["goal"] == "Re-plan the constrained publish escalation." and
-               item["follow_up"]["strategy_key"] == "operator_guided_replan" and
-               item["follow_up"]["strategy"] == "Operator-guided recovery" and
-               item["follow_up"]["priority_boost"] == 3 and
-               item["follow_up"]["priority_boosts"] == [3] and
-               item["follow_up"]["alternatives"] == ["Narrowed delegation batch"] and
-               item["follow_up"]["alternative_strategies"] == ["narrow_delegate_batch"] and
-               item["follow_up"]["entries"] == [
-                 %{
-                   "work_item_id" => nil,
-                   "type" => "replan",
-                   "strategy" => "operator_guided_replan",
-                   "summary" => "Operator-guided recovery",
-                   "alternative_strategies" => ["narrow_delegate_batch"],
-                   "alternative_summaries" => ["Narrowed delegation batch"],
-                   "priority_boost" => 3
-                 }
-               ]
+               follow_up["strategy_key"] == "operator_guided_replan" and
+               follow_up["strategy"] == "Operator-guided recovery" and
+               follow_up["additional_entries_count"] == 1 and
+               follow_up["priority_boost"] == 3 and
+               follow_up["priority_boosts"] == [3, 2] and
+               follow_up["alternatives"] == ["Narrowed delegation batch"] and
+               follow_up["alternative_strategies"] == ["narrow_delegate_batch"] and
+               length(entries) == 2 and
+               Enum.at(entries, 0)["strategy"] == "operator_guided_replan" and
+               Enum.at(entries, 0)["summary"] == "Operator-guided recovery" and
+               Enum.at(entries, 0)["priority_boost"] == 3 and
+               Enum.at(entries, 1)["strategy"] == "review_guided_replan" and
+               Enum.at(entries, 1)["summary"] == "Reviewer-guided recovery" and
+               Enum.at(entries, 1)["priority_boost"] == 2
            end)
 
     assert File.read!(export.markdown_path) =~
@@ -1220,7 +1256,7 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "publish=queued 1"
 
     assert File.read!(export.markdown_path) =~
-             "publish=replan queued 1 (Operator-guided recovery; priority +3; alternatives Narrowed delegation batch)"
+             "publish=replan queued 2 (Operator-guided recovery; priority +3; alternatives Narrowed delegation batch; +1 more)"
 
     assert File.read!(export.markdown_path) =~ "publish=delivered telegram -> ops-room"
     assert File.read!(export.markdown_path) =~ "assignment=report-agent:role_capability_match"

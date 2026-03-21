@@ -2359,9 +2359,15 @@ defmodule HydraX.Report do
             _ -> nil
           end
 
+        additional =
+          case Map.get(snapshot, :additional_entries_count) do
+            value when is_integer(value) and value > 0 -> "+#{value} more"
+            _ -> nil
+          end
+
         [
           "replan queued #{count}",
-          [strategy, priority, alternatives]
+          [strategy, priority, alternatives, additional]
           |> Enum.reject(&is_nil_or_empty/1)
           |> case do
             [] -> nil
@@ -2573,6 +2579,7 @@ defmodule HydraX.Report do
       type: type,
       count: count,
       entries: entries,
+      additional_entries_count: max(count - 1, 0),
       strategy_key:
         entries
         |> List.first()
@@ -2736,7 +2743,14 @@ defmodule HydraX.Report do
       |> Enum.filter(&is_integer/1)
 
     max_len =
-      [length(types), length(strategies), length(summaries), max(length(priority_boosts), 1)]
+      [
+        length(types),
+        length(strategies),
+        length(summaries),
+        length(alternative_strategies),
+        length(alternative_summaries),
+        length(priority_boosts)
+      ]
       |> Enum.max(fn -> 0 end)
 
     if max_len <= 0 do
@@ -2854,9 +2868,15 @@ defmodule HydraX.Report do
               _ -> nil
             end
 
+          additional =
+            case Map.get(follow_up, :additional_entries_count) do
+              value when is_integer(value) and value > 0 -> "+#{value} more"
+              _ -> nil
+            end
+
           [
             "replan queued #{count}",
-            [Map.get(follow_up, :strategy), priority, alternatives]
+            [Map.get(follow_up, :strategy), priority, alternatives, additional]
             |> Enum.reject(&is_nil_or_empty/1)
             |> case do
               [] -> nil

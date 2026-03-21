@@ -401,6 +401,10 @@ defmodule Mix.Tasks.HydraX.Work do
       []
       |> maybe_prepend_follow_up_line("follow_up_count", count)
       |> maybe_prepend_follow_up_line("follow_up_entries", length(entries))
+      |> maybe_prepend_follow_up_line(
+        "follow_up_additional_entries",
+        if(is_integer(count) and count > 1, do: count - 1, else: nil)
+      )
       |> maybe_prepend_follow_up_line("follow_up_types", Enum.join(types, ","))
       |> maybe_prepend_follow_up_line("follow_up_strategies", Enum.join(strategies, ","))
       |> maybe_prepend_follow_up_line("follow_up_summaries", Enum.join(summaries, ","))
@@ -568,20 +572,33 @@ defmodule Mix.Tasks.HydraX.Work do
 
     case {summary, priority, alternatives} do
       {value, nil, []} when is_binary(value) and value != "" ->
-        value
+        append_follow_up_additional_detail(work_item, value)
 
       {value, boost, []} when is_binary(value) and value != "" and is_binary(boost) ->
-        "#{value}; #{boost}"
+        append_follow_up_additional_detail(work_item, "#{value}; #{boost}")
 
       {value, nil, entries} when is_binary(value) and value != "" and entries != [] ->
-        "#{value}; alternatives #{Enum.join(entries, ", ")}"
+        append_follow_up_additional_detail(
+          work_item,
+          "#{value}; alternatives #{Enum.join(entries, ", ")}"
+        )
 
       {value, boost, entries}
       when is_binary(value) and value != "" and is_binary(boost) and entries != [] ->
-        "#{value}; #{boost}; alternatives #{Enum.join(entries, ", ")}"
+        append_follow_up_additional_detail(
+          work_item,
+          "#{value}; #{boost}; alternatives #{Enum.join(entries, ", ")}"
+        )
 
       _ ->
         nil
+    end
+  end
+
+  defp append_follow_up_additional_detail(work_item, detail) do
+    case get_in(work_item.result_refs || %{}, ["follow_up_summary", "count"]) do
+      value when is_integer(value) and value > 1 -> "#{detail}; +#{value - 1} more"
+      _ -> detail
     end
   end
 

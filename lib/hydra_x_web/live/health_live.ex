@@ -2863,12 +2863,13 @@ defmodule HydraXWeb.HealthLive do
         strategy = autonomy_follow_up_strategy_detail(item)
         priority = autonomy_follow_up_priority_detail(item)
         alternatives = autonomy_follow_up_alternative_detail(item)
+        additional = autonomy_follow_up_additional_detail(item)
 
         case autonomy_follow_up_type(item) do
           "replan" ->
             [
               "replan queued #{count}",
-              [strategy, priority, alternatives]
+              [strategy, priority, alternatives, additional]
               |> Enum.reject(&is_nil_or_empty/1)
               |> case do
                 [] -> nil
@@ -3069,6 +3070,13 @@ defmodule HydraXWeb.HealthLive do
     end
   end
 
+  defp autonomy_follow_up_additional_detail(item) do
+    case autonomy_follow_up_count(item) do
+      value when is_integer(value) and value > 1 -> "+#{value - 1} more"
+      _ -> nil
+    end
+  end
+
   defp autonomy_follow_up_entries(item) do
     summary = get_in(item.result_refs || %{}, ["follow_up_summary"]) || %{}
 
@@ -3187,10 +3195,11 @@ defmodule HydraXWeb.HealthLive do
       strategy = autonomy_follow_up_strategy_detail(item)
       priority = autonomy_follow_up_priority_detail(item)
       alternatives = autonomy_follow_up_alternative_detail(item)
+      additional = autonomy_follow_up_additional_detail(item)
 
       [
         "replan queued #{count}",
-        [strategy, priority, alternatives]
+        [strategy, priority, alternatives, additional]
         |> Enum.reject(&is_nil_or_empty/1)
         |> case do
           [] -> nil

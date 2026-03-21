@@ -2045,12 +2045,13 @@ defmodule HydraXWeb.AgentsLive do
         strategy = follow_up_queue_strategy_detail(work_item)
         priority = follow_up_queue_priority_detail(work_item)
         alternatives = follow_up_queue_alternative_detail(work_item)
+        additional = follow_up_queue_additional_detail(work_item)
 
         case follow_up_queue_type(work_item) do
           "replan" ->
             [
               "replan follow-up queued #{count}",
-              [strategy, priority, alternatives]
+              [strategy, priority, alternatives, additional]
               |> Enum.reject(&(&1 in [nil, ""]))
               |> case do
                 [] -> nil
@@ -2497,6 +2498,13 @@ defmodule HydraXWeb.AgentsLive do
     end
   end
 
+  defp follow_up_queue_additional_detail(work_item) do
+    case follow_up_queue_count(work_item) do
+      value when is_integer(value) and value > 1 -> "+#{value - 1} more"
+      _ -> nil
+    end
+  end
+
   defp follow_up_summary_entries(work_item) do
     summary = get_in(work_item.result_refs || %{}, ["follow_up_summary"]) || %{}
 
@@ -2628,10 +2636,11 @@ defmodule HydraXWeb.AgentsLive do
       strategy = follow_up_queue_strategy_detail(work_item)
       priority = follow_up_queue_priority_detail(work_item)
       alternatives = follow_up_queue_alternative_detail(work_item)
+      additional = follow_up_queue_additional_detail(work_item)
 
       [
         "replan queued #{count}",
-        [strategy, priority, alternatives]
+        [strategy, priority, alternatives, additional]
         |> Enum.reject(&(&1 in [nil, ""]))
         |> case do
           [] -> nil

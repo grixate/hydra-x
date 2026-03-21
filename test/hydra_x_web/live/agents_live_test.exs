@@ -811,11 +811,29 @@ defmodule HydraXWeb.AgentsLiveTest do
         "priority" => 99,
         "result_refs" => %{
           "degraded" => true,
-          "follow_up_work_item_ids" => [8_101],
+          "follow_up_work_item_ids" => [8_101, 8_102],
           "follow_up_summary" => %{
-            "count" => 1,
+            "count" => 2,
             "types" => ["replan"],
             "strategies" => ["operator_guided_replan"],
+            "entries" => [
+              %{
+                "work_item_id" => 8_101,
+                "type" => "replan",
+                "strategy" => "operator_guided_replan",
+                "summary" => "Operator-guided recovery",
+                "alternative_strategies" => ["narrow_delegate_batch"],
+                "alternative_summaries" => ["Narrowed delegation batch"],
+                "priority_boost" => 3
+              },
+              %{
+                "work_item_id" => 8_102,
+                "type" => "replan",
+                "strategy" => "review_guided_replan",
+                "summary" => "Reviewer-guided recovery",
+                "priority_boost" => 2
+              }
+            ],
             "priority_boosts" => [3],
             "alternative_strategies" => ["narrow_delegate_batch"]
           },
@@ -875,7 +893,7 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "delivery internal"
 
     assert html =~
-             "replan queued 1 (Operator-guided recovery; priority +3; alternatives Narrowed delegation batch)"
+             "replan queued 2 (Operator-guided recovery; priority +3; alternatives Narrowed delegation batch; +1 more)"
 
     assert html =~ "operator intervention prepared role_capacity_constrained"
 
