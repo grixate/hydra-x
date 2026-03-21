@@ -997,13 +997,19 @@ defmodule HydraX.Report do
     behavior = metadata["recovery_strategy_behavior"]
     priority_boost = metadata["recovery_strategy_priority_boost"]
     alternatives = work_item_recovery_alternatives(metadata)
+    selection_reason = metadata["recovery_strategy_selection_reason"]
+    deescalated_from = metadata["recovery_strategy_deescalated_from"]
 
     [
       strategy && "recovery_preferred=#{humanize_follow_up_strategy(strategy)}",
       behavior && "recovery_behavior=#{humanize_recovery_strategy_behavior(behavior)}",
       is_integer(priority_boost) && priority_boost > 0 &&
         "recovery_priority_boost=#{priority_boost}",
-      alternatives != [] && "recovery_alternatives=#{Enum.join(alternatives, ",")}"
+      alternatives != [] && "recovery_alternatives=#{Enum.join(alternatives, ",")}",
+      is_binary(deescalated_from) && deescalated_from != "" &&
+        "recovery_deescalated_from=#{humanize_follow_up_strategy(deescalated_from)}",
+      is_binary(selection_reason) && selection_reason != "" &&
+        "recovery_selection_reason=#{selection_reason}"
     ]
     |> Enum.reject(&is_nil_or_empty/1)
   end
@@ -2293,6 +2299,10 @@ defmodule HydraX.Report do
       recovery_strategy_priority_boost:
         get_in(item.metadata || %{}, ["recovery_strategy_priority_boost"]),
       recovery_strategy_alternatives: work_item_recovery_alternatives(item.metadata || %{}),
+      recovery_strategy_deescalated_from:
+        get_in(item.metadata || %{}, ["recovery_strategy_deescalated_from"]),
+      recovery_strategy_selection_reason:
+        get_in(item.metadata || %{}, ["recovery_strategy_selection_reason"]),
       delegation_batch: Runtime.delegation_batch_snapshot(item),
       delegation_batch_summary: render_work_item_delegation_summary(item),
       follow_up: follow_up_snapshot(item),
@@ -2850,6 +2860,8 @@ defmodule HydraX.Report do
       "type" => Map.get(entry, "type"),
       "strategy" => Map.get(entry, "strategy"),
       "summary" => Map.get(entry, "summary"),
+      "deescalated_from" => Map.get(entry, "deescalated_from"),
+      "selection_reason" => Map.get(entry, "selection_reason"),
       "alternative_strategies" =>
         entry
         |> Map.get("alternative_strategies", [])

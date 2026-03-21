@@ -4459,10 +4459,33 @@ defmodule HydraX.RuntimeTest do
              "operator_guided_replan"
            ]
 
+    assert get_in(replan_item.metadata || %{}, ["recovery_strategy_deescalated_from"]) ==
+             "operator_guided_replan"
+
+    assert get_in(replan_item.metadata || %{}, ["recovery_strategy_selection_reason"]) ==
+             "de-escalated from Operator-guided recovery under existing planner recovery pressure (1 existing)"
+
     assert get_in(replan_item.metadata || %{}, ["recovery_strategy_summary"]) ==
              "Reviewer-guided recovery"
 
     assert get_in(replan_item.metadata || %{}, ["recovery_strategy_priority_boost"]) == 3
+
+    parent = Runtime.get_work_item!(parent.id)
+
+    assert get_in(parent.result_refs || %{}, ["follow_up_summary", "entries"]) == [
+             %{
+               "work_item_id" => replan_item.id,
+               "type" => "replan",
+               "strategy" => "review_guided_replan",
+               "summary" => "Reviewer-guided recovery",
+               "deescalated_from" => "operator_guided_replan",
+               "selection_reason" =>
+                 "de-escalated from Operator-guided recovery under existing planner recovery pressure (1 existing)",
+               "alternative_strategies" => ["operator_guided_replan"],
+               "alternative_summaries" => ["Operator-guided recovery"],
+               "priority_boost" => 3
+             }
+           ]
   end
 
   test "planner delegate batches create multiple child work items and batch snapshots" do

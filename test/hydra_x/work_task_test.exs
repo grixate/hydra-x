@@ -20,7 +20,10 @@ defmodule HydraX.WorkTaskTest do
           "preferred_recovery_strategy" => "operator_guided_replan",
           "recovery_strategy_behavior" => "operator_review_after_execution",
           "recovery_strategy_priority_boost" => 3,
-          "recovery_strategy_alternatives" => ["narrow_delegate_batch"]
+          "recovery_strategy_alternatives" => ["narrow_delegate_batch"],
+          "recovery_strategy_deescalated_from" => "operator_guided_replan",
+          "recovery_strategy_selection_reason" =>
+            "de-escalated from Operator-guided recovery under existing planner recovery pressure (1 existing)"
         },
         "result_refs" => %{
           "follow_up_summary" => %{
@@ -127,6 +130,11 @@ defmodule HydraX.WorkTaskTest do
              "recovery_summary=Operator-guided recovery with narrowed delegation fallback"
 
     assert show_output =~ "recovery_strategy_priority_boost=3"
+    assert show_output =~ "recovery_strategy_deescalated_from=operator_guided_replan"
+
+    assert show_output =~
+             "recovery_strategy_selection_reason=de-escalated from Operator-guided recovery under existing planner recovery pressure (1 existing)"
+
     assert show_output =~ "follow_up_count=1"
     assert show_output =~ "follow_up_entries=1"
     assert show_output =~ "follow_up_types=replan"

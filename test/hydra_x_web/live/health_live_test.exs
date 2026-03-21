@@ -644,7 +644,9 @@ defmodule HydraXWeb.HealthLiveTest do
           "recovery_strategy_behavior" => "operator_review_after_execution",
           "recovery_strategy_priority_boost" => 3,
           "recovery_strategy_alternatives" => ["narrow_delegate_batch"],
-          "recovery_strategy_alternative_summaries" => ["Narrowed delegation batch"]
+          "recovery_strategy_alternative_summaries" => ["Narrowed delegation batch"],
+          "recovery_strategy_selection_reason" =>
+            "de-escalated from Operator-guided recovery under existing planner recovery pressure (1 existing)"
         }
       })
 
@@ -656,6 +658,9 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "strategy behavior operator review after execution"
     assert html =~ "strategy priority +3"
     assert html =~ "alternative strategies Narrowed delegation batch"
+
+    assert html =~
+             "selection reason de-escalated from Operator-guided recovery under existing planner recovery pressure (1 existing)"
   end
 
   test "health page shows degraded publish posture", %{conn: conn} do

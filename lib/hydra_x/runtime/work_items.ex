@@ -9968,7 +9968,11 @@ defmodule HydraX.Runtime.WorkItems do
        ) do
     if parent.assigned_role == "planner" and constraint_findings != [] do
       constraint_strategy = derive_constraint_strategy(constraint_findings)
-      preferred_strategy = preferred_work_item_follow_up_strategy(parent)
+      strategy_selection = preferred_work_item_follow_up_selection(parent)
+      preferred_strategy = strategy_selection && strategy_selection.strategy
+
+      preferred_alternatives =
+        (strategy_selection && strategy_selection.alternative_strategies) || []
 
       follow_up_context =
         build_follow_up_context(
@@ -9997,7 +10001,7 @@ defmodule HydraX.Runtime.WorkItems do
               follow_up_replan_goal(
                 parent.goal,
                 preferred_strategy,
-                preferred_work_item_follow_up_alternatives(parent)
+                preferred_alternatives
               ),
             "status" => "planned",
             "execution_mode" => "delegate",
@@ -10009,7 +10013,7 @@ defmodule HydraX.Runtime.WorkItems do
               follow_up_replan_priority(
                 max(parent.priority - 1, 0),
                 preferred_strategy,
-                preferred_work_item_follow_up_alternatives(parent)
+                preferred_alternatives
               ),
             "autonomy_level" => parent.autonomy_level,
             "approval_stage" => parent.approval_stage,
@@ -10023,14 +10027,13 @@ defmodule HydraX.Runtime.WorkItems do
                   "task_type" => "constraint_replan",
                   "delegate_goal" => parent.goal,
                   "summary_artifact_id" => summary_artifact.id,
-                  "recovery_strategy_alternatives" =>
-                    preferred_work_item_follow_up_alternatives(parent),
+                  "recovery_strategy_alternatives" => preferred_alternatives,
                   "constraint_findings" => Enum.take(constraint_findings, 5),
                   "constraint_strategy" => constraint_strategy,
                   "delivery_recovery" => delivery_recovery,
                   "follow_up_context" => follow_up_context
                 },
-                preferred_strategy
+                strategy_selection || preferred_strategy
               )
           }
         )
@@ -10642,6 +10645,14 @@ defmodule HydraX.Runtime.WorkItems do
       "alternative_strategies" => follow_up_summary_alternative_strategies(follow_up_work_item),
       "alternative_summaries" => follow_up_summary_alternative_summaries(follow_up_work_item)
     }
+    |> maybe_put_follow_up_entry_detail(
+      "deescalated_from",
+      get_in(follow_up_work_item.metadata || %{}, ["recovery_strategy_deescalated_from"])
+    )
+    |> maybe_put_follow_up_entry_detail(
+      "selection_reason",
+      get_in(follow_up_work_item.metadata || %{}, ["recovery_strategy_selection_reason"])
+    )
     |> maybe_put_follow_up_entry_priority(follow_up_summary_priority_boost(follow_up_work_item))
   end
 
@@ -10651,27 +10662,40 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp maybe_put_follow_up_entry_priority(entry, _value), do: entry
 
+  defp maybe_put_follow_up_entry_detail(entry, _key, value) when value in [nil, ""], do: entry
+  defp maybe_put_follow_up_entry_detail(entry, key, value), do: Map.put(entry, key, value)
+
   defp maybe_put_follow_up_summary_list(summary, _key, []), do: summary
   defp maybe_put_follow_up_summary_list(summary, key, values), do: Map.put(summary, key, values)
 
-  defp preferred_work_item_follow_up_strategy(%WorkItem{} = work_item) do
-    work_item
-    |> work_item_follow_up_strategies()
-    |> preferred_follow_up_strategy(
-      intervention_pressure: follow_up_strategy_intervention_pressure(work_item)
-    )
+  defp preferred_work_item_follow_up_alternatives(%WorkItem{} = work_item) do
+    case preferred_work_item_follow_up_selection(work_item) do
+      %{alternative_strategies: alternatives} -> alternatives
+      _ -> []
+    end
   end
 
-  defp preferred_work_item_follow_up_alternatives(%WorkItem{} = work_item) do
+  defp preferred_work_item_follow_up_selection(%WorkItem{} = work_item) do
     strategies = work_item_follow_up_strategies(work_item)
+    intervention_pressure = follow_up_strategy_intervention_pressure(work_item)
 
     preferred =
-      preferred_follow_up_strategy(
-        strategies,
-        intervention_pressure: follow_up_strategy_intervention_pressure(work_item)
-      )
+      preferred_follow_up_strategy(strategies, intervention_pressure: intervention_pressure)
 
-    Enum.reject(strategies, &(&1 in [nil, "", preferred]))
+    case {base_follow_up_strategy_choice(strategies), preferred} do
+      {_base, nil} ->
+        nil
+
+      {base, strategy} ->
+        %{
+          strategy: strategy,
+          alternative_strategies: Enum.reject(strategies, &(&1 in [nil, "", strategy])),
+          deescalated_from:
+            if(is_binary(base) and base != "" and base != strategy, do: base, else: nil),
+          selection_reason:
+            follow_up_strategy_selection_reason(base, strategy, intervention_pressure)
+        }
+    end
   end
 
   defp work_item_follow_up_strategies(%WorkItem{} = work_item) do
@@ -10681,6 +10705,15 @@ defmodule HydraX.Runtime.WorkItems do
     |> Enum.reject(&(&1 in [nil, ""]))
     |> Enum.uniq()
   end
+
+  defp follow_up_strategy_selection_reason(base, preferred, intervention_pressure)
+       when is_binary(base) and is_binary(preferred) and base != preferred do
+    pressure_count = Map.get(intervention_pressure, base, 0)
+
+    "de-escalated from #{recovery_strategy_summary(base)} under existing planner recovery pressure#{if(pressure_count > 0, do: " (#{pressure_count} existing)", else: "")}"
+  end
+
+  defp follow_up_strategy_selection_reason(_base, _preferred, _intervention_pressure), do: nil
 
   defp follow_up_strategy_intervention_pressure(%WorkItem{} = work_item) do
     if work_item.assigned_role == "planner" do
@@ -10710,6 +10743,14 @@ defmodule HydraX.Runtime.WorkItems do
     end
   end
 
+  defp apply_follow_up_strategy_to_follow_up_metadata(metadata, %{strategy: strategy} = selection)
+       when is_binary(strategy) do
+    metadata
+    |> Helpers.normalize_string_keys()
+    |> maybe_put_follow_up_selection_metadata(selection)
+    |> apply_follow_up_strategy_to_follow_up_metadata(strategy)
+  end
+
   defp apply_follow_up_strategy_to_follow_up_metadata(metadata, nil),
     do: Helpers.normalize_string_keys(metadata || %{})
 
@@ -10736,6 +10777,29 @@ defmodule HydraX.Runtime.WorkItems do
       metadata
     end
   end
+
+  defp maybe_put_follow_up_selection_metadata(metadata, %{deescalated_from: from} = selection)
+       when is_map(metadata) do
+    metadata
+    |> then(fn current ->
+      if is_binary(from) and from != "" do
+        Map.put(current, "recovery_strategy_deescalated_from", from)
+      else
+        current
+      end
+    end)
+    |> then(fn current ->
+      case selection[:selection_reason] do
+        value when is_binary(value) and value != "" ->
+          Map.put(current, "recovery_strategy_selection_reason", value)
+
+        _ ->
+          current
+      end
+    end)
+  end
+
+  defp maybe_put_follow_up_selection_metadata(metadata, _selection), do: metadata
 
   defp follow_up_replan_priority(base_priority, strategy, alternatives)
        when is_integer(base_priority) and is_binary(strategy) and is_list(alternatives) do

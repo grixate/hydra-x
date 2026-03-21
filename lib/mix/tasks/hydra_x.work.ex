@@ -698,6 +698,22 @@ defmodule Mix.Tasks.HydraX.Work do
       _ ->
         :ok
     end
+
+    case metadata["recovery_strategy_deescalated_from"] do
+      value when is_binary(value) and value != "" ->
+        Mix.shell().info("recovery_strategy_deescalated_from=#{value}")
+
+      _ ->
+        :ok
+    end
+
+    case metadata["recovery_strategy_selection_reason"] do
+      value when is_binary(value) and value != "" ->
+        Mix.shell().info("recovery_strategy_selection_reason=#{value}")
+
+      _ ->
+        :ok
+    end
   end
 
   defp base_recovery_strategy_summary("review_guided_replan"), do: "Reviewer-guided recovery"

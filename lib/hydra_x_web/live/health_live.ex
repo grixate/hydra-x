@@ -3203,12 +3203,14 @@ defmodule HydraXWeb.HealthLive do
     behavior = metadata["recovery_strategy_behavior"]
     priority_boost = metadata["recovery_strategy_priority_boost"]
     alternatives = autonomy_recovery_alternatives(metadata)
+    selection_reason = metadata["recovery_strategy_selection_reason"]
 
     [
       strategy && "preferred strategy #{humanize_follow_up_strategy(strategy)}",
       behavior && "strategy behavior #{humanize_recovery_strategy_behavior(behavior)}",
       is_integer(priority_boost) && priority_boost > 0 && "strategy priority +#{priority_boost}",
-      alternatives != [] && "alternative strategies #{Enum.join(alternatives, ", ")}"
+      alternatives != [] && "alternative strategies #{Enum.join(alternatives, ", ")}",
+      selection_reason && "selection reason #{selection_reason}"
     ]
     |> Enum.reject(&is_nil_or_empty/1)
   end
