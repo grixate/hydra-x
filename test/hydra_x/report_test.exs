@@ -977,7 +977,13 @@ defmodule HydraX.ReportTest do
         "result_refs" => %{
           "degraded" => true,
           "follow_up_work_item_ids" => [8_401],
-          "follow_up_summary" => %{"count" => 1, "types" => ["replan"]},
+          "follow_up_summary" => %{
+            "count" => 1,
+            "types" => ["replan"],
+            "strategies" => ["operator_guided_replan"],
+            "priority_boosts" => [3],
+            "alternative_strategies" => ["narrow_delegate_batch"]
+          },
           "delivery" => %{
             "status" => "skipped",
             "mode" => "report",
@@ -1201,7 +1207,10 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "patch_bundle:approved/approved"
     assert File.read!(export.markdown_path) =~ "promoted=Decision:"
     assert File.read!(export.markdown_path) =~ "publish=queued 1"
-    assert File.read!(export.markdown_path) =~ "publish=replan queued 1"
+
+    assert File.read!(export.markdown_path) =~
+             "publish=replan queued 1 (Operator-guided recovery; priority +3; alternatives Narrowed delegation batch)"
+
     assert File.read!(export.markdown_path) =~ "publish=delivered telegram -> ops-room"
     assert File.read!(export.markdown_path) =~ "assignment=report-agent:role_capability_match"
     assert File.read!(export.markdown_path) =~ "ownership=#{local_owner}:completed:released"

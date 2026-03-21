@@ -2677,8 +2677,36 @@ defmodule HydraX.Report do
 
     if match?(%{type: "publish_summary"}, snapshot) do
       case follow_up_snapshot(item) do
-        %{type: "queued_replan_follow_up", count: count} -> "replan queued #{count}"
-        _ -> nil
+        %{type: "queued_replan_follow_up", count: count} = follow_up ->
+          alternatives =
+            follow_up
+            |> Map.get(:alternatives, [])
+            |> Enum.reject(&is_nil_or_empty/1)
+            |> case do
+              [] -> nil
+              entries -> "alternatives #{Enum.join(entries, ", ")}"
+            end
+
+          priority =
+            case Map.get(follow_up, :priority_boost) do
+              value when is_integer(value) and value > 0 -> "priority +#{value}"
+              _ -> nil
+            end
+
+          [
+            "replan queued #{count}",
+            [Map.get(follow_up, :strategy), priority, alternatives]
+            |> Enum.reject(&is_nil_or_empty/1)
+            |> case do
+              [] -> nil
+              details -> "(" <> Enum.join(details, "; ") <> ")"
+            end
+          ]
+          |> Enum.reject(&is_nil_or_empty/1)
+          |> Enum.join(" ")
+
+        _ ->
+          nil
       end
     end
   end

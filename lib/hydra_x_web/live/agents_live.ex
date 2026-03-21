@@ -2578,7 +2578,22 @@ defmodule HydraXWeb.AgentsLive do
 
   defp publish_replan_summary(work_item) do
     if follow_up_queue_type(work_item) == "replan" do
-      "replan queued #{follow_up_queue_count(work_item)}"
+      count = follow_up_queue_count(work_item)
+      strategy = follow_up_queue_strategy_detail(work_item)
+      priority = follow_up_queue_priority_detail(work_item)
+      alternatives = follow_up_queue_alternative_detail(work_item)
+
+      [
+        "replan queued #{count}",
+        [strategy, priority, alternatives]
+        |> Enum.reject(&(&1 in [nil, ""]))
+        |> case do
+          [] -> nil
+          details -> "(" <> Enum.join(details, "; ") <> ")"
+        end
+      ]
+      |> Enum.reject(&(&1 in [nil, ""]))
+      |> Enum.join(" ")
     end
   end
 

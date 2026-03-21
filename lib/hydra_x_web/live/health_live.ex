@@ -3137,7 +3137,22 @@ defmodule HydraXWeb.HealthLive do
 
   defp publish_replan_summary(item) do
     if autonomy_follow_up_type(item) == "replan" do
-      "replan queued #{autonomy_follow_up_count(item)}"
+      count = autonomy_follow_up_count(item)
+      strategy = autonomy_follow_up_strategy_detail(item)
+      priority = autonomy_follow_up_priority_detail(item)
+      alternatives = autonomy_follow_up_alternative_detail(item)
+
+      [
+        "replan queued #{count}",
+        [strategy, priority, alternatives]
+        |> Enum.reject(&is_nil_or_empty/1)
+        |> case do
+          [] -> nil
+          details -> "(" <> Enum.join(details, "; ") <> ")"
+        end
+      ]
+      |> Enum.reject(&is_nil_or_empty/1)
+      |> Enum.join(" ")
     end
   end
 

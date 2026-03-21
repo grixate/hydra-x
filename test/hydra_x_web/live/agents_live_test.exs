@@ -812,7 +812,13 @@ defmodule HydraXWeb.AgentsLiveTest do
         "result_refs" => %{
           "degraded" => true,
           "follow_up_work_item_ids" => [8_101],
-          "follow_up_summary" => %{"count" => 1, "types" => ["replan"]},
+          "follow_up_summary" => %{
+            "count" => 1,
+            "types" => ["replan"],
+            "strategies" => ["operator_guided_replan"],
+            "priority_boosts" => [3],
+            "alternative_strategies" => ["narrow_delegate_batch"]
+          },
           "delivery" => %{
             "status" => "skipped",
             "mode" => "report",
@@ -867,7 +873,10 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "recovery switch slack"
     assert html =~ "explicit-signal"
     assert html =~ "delivery internal"
-    assert html =~ "replan queued 1"
+
+    assert html =~
+             "replan queued 1 (Operator-guided recovery; priority +3; alternatives Narrowed delegation batch)"
+
     assert html =~ "operator intervention prepared role_capacity_constrained"
 
     assert html =~
