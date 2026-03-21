@@ -4337,7 +4337,9 @@ defmodule HydraX.RuntimeTest do
 
     assert get_in(replan_item.metadata || %{}, ["delegate_batch_concurrency"]) == 1
     assert get_in(replan_item.metadata || %{}, ["delegate_batch_completion_quorum"]) == 1
-    assert replan_item.goal =~ "operator-guided delegation recovery"
+
+    assert replan_item.goal ==
+             "Re-plan Recover a constrained delegated branch with a guided fallback. with operator-guided delegation recovery and narrowed delegation fallback."
   end
 
   test "planner delegate batches create multiple child work items and batch snapshots" do

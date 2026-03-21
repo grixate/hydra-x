@@ -4009,7 +4009,12 @@ defmodule HydraX.Runtime.WorkItems do
           end,
           %{
             "kind" => target.kind,
-            "goal" => follow_up_replan_goal(target.goal, "review_guided_replan"),
+            "goal" =>
+              follow_up_replan_goal(
+                target.goal,
+                "review_guided_replan",
+                preferred_work_item_follow_up_alternatives(target)
+              ),
             "status" => "planned",
             "execution_mode" => "delegate",
             "assigned_role" => "planner",
@@ -4278,7 +4283,12 @@ defmodule HydraX.Runtime.WorkItems do
           end,
           %{
             "kind" => target.kind,
-            "goal" => follow_up_replan_goal(target.goal, "operator_guided_replan"),
+            "goal" =>
+              follow_up_replan_goal(
+                target.goal,
+                "operator_guided_replan",
+                preferred_work_item_follow_up_alternatives(target)
+              ),
             "status" => "planned",
             "execution_mode" => "delegate",
             "assigned_role" => "planner",
@@ -9812,7 +9822,12 @@ defmodule HydraX.Runtime.WorkItems do
           end,
           %{
             "kind" => parent.kind,
-            "goal" => follow_up_replan_goal(parent.goal, preferred_strategy),
+            "goal" =>
+              follow_up_replan_goal(
+                parent.goal,
+                preferred_strategy,
+                preferred_work_item_follow_up_alternatives(parent)
+              ),
             "status" => "planned",
             "execution_mode" => "delegate",
             "assigned_role" => "planner",
@@ -10422,6 +10437,18 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp follow_up_replan_goal(goal, _strategy) do
     "Re-plan #{goal} within the current autonomy constraints."
+  end
+
+  defp follow_up_replan_goal(goal, strategy, alternatives)
+       when is_binary(goal) and is_binary(strategy) and is_list(alternatives) do
+    base_goal = follow_up_replan_goal(goal, strategy)
+
+    if strategy != "narrow_delegate_batch" and
+         Enum.member?(alternatives, "narrow_delegate_batch") do
+      "#{String.trim_trailing(base_goal, ".")} and narrowed delegation fallback."
+    else
+      base_goal
+    end
   end
 
   defp recovery_strategy_summary(strategy, alternatives)
