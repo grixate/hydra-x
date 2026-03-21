@@ -537,7 +537,6 @@ defmodule HydraXWeb.AgentsLiveTest do
         "approval_stage" => "proposal_only",
         "metadata" => %{
           "preferred_recovery_strategy" => "operator_guided_replan",
-          "recovery_strategy_summary" => "Operator-guided recovery",
           "recovery_strategy_behavior" => "operator_review_after_execution",
           "recovery_strategy_alternatives" => ["narrow_delegate_batch"],
           "recovery_strategy_alternative_summaries" => ["Narrowed delegation batch"]
@@ -547,7 +546,7 @@ defmodule HydraXWeb.AgentsLiveTest do
     {:ok, _view, html} = live(conn, ~p"/agents")
 
     assert html =~ work_item.goal
-    assert html =~ "Operator-guided recovery"
+    assert html =~ "Operator-guided recovery with narrowed delegation fallback"
     assert html =~ "preferred strategy operator-guided"
     assert html =~ "strategy behavior operator review after execution"
     assert html =~ "alternative strategies Narrowed delegation batch"

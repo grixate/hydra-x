@@ -2978,17 +2978,14 @@ defmodule HydraXWeb.HealthLive do
   defp humanize_follow_up_strategy(_strategy), do: "follow-up"
 
   defp autonomy_recovery_summary(item) do
-    case get_in(item.metadata || %{}, ["recovery_strategy_summary"]) do
+    metadata = item.metadata || %{}
+
+    case metadata["recovery_strategy_summary"] do
       value when is_binary(value) and value != "" ->
         value
 
       _ ->
-        item
-        |> get_in([Access.key(:metadata, %{}), "preferred_recovery_strategy"])
-        |> case do
-          value when is_binary(value) and value != "" -> humanize_follow_up_strategy(value)
-          _ -> nil
-        end
+        derived_recovery_strategy_summary(metadata)
     end
   end
 
@@ -3024,6 +3021,37 @@ defmodule HydraXWeb.HealthLive do
       |> List.wrap()
       |> Enum.reject(&(&1 in [nil, ""]))
       |> Enum.map(&humanize_follow_up_strategy/1)
+  end
+
+  defp derived_recovery_strategy_summary(metadata) do
+    strategy = metadata["preferred_recovery_strategy"]
+
+    with value when is_binary(value) and value != "" <- base_recovery_strategy_summary(strategy) do
+      if narrowed_delegation_recovery_alternative?(metadata, strategy) do
+        "#{value} with narrowed delegation fallback"
+      else
+        value
+      end
+    end
+  end
+
+  defp base_recovery_strategy_summary("review_guided_replan"), do: "Reviewer-guided recovery"
+  defp base_recovery_strategy_summary("operator_guided_replan"), do: "Operator-guided recovery"
+  defp base_recovery_strategy_summary("request_review"), do: "Review-requested recovery"
+  defp base_recovery_strategy_summary("constraint_replan"), do: "Constraint-first recovery"
+  defp base_recovery_strategy_summary("narrow_delegate_batch"), do: "Narrowed delegation batch"
+
+  defp base_recovery_strategy_summary(strategy) when is_binary(strategy),
+    do: humanize_follow_up_strategy(strategy)
+
+  defp base_recovery_strategy_summary(_strategy), do: nil
+
+  defp narrowed_delegation_recovery_alternative?(metadata, strategy) do
+    strategy != "narrow_delegate_batch" and
+      ("narrow_delegate_batch" in List.wrap(metadata["recovery_strategy_alternatives"]) or
+         "Narrowed delegation batch" in List.wrap(
+           metadata["recovery_strategy_alternative_summaries"]
+         ))
   end
 
   defp publish_replan_summary(item) do

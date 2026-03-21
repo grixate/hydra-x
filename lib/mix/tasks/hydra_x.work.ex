@@ -362,7 +362,7 @@ defmodule Mix.Tasks.HydraX.Work do
 
   defp work_item_list_detail(work_item) do
     [
-      get_in(work_item.metadata || %{}, ["recovery_strategy_summary"]),
+      derived_recovery_strategy_summary(work_item.metadata || %{}),
       work_item
       |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "summaries"]))
       |> List.wrap()
@@ -372,5 +372,39 @@ defmodule Mix.Tasks.HydraX.Work do
       value when is_binary(value) -> value != ""
       _ -> false
     end)
+  end
+
+  defp derived_recovery_strategy_summary(metadata) do
+    case metadata["recovery_strategy_summary"] do
+      value when is_binary(value) and value != "" ->
+        value
+
+      _ ->
+        strategy = metadata["preferred_recovery_strategy"]
+
+        with value when is_binary(value) and value != "" <-
+               base_recovery_strategy_summary(strategy) do
+          if narrowed_delegation_recovery_alternative?(metadata, strategy) do
+            "#{value} with narrowed delegation fallback"
+          else
+            value
+          end
+        end
+    end
+  end
+
+  defp base_recovery_strategy_summary("review_guided_replan"), do: "Reviewer-guided recovery"
+  defp base_recovery_strategy_summary("operator_guided_replan"), do: "Operator-guided recovery"
+  defp base_recovery_strategy_summary("request_review"), do: "Review-requested recovery"
+  defp base_recovery_strategy_summary("constraint_replan"), do: "Constraint-first recovery"
+  defp base_recovery_strategy_summary("narrow_delegate_batch"), do: "Narrowed delegation batch"
+  defp base_recovery_strategy_summary(_strategy), do: nil
+
+  defp narrowed_delegation_recovery_alternative?(metadata, strategy) do
+    strategy != "narrow_delegate_batch" and
+      ("narrow_delegate_batch" in List.wrap(metadata["recovery_strategy_alternatives"]) or
+         "Narrowed delegation batch" in List.wrap(
+           metadata["recovery_strategy_alternative_summaries"]
+         ))
   end
 end

@@ -259,7 +259,8 @@ defmodule HydraX.WorkTaskTest do
         "status" => "planned",
         "approval_stage" => "proposal_only",
         "metadata" => %{
-          "recovery_strategy_summary" => "Operator-guided recovery"
+          "preferred_recovery_strategy" => "operator_guided_replan",
+          "recovery_strategy_alternatives" => ["narrow_delegate_batch"]
         }
       })
 
@@ -289,7 +290,7 @@ defmodule HydraX.WorkTaskTest do
       end)
 
     assert output =~
-             "#{guided_item.id}\tplan\tplanned\tplanner\tproposal_only\tRecover a constrained planner branch.\tOperator-guided recovery"
+             "#{guided_item.id}\tplan\tplanned\tplanner\tproposal_only\tRecover a constrained planner branch.\tOperator-guided recovery with narrowed delegation fallback"
 
     assert output =~
              "#{follow_up_item.id}\tplan\tblocked\tplanner\tvalidated\tFinalize the parent planner tree.\tReviewer-guided recovery"
