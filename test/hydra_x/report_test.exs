@@ -1108,6 +1108,7 @@ defmodule HydraX.ReportTest do
             "count" => 1,
             "types" => ["replan"],
             "strategies" => ["operator_guided_replan"],
+            "priority_boosts" => [3],
             "alternative_strategies" => ["narrow_delegate_batch"]
           }
         }
@@ -1157,7 +1158,7 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "Required warnings:"
 
     assert File.read!(export.markdown_path) =~
-             "replan queued 1 (Operator-guided recovery; alternatives Narrowed delegation batch)"
+             "replan queued 1 (Operator-guided recovery; priority +3; alternatives Narrowed delegation batch)"
 
     work_items_json = Jason.decode!(File.read!(Path.join(export.bundle_dir, "work_items.json")))
 
@@ -1165,6 +1166,8 @@ defmodule HydraX.ReportTest do
              item["goal"] == "Re-plan the constrained publish escalation." and
                item["follow_up"]["strategy_key"] == "operator_guided_replan" and
                item["follow_up"]["strategy"] == "Operator-guided recovery" and
+               item["follow_up"]["priority_boost"] == 3 and
+               item["follow_up"]["priority_boosts"] == [3] and
                item["follow_up"]["alternatives"] == ["Narrowed delegation batch"] and
                item["follow_up"]["alternative_strategies"] == ["narrow_delegate_batch"]
            end)

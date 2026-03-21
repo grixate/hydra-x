@@ -374,6 +374,10 @@ defmodule Mix.Tasks.HydraX.Work do
       |> maybe_prepend_follow_up_line("follow_up_strategies", Enum.join(strategies, ","))
       |> maybe_prepend_follow_up_line("follow_up_summaries", Enum.join(summaries, ","))
       |> maybe_prepend_follow_up_line(
+        "follow_up_priority_boosts",
+        follow_up_priority_boosts(summary) |> Enum.map(&to_string/1) |> Enum.join(",")
+      )
+      |> maybe_prepend_follow_up_line(
         "follow_up_alternative_strategies",
         Enum.join(alternative_strategies, ",")
       )
@@ -383,12 +387,19 @@ defmodule Mix.Tasks.HydraX.Work do
       )
 
     detail_lines =
-      Enum.concat(
-        summaries
+      summaries
+      |> Enum.with_index(1)
+      |> Enum.map(fn {summary, index} ->
+        "follow_up_detail\t#{work_item.id}\trecovery_summary_#{index}\t#{summary}"
+      end)
+      |> Kernel.++(
+        follow_up_priority_boosts(summary)
         |> Enum.with_index(1)
-        |> Enum.map(fn {summary, index} ->
-          "follow_up_detail\t#{work_item.id}\trecovery_summary_#{index}\t#{summary}"
-        end),
+        |> Enum.map(fn {boost, index} ->
+          "follow_up_detail\t#{work_item.id}\trecovery_priority_#{index}\t+#{boost}"
+        end)
+      )
+      |> Kernel.++(
         alternative_summaries
         |> Enum.with_index(1)
         |> Enum.map(fn {summary, index} ->
@@ -404,6 +415,13 @@ defmodule Mix.Tasks.HydraX.Work do
 
   defp maybe_prepend_follow_up_line(lines, label, value) do
     lines ++ ["#{label}=#{value}"]
+  end
+
+  defp follow_up_priority_boosts(summary) do
+    summary
+    |> Map.get("priority_boosts", [])
+    |> List.wrap()
+    |> Enum.filter(&is_integer/1)
   end
 
   defp work_item_list_detail(work_item) do

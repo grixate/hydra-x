@@ -2353,9 +2353,15 @@ defmodule HydraX.Report do
             entries -> "alternatives #{Enum.join(entries, ", ")}"
           end
 
+        priority =
+          case Map.get(snapshot, :priority_boost) do
+            value when is_integer(value) and value > 0 -> "priority +#{value}"
+            _ -> nil
+          end
+
         [
           "replan queued #{count}",
-          [strategy, alternatives]
+          [strategy, priority, alternatives]
           |> Enum.reject(&is_nil_or_empty/1)
           |> case do
             [] -> nil
@@ -2612,7 +2618,18 @@ defmodule HydraX.Report do
         item
         |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "alternative_strategies"]))
         |> List.wrap()
-        |> Enum.reject(&is_nil_or_empty/1)
+        |> Enum.reject(&is_nil_or_empty/1),
+      priority_boost:
+        item
+        |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "priority_boosts"]))
+        |> List.wrap()
+        |> Enum.filter(&is_integer/1)
+        |> Enum.max(fn -> nil end),
+      priority_boosts:
+        item
+        |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "priority_boosts"]))
+        |> List.wrap()
+        |> Enum.filter(&is_integer/1)
     }
   end
 

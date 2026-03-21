@@ -10388,6 +10388,15 @@ defmodule HydraX.Runtime.WorkItems do
       |> Enum.reject(&(&1 in [nil, ""]))
       |> Enum.uniq()
 
+    priority_boosts =
+      result_refs
+      |> Kernel.||(%{})
+      |> get_in(["follow_up_summary", "priority_boosts"])
+      |> List.wrap()
+      |> Kernel.++([follow_up_summary_priority_boost(follow_up_work_item)])
+      |> Enum.filter(&is_integer/1)
+      |> Enum.uniq()
+
     follow_up_summary =
       %{
         "count" => length(ids),
@@ -10397,6 +10406,7 @@ defmodule HydraX.Runtime.WorkItems do
       }
       |> maybe_put_follow_up_summary_list("alternative_strategies", alternative_strategies)
       |> maybe_put_follow_up_summary_list("alternative_summaries", alternative_summaries)
+      |> maybe_put_follow_up_summary_list("priority_boosts", priority_boosts)
 
     (result_refs || %{})
     |> Map.put("follow_up_work_item_ids", ids)
@@ -10442,6 +10452,13 @@ defmodule HydraX.Runtime.WorkItems do
     metadata["recovery_strategy_alternative_summaries"] ||
       follow_up_summary_alternative_strategies(follow_up_work_item)
       |> Enum.map(&recovery_strategy_summary/1)
+  end
+
+  defp follow_up_summary_priority_boost(%WorkItem{} = follow_up_work_item) do
+    case get_in(follow_up_work_item.metadata || %{}, ["recovery_strategy_priority_boost"]) do
+      value when is_integer(value) -> value
+      _ -> nil
+    end
   end
 
   defp maybe_put_follow_up_summary_list(summary, _key, []), do: summary

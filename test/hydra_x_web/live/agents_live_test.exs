@@ -505,6 +505,7 @@ defmodule HydraXWeb.AgentsLiveTest do
             "count" => 1,
             "types" => ["replan"],
             "strategies" => ["operator_guided_replan"],
+            "priority_boosts" => [3],
             "alternative_strategies" => ["narrow_delegate_batch"]
           }
         }
@@ -515,7 +516,7 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ replan_parent.goal
 
     assert html =~
-             "replan follow-up queued 1 (Operator-guided recovery; alternatives Narrowed delegation batch)"
+             "replan follow-up queued 1 (Operator-guided recovery; priority +3; alternatives Narrowed delegation batch)"
   end
 
   test "agents page shows recovery strategy summaries for planner replans", %{conn: conn} do

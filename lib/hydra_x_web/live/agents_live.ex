@@ -2043,13 +2043,14 @@ defmodule HydraXWeb.AgentsLive do
       List.wrap(get_in(work_item.result_refs || %{}, ["follow_up_work_item_ids"])) != [] ->
         count = follow_up_queue_count(work_item)
         strategy = follow_up_queue_strategy_detail(work_item)
+        priority = follow_up_queue_priority_detail(work_item)
         alternatives = follow_up_queue_alternative_detail(work_item)
 
         case follow_up_queue_type(work_item) do
           "replan" ->
             [
               "replan follow-up queued #{count}",
-              [strategy, alternatives]
+              [strategy, priority, alternatives]
               |> Enum.reject(&(&1 in [nil, ""]))
               |> case do
                 [] -> nil
@@ -2443,6 +2444,19 @@ defmodule HydraXWeb.AgentsLive do
       nil
     else
       "alternatives #{Enum.join(alternatives, ", ")}"
+    end
+  end
+
+  defp follow_up_queue_priority_detail(work_item) do
+    boosts =
+      work_item
+      |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "priority_boosts"]))
+      |> List.wrap()
+      |> Enum.filter(&is_integer/1)
+
+    case Enum.max(boosts, fn -> nil end) do
+      value when is_integer(value) and value > 0 -> "priority +#{value}"
+      _ -> nil
     end
   end
 

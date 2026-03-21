@@ -2861,13 +2861,14 @@ defmodule HydraXWeb.HealthLive do
       List.wrap(get_in(item.result_refs || %{}, ["follow_up_work_item_ids"])) != [] ->
         count = autonomy_follow_up_count(item)
         strategy = autonomy_follow_up_strategy_detail(item)
+        priority = autonomy_follow_up_priority_detail(item)
         alternatives = autonomy_follow_up_alternative_detail(item)
 
         case autonomy_follow_up_type(item) do
           "replan" ->
             [
               "replan queued #{count}",
-              [strategy, alternatives]
+              [strategy, priority, alternatives]
               |> Enum.reject(&is_nil_or_empty/1)
               |> case do
                 [] -> nil
@@ -3015,6 +3016,19 @@ defmodule HydraXWeb.HealthLive do
       nil
     else
       "alternatives #{Enum.join(alternatives, ", ")}"
+    end
+  end
+
+  defp autonomy_follow_up_priority_detail(item) do
+    boosts =
+      item
+      |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "priority_boosts"]))
+      |> List.wrap()
+      |> Enum.filter(&is_integer/1)
+
+    case Enum.max(boosts, fn -> nil end) do
+      value when is_integer(value) and value > 0 -> "priority +#{value}"
+      _ -> nil
     end
   end
 
