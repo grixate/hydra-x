@@ -2499,9 +2499,20 @@ defmodule HydraXWeb.AgentsLive do
   end
 
   defp follow_up_queue_additional_detail(work_item) do
-    case follow_up_queue_count(work_item) do
-      value when is_integer(value) and value > 1 -> "+#{value - 1} more"
-      _ -> nil
+    entries = follow_up_summary_entries(work_item)
+
+    case additional_follow_up_summaries(entries) do
+      [] ->
+        case follow_up_queue_count(work_item) do
+          value when is_integer(value) and value > 1 -> "+#{value - 1} more"
+          _ -> nil
+        end
+
+      summaries ->
+        extra_count = length(summaries)
+        preview = summaries |> Enum.take(2) |> Enum.join(", ")
+        suffix = if extra_count > 2, do: ", ...", else: ""
+        "+#{extra_count} more: #{preview}#{suffix}"
     end
   end
 
@@ -2512,6 +2523,15 @@ defmodule HydraXWeb.AgentsLive do
       [] -> []
       entries -> entries
     end
+  end
+
+  defp additional_follow_up_summaries(entries) do
+    entries
+    |> Enum.drop(1)
+    |> Enum.map(
+      &(Map.get(&1, "summary") || humanize_follow_up_strategy_summary(Map.get(&1, "strategy")))
+    )
+    |> Enum.reject(&(&1 in [nil, ""]))
   end
 
   defp humanize_follow_up_strategy("review_guided_replan"), do: "review-guided"

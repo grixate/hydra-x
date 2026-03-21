@@ -2360,9 +2360,15 @@ defmodule HydraX.Report do
           end
 
         additional =
-          case Map.get(snapshot, :additional_entries_count) do
-            value when is_integer(value) and value > 0 -> "+#{value} more"
-            _ -> nil
+          case Map.get(snapshot, :additional_summary_preview) do
+            value when is_binary(value) and value != "" ->
+              value
+
+            _ ->
+              case Map.get(snapshot, :additional_entries_count) do
+                value when is_integer(value) and value > 0 -> "+#{value} more"
+                _ -> nil
+              end
           end
 
         [
@@ -2580,6 +2586,29 @@ defmodule HydraX.Report do
       count: count,
       entries: entries,
       additional_entries_count: max(count - 1, 0),
+      additional_summaries:
+        entries
+        |> Enum.drop(1)
+        |> Enum.map(
+          &(Map.get(&1, "summary") || humanize_follow_up_strategy_summary(Map.get(&1, "strategy")))
+        )
+        |> Enum.reject(&is_nil_or_empty/1),
+      additional_summary_preview:
+        entries
+        |> Enum.drop(1)
+        |> Enum.map(
+          &(Map.get(&1, "summary") || humanize_follow_up_strategy_summary(Map.get(&1, "strategy")))
+        )
+        |> Enum.reject(&is_nil_or_empty/1)
+        |> case do
+          [] ->
+            nil
+
+          summaries ->
+            preview = summaries |> Enum.take(2) |> Enum.join(", ")
+            suffix = if length(summaries) > 2, do: ", ...", else: ""
+            "+#{length(summaries)} more: #{preview}#{suffix}"
+        end,
       strategy_key:
         entries
         |> List.first()
@@ -2869,9 +2898,15 @@ defmodule HydraX.Report do
             end
 
           additional =
-            case Map.get(follow_up, :additional_entries_count) do
-              value when is_integer(value) and value > 0 -> "+#{value} more"
-              _ -> nil
+            case Map.get(follow_up, :additional_summary_preview) do
+              value when is_binary(value) and value != "" ->
+                value
+
+              _ ->
+                case Map.get(follow_up, :additional_entries_count) do
+                  value when is_integer(value) and value > 0 -> "+#{value} more"
+                  _ -> nil
+                end
             end
 
           [

@@ -596,9 +596,13 @@ defmodule Mix.Tasks.HydraX.Work do
   end
 
   defp append_follow_up_additional_detail(work_item, detail) do
-    case get_in(work_item.result_refs || %{}, ["follow_up_summary", "count"]) do
-      value when is_integer(value) and value > 1 -> "#{detail}; +#{value - 1} more"
-      _ -> detail
+    summary =
+      get_in(work_item.result_refs || %{}, ["follow_up_summary"])
+      |> Kernel.||(%{})
+
+    case additional_follow_up_detail(summary) do
+      nil -> detail
+      extra -> "#{detail}; #{extra}"
     end
   end
 
@@ -607,6 +611,31 @@ defmodule Mix.Tasks.HydraX.Work do
     |> Map.get("entries", [])
     |> List.wrap()
     |> Enum.filter(&is_map/1)
+  end
+
+  defp additional_follow_up_detail(summary) do
+    entries = follow_up_entries(summary)
+
+    summaries =
+      entries
+      |> Enum.drop(1)
+      |> Enum.map(
+        &(Map.get(&1, "summary") || humanize_follow_up_strategy_summary(Map.get(&1, "strategy")))
+      )
+      |> Enum.reject(&(&1 in [nil, ""]))
+
+    cond do
+      summaries != [] ->
+        preview = summaries |> Enum.take(2) |> Enum.join(", ")
+        suffix = if length(summaries) > 2, do: ", ...", else: ""
+        "+#{length(summaries)} more: #{preview}#{suffix}"
+
+      match?(value when is_integer(value) and value > 1, Map.get(summary, "count")) ->
+        "+#{Map.get(summary, "count") - 1} more"
+
+      true ->
+        nil
+    end
   end
 
   defp maybe_append_follow_up_entry_detail(lines, _work_item_id, _index, _label, nil), do: lines

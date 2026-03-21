@@ -1200,7 +1200,7 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "Required warnings:"
 
     assert File.read!(export.markdown_path) =~
-             "replan queued 2 (Operator-guided recovery; priority +3; alternatives Narrowed delegation batch; +1 more)"
+             "replan queued 2 (Operator-guided recovery; priority +3; alternatives Narrowed delegation batch; +1 more: Reviewer-guided recovery)"
 
     work_items_json = Jason.decode!(File.read!(Path.join(export.bundle_dir, "work_items.json")))
 
@@ -1212,6 +1212,9 @@ defmodule HydraX.ReportTest do
                follow_up["strategy_key"] == "operator_guided_replan" and
                follow_up["strategy"] == "Operator-guided recovery" and
                follow_up["additional_entries_count"] == 1 and
+               follow_up["additional_summaries"] == ["Reviewer-guided recovery"] and
+               follow_up["additional_summary_preview"] ==
+                 "+1 more: Reviewer-guided recovery" and
                follow_up["priority_boost"] == 3 and
                follow_up["priority_boosts"] == [3, 2] and
                follow_up["alternatives"] == ["Narrowed delegation batch"] and
@@ -1256,7 +1259,7 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "publish=queued 1"
 
     assert File.read!(export.markdown_path) =~
-             "publish=replan queued 2 (Operator-guided recovery; priority +3; alternatives Narrowed delegation batch; +1 more)"
+             "publish=replan queued 2 (Operator-guided recovery; priority +3; alternatives Narrowed delegation batch; +1 more: Reviewer-guided recovery)"
 
     assert File.read!(export.markdown_path) =~ "publish=delivered telegram -> ops-room"
     assert File.read!(export.markdown_path) =~ "assignment=report-agent:role_capability_match"

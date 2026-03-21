@@ -351,6 +351,6 @@ defmodule HydraX.WorkTaskTest do
              "#{guided_item.id}\tplan\tplanned\tplanner\tproposal_only\tRecover a constrained planner branch.\tOperator-guided recovery with narrowed delegation fallback (+3)"
 
     assert output =~
-             "#{follow_up_item.id}\tplan\tblocked\tplanner\tvalidated\tFinalize the parent planner tree.\tReviewer-guided recovery; priority +2; alternatives Narrowed delegation batch; +1 more"
+             "#{follow_up_item.id}\tplan\tblocked\tplanner\tvalidated\tFinalize the parent planner tree.\tReviewer-guided recovery; priority +2; alternatives Narrowed delegation batch; +1 more: Review-requested recovery"
   end
 end
