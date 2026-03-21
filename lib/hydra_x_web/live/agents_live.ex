@@ -1383,7 +1383,8 @@ defmodule HydraXWeb.AgentsLive do
   defp merge_agent_delegation_supervision([entry]), do: entry
 
   defp merge_agent_delegation_supervision(entries) when is_list(entries) do
-    Enum.reduce(entries, %{}, fn entry, acc ->
+    entries
+    |> Enum.reduce(%{}, fn entry, acc ->
       %{
         agent_id: entry[:agent_id] || acc[:agent_id],
         agent_name: entry[:agent_name] || acc[:agent_name],
@@ -1416,15 +1417,6 @@ defmodule HydraXWeb.AgentsLive do
             acc[:alternative_recovery_mix],
             entry[:alternative_recovery_mix]
           ),
-        dominant_recovery_strategy:
-          dominant_supervision_recovery_strategy(
-            acc[:dominant_recovery_strategy],
-            entry[:dominant_recovery_strategy]
-          ),
-        dominant_recovery_count:
-          max(acc[:dominant_recovery_count] || 0, entry[:dominant_recovery_count] || 0),
-        dominant_recovery_score:
-          max(acc[:dominant_recovery_score] || 0, entry[:dominant_recovery_score] || 0),
         missing_required_roles:
           merge_role_frequency_maps(
             acc[:missing_required_roles],
@@ -1458,9 +1450,24 @@ defmodule HydraXWeb.AgentsLive do
         highest_priority: max(acc[:highest_priority] || 0, entry[:highest_priority] || 0)
       }
     end)
+    |> put_merged_dominant_recovery()
   end
 
   defp merge_agent_delegation_supervision(_entries), do: %{}
+
+  defp put_merged_dominant_recovery(summary) when is_map(summary) do
+    {strategy, count, score} =
+      summary
+      |> Map.get(:selected_recovery_mix, %{})
+      |> dominant_recovery_from_mix()
+
+    summary
+    |> Map.put(:dominant_recovery_strategy, strategy)
+    |> Map.put(:dominant_recovery_count, count)
+    |> Map.put(:dominant_recovery_score, score)
+  end
+
+  defp put_merged_dominant_recovery(summary), do: summary
 
   defp merge_role_frequency_maps(left, right) do
     [left || %{}, right || %{}]
@@ -1518,14 +1525,23 @@ defmodule HydraXWeb.AgentsLive do
   defp min_remaining_budget(value, nil), do: value
   defp min_remaining_budget(left, right), do: min(left, right)
 
-  defp dominant_supervision_recovery_strategy(nil, value), do: value
-  defp dominant_supervision_recovery_strategy(value, nil), do: value
+  defp dominant_recovery_from_mix(mix) when is_map(mix) do
+    mix
+    |> Enum.reject(fn {strategy, count} -> strategy in [nil, ""] or count in [nil, 0] end)
+    |> Enum.max_by(
+      fn {strategy, count} -> {follow_up_recovery_strategy_rank(strategy), count, strategy} end,
+      fn -> {nil, 0} end
+    )
+    |> case do
+      {nil, 0} ->
+        {nil, 0, 0}
 
-  defp dominant_supervision_recovery_strategy(left, right) do
-    [left, right]
-    |> Enum.reject(&(&1 in [nil, ""]))
-    |> Enum.max_by(&follow_up_recovery_strategy_rank/1, fn -> nil end)
+      {strategy, count} ->
+        {strategy, count, follow_up_recovery_strategy_rank(strategy)}
+    end
   end
+
+  defp dominant_recovery_from_mix(_mix), do: {nil, 0, 0}
 
   defp compaction_policy_form(agent) do
     %{
