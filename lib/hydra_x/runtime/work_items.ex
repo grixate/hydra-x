@@ -947,6 +947,7 @@ defmodule HydraX.Runtime.WorkItems do
     |> Enum.map(fn {{agent_id, role}, entries} ->
       agent = Map.get(agents_by_id, agent_id)
       snapshots = Enum.map(entries, fn {_work_item, snapshot} -> snapshot end)
+      recovery_mix = aggregate_follow_up_recovery_mix(entries)
       constrained_roles = aggregate_constrained_pending_roles(snapshots, role_capacity)
       constrained_role_pressure = constrained_role_pressure(constrained_roles, role_capacity)
       missing_required_roles = aggregate_missing_completion_roles(snapshots)
@@ -988,6 +989,7 @@ defmodule HydraX.Runtime.WorkItems do
         terminal_children: Enum.reduce(snapshots, 0, &((&1["terminal_count"] || 0) + &2)),
         constrained_roles: constrained_roles,
         constrained_role_pressure: constrained_role_pressure,
+        recovery_mix: recovery_mix,
         repeatedly_deferred_batches: repeatedly_deferred_batches,
         total_expansion_deferrals: total_expansion_deferrals,
         max_expansion_deferrals: max_expansion_deferrals,
@@ -1035,6 +1037,35 @@ defmodule HydraX.Runtime.WorkItems do
         _ -> acc
       end
     end)
+  end
+
+  defp aggregate_follow_up_recovery_mix(entries) when is_list(entries) do
+    Enum.reduce(entries, %{}, fn {work_item, _snapshot}, acc ->
+      work_item
+      |> work_item_follow_up_recovery_strategies()
+      |> Enum.reduce(acc, fn strategy, mix ->
+        Map.update(mix, strategy, 1, &(&1 + 1))
+      end)
+    end)
+  end
+
+  defp aggregate_follow_up_recovery_mix(_entries), do: %{}
+
+  defp work_item_follow_up_recovery_strategies(%WorkItem{} = work_item) do
+    summary = get_in(work_item.result_refs || %{}, ["follow_up_summary"]) || %{}
+
+    case summary |> Map.get("entries", []) |> List.wrap() |> Enum.filter(&is_map/1) do
+      [] ->
+        summary
+        |> Map.get("strategies", [])
+        |> List.wrap()
+        |> Enum.reject(&(&1 in [nil, ""]))
+
+      entries ->
+        entries
+        |> Enum.map(&Map.get(&1, "strategy"))
+        |> Enum.reject(&(&1 in [nil, ""]))
+    end
   end
 
   defp delegation_batch_repeatedly_deferred?(%{} = snapshot) do

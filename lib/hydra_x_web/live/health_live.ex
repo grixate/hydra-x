@@ -1536,6 +1536,9 @@ defmodule HydraXWeb.HealthLive do
                   <span :if={(entry.urgent_batches || 0) > 0}>
                     {" "}· urgent {entry.urgent_batches}
                   </span>
+                  <span :if={autonomy_delegation_recovery_mix_label(entry)}>
+                    {" "}· {autonomy_delegation_recovery_mix_label(entry)}
+                  </span>
                   <span :if={map_size(entry.missing_required_roles || %{}) > 0}>
                     {" "}· required roles {autonomy_delegation_role_requirements(
                       entry.missing_required_roles
@@ -2743,6 +2746,18 @@ defmodule HydraXWeb.HealthLive do
 
   defp autonomy_delegation_pressure_label(_entry), do: nil
 
+  defp autonomy_delegation_recovery_mix_label(entry) when is_map(entry) do
+    case entry[:recovery_mix] || entry["recovery_mix"] || %{} do
+      mix when mix == %{} ->
+        nil
+
+      mix ->
+        "recovery mix #{autonomy_recovery_mix(mix)}"
+    end
+  end
+
+  defp autonomy_delegation_recovery_mix_label(_entry), do: nil
+
   defp autonomy_delegation_deferral_pressure_label(entry) when is_map(entry) do
     repeated = entry[:repeatedly_deferred_batches] || 0
     max_deferrals = entry[:max_expansion_deferrals] || 0
@@ -2753,6 +2768,14 @@ defmodule HydraXWeb.HealthLive do
   end
 
   defp autonomy_delegation_deferral_pressure_label(_entry), do: nil
+
+  defp autonomy_recovery_mix(mix) when is_map(mix) do
+    mix
+    |> Enum.sort_by(fn {strategy, _count} -> strategy end)
+    |> Enum.map_join(", ", fn {strategy, count} ->
+      "#{humanize_follow_up_strategy(strategy)} x#{count}"
+    end)
+  end
 
   defp assignment_strategy_label("role_capability_match"), do: "role capability match"
   defp assignment_strategy_label("capability_fallback"), do: "capability fallback"

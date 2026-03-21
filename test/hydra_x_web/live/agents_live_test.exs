@@ -292,6 +292,29 @@ defmodule HydraXWeb.AgentsLiveTest do
         "status" => "blocked",
         "execution_mode" => "delegate",
         "priority" => 92,
+        "result_refs" => %{
+          "follow_up_summary" => %{
+            "count" => 2,
+            "types" => ["replan"],
+            "strategies" => ["operator_guided_replan", "review_guided_replan"],
+            "entries" => [
+              %{
+                "work_item_id" => 73_101,
+                "type" => "replan",
+                "strategy" => "operator_guided_replan",
+                "summary" => "Operator-guided recovery",
+                "priority_boost" => 3
+              },
+              %{
+                "work_item_id" => 73_102,
+                "type" => "replan",
+                "strategy" => "review_guided_replan",
+                "summary" => "Reviewer-guided recovery",
+                "priority_boost" => 2
+              }
+            ]
+          }
+        },
         "metadata" => %{
           "delegation_batch" => %{
             "mode" => "parallel",
@@ -450,6 +473,7 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "role quorum operator x1 met"
     assert html =~ "quorum skipped 1"
     assert html =~ "urgent 1"
+    assert html =~ "recovery mix operator-guided x1, review-guided x1"
     assert html =~ "required roles operator x1"
     assert html =~ "pressure h0 m1 l0"
     assert html =~ "repeat deferrals 1 · max 2"

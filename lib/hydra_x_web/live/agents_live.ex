@@ -1401,6 +1401,11 @@ defmodule HydraXWeb.AgentsLive do
             acc[:constrained_role_pressure],
             entry[:constrained_role_pressure]
           ),
+        recovery_mix:
+          merge_role_frequency_maps(
+            acc[:recovery_mix],
+            entry[:recovery_mix]
+          ),
         missing_required_roles:
           merge_role_frequency_maps(
             acc[:missing_required_roles],
@@ -1556,6 +1561,7 @@ defmodule HydraXWeb.AgentsLive do
       delegation_supervision_budget_label(summary),
       delegation_supervision_batch_budget_label(summary),
       delegation_supervision_urgent_batches_label(summary),
+      delegation_supervision_recovery_mix_label(summary),
       delegation_supervision_missing_roles_label(summary),
       delegation_supervision_pressure_label(summary),
       delegation_supervision_deferral_pressure_label(summary),
@@ -1620,6 +1626,18 @@ defmodule HydraXWeb.AgentsLive do
 
   defp delegation_supervision_urgent_batches_label(_summary), do: nil
 
+  defp delegation_supervision_recovery_mix_label(summary) when is_map(summary) do
+    case summary[:recovery_mix] || %{} do
+      mix when mix == %{} ->
+        nil
+
+      mix ->
+        "recovery mix #{format_recovery_mix(mix)}"
+    end
+  end
+
+  defp delegation_supervision_recovery_mix_label(_summary), do: nil
+
   defp delegation_supervision_missing_roles_label(summary) when is_map(summary) do
     case summary[:missing_required_roles] || %{} do
       requirements when requirements == %{} ->
@@ -1660,6 +1678,14 @@ defmodule HydraXWeb.AgentsLive do
     do: "deferred #{count}"
 
   defp delegation_deferred_batches_label(_count), do: nil
+
+  defp format_recovery_mix(mix) when is_map(mix) do
+    mix
+    |> Enum.sort_by(fn {strategy, _count} -> strategy end)
+    |> Enum.map_join(", ", fn {strategy, count} ->
+      "#{humanize_follow_up_strategy(strategy)} x#{count}"
+    end)
+  end
 
   defp recent_role_dispatch_summary(results, agent_id) do
     agent_results = Enum.filter(results, &((&1[:agent_id] || &1["agent_id"]) == agent_id))

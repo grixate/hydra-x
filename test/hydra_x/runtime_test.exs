@@ -7973,6 +7973,29 @@ defmodule HydraX.RuntimeTest do
         "status" => "blocked",
         "execution_mode" => "delegate",
         "priority" => 91,
+        "result_refs" => %{
+          "follow_up_summary" => %{
+            "count" => 2,
+            "types" => ["replan"],
+            "strategies" => ["operator_guided_replan", "review_guided_replan"],
+            "entries" => [
+              %{
+                "work_item_id" => 77_201,
+                "type" => "replan",
+                "strategy" => "operator_guided_replan",
+                "summary" => "Operator-guided recovery",
+                "priority_boost" => 3
+              },
+              %{
+                "work_item_id" => 77_202,
+                "type" => "replan",
+                "strategy" => "review_guided_replan",
+                "summary" => "Reviewer-guided recovery",
+                "priority_boost" => 2
+              }
+            ]
+          }
+        },
         "metadata" => %{
           "delegation_batch" => %{
             "mode" => "parallel",
@@ -8053,6 +8076,15 @@ defmodule HydraX.RuntimeTest do
              status.delegation_supervision,
              &(&1.agent_id == agent.id and &1.repeatedly_deferred_batches >= 0 and
                  &1.max_expansion_deferrals >= 0)
+           )
+
+    assert Enum.any?(
+             status.delegation_supervision,
+             &(&1.agent_id == agent.id and
+                 (&1.recovery_mix || %{}) == %{
+                   "operator_guided_replan" => 1,
+                   "review_guided_replan" => 1
+                 })
            )
 
     assert status.delegation_urgent_batch_count >= 1

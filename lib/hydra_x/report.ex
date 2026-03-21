@@ -397,11 +397,21 @@ defmodule HydraX.Report do
                 " required_roles=#{report_delegation_role_requirements(requirements)}"
             end
 
+          recovery_mix =
+            case entry.recovery_mix || %{} do
+              mix when mix == %{} ->
+                nil
+
+              mix ->
+                " recovery_mix=#{report_recovery_mix(mix)}"
+            end
+
           "- #{entry.agent_name || entry.role || "planner"}: batches=#{entry.active_batches} pending=#{entry.pending_children} active=#{entry.active_children} terminal=#{entry.terminal_children} priority=#{entry.highest_priority}#{constrained || ""}" <>
             if((entry.urgent_batches || 0) > 0,
               do: " urgent=#{entry.urgent_batches}",
               else: ""
             ) <>
+            (recovery_mix || "") <>
             (required_roles || "") <>
             report_delegation_pressure_batches(entry) <>
             report_delegation_deferral_batches(entry) <>
@@ -453,6 +463,14 @@ defmodule HydraX.Report do
     else
       ""
     end
+  end
+
+  defp report_recovery_mix(mix) when is_map(mix) do
+    mix
+    |> Enum.sort_by(fn {strategy, _count} -> strategy end)
+    |> Enum.map_join(",", fn {strategy, count} ->
+      "#{humanize_follow_up_strategy(strategy)}:#{count}"
+    end)
   end
 
   defp report_constraint_pressure_suffix(pressure) when is_map(pressure) do

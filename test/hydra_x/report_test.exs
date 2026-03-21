@@ -1674,6 +1674,29 @@ defmodule HydraX.ReportTest do
         "status" => "blocked",
         "execution_mode" => "delegate",
         "priority" => 88,
+        "result_refs" => %{
+          "follow_up_summary" => %{
+            "count" => 2,
+            "types" => ["replan"],
+            "strategies" => ["operator_guided_replan", "review_guided_replan"],
+            "entries" => [
+              %{
+                "work_item_id" => 75_101,
+                "type" => "replan",
+                "strategy" => "operator_guided_replan",
+                "summary" => "Operator-guided recovery",
+                "priority_boost" => 3
+              },
+              %{
+                "work_item_id" => 75_102,
+                "type" => "replan",
+                "strategy" => "review_guided_replan",
+                "summary" => "Reviewer-guided recovery",
+                "priority_boost" => 2
+              }
+            ]
+          }
+        },
         "metadata" => %{
           "delegation_batch" => %{
             "mode" => "parallel",
@@ -1740,6 +1763,7 @@ defmodule HydraX.ReportTest do
     assert markdown =~ "repeat_deferrals=1 max_deferrals=2"
     assert markdown =~ "deferred=1"
     assert markdown =~ "urgent=1"
+    assert markdown =~ "recovery_mix=operator-guided:1,review-guided:1"
     assert markdown =~ "required_roles=operator:1"
     assert markdown =~ "budget=2 remaining=1"
     assert markdown =~ "batch_budget=1 batch_remaining=0"
