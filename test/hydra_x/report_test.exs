@@ -1164,6 +1164,7 @@ defmodule HydraX.ReportTest do
 
     assert Enum.any?(work_items_json, fn item ->
              item["goal"] == "Re-plan the constrained publish escalation." and
+               item["follow_up"]["strategy_key"] == "operator_guided_replan" and
                item["follow_up"]["strategy"] == "Operator-guided recovery" and
                item["follow_up"]["alternatives"] == ["Narrowed delegation batch"] and
                item["follow_up"]["alternative_strategies"] == []
@@ -1459,6 +1460,12 @@ defmodule HydraX.ReportTest do
                  "Operator-guided recovery with narrowed delegation fallback" and
                item["recovery_strategy_behavior"] == "operator_review_after_execution" and
                item["recovery_strategy_alternatives"] == ["Narrowed delegation batch"]
+           end)
+
+    assert Enum.any?(work_items_json, fn item ->
+             item["id"] == work_item.id and
+               item["follow_up"]["strategy_key"] == nil and
+               item["follow_up"]["strategy"] == nil
            end)
   end
 

@@ -2553,6 +2553,11 @@ defmodule HydraX.Report do
     %{
       type: type,
       count: count,
+      strategy_key:
+        item
+        |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "strategies"]))
+        |> List.wrap()
+        |> List.first(),
       strategy:
         item
         |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "summaries"]))
