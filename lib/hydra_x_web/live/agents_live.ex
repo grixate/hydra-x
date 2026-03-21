@@ -1581,6 +1581,8 @@ defmodule HydraXWeb.AgentsLive do
       delegation_supervision_urgent_batches_label(summary),
       delegation_supervision_intervention_label(summary),
       delegation_supervision_dominant_recovery_label(summary),
+      delegation_supervision_selected_recovery_mix_label(summary),
+      delegation_supervision_alternative_recovery_mix_label(summary),
       delegation_supervision_recovery_mix_label(summary),
       delegation_supervision_missing_roles_label(summary),
       delegation_supervision_pressure_label(summary),
@@ -1678,6 +1680,30 @@ defmodule HydraXWeb.AgentsLive do
   end
 
   defp delegation_supervision_recovery_mix_label(_summary), do: nil
+
+  defp delegation_supervision_selected_recovery_mix_label(summary) when is_map(summary) do
+    case summary[:selected_recovery_mix] || %{} do
+      mix when mix == %{} ->
+        nil
+
+      mix ->
+        "selected mix #{format_recovery_mix(mix)}"
+    end
+  end
+
+  defp delegation_supervision_selected_recovery_mix_label(_summary), do: nil
+
+  defp delegation_supervision_alternative_recovery_mix_label(summary) when is_map(summary) do
+    case summary[:alternative_recovery_mix] || %{} do
+      mix when mix == %{} ->
+        nil
+
+      mix ->
+        "fallback mix #{format_recovery_mix(mix)}"
+    end
+  end
+
+  defp delegation_supervision_alternative_recovery_mix_label(_summary), do: nil
 
   defp delegation_supervision_missing_roles_label(summary) when is_map(summary) do
     case summary[:missing_required_roles] || %{} do

@@ -1547,6 +1547,12 @@ defmodule HydraXWeb.HealthLive do
                   <span :if={autonomy_delegation_intervention_label(entry)}>
                     {" "}· {autonomy_delegation_intervention_label(entry)}
                   </span>
+                  <span :if={autonomy_delegation_selected_recovery_mix_label(entry)}>
+                    {" "}· {autonomy_delegation_selected_recovery_mix_label(entry)}
+                  </span>
+                  <span :if={autonomy_delegation_alternative_recovery_mix_label(entry)}>
+                    {" "}· {autonomy_delegation_alternative_recovery_mix_label(entry)}
+                  </span>
                   <span :if={autonomy_delegation_recovery_mix_label(entry)}>
                     {" "}· {autonomy_delegation_recovery_mix_label(entry)}
                   </span>
@@ -2789,6 +2795,30 @@ defmodule HydraXWeb.HealthLive do
   end
 
   defp autonomy_delegation_recovery_mix_label(_entry), do: nil
+
+  defp autonomy_delegation_selected_recovery_mix_label(entry) when is_map(entry) do
+    case entry[:selected_recovery_mix] || entry["selected_recovery_mix"] || %{} do
+      mix when mix == %{} ->
+        nil
+
+      mix ->
+        "selected mix #{autonomy_recovery_mix(mix)}"
+    end
+  end
+
+  defp autonomy_delegation_selected_recovery_mix_label(_entry), do: nil
+
+  defp autonomy_delegation_alternative_recovery_mix_label(entry) when is_map(entry) do
+    case entry[:alternative_recovery_mix] || entry["alternative_recovery_mix"] || %{} do
+      mix when mix == %{} ->
+        nil
+
+      mix ->
+        "fallback mix #{autonomy_recovery_mix(mix)}"
+    end
+  end
+
+  defp autonomy_delegation_alternative_recovery_mix_label(_entry), do: nil
 
   defp autonomy_delegation_deferral_pressure_label(entry) when is_map(entry) do
     repeated = entry[:repeatedly_deferred_batches] || 0

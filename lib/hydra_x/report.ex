@@ -406,6 +406,24 @@ defmodule HydraX.Report do
                 " recovery_mix=#{report_recovery_mix(mix)}"
             end
 
+          selected_recovery_mix =
+            case entry.selected_recovery_mix || %{} do
+              mix when mix == %{} ->
+                nil
+
+              mix ->
+                " selected_recovery_mix=#{report_recovery_mix(mix)}"
+            end
+
+          alternative_recovery_mix =
+            case entry.alternative_recovery_mix || %{} do
+              mix when mix == %{} ->
+                nil
+
+              mix ->
+                " fallback_recovery_mix=#{report_recovery_mix(mix)}"
+            end
+
           dominant_recovery =
             case {entry.dominant_recovery_strategy, entry.dominant_recovery_count} do
               {strategy, count} when is_binary(strategy) and strategy != "" and count > 0 ->
@@ -436,6 +454,8 @@ defmodule HydraX.Report do
             ) <>
             (intervention || "") <>
             (dominant_recovery || "") <>
+            (selected_recovery_mix || "") <>
+            (alternative_recovery_mix || "") <>
             (recovery_mix || "") <>
             (required_roles || "") <>
             report_delegation_pressure_batches(entry) <>

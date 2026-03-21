@@ -8375,6 +8375,8 @@ defmodule HydraX.RuntimeTest do
     assert Enum.any?(
              status.delegation_supervision,
              &(&1.agent_id == agent.id and
+                 (&1.selected_recovery_mix || %{}) == %{"operator_guided_replan" => 1} and
+                 (&1.alternative_recovery_mix || %{}) == %{"review_guided_replan" => 1} and
                  (&1.recovery_mix || %{}) == %{
                    "operator_guided_replan" => 1,
                    "review_guided_replan" => 1

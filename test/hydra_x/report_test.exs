@@ -1787,6 +1787,8 @@ defmodule HydraX.ReportTest do
     assert markdown =~ "delegation_role_gaps=1"
     assert markdown =~ "intervention=heavy"
     assert markdown =~ "dominant_recovery=operator-guided:1"
+    assert markdown =~ "selected_recovery_mix=operator-guided:1"
+    assert markdown =~ "fallback_recovery_mix=review-guided:1"
     assert markdown =~ "pressure=h0/m1/l0"
     assert markdown =~ "repeat_deferrals=1 max_deferrals=2"
     assert markdown =~ "deferred=1"

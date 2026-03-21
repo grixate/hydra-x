@@ -478,6 +478,8 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "urgent 1"
     assert html =~ "intervention-heavy"
     assert html =~ "dominant operator-guided x1"
+    assert html =~ "selected mix operator-guided x1"
+    assert html =~ "fallback mix review-guided x1"
     assert html =~ "recovery mix operator-guided x1, review-guided x1"
     assert html =~ "required roles operator x1"
     assert html =~ "pressure h0 m1 l0"

@@ -969,9 +969,11 @@ defmodule HydraX.Runtime.WorkItems do
       agent = Map.get(agents_by_id, agent_id)
       snapshots = Enum.map(entries, fn {_work_item, snapshot} -> snapshot end)
       recovery_mix = aggregate_follow_up_recovery_mix(entries)
+      selected_recovery_mix = aggregate_selected_follow_up_recovery_mix(entries)
+      alternative_recovery_mix = aggregate_alternative_follow_up_recovery_mix(entries)
 
       {dominant_recovery_strategy, dominant_recovery_count, dominant_recovery_score} =
-        dominant_follow_up_recovery_strategy(recovery_mix)
+        dominant_follow_up_recovery_strategy(selected_recovery_mix)
 
       constrained_roles = aggregate_constrained_pending_roles(snapshots, role_capacity)
       constrained_role_pressure = constrained_role_pressure(constrained_roles, role_capacity)
@@ -1015,6 +1017,8 @@ defmodule HydraX.Runtime.WorkItems do
         constrained_roles: constrained_roles,
         constrained_role_pressure: constrained_role_pressure,
         recovery_mix: recovery_mix,
+        selected_recovery_mix: selected_recovery_mix,
+        alternative_recovery_mix: alternative_recovery_mix,
         dominant_recovery_strategy: dominant_recovery_strategy,
         dominant_recovery_count: dominant_recovery_count,
         dominant_recovery_score: dominant_recovery_score,
@@ -1080,6 +1084,52 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp aggregate_follow_up_recovery_mix(_entries), do: %{}
+
+  defp aggregate_selected_follow_up_recovery_mix(entries) when is_list(entries) do
+    Enum.reduce(entries, %{}, fn {work_item, _snapshot}, acc ->
+      case base_work_item_follow_up_selection(work_item) do
+        %{strategy: strategy} when is_binary(strategy) and strategy != "" ->
+          Map.update(acc, strategy, 1, &(&1 + 1))
+
+        _ ->
+          acc
+      end
+    end)
+  end
+
+  defp aggregate_selected_follow_up_recovery_mix(_entries), do: %{}
+
+  defp aggregate_alternative_follow_up_recovery_mix(entries) when is_list(entries) do
+    Enum.reduce(entries, %{}, fn {work_item, _snapshot}, acc ->
+      explicit_entries = explicit_work_item_follow_up_entries(work_item)
+
+      fallback_strategies =
+        case preferred_follow_up_entry(explicit_entries) do
+          %{} = selected_entry when explicit_entries != [] ->
+            explicit_entries
+            |> Enum.reject(&(&1 == selected_entry))
+            |> Enum.map(&Map.get(&1, "strategy"))
+            |> Enum.reject(&(&1 in [nil, ""]))
+
+          _ ->
+            case base_work_item_follow_up_selection(work_item) do
+              %{alternative_strategies: alternatives} ->
+                alternatives
+                |> List.wrap()
+                |> Enum.reject(&(&1 in [nil, ""]))
+
+              _ ->
+                []
+            end
+        end
+
+      Enum.reduce(fallback_strategies, acc, fn strategy, mix ->
+        Map.update(mix, strategy, 1, &(&1 + 1))
+      end)
+    end)
+  end
+
+  defp aggregate_alternative_follow_up_recovery_mix(_entries), do: %{}
 
   defp delegation_dominant_recovery_batches(entries) when is_list(entries) do
     Enum.reduce(entries, %{}, fn entry, acc ->
