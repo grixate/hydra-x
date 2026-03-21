@@ -7194,7 +7194,10 @@ defmodule HydraX.Runtime.WorkItems do
       |> Enum.reject(&(&1 in [nil, ""]))
       |> Enum.uniq()
 
-    case preferred_follow_up_strategy(strategies) do
+    case preferred_follow_up_strategy(
+           strategies,
+           intervention_pressure: follow_up_strategy_intervention_pressure(work_item)
+         ) do
       nil ->
         []
 
@@ -7216,7 +7219,27 @@ defmodule HydraX.Runtime.WorkItems do
     end
   end
 
-  defp preferred_follow_up_strategy(strategies) when is_list(strategies) do
+  defp preferred_follow_up_strategy(strategies, opts) when is_list(strategies) do
+    pressure = Keyword.get(opts, :intervention_pressure, %{})
+
+    strategies
+    |> base_follow_up_strategy_choice()
+    |> case do
+      nil ->
+        nil
+
+      strategy ->
+        strategy
+        |> maybe_deescalate_follow_up_strategy(
+          Enum.reject(strategies, &(&1 in [nil, "", strategy])),
+          pressure
+        )
+    end
+  end
+
+  defp preferred_follow_up_strategy(_strategies, _opts), do: nil
+
+  defp base_follow_up_strategy_choice(strategies) when is_list(strategies) do
     strategies
     |> Enum.map(&{&1, preferred_follow_up_strategy_rank(&1)})
     |> Enum.reject(fn {strategy, _rank} -> strategy in [nil, ""] end)
@@ -7225,12 +7248,49 @@ defmodule HydraX.Runtime.WorkItems do
       fn -> nil end
     )
     |> case do
-      {strategy, _rank} -> strategy
-      nil -> nil
+      {strategy, _rank} ->
+        strategy
+
+      nil ->
+        nil
     end
   end
 
-  defp preferred_follow_up_strategy(_strategies), do: nil
+  defp base_follow_up_strategy_choice(_strategies), do: nil
+
+  defp maybe_deescalate_follow_up_strategy(
+         "operator_guided_replan",
+         alternatives,
+         pressure
+       )
+       when is_list(alternatives) and is_map(pressure) do
+    if Map.get(pressure, "operator_guided_replan", 0) > 0 do
+      Enum.find(
+        ["review_guided_replan", "request_review", "constraint_replan", "narrow_delegate_batch"],
+        &Enum.member?(alternatives, &1)
+      ) || "operator_guided_replan"
+    else
+      "operator_guided_replan"
+    end
+  end
+
+  defp maybe_deescalate_follow_up_strategy(
+         "review_guided_replan",
+         alternatives,
+         pressure
+       )
+       when is_list(alternatives) and is_map(pressure) do
+    if Map.get(pressure, "review_guided_replan", 0) > 0 do
+      Enum.find(
+        ["request_review", "constraint_replan", "narrow_delegate_batch"],
+        &Enum.member?(alternatives, &1)
+      ) || "review_guided_replan"
+    else
+      "review_guided_replan"
+    end
+  end
+
+  defp maybe_deescalate_follow_up_strategy(strategy, _alternatives, _pressure), do: strategy
 
   defp preferred_follow_up_strategy_rank("operator_guided_replan"), do: 90
   defp preferred_follow_up_strategy_rank("review_guided_replan"), do: 80
@@ -10597,12 +10657,19 @@ defmodule HydraX.Runtime.WorkItems do
   defp preferred_work_item_follow_up_strategy(%WorkItem{} = work_item) do
     work_item
     |> work_item_follow_up_strategies()
-    |> preferred_follow_up_strategy()
+    |> preferred_follow_up_strategy(
+      intervention_pressure: follow_up_strategy_intervention_pressure(work_item)
+    )
   end
 
   defp preferred_work_item_follow_up_alternatives(%WorkItem{} = work_item) do
     strategies = work_item_follow_up_strategies(work_item)
-    preferred = preferred_follow_up_strategy(strategies)
+
+    preferred =
+      preferred_follow_up_strategy(
+        strategies,
+        intervention_pressure: follow_up_strategy_intervention_pressure(work_item)
+      )
 
     Enum.reject(strategies, &(&1 in [nil, "", preferred]))
   end
@@ -10613,6 +10680,34 @@ defmodule HydraX.Runtime.WorkItems do
     |> List.wrap()
     |> Enum.reject(&(&1 in [nil, ""]))
     |> Enum.uniq()
+  end
+
+  defp follow_up_strategy_intervention_pressure(%WorkItem{} = work_item) do
+    if work_item.assigned_role == "planner" do
+      WorkItem
+      |> where(
+        [item],
+        item.id != ^work_item.id and item.status == "blocked" and
+          item.execution_mode == "delegate" and
+          (item.assigned_agent_id == ^work_item.assigned_agent_id or
+             (is_nil(item.assigned_agent_id) and item.assigned_role == ^work_item.assigned_role))
+      )
+      |> limit(20)
+      |> Repo.all()
+      |> Enum.reduce(%{}, fn item, acc ->
+        case item
+             |> work_item_follow_up_recovery_strategies()
+             |> base_follow_up_strategy_choice() do
+          strategy when is_binary(strategy) and strategy != "" ->
+            Map.update(acc, strategy, 1, &(&1 + 1))
+
+          _ ->
+            acc
+        end
+      end)
+    else
+      %{}
+    end
   end
 
   defp apply_follow_up_strategy_to_follow_up_metadata(metadata, nil),
