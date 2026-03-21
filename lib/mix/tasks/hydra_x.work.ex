@@ -388,6 +388,7 @@ defmodule Mix.Tasks.HydraX.Work do
   defp work_item_list_detail(work_item) do
     [
       derived_recovery_strategy_summary(work_item.metadata || %{}),
+      follow_up_list_detail(work_item),
       work_item
       |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "summaries"]))
       |> List.wrap()
@@ -397,6 +398,31 @@ defmodule Mix.Tasks.HydraX.Work do
       value when is_binary(value) -> value != ""
       _ -> false
     end)
+  end
+
+  defp follow_up_list_detail(work_item) do
+    summary =
+      work_item
+      |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "summaries"]))
+      |> List.wrap()
+      |> List.first()
+
+    alternatives =
+      work_item
+      |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "alternative_summaries"]))
+      |> List.wrap()
+      |> Enum.reject(&(&1 in [nil, ""]))
+
+    case {summary, alternatives} do
+      {value, []} when is_binary(value) and value != "" ->
+        value
+
+      {value, entries} when is_binary(value) and value != "" and entries != [] ->
+        "#{value}; alternatives #{Enum.join(entries, ", ")}"
+
+      _ ->
+        nil
+    end
   end
 
   defp derived_recovery_strategy_summary(metadata) do

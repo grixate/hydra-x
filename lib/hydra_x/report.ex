@@ -2247,6 +2247,7 @@ defmodule HydraX.Report do
       recovery_strategy_alternatives: work_item_recovery_alternatives(item.metadata || %{}),
       delegation_batch: Runtime.delegation_batch_snapshot(item),
       delegation_batch_summary: render_work_item_delegation_summary(item),
+      follow_up: follow_up_snapshot(item),
       ownership: get_in(item.metadata || %{}, ["ownership"]),
       ownership_summary: render_work_item_ownership(item),
       publish_follow_up: work_item_publish_snapshot(item),
@@ -2568,6 +2569,11 @@ defmodule HydraX.Report do
       alternatives:
         item
         |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "alternative_summaries"]))
+        |> List.wrap()
+        |> Enum.reject(&is_nil_or_empty/1),
+      alternative_strategies:
+        item
+        |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "alternative_strategies"]))
         |> List.wrap()
         |> Enum.reject(&is_nil_or_empty/1)
     }

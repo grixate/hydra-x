@@ -1160,6 +1160,15 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~
              "replan queued 1 (Operator-guided recovery; alternatives Narrowed delegation batch)"
 
+    work_items_json = Jason.decode!(File.read!(Path.join(export.bundle_dir, "work_items.json")))
+
+    assert Enum.any?(work_items_json, fn item ->
+             item["goal"] == "Re-plan the constrained publish escalation." and
+               item["follow_up"]["strategy"] == "Operator-guided recovery" and
+               item["follow_up"]["alternatives"] == ["Narrowed delegation batch"] and
+               item["follow_up"]["alternative_strategies"] == []
+           end)
+
     assert File.read!(export.markdown_path) =~
              "operator_intervention_prepared role_capacity_constrained"
 
