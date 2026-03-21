@@ -4340,6 +4340,20 @@ defmodule HydraX.RuntimeTest do
 
     assert replan_item.goal ==
              "Re-plan Recover a constrained delegated branch with a guided fallback. with operator-guided delegation recovery and narrowed delegation fallback."
+
+    parent = Runtime.get_work_item!(parent.id)
+
+    assert get_in(parent.result_refs || %{}, ["follow_up_summary", "summaries"]) == [
+             "Operator-guided recovery with narrowed delegation fallback"
+           ]
+
+    assert get_in(parent.result_refs || %{}, ["follow_up_summary", "alternative_strategies"]) == [
+             "narrow_delegate_batch"
+           ]
+
+    assert get_in(parent.result_refs || %{}, ["follow_up_summary", "alternative_summaries"]) == [
+             "Narrowed delegation batch"
+           ]
   end
 
   test "planner delegate batches create multiple child work items and batch snapshots" do

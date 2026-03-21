@@ -328,6 +328,16 @@ defmodule Mix.Tasks.HydraX.Work do
       |> Map.get("summaries", [])
       |> List.wrap()
 
+    alternative_strategies =
+      summary
+      |> Map.get("alternative_strategies", [])
+      |> List.wrap()
+
+    alternative_summaries =
+      summary
+      |> Map.get("alternative_summaries", [])
+      |> List.wrap()
+
     count =
       summary
       |> Map.get("count")
@@ -342,13 +352,28 @@ defmodule Mix.Tasks.HydraX.Work do
       |> maybe_prepend_follow_up_line("follow_up_types", Enum.join(types, ","))
       |> maybe_prepend_follow_up_line("follow_up_strategies", Enum.join(strategies, ","))
       |> maybe_prepend_follow_up_line("follow_up_summaries", Enum.join(summaries, ","))
+      |> maybe_prepend_follow_up_line(
+        "follow_up_alternative_strategies",
+        Enum.join(alternative_strategies, ",")
+      )
+      |> maybe_prepend_follow_up_line(
+        "follow_up_alternative_summaries",
+        Enum.join(alternative_summaries, ",")
+      )
 
     detail_lines =
-      summaries
-      |> Enum.with_index(1)
-      |> Enum.map(fn {summary, index} ->
-        "follow_up_detail\t#{work_item.id}\trecovery_summary_#{index}\t#{summary}"
-      end)
+      Enum.concat(
+        summaries
+        |> Enum.with_index(1)
+        |> Enum.map(fn {summary, index} ->
+          "follow_up_detail\t#{work_item.id}\trecovery_summary_#{index}\t#{summary}"
+        end),
+        alternative_summaries
+        |> Enum.with_index(1)
+        |> Enum.map(fn {summary, index} ->
+          "follow_up_detail\t#{work_item.id}\trecovery_alternative_#{index}\t#{summary}"
+        end)
+      )
 
     base_lines ++ detail_lines
   end

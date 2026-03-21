@@ -10355,17 +10355,37 @@ defmodule HydraX.Runtime.WorkItems do
       |> Enum.reject(&(&1 in [nil, ""]))
       |> Enum.uniq()
 
-    (result_refs || %{})
-    |> Map.put("follow_up_work_item_ids", ids)
-    |> Map.put(
-      "follow_up_summary",
+    alternative_strategies =
+      result_refs
+      |> Kernel.||(%{})
+      |> get_in(["follow_up_summary", "alternative_strategies"])
+      |> List.wrap()
+      |> Kernel.++(follow_up_summary_alternative_strategies(follow_up_work_item))
+      |> Enum.reject(&(&1 in [nil, ""]))
+      |> Enum.uniq()
+
+    alternative_summaries =
+      result_refs
+      |> Kernel.||(%{})
+      |> get_in(["follow_up_summary", "alternative_summaries"])
+      |> List.wrap()
+      |> Kernel.++(follow_up_summary_alternative_summaries(follow_up_work_item))
+      |> Enum.reject(&(&1 in [nil, ""]))
+      |> Enum.uniq()
+
+    follow_up_summary =
       %{
         "count" => length(ids),
         "types" => types,
         "strategies" => strategies,
         "summaries" => summaries
       }
-    )
+      |> maybe_put_follow_up_summary_list("alternative_strategies", alternative_strategies)
+      |> maybe_put_follow_up_summary_list("alternative_summaries", alternative_summaries)
+
+    (result_refs || %{})
+    |> Map.put("follow_up_work_item_ids", ids)
+    |> Map.put("follow_up_summary", follow_up_summary)
   end
 
   defp follow_up_summary_strategy(%WorkItem{} = follow_up_work_item) do
@@ -10374,8 +10394,43 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp follow_up_summary_summary(%WorkItem{} = follow_up_work_item) do
-    get_in(follow_up_work_item.metadata || %{}, ["recovery_strategy_summary"])
+    metadata = follow_up_work_item.metadata || %{}
+
+    case metadata["recovery_strategy_summary"] do
+      value when is_binary(value) and value != "" ->
+        value
+
+      _ ->
+        case metadata["preferred_recovery_strategy"] do
+          strategy when is_binary(strategy) and strategy != "" ->
+            recovery_strategy_summary(
+              strategy,
+              List.wrap(metadata["recovery_strategy_alternatives"])
+            )
+
+          _ ->
+            nil
+        end
+    end
   end
+
+  defp follow_up_summary_alternative_strategies(%WorkItem{} = follow_up_work_item) do
+    get_in(follow_up_work_item.metadata || %{}, ["recovery_strategy_alternatives"])
+    |> List.wrap()
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> Enum.uniq()
+  end
+
+  defp follow_up_summary_alternative_summaries(%WorkItem{} = follow_up_work_item) do
+    metadata = follow_up_work_item.metadata || %{}
+
+    metadata["recovery_strategy_alternative_summaries"] ||
+      follow_up_summary_alternative_strategies(follow_up_work_item)
+      |> Enum.map(&recovery_strategy_summary/1)
+  end
+
+  defp maybe_put_follow_up_summary_list(summary, _key, []), do: summary
+  defp maybe_put_follow_up_summary_list(summary, key, values), do: Map.put(summary, key, values)
 
   defp preferred_work_item_follow_up_strategy(%WorkItem{} = work_item) do
     work_item
