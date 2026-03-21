@@ -2575,6 +2575,18 @@ defmodule HydraX.Report do
         item
         |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "alternative_summaries"]))
         |> List.wrap()
+        |> case do
+          [] ->
+            item
+            |> then(
+              &get_in(&1.result_refs || %{}, ["follow_up_summary", "alternative_strategies"])
+            )
+            |> List.wrap()
+            |> Enum.map(&humanize_follow_up_strategy_summary/1)
+
+          entries ->
+            entries
+        end
         |> Enum.reject(&is_nil_or_empty/1),
       alternative_strategies:
         item
@@ -2590,6 +2602,23 @@ defmodule HydraX.Report do
   defp humanize_follow_up_strategy("request_review"), do: "review requested"
   defp humanize_follow_up_strategy(strategy) when is_binary(strategy), do: strategy
   defp humanize_follow_up_strategy(_strategy), do: "follow-up"
+
+  defp humanize_follow_up_strategy_summary("review_guided_replan"),
+    do: "Reviewer-guided recovery"
+
+  defp humanize_follow_up_strategy_summary("operator_guided_replan"),
+    do: "Operator-guided recovery"
+
+  defp humanize_follow_up_strategy_summary("narrow_delegate_batch"),
+    do: "Narrowed delegation batch"
+
+  defp humanize_follow_up_strategy_summary("request_review"),
+    do: "Review-requested recovery"
+
+  defp humanize_follow_up_strategy_summary(strategy) when is_binary(strategy),
+    do: humanize_follow_up_strategy(strategy)
+
+  defp humanize_follow_up_strategy_summary(_strategy), do: nil
 
   defp humanize_recovery_strategy_behavior("operator_review_after_execution"),
     do: "operator review after execution"

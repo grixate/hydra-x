@@ -1109,7 +1109,7 @@ defmodule HydraX.ReportTest do
             "types" => ["replan"],
             "strategies" => ["operator_guided_replan"],
             "summaries" => ["Operator-guided recovery"],
-            "alternative_summaries" => ["Narrowed delegation batch"]
+            "alternative_strategies" => ["narrow_delegate_batch"]
           }
         }
       })
@@ -1167,7 +1167,7 @@ defmodule HydraX.ReportTest do
                item["follow_up"]["strategy_key"] == "operator_guided_replan" and
                item["follow_up"]["strategy"] == "Operator-guided recovery" and
                item["follow_up"]["alternatives"] == ["Narrowed delegation batch"] and
-               item["follow_up"]["alternative_strategies"] == []
+               item["follow_up"]["alternative_strategies"] == ["narrow_delegate_batch"]
            end)
 
     assert File.read!(export.markdown_path) =~

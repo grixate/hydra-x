@@ -337,6 +337,16 @@ defmodule Mix.Tasks.HydraX.Work do
       summary
       |> Map.get("alternative_summaries", [])
       |> List.wrap()
+      |> case do
+        [] ->
+          summary
+          |> Map.get("alternative_strategies", [])
+          |> List.wrap()
+          |> Enum.map(&humanize_follow_up_strategy_summary/1)
+
+        entries ->
+          entries
+      end
 
     count =
       summary
@@ -450,6 +460,21 @@ defmodule Mix.Tasks.HydraX.Work do
   defp base_recovery_strategy_summary("constraint_replan"), do: "Constraint-first recovery"
   defp base_recovery_strategy_summary("narrow_delegate_batch"), do: "Narrowed delegation batch"
   defp base_recovery_strategy_summary(_strategy), do: nil
+
+  defp humanize_follow_up_strategy_summary("review_guided_replan"),
+    do: "Reviewer-guided recovery"
+
+  defp humanize_follow_up_strategy_summary("operator_guided_replan"),
+    do: "Operator-guided recovery"
+
+  defp humanize_follow_up_strategy_summary("narrow_delegate_batch"),
+    do: "Narrowed delegation batch"
+
+  defp humanize_follow_up_strategy_summary("request_review"),
+    do: "Review-requested recovery"
+
+  defp humanize_follow_up_strategy_summary(strategy) when is_binary(strategy), do: strategy
+  defp humanize_follow_up_strategy_summary(_strategy), do: nil
 
   defp narrowed_delegation_recovery_alternative?(metadata, strategy) do
     strategy != "narrow_delegate_batch" and

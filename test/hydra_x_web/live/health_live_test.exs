@@ -586,7 +586,7 @@ defmodule HydraXWeb.HealthLiveTest do
             "types" => ["replan"],
             "strategies" => ["operator_guided_replan"],
             "summaries" => ["Operator-guided recovery"],
-            "alternative_summaries" => ["Narrowed delegation batch"]
+            "alternative_strategies" => ["narrow_delegate_batch"]
           }
         }
       })
