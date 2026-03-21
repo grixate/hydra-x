@@ -16,6 +16,12 @@ defmodule HydraX.WorkTaskTest do
         "assigned_role" => "builder",
         "status" => "completed",
         "approval_stage" => "validated",
+        "metadata" => %{
+          "preferred_recovery_strategy" => "operator_guided_replan",
+          "recovery_strategy_behavior" => "operator_review_after_execution",
+          "recovery_strategy_priority_boost" => 3,
+          "recovery_strategy_alternatives" => ["narrow_delegate_batch"]
+        },
         "result_refs" => %{
           "follow_up_summary" => %{
             "count" => 1,
@@ -104,6 +110,11 @@ defmodule HydraX.WorkTaskTest do
 
     assert show_output =~ "work_item=#{work_item.id}"
     assert show_output =~ "kind=engineering"
+
+    assert show_output =~
+             "recovery_summary=Operator-guided recovery with narrowed delegation fallback"
+
+    assert show_output =~ "recovery_strategy_priority_boost=3"
     assert show_output =~ "follow_up_count=1"
     assert show_output =~ "follow_up_types=replan"
     assert show_output =~ "follow_up_strategies=operator_guided_replan"
@@ -265,6 +276,7 @@ defmodule HydraX.WorkTaskTest do
         "approval_stage" => "proposal_only",
         "metadata" => %{
           "preferred_recovery_strategy" => "operator_guided_replan",
+          "recovery_strategy_priority_boost" => 3,
           "recovery_strategy_alternatives" => ["narrow_delegate_batch"]
         }
       })
@@ -295,7 +307,7 @@ defmodule HydraX.WorkTaskTest do
       end)
 
     assert output =~
-             "#{guided_item.id}\tplan\tplanned\tplanner\tproposal_only\tRecover a constrained planner branch.\tOperator-guided recovery with narrowed delegation fallback"
+             "#{guided_item.id}\tplan\tplanned\tplanner\tproposal_only\tRecover a constrained planner branch.\tOperator-guided recovery with narrowed delegation fallback (+3)"
 
     assert output =~
              "#{follow_up_item.id}\tplan\tblocked\tplanner\tvalidated\tFinalize the parent planner tree.\tReviewer-guided recovery; alternatives Narrowed delegation batch"

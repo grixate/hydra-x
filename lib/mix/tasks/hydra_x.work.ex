@@ -73,6 +73,7 @@ defmodule Mix.Tasks.HydraX.Work do
     Mix.shell().info("approval_stage=#{work_item.approval_stage}")
     Mix.shell().info("execution_mode=#{work_item.execution_mode}")
     Mix.shell().info("goal=#{work_item.goal}")
+    maybe_print_recovery_lines(work_item)
     Mix.shell().info("artifacts=#{length(artifacts)}")
     Mix.shell().info("approvals=#{length(approvals)}")
 
@@ -407,7 +408,7 @@ defmodule Mix.Tasks.HydraX.Work do
 
   defp work_item_list_detail(work_item) do
     [
-      derived_recovery_strategy_summary(work_item.metadata || %{}),
+      derived_recovery_strategy_summary_with_priority(work_item.metadata || %{}),
       follow_up_list_detail(work_item),
       work_item
       |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "summaries"]))
@@ -471,6 +472,42 @@ defmodule Mix.Tasks.HydraX.Work do
             value
           end
         end
+    end
+  end
+
+  defp derived_recovery_strategy_summary_with_priority(metadata) do
+    summary = derived_recovery_strategy_summary(metadata)
+    priority_boost = metadata["recovery_strategy_priority_boost"]
+
+    cond do
+      not is_binary(summary) or summary == "" ->
+        nil
+
+      is_integer(priority_boost) and priority_boost > 0 ->
+        "#{summary} (+#{priority_boost})"
+
+      true ->
+        summary
+    end
+  end
+
+  defp maybe_print_recovery_lines(work_item) do
+    metadata = work_item.metadata || %{}
+
+    case derived_recovery_strategy_summary(metadata) do
+      value when is_binary(value) and value != "" ->
+        Mix.shell().info("recovery_summary=#{value}")
+
+      _ ->
+        :ok
+    end
+
+    case metadata["recovery_strategy_priority_boost"] do
+      value when is_integer(value) and value > 0 ->
+        Mix.shell().info("recovery_strategy_priority_boost=#{value}")
+
+      _ ->
+        :ok
     end
   end
 
