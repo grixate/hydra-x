@@ -4234,6 +4234,7 @@ defmodule HydraX.RuntimeTest do
              "Narrowed delegation batch"
 
     assert replan_item.goal =~ "narrowed delegation batch"
+    assert replan_item.priority == 5
 
     assert get_in(replan_item.metadata || %{}, ["delegate_batch_concurrency"]) == 1
     assert get_in(replan_item.metadata || %{}, ["delegate_batch_completion_quorum"]) == 1
@@ -4337,6 +4338,7 @@ defmodule HydraX.RuntimeTest do
 
     assert get_in(replan_item.metadata || %{}, ["delegate_batch_concurrency"]) == 1
     assert get_in(replan_item.metadata || %{}, ["delegate_batch_completion_quorum"]) == 1
+    assert replan_item.priority == 9
 
     assert replan_item.goal ==
              "Re-plan Recover a constrained delegated branch with a guided fallback. with operator-guided delegation recovery and narrowed delegation fallback."
@@ -4951,6 +4953,7 @@ defmodule HydraX.RuntimeTest do
     assert replan_item.goal =~ "reviewer-guided delegation recovery"
 
     assert replan_item.review_required == true
+    assert replan_item.priority == 10
 
     parent = Runtime.get_work_item!(parent.id)
 
@@ -5104,6 +5107,7 @@ defmodule HydraX.RuntimeTest do
     assert replan_item.goal =~ "operator-guided delegation recovery"
 
     assert replan_item.review_required == true
+    assert replan_item.priority == 11
 
     parent = Runtime.get_work_item!(parent.id)
 

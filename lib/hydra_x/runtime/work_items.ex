@@ -4021,7 +4021,12 @@ defmodule HydraX.Runtime.WorkItems do
             "assigned_agent_id" => target.assigned_agent_id,
             "delegated_by_agent_id" => target.assigned_agent_id || target.delegated_by_agent_id,
             "parent_work_item_id" => target.id,
-            "priority" => max(target.priority - 1, 0),
+            "priority" =>
+              follow_up_replan_priority(
+                max(target.priority - 1, 0),
+                "review_guided_replan",
+                preferred_work_item_follow_up_alternatives(target)
+              ),
             "autonomy_level" => target.autonomy_level,
             "approval_stage" => target.approval_stage,
             "deliverables" => target.deliverables,
@@ -4295,7 +4300,12 @@ defmodule HydraX.Runtime.WorkItems do
             "assigned_agent_id" => target.assigned_agent_id,
             "delegated_by_agent_id" => target.assigned_agent_id || target.delegated_by_agent_id,
             "parent_work_item_id" => target.id,
-            "priority" => max(target.priority - 1, 0),
+            "priority" =>
+              follow_up_replan_priority(
+                max(target.priority - 1, 0),
+                "operator_guided_replan",
+                preferred_work_item_follow_up_alternatives(target)
+              ),
             "autonomy_level" => target.autonomy_level,
             "approval_stage" => target.approval_stage,
             "deliverables" => target.deliverables,
@@ -9834,7 +9844,12 @@ defmodule HydraX.Runtime.WorkItems do
             "assigned_agent_id" => parent.assigned_agent_id,
             "delegated_by_agent_id" => parent.assigned_agent_id || parent.delegated_by_agent_id,
             "parent_work_item_id" => parent.id,
-            "priority" => max(parent.priority - 1, 0),
+            "priority" =>
+              follow_up_replan_priority(
+                max(parent.priority - 1, 0),
+                preferred_strategy,
+                preferred_work_item_follow_up_alternatives(parent)
+              ),
             "autonomy_level" => parent.autonomy_level,
             "approval_stage" => parent.approval_stage,
             "deliverables" => resolved_deliverables,
@@ -10478,6 +10493,20 @@ defmodule HydraX.Runtime.WorkItems do
     end
   end
 
+  defp follow_up_replan_priority(base_priority, strategy, alternatives)
+       when is_integer(base_priority) and is_binary(strategy) and is_list(alternatives) do
+    boost =
+      [strategy | alternatives]
+      |> Enum.reject(&(&1 in [nil, ""]))
+      |> Enum.uniq()
+      |> Enum.map(&recovery_strategy_priority_boost/1)
+      |> Enum.max(fn -> 0 end)
+
+    min(base_priority + boost, 100)
+  end
+
+  defp follow_up_replan_priority(base_priority, _strategy, _alternatives), do: base_priority
+
   defp follow_up_replan_goal(goal, "narrow_delegate_batch") do
     "Re-plan #{goal} with a narrowed delegation batch under the current autonomy constraints."
   end
@@ -10537,6 +10566,22 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp recovery_strategy_summary(_strategy), do: "Strategy-guided recovery"
+
+  defp recovery_strategy_priority_boost("operator_guided_replan"), do: 3
+  defp recovery_strategy_priority_boost("review_guided_replan"), do: 2
+  defp recovery_strategy_priority_boost("request_review"), do: 2
+  defp recovery_strategy_priority_boost("constraint_replan"), do: 1
+  defp recovery_strategy_priority_boost("narrow_delegate_batch"), do: 0
+
+  defp recovery_strategy_priority_boost(strategy) when is_binary(strategy) do
+    cond do
+      String.ends_with?(strategy, "_guided_replan") -> 2
+      String.ends_with?(strategy, "_replan") -> 1
+      true -> 0
+    end
+  end
+
+  defp recovery_strategy_priority_boost(_strategy), do: 0
 
   defp maybe_put_recovery_strategy_alternatives(metadata, alternatives) do
     alternatives =
