@@ -1675,10 +1675,15 @@ defmodule HydraXWeb.AgentsLive do
   defp delegation_supervision_urgent_batches_label(_summary), do: nil
 
   defp delegation_supervision_intervention_label(summary) when is_map(summary) do
-    strategy = summary[:dominant_recovery_strategy]
+    cond do
+      intervention_recovery_mix?(summary[:selected_recovery_mix]) ->
+        "intervention-heavy"
 
-    if strategy in ["operator_guided_replan", "review_guided_replan", "request_review"] do
-      "intervention-heavy"
+      intervention_recovery_mix?(summary[:alternative_recovery_mix]) ->
+        "fallback-intervention"
+
+      true ->
+        nil
     end
   end
 
@@ -1779,6 +1784,20 @@ defmodule HydraXWeb.AgentsLive do
       "#{humanize_follow_up_strategy(strategy)} x#{count}"
     end)
   end
+
+  defp intervention_recovery_mix?(mix) when is_map(mix) do
+    Enum.any?(mix, fn
+      {strategy, count}
+      when strategy in ["operator_guided_replan", "review_guided_replan", "request_review"] and
+             count not in [nil, 0] ->
+        true
+
+      _ ->
+        false
+    end)
+  end
+
+  defp intervention_recovery_mix?(_mix), do: false
 
   defp follow_up_recovery_strategy_rank("operator_guided_replan"), do: 4
   defp follow_up_recovery_strategy_rank("review_guided_replan"), do: 3
@@ -2684,6 +2703,7 @@ defmodule HydraXWeb.AgentsLive do
 
   defp humanize_follow_up_strategy("review_guided_replan"), do: "review-guided"
   defp humanize_follow_up_strategy("operator_guided_replan"), do: "operator-guided"
+  defp humanize_follow_up_strategy("constraint_replan"), do: "constraint-first"
   defp humanize_follow_up_strategy("narrow_delegate_batch"), do: "narrowed"
   defp humanize_follow_up_strategy("request_review"), do: "review requested"
   defp humanize_follow_up_strategy(strategy) when is_binary(strategy), do: strategy

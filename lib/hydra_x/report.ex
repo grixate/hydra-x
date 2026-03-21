@@ -434,16 +434,14 @@ defmodule HydraX.Report do
             end
 
           intervention =
-            case entry.dominant_recovery_strategy do
-              strategy
-              when strategy in [
-                     "operator_guided_replan",
-                     "review_guided_replan",
-                     "request_review"
-                   ] ->
+            cond do
+              intervention_recovery_mix?(entry.selected_recovery_mix) ->
                 " intervention=heavy"
 
-              _ ->
+              intervention_recovery_mix?(entry.alternative_recovery_mix) ->
+                " intervention=fallback"
+
+              true ->
                 nil
             end
 
@@ -522,6 +520,20 @@ defmodule HydraX.Report do
     do: report_recovery_mix(mix)
 
   defp report_recovery_mix_or_none(_mix), do: "none"
+
+  defp intervention_recovery_mix?(mix) when is_map(mix) do
+    Enum.any?(mix, fn
+      {strategy, count}
+      when strategy in ["operator_guided_replan", "review_guided_replan", "request_review"] and
+             count not in [nil, 0] ->
+        true
+
+      _ ->
+        false
+    end)
+  end
+
+  defp intervention_recovery_mix?(_mix), do: false
 
   defp report_constraint_pressure_suffix(pressure) when is_map(pressure) do
     urgent_queued = pressure[:urgent_queued_count] || pressure["urgent_queued_count"] || 0
@@ -2945,6 +2957,7 @@ defmodule HydraX.Report do
 
   defp humanize_follow_up_strategy("review_guided_replan"), do: "review-guided"
   defp humanize_follow_up_strategy("operator_guided_replan"), do: "operator-guided"
+  defp humanize_follow_up_strategy("constraint_replan"), do: "constraint-first"
   defp humanize_follow_up_strategy("narrow_delegate_batch"), do: "narrowed"
   defp humanize_follow_up_strategy("request_review"), do: "review requested"
   defp humanize_follow_up_strategy(strategy) when is_binary(strategy), do: strategy

@@ -2782,10 +2782,17 @@ defmodule HydraXWeb.HealthLive do
   defp autonomy_delegation_dominant_recovery_label(_entry), do: nil
 
   defp autonomy_delegation_intervention_label(entry) when is_map(entry) do
-    strategy = entry[:dominant_recovery_strategy] || entry["dominant_recovery_strategy"]
+    cond do
+      intervention_recovery_mix?(entry[:selected_recovery_mix] || entry["selected_recovery_mix"]) ->
+        "intervention-heavy"
 
-    if strategy in ["operator_guided_replan", "review_guided_replan", "request_review"] do
-      "intervention-heavy"
+      intervention_recovery_mix?(
+        entry[:alternative_recovery_mix] || entry["alternative_recovery_mix"]
+      ) ->
+        "fallback-intervention"
+
+      true ->
+        nil
     end
   end
 
@@ -2845,6 +2852,20 @@ defmodule HydraXWeb.HealthLive do
       "#{humanize_follow_up_strategy(strategy)} x#{count}"
     end)
   end
+
+  defp intervention_recovery_mix?(mix) when is_map(mix) do
+    Enum.any?(mix, fn
+      {strategy, count}
+      when strategy in ["operator_guided_replan", "review_guided_replan", "request_review"] and
+             count not in [nil, 0] ->
+        true
+
+      _ ->
+        false
+    end)
+  end
+
+  defp intervention_recovery_mix?(_mix), do: false
 
   defp autonomy_delegation_summary_recovery_mix(mix) when is_map(mix) and map_size(mix) > 0 do
     autonomy_recovery_mix(mix)
@@ -3226,6 +3247,7 @@ defmodule HydraXWeb.HealthLive do
 
   defp humanize_follow_up_strategy("review_guided_replan"), do: "review-guided"
   defp humanize_follow_up_strategy("operator_guided_replan"), do: "operator-guided"
+  defp humanize_follow_up_strategy("constraint_replan"), do: "constraint-first"
   defp humanize_follow_up_strategy("narrow_delegate_batch"), do: "narrowed"
   defp humanize_follow_up_strategy("request_review"), do: "review requested"
   defp humanize_follow_up_strategy(strategy) when is_binary(strategy), do: strategy

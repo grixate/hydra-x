@@ -340,7 +340,15 @@ defmodule HydraX.ReportTest do
       end
     end)
 
-    agent = Runtime.ensure_default_agent!()
+    {:ok, agent} =
+      Runtime.save_agent(%{
+        name: "Fallback Planner",
+        slug: "fallback-planner-report",
+        role: "planner",
+        workspace_root: Path.join(System.tmp_dir!(), "hydra-x-fallback-planner-report"),
+        description: "planner",
+        is_default: false
+      })
 
     {:ok, job} =
       Runtime.save_scheduled_job(%{
