@@ -5936,7 +5936,7 @@ defmodule HydraX.Runtime.WorkItems do
       |> Helpers.normalize_string_keys()
       |> Map.put("preferred_recovery_strategy", strategy)
       |> Map.put("recovery_strategy_behavior", recovery_strategy_behavior(strategy))
-      |> Map.put("recovery_strategy_summary", recovery_strategy_summary(strategy))
+      |> Map.put("recovery_strategy_summary", recovery_strategy_summary(strategy, alternatives))
       |> maybe_put_recovery_strategy_alternatives(alternatives)
 
     attrs = Map.put(attrs, "metadata", metadata)
@@ -10395,7 +10395,7 @@ defmodule HydraX.Runtime.WorkItems do
       normalized_metadata
       |> Map.put("preferred_recovery_strategy", strategy)
       |> Map.put("recovery_strategy_behavior", recovery_strategy_behavior(strategy))
-      |> Map.put("recovery_strategy_summary", recovery_strategy_summary(strategy))
+      |> Map.put("recovery_strategy_summary", recovery_strategy_summary(strategy, alternatives))
       |> maybe_put_recovery_strategy_alternatives(alternatives)
 
     if strategy == "narrow_delegate_batch" or
@@ -10422,6 +10422,18 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp follow_up_replan_goal(goal, _strategy) do
     "Re-plan #{goal} within the current autonomy constraints."
+  end
+
+  defp recovery_strategy_summary(strategy, alternatives)
+       when is_binary(strategy) and is_list(alternatives) do
+    base_summary = recovery_strategy_summary(strategy)
+
+    if strategy != "narrow_delegate_batch" and
+         Enum.member?(alternatives, "narrow_delegate_batch") do
+      "#{base_summary} with narrowed delegation fallback"
+    else
+      base_summary
+    end
   end
 
   defp recovery_strategy_summary("narrow_delegate_batch"),

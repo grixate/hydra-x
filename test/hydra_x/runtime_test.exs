@@ -4332,6 +4332,9 @@ defmodule HydraX.RuntimeTest do
              ["recovery_strategy_alternative_summaries"]
            ) == ["Narrowed delegation batch"]
 
+    assert get_in(replan_item.metadata || %{}, ["recovery_strategy_summary"]) ==
+             "Operator-guided recovery with narrowed delegation fallback"
+
     assert get_in(replan_item.metadata || %{}, ["delegate_batch_concurrency"]) == 1
     assert get_in(replan_item.metadata || %{}, ["delegate_batch_completion_quorum"]) == 1
     assert replan_item.goal =~ "operator-guided delegation recovery"
