@@ -299,6 +299,7 @@ defmodule HydraX.WorkTaskTest do
             "count" => 1,
             "types" => ["replan"],
             "strategies" => ["review_guided_replan"],
+            "priority_boosts" => [2],
             "alternative_summaries" => ["Narrowed delegation batch"]
           }
         }
@@ -315,6 +316,6 @@ defmodule HydraX.WorkTaskTest do
              "#{guided_item.id}\tplan\tplanned\tplanner\tproposal_only\tRecover a constrained planner branch.\tOperator-guided recovery with narrowed delegation fallback (+3)"
 
     assert output =~
-             "#{follow_up_item.id}\tplan\tblocked\tplanner\tvalidated\tFinalize the parent planner tree.\tReviewer-guided recovery; alternatives Narrowed delegation batch"
+             "#{follow_up_item.id}\tplan\tblocked\tplanner\tvalidated\tFinalize the parent planner tree.\tReviewer-guided recovery; priority +2; alternatives Narrowed delegation batch"
   end
 end

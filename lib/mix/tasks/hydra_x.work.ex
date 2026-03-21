@@ -456,18 +456,36 @@ defmodule Mix.Tasks.HydraX.Work do
       end
       |> List.first()
 
+    priority =
+      work_item
+      |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "priority_boosts"]))
+      |> List.wrap()
+      |> Enum.filter(&is_integer/1)
+      |> Enum.max(fn -> nil end)
+      |> case do
+        value when is_integer(value) and value > 0 -> "priority +#{value}"
+        _ -> nil
+      end
+
     alternatives =
       work_item
       |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "alternative_summaries"]))
       |> List.wrap()
       |> Enum.reject(&(&1 in [nil, ""]))
 
-    case {summary, alternatives} do
-      {value, []} when is_binary(value) and value != "" ->
+    case {summary, priority, alternatives} do
+      {value, nil, []} when is_binary(value) and value != "" ->
         value
 
-      {value, entries} when is_binary(value) and value != "" and entries != [] ->
+      {value, boost, []} when is_binary(value) and value != "" and is_binary(boost) ->
+        "#{value}; #{boost}"
+
+      {value, nil, entries} when is_binary(value) and value != "" and entries != [] ->
         "#{value}; alternatives #{Enum.join(entries, ", ")}"
+
+      {value, boost, entries}
+      when is_binary(value) and value != "" and is_binary(boost) and entries != [] ->
+        "#{value}; #{boost}; alternatives #{Enum.join(entries, ", ")}"
 
       _ ->
         nil
