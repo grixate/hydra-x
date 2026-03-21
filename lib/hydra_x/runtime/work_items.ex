@@ -717,6 +717,12 @@ defmodule HydraX.Runtime.WorkItems do
         acc + (entry.repeatedly_deferred_batches || 0)
       end)
 
+    delegation_selected_recovery_batches =
+      delegation_recovery_batches(delegation_supervision, :selected_recovery_mix)
+
+    delegation_alternative_recovery_batches =
+      delegation_recovery_batches(delegation_supervision, :alternative_recovery_mix)
+
     delegation_operator_guided_batch_count =
       Map.get(dominant_recovery_batches, "operator_guided_replan", 0)
 
@@ -774,6 +780,8 @@ defmodule HydraX.Runtime.WorkItems do
       delegation_medium_pressure_batch_count: delegation_medium_pressure_batch_count,
       delegation_repeatedly_deferred_batch_count: delegation_repeatedly_deferred_batch_count,
       delegation_dominant_recovery_batches: dominant_recovery_batches,
+      delegation_selected_recovery_batches: delegation_selected_recovery_batches,
+      delegation_alternative_recovery_batches: delegation_alternative_recovery_batches,
       delegation_operator_guided_batch_count: delegation_operator_guided_batch_count,
       delegation_review_guided_batch_count: delegation_review_guided_batch_count,
       delegation_request_review_batch_count: delegation_request_review_batch_count,
@@ -1145,6 +1153,27 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp delegation_dominant_recovery_batches(_entries), do: %{}
+
+  defp delegation_recovery_batches(entries, field) when is_list(entries) do
+    Enum.reduce(entries, %{}, fn entry, acc ->
+      mix =
+        case entry do
+          %{^field => value} -> value || %{}
+          _ -> Map.get(entry, field, %{}) || %{}
+        end
+
+      Enum.reduce(mix, acc, fn
+        {strategy, count}, inner
+        when is_binary(strategy) and strategy != "" and count not in [nil, 0] ->
+          Map.update(inner, strategy, count, &(&1 + count))
+
+        _, inner ->
+          inner
+      end)
+    end)
+  end
+
+  defp delegation_recovery_batches(_entries, _field), do: %{}
 
   defp dominant_follow_up_recovery_strategy(mix) when is_map(mix) do
     mix

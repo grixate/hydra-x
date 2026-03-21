@@ -1406,6 +1406,16 @@ defmodule HydraXWeb.AgentsLive do
             acc[:recovery_mix],
             entry[:recovery_mix]
           ),
+        selected_recovery_mix:
+          merge_role_frequency_maps(
+            acc[:selected_recovery_mix],
+            entry[:selected_recovery_mix]
+          ),
+        alternative_recovery_mix:
+          merge_role_frequency_maps(
+            acc[:alternative_recovery_mix],
+            entry[:alternative_recovery_mix]
+          ),
         dominant_recovery_strategy:
           dominant_supervision_recovery_strategy(
             acc[:dominant_recovery_strategy],

@@ -1351,6 +1351,13 @@ defmodule HydraXWeb.HealthLive do
               operator-guided {@autonomy_status.delegation_operator_guided_batch_count || 0} ·
               reviewer-guided {@autonomy_status.delegation_review_guided_batch_count || 0}
             </p>
+            <p class="mt-1 text-xs text-[var(--hx-mute)]">
+              selected recovery {autonomy_delegation_summary_recovery_mix(
+                @autonomy_status.delegation_selected_recovery_batches
+              )} · fallback recovery {autonomy_delegation_summary_recovery_mix(
+                @autonomy_status.delegation_alternative_recovery_batches
+              )}
+            </p>
           </article>
         </div>
         <div class="mt-4 grid gap-3 lg:grid-cols-2">
@@ -2838,6 +2845,12 @@ defmodule HydraXWeb.HealthLive do
       "#{humanize_follow_up_strategy(strategy)} x#{count}"
     end)
   end
+
+  defp autonomy_delegation_summary_recovery_mix(mix) when is_map(mix) and map_size(mix) > 0 do
+    autonomy_recovery_mix(mix)
+  end
+
+  defp autonomy_delegation_summary_recovery_mix(_mix), do: "none"
 
   defp assignment_strategy_label("role_capability_match"), do: "role capability match"
   defp assignment_strategy_label("capability_fallback"), do: "capability fallback"

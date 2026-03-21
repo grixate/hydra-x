@@ -1781,6 +1781,8 @@ defmodule HydraX.ReportTest do
     assert markdown =~ "operator_guided_batches=2"
     assert markdown =~ "review_guided_batches=0"
     assert markdown =~ "request_review_batches=0"
+    assert markdown =~ "selected_recovery_batches=operator-guided:1"
+    assert markdown =~ "fallback_recovery_batches=review-guided:1"
     assert markdown =~ "high_pressure_batches=0"
     assert markdown =~ "medium_pressure_batches=1"
     assert markdown =~ "repeated_deferred_batches=1"
