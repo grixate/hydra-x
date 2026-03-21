@@ -21,7 +21,6 @@ defmodule HydraX.WorkTaskTest do
             "count" => 1,
             "types" => ["replan"],
             "strategies" => ["operator_guided_replan"],
-            "summaries" => ["Operator-guided recovery"],
             "alternative_strategies" => ["narrow_delegate_batch"]
           }
         }
@@ -283,7 +282,6 @@ defmodule HydraX.WorkTaskTest do
             "count" => 1,
             "types" => ["replan"],
             "strategies" => ["review_guided_replan"],
-            "summaries" => ["Reviewer-guided recovery"],
             "alternative_summaries" => ["Narrowed delegation batch"]
           }
         }

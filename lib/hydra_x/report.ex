@@ -2562,6 +2562,21 @@ defmodule HydraX.Report do
         item
         |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "summaries"]))
         |> List.wrap()
+        |> case do
+          [] ->
+            item
+            |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "strategies"]))
+            |> List.wrap()
+            |> List.first()
+            |> case do
+              value when is_binary(value) -> humanize_follow_up_strategy_summary(value)
+              _ -> nil
+            end
+            |> List.wrap()
+
+          entries ->
+            entries
+        end
         |> List.first() ||
           item
           |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "strategies"]))
@@ -2614,6 +2629,9 @@ defmodule HydraX.Report do
 
   defp humanize_follow_up_strategy_summary("request_review"),
     do: "Review-requested recovery"
+
+  defp humanize_follow_up_strategy_summary("constraint_replan"),
+    do: "Constraint-first recovery"
 
   defp humanize_follow_up_strategy_summary(strategy) when is_binary(strategy),
     do: humanize_follow_up_strategy(strategy)

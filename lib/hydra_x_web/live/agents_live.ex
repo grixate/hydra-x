@@ -2387,6 +2387,21 @@ defmodule HydraXWeb.AgentsLive do
       work_item
       |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "summaries"]))
       |> List.wrap()
+      |> case do
+        [] ->
+          work_item
+          |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "strategies"]))
+          |> List.wrap()
+          |> List.first()
+          |> case do
+            value when is_binary(value) -> humanize_follow_up_strategy_summary(value)
+            _ -> nil
+          end
+          |> List.wrap()
+
+        entries ->
+          entries
+      end
       |> List.first()
 
     if is_binary(summary) and summary != "" do

@@ -327,6 +327,16 @@ defmodule Mix.Tasks.HydraX.Work do
       summary
       |> Map.get("summaries", [])
       |> List.wrap()
+      |> case do
+        [] ->
+          summary
+          |> Map.get("strategies", [])
+          |> List.wrap()
+          |> Enum.map(&humanize_follow_up_strategy_summary/1)
+
+        entries ->
+          entries
+      end
 
     alternative_strategies =
       summary
@@ -415,6 +425,16 @@ defmodule Mix.Tasks.HydraX.Work do
       work_item
       |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "summaries"]))
       |> List.wrap()
+      |> case do
+        [] ->
+          work_item
+          |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "strategies"]))
+          |> List.wrap()
+          |> Enum.map(&humanize_follow_up_strategy_summary/1)
+
+        entries ->
+          entries
+      end
       |> List.first()
 
     alternatives =
@@ -472,6 +492,9 @@ defmodule Mix.Tasks.HydraX.Work do
 
   defp humanize_follow_up_strategy_summary("request_review"),
     do: "Review-requested recovery"
+
+  defp humanize_follow_up_strategy_summary("constraint_replan"),
+    do: "Constraint-first recovery"
 
   defp humanize_follow_up_strategy_summary(strategy) when is_binary(strategy), do: strategy
   defp humanize_follow_up_strategy_summary(_strategy), do: nil
