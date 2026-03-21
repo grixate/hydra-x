@@ -585,7 +585,8 @@ defmodule HydraXWeb.HealthLiveTest do
             "count" => 1,
             "types" => ["replan"],
             "strategies" => ["operator_guided_replan"],
-            "summaries" => ["Operator-guided recovery"]
+            "summaries" => ["Operator-guided recovery"],
+            "alternative_summaries" => ["Narrowed delegation batch"]
           }
         }
       })
@@ -593,7 +594,9 @@ defmodule HydraXWeb.HealthLiveTest do
     {:ok, _view, html} = live(conn, ~p"/health")
 
     assert html =~ replan_parent.goal
-    assert html =~ "replan queued 1 (Operator-guided recovery)"
+
+    assert html =~
+             "replan queued 1 (Operator-guided recovery; alternatives Narrowed delegation batch)"
   end
 
   test "health page shows recovery strategy summaries for planner replans", %{conn: conn} do

@@ -2337,8 +2337,25 @@ defmodule HydraX.Report do
         |> Enum.reject(&is_nil_or_empty/1)
         |> Enum.join(" ")
 
-      %{type: "queued_replan_follow_up", count: count, strategy: strategy} ->
-        ["replan queued #{count}", strategy && "(#{strategy})"]
+      %{type: "queued_replan_follow_up", count: count, strategy: strategy} = snapshot ->
+        alternatives =
+          snapshot
+          |> Map.get(:alternatives, [])
+          |> Enum.reject(&is_nil_or_empty/1)
+          |> case do
+            [] -> nil
+            entries -> "alternatives #{Enum.join(entries, ", ")}"
+          end
+
+        [
+          "replan queued #{count}",
+          [strategy, alternatives]
+          |> Enum.reject(&is_nil_or_empty/1)
+          |> case do
+            [] -> nil
+            details -> "(" <> Enum.join(details, "; ") <> ")"
+          end
+        ]
         |> Enum.reject(&is_nil_or_empty/1)
         |> Enum.join(" ")
 
@@ -2547,7 +2564,12 @@ defmodule HydraX.Report do
           |> case do
             value when is_binary(value) -> humanize_follow_up_strategy(value)
             _ -> nil
-          end
+          end,
+      alternatives:
+        item
+        |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "alternative_summaries"]))
+        |> List.wrap()
+        |> Enum.reject(&is_nil_or_empty/1)
     }
   end
 

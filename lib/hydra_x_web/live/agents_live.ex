@@ -2043,12 +2043,18 @@ defmodule HydraXWeb.AgentsLive do
       List.wrap(get_in(work_item.result_refs || %{}, ["follow_up_work_item_ids"])) != [] ->
         count = follow_up_queue_count(work_item)
         strategy = follow_up_queue_strategy_detail(work_item)
+        alternatives = follow_up_queue_alternative_detail(work_item)
 
         case follow_up_queue_type(work_item) do
           "replan" ->
             [
               "replan follow-up queued #{count}",
-              strategy && "(#{strategy})"
+              [strategy, alternatives]
+              |> Enum.reject(&(&1 in [nil, ""]))
+              |> case do
+                [] -> nil
+                details -> "(" <> Enum.join(details, "; ") <> ")"
+              end
             ]
             |> Enum.reject(&(&1 in [nil, ""]))
             |> Enum.join(" ")
@@ -2399,6 +2405,20 @@ defmodule HydraXWeb.AgentsLive do
     |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "strategies"]))
     |> List.wrap()
     |> List.first()
+  end
+
+  defp follow_up_queue_alternative_detail(work_item) do
+    alternatives =
+      work_item
+      |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "alternative_summaries"]))
+      |> List.wrap()
+      |> Enum.reject(&(&1 in [nil, ""]))
+
+    if alternatives == [] do
+      nil
+    else
+      "alternatives #{Enum.join(alternatives, ", ")}"
+    end
   end
 
   defp humanize_follow_up_strategy("review_guided_replan"), do: "review-guided"

@@ -1108,7 +1108,8 @@ defmodule HydraX.ReportTest do
             "count" => 1,
             "types" => ["replan"],
             "strategies" => ["operator_guided_replan"],
-            "summaries" => ["Operator-guided recovery"]
+            "summaries" => ["Operator-guided recovery"],
+            "alternative_summaries" => ["Narrowed delegation batch"]
           }
         }
       })
@@ -1155,7 +1156,9 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "Readiness"
     assert File.read!(export.markdown_path) =~ "Total items:"
     assert File.read!(export.markdown_path) =~ "Required warnings:"
-    assert File.read!(export.markdown_path) =~ "replan queued 1 (Operator-guided recovery)"
+
+    assert File.read!(export.markdown_path) =~
+             "replan queued 1 (Operator-guided recovery; alternatives Narrowed delegation batch)"
 
     assert File.read!(export.markdown_path) =~
              "operator_intervention_prepared role_capacity_constrained"
