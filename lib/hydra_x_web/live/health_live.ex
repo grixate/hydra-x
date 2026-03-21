@@ -1536,6 +1536,9 @@ defmodule HydraXWeb.HealthLive do
                   <span :if={(entry.urgent_batches || 0) > 0}>
                     {" "}· urgent {entry.urgent_batches}
                   </span>
+                  <span :if={autonomy_delegation_dominant_recovery_label(entry)}>
+                    {" "}· {autonomy_delegation_dominant_recovery_label(entry)}
+                  </span>
                   <span :if={autonomy_delegation_recovery_mix_label(entry)}>
                     {" "}· {autonomy_delegation_recovery_mix_label(entry)}
                   </span>
@@ -2745,6 +2748,17 @@ defmodule HydraXWeb.HealthLive do
   end
 
   defp autonomy_delegation_pressure_label(_entry), do: nil
+
+  defp autonomy_delegation_dominant_recovery_label(entry) when is_map(entry) do
+    strategy = entry[:dominant_recovery_strategy] || entry["dominant_recovery_strategy"]
+    count = entry[:dominant_recovery_count] || entry["dominant_recovery_count"] || 0
+
+    if is_binary(strategy) and strategy != "" and count > 0 do
+      "dominant #{humanize_follow_up_strategy(strategy)} x#{count}"
+    end
+  end
+
+  defp autonomy_delegation_dominant_recovery_label(_entry), do: nil
 
   defp autonomy_delegation_recovery_mix_label(entry) when is_map(entry) do
     case entry[:recovery_mix] || entry["recovery_mix"] || %{} do

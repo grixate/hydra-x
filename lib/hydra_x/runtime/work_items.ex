@@ -948,6 +948,10 @@ defmodule HydraX.Runtime.WorkItems do
       agent = Map.get(agents_by_id, agent_id)
       snapshots = Enum.map(entries, fn {_work_item, snapshot} -> snapshot end)
       recovery_mix = aggregate_follow_up_recovery_mix(entries)
+
+      {dominant_recovery_strategy, dominant_recovery_count, dominant_recovery_score} =
+        dominant_follow_up_recovery_strategy(recovery_mix)
+
       constrained_roles = aggregate_constrained_pending_roles(snapshots, role_capacity)
       constrained_role_pressure = constrained_role_pressure(constrained_roles, role_capacity)
       missing_required_roles = aggregate_missing_completion_roles(snapshots)
@@ -990,6 +994,9 @@ defmodule HydraX.Runtime.WorkItems do
         constrained_roles: constrained_roles,
         constrained_role_pressure: constrained_role_pressure,
         recovery_mix: recovery_mix,
+        dominant_recovery_strategy: dominant_recovery_strategy,
+        dominant_recovery_count: dominant_recovery_count,
+        dominant_recovery_score: dominant_recovery_score,
         repeatedly_deferred_batches: repeatedly_deferred_batches,
         total_expansion_deferrals: total_expansion_deferrals,
         max_expansion_deferrals: max_expansion_deferrals,
@@ -1010,6 +1017,8 @@ defmodule HydraX.Runtime.WorkItems do
     end)
     |> Enum.sort_by(fn entry ->
       {
+        -(entry.dominant_recovery_score || 0),
+        -(entry.dominant_recovery_count || 0),
         -delegation_pressure_batch_count(entry, :high),
         -delegation_pressure_batch_count(entry, :medium),
         -(entry.repeatedly_deferred_batches || 0),
@@ -1050,6 +1059,31 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp aggregate_follow_up_recovery_mix(_entries), do: %{}
+
+  defp dominant_follow_up_recovery_strategy(mix) when is_map(mix) do
+    mix
+    |> Enum.reject(fn {strategy, count} -> strategy in [nil, ""] or count in [nil, 0] end)
+    |> Enum.max_by(
+      fn {strategy, count} -> {follow_up_recovery_strategy_rank(strategy), count, strategy} end,
+      fn -> {nil, 0} end
+    )
+    |> case do
+      {nil, 0} ->
+        {nil, 0, 0}
+
+      {strategy, count} ->
+        {strategy, count, follow_up_recovery_strategy_rank(strategy)}
+    end
+  end
+
+  defp dominant_follow_up_recovery_strategy(_mix), do: {nil, 0, 0}
+
+  defp follow_up_recovery_strategy_rank("operator_guided_replan"), do: 4
+  defp follow_up_recovery_strategy_rank("review_guided_replan"), do: 3
+  defp follow_up_recovery_strategy_rank("request_review"), do: 2
+  defp follow_up_recovery_strategy_rank("constraint_replan"), do: 1
+  defp follow_up_recovery_strategy_rank("narrow_delegate_batch"), do: 0
+  defp follow_up_recovery_strategy_rank(_strategy), do: 0
 
   defp work_item_follow_up_recovery_strategies(%WorkItem{} = work_item) do
     summary = get_in(work_item.result_refs || %{}, ["follow_up_summary"]) || %{}

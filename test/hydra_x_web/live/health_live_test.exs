@@ -577,6 +577,7 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "batch budget 1 · remaining 0"
     assert html =~ "supervision budget 2 · active children 1"
     assert html =~ "urgent 1"
+    assert html =~ "dominant operator-guided x1"
     assert html =~ "recovery mix operator-guided x1, review-guided x1"
     assert html =~ "required roles operator x1"
     assert html =~ "pressure h0 m1 l0"

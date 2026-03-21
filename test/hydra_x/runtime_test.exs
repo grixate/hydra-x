@@ -8087,6 +8087,13 @@ defmodule HydraX.RuntimeTest do
                  })
            )
 
+    assert Enum.any?(
+             status.delegation_supervision,
+             &(&1.agent_id == agent.id and
+                 &1.dominant_recovery_strategy == "operator_guided_replan" and
+                 &1.dominant_recovery_count == 1 and &1.dominant_recovery_score == 4)
+           )
+
     assert status.delegation_urgent_batch_count >= 1
     assert status.delegation_high_pressure_batch_count >= 0
     assert status.delegation_medium_pressure_batch_count >= 0

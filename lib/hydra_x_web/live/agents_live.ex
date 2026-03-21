@@ -1406,6 +1406,15 @@ defmodule HydraXWeb.AgentsLive do
             acc[:recovery_mix],
             entry[:recovery_mix]
           ),
+        dominant_recovery_strategy:
+          dominant_supervision_recovery_strategy(
+            acc[:dominant_recovery_strategy],
+            entry[:dominant_recovery_strategy]
+          ),
+        dominant_recovery_count:
+          max(acc[:dominant_recovery_count] || 0, entry[:dominant_recovery_count] || 0),
+        dominant_recovery_score:
+          max(acc[:dominant_recovery_score] || 0, entry[:dominant_recovery_score] || 0),
         missing_required_roles:
           merge_role_frequency_maps(
             acc[:missing_required_roles],
@@ -1499,6 +1508,15 @@ defmodule HydraXWeb.AgentsLive do
   defp min_remaining_budget(value, nil), do: value
   defp min_remaining_budget(left, right), do: min(left, right)
 
+  defp dominant_supervision_recovery_strategy(nil, value), do: value
+  defp dominant_supervision_recovery_strategy(value, nil), do: value
+
+  defp dominant_supervision_recovery_strategy(left, right) do
+    [left, right]
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> Enum.max_by(&follow_up_recovery_strategy_rank/1, fn -> nil end)
+  end
+
   defp compaction_policy_form(agent) do
     %{
       "soft" => agent.compaction_policy.soft,
@@ -1561,6 +1579,7 @@ defmodule HydraXWeb.AgentsLive do
       delegation_supervision_budget_label(summary),
       delegation_supervision_batch_budget_label(summary),
       delegation_supervision_urgent_batches_label(summary),
+      delegation_supervision_dominant_recovery_label(summary),
       delegation_supervision_recovery_mix_label(summary),
       delegation_supervision_missing_roles_label(summary),
       delegation_supervision_pressure_label(summary),
@@ -1626,6 +1645,17 @@ defmodule HydraXWeb.AgentsLive do
 
   defp delegation_supervision_urgent_batches_label(_summary), do: nil
 
+  defp delegation_supervision_dominant_recovery_label(summary) when is_map(summary) do
+    strategy = summary[:dominant_recovery_strategy]
+    count = summary[:dominant_recovery_count] || 0
+
+    if is_binary(strategy) and strategy != "" and count > 0 do
+      "dominant #{humanize_follow_up_strategy(strategy)} x#{count}"
+    end
+  end
+
+  defp delegation_supervision_dominant_recovery_label(_summary), do: nil
+
   defp delegation_supervision_recovery_mix_label(summary) when is_map(summary) do
     case summary[:recovery_mix] || %{} do
       mix when mix == %{} ->
@@ -1686,6 +1716,13 @@ defmodule HydraXWeb.AgentsLive do
       "#{humanize_follow_up_strategy(strategy)} x#{count}"
     end)
   end
+
+  defp follow_up_recovery_strategy_rank("operator_guided_replan"), do: 4
+  defp follow_up_recovery_strategy_rank("review_guided_replan"), do: 3
+  defp follow_up_recovery_strategy_rank("request_review"), do: 2
+  defp follow_up_recovery_strategy_rank("constraint_replan"), do: 1
+  defp follow_up_recovery_strategy_rank("narrow_delegate_batch"), do: 0
+  defp follow_up_recovery_strategy_rank(_strategy), do: 0
 
   defp recent_role_dispatch_summary(results, agent_id) do
     agent_results = Enum.filter(results, &((&1[:agent_id] || &1["agent_id"]) == agent_id))

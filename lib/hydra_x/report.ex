@@ -406,11 +406,21 @@ defmodule HydraX.Report do
                 " recovery_mix=#{report_recovery_mix(mix)}"
             end
 
+          dominant_recovery =
+            case {entry.dominant_recovery_strategy, entry.dominant_recovery_count} do
+              {strategy, count} when is_binary(strategy) and strategy != "" and count > 0 ->
+                " dominant_recovery=#{humanize_follow_up_strategy(strategy)}:#{count}"
+
+              _ ->
+                nil
+            end
+
           "- #{entry.agent_name || entry.role || "planner"}: batches=#{entry.active_batches} pending=#{entry.pending_children} active=#{entry.active_children} terminal=#{entry.terminal_children} priority=#{entry.highest_priority}#{constrained || ""}" <>
             if((entry.urgent_batches || 0) > 0,
               do: " urgent=#{entry.urgent_batches}",
               else: ""
             ) <>
+            (dominant_recovery || "") <>
             (recovery_mix || "") <>
             (required_roles || "") <>
             report_delegation_pressure_batches(entry) <>
