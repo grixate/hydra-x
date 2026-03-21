@@ -540,6 +540,7 @@ defmodule HydraXWeb.AgentsLiveTest do
         "metadata" => %{
           "preferred_recovery_strategy" => "operator_guided_replan",
           "recovery_strategy_behavior" => "operator_review_after_execution",
+          "recovery_strategy_priority_boost" => 3,
           "recovery_strategy_alternatives" => ["narrow_delegate_batch"],
           "recovery_strategy_alternative_summaries" => ["Narrowed delegation batch"]
         }
@@ -551,6 +552,7 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "Operator-guided recovery with narrowed delegation fallback"
     assert html =~ "preferred strategy operator-guided"
     assert html =~ "strategy behavior operator review after execution"
+    assert html =~ "strategy priority +3"
     assert html =~ "alternative strategies Narrowed delegation batch"
   end
 

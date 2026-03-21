@@ -952,11 +952,14 @@ defmodule HydraX.Report do
     metadata = item.metadata || %{}
     strategy = metadata["preferred_recovery_strategy"]
     behavior = metadata["recovery_strategy_behavior"]
+    priority_boost = metadata["recovery_strategy_priority_boost"]
     alternatives = work_item_recovery_alternatives(metadata)
 
     [
       strategy && "recovery_preferred=#{humanize_follow_up_strategy(strategy)}",
       behavior && "recovery_behavior=#{humanize_recovery_strategy_behavior(behavior)}",
+      is_integer(priority_boost) && priority_boost > 0 &&
+        "recovery_priority_boost=#{priority_boost}",
       alternatives != [] && "recovery_alternatives=#{Enum.join(alternatives, ",")}"
     ]
     |> Enum.reject(&is_nil_or_empty/1)
@@ -2244,6 +2247,8 @@ defmodule HydraX.Report do
       assignment_recovery_summary: render_work_item_assignment_recovery(item),
       recovery_strategy_summary: render_work_item_recovery_summary(item),
       recovery_strategy_behavior: get_in(item.metadata || %{}, ["recovery_strategy_behavior"]),
+      recovery_strategy_priority_boost:
+        get_in(item.metadata || %{}, ["recovery_strategy_priority_boost"]),
       recovery_strategy_alternatives: work_item_recovery_alternatives(item.metadata || %{}),
       delegation_batch: Runtime.delegation_batch_snapshot(item),
       delegation_batch_summary: render_work_item_delegation_summary(item),

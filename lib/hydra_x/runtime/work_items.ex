@@ -10475,12 +10475,14 @@ defmodule HydraX.Runtime.WorkItems do
        when is_binary(strategy) do
     normalized_metadata = Helpers.normalize_string_keys(metadata || %{})
     alternatives = Map.get(normalized_metadata, "recovery_strategy_alternatives")
+    priority_boost = recovery_strategy_priority_boost(strategy, alternatives)
 
     metadata =
       normalized_metadata
       |> Map.put("preferred_recovery_strategy", strategy)
       |> Map.put("recovery_strategy_behavior", recovery_strategy_behavior(strategy))
       |> Map.put("recovery_strategy_summary", recovery_strategy_summary(strategy, alternatives))
+      |> Map.put("recovery_strategy_priority_boost", priority_boost)
       |> maybe_put_recovery_strategy_alternatives(alternatives)
 
     if strategy == "narrow_delegate_batch" or
@@ -10495,14 +10497,7 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp follow_up_replan_priority(base_priority, strategy, alternatives)
        when is_integer(base_priority) and is_binary(strategy) and is_list(alternatives) do
-    boost =
-      [strategy | alternatives]
-      |> Enum.reject(&(&1 in [nil, ""]))
-      |> Enum.uniq()
-      |> Enum.map(&recovery_strategy_priority_boost/1)
-      |> Enum.max(fn -> 0 end)
-
-    min(base_priority + boost, 100)
+    min(base_priority + recovery_strategy_priority_boost(strategy, alternatives), 100)
   end
 
   defp follow_up_replan_priority(base_priority, _strategy, _alternatives), do: base_priority
@@ -10582,6 +10577,15 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp recovery_strategy_priority_boost(_strategy), do: 0
+
+  defp recovery_strategy_priority_boost(strategy, alternatives)
+       when is_binary(strategy) and is_list(alternatives) do
+    [strategy | alternatives]
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> Enum.uniq()
+    |> Enum.map(&recovery_strategy_priority_boost/1)
+    |> Enum.max(fn -> 0 end)
+  end
 
   defp maybe_put_recovery_strategy_alternatives(metadata, alternatives) do
     alternatives =

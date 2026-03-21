@@ -3058,11 +3058,13 @@ defmodule HydraXWeb.HealthLive do
     metadata = item.metadata || %{}
     strategy = metadata["preferred_recovery_strategy"]
     behavior = metadata["recovery_strategy_behavior"]
+    priority_boost = metadata["recovery_strategy_priority_boost"]
     alternatives = autonomy_recovery_alternatives(metadata)
 
     [
       strategy && "preferred strategy #{humanize_follow_up_strategy(strategy)}",
       behavior && "strategy behavior #{humanize_recovery_strategy_behavior(behavior)}",
+      is_integer(priority_boost) && priority_boost > 0 && "strategy priority +#{priority_boost}",
       alternatives != [] && "alternative strategies #{Enum.join(alternatives, ", ")}"
     ]
     |> Enum.reject(&is_nil_or_empty/1)
