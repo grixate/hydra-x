@@ -2397,6 +2397,18 @@ defmodule HydraX.Report do
         |> Enum.join(" ")
 
       %{type: "queued_replan_follow_up", count: count, strategy: strategy} = snapshot ->
+        selection =
+          cond do
+            is_binary(Map.get(snapshot, :deescalated_from)) ->
+              "de-escalated from #{humanize_follow_up_strategy(Map.get(snapshot, :deescalated_from))}"
+
+            is_binary(Map.get(snapshot, :selection_reason)) ->
+              Map.get(snapshot, :selection_reason)
+
+            true ->
+              nil
+          end
+
         alternatives =
           snapshot
           |> Map.get(:alternatives, [])
@@ -2426,7 +2438,7 @@ defmodule HydraX.Report do
 
         [
           "replan queued #{count}",
-          [strategy, priority, alternatives, additional]
+          [strategy, priority, selection, alternatives, additional]
           |> Enum.reject(&is_nil_or_empty/1)
           |> case do
             [] -> nil
@@ -2661,6 +2673,20 @@ defmodule HydraX.Report do
             preview = summaries |> Enum.take(2) |> Enum.join(", ")
             suffix = if length(summaries) > 2, do: ", ...", else: ""
             "+#{length(summaries)} more: #{preview}#{suffix}"
+        end,
+      deescalated_from:
+        entries
+        |> List.first()
+        |> case do
+          %{"deescalated_from" => value} when is_binary(value) and value != "" -> value
+          _ -> nil
+        end,
+      selection_reason:
+        entries
+        |> List.first()
+        |> case do
+          %{"selection_reason" => value} when is_binary(value) and value != "" -> value
+          _ -> nil
         end,
       strategy_key:
         entries
@@ -2937,6 +2963,18 @@ defmodule HydraX.Report do
     if match?(%{type: "publish_summary"}, snapshot) do
       case follow_up_snapshot(item) do
         %{type: "queued_replan_follow_up", count: count} = follow_up ->
+          selection =
+            cond do
+              is_binary(Map.get(follow_up, :deescalated_from)) ->
+                "de-escalated from #{humanize_follow_up_strategy(Map.get(follow_up, :deescalated_from))}"
+
+              is_binary(Map.get(follow_up, :selection_reason)) ->
+                Map.get(follow_up, :selection_reason)
+
+              true ->
+                nil
+            end
+
           alternatives =
             follow_up
             |> Map.get(:alternatives, [])
@@ -2966,7 +3004,7 @@ defmodule HydraX.Report do
 
           [
             "replan queued #{count}",
-            [Map.get(follow_up, :strategy), priority, alternatives, additional]
+            [Map.get(follow_up, :strategy), priority, selection, alternatives, additional]
             |> Enum.reject(&is_nil_or_empty/1)
             |> case do
               [] -> nil

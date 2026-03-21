@@ -464,6 +464,18 @@ defmodule Mix.Tasks.HydraX.Work do
             "summary",
             Map.get(entry, "summary")
           )
+          |> maybe_append_follow_up_entry_detail(
+            work_item.id,
+            index,
+            "deescalated_from",
+            Map.get(entry, "deescalated_from")
+          )
+          |> maybe_append_follow_up_entry_detail(
+            work_item.id,
+            index,
+            "selection_reason",
+            Map.get(entry, "selection_reason")
+          )
         end)
       )
 
@@ -570,24 +582,64 @@ defmodule Mix.Tasks.HydraX.Work do
           |> Enum.reject(&(&1 in [nil, ""]))
       end
 
-    case {summary, priority, alternatives} do
-      {value, nil, []} when is_binary(value) and value != "" ->
+    selection =
+      case entries do
+        [%{} = entry | _] ->
+          cond do
+            is_binary(Map.get(entry, "deescalated_from")) ->
+              "de-escalated from #{humanize_follow_up_strategy_summary(Map.get(entry, "deescalated_from"))}"
+
+            is_binary(Map.get(entry, "selection_reason")) ->
+              Map.get(entry, "selection_reason")
+
+            true ->
+              nil
+          end
+
+        _ ->
+          nil
+      end
+
+    case {summary, priority, selection, alternatives} do
+      {value, nil, nil, []} when is_binary(value) and value != "" ->
         append_follow_up_additional_detail(work_item, value)
 
-      {value, boost, []} when is_binary(value) and value != "" and is_binary(boost) ->
+      {value, boost, nil, []} when is_binary(value) and value != "" and is_binary(boost) ->
         append_follow_up_additional_detail(work_item, "#{value}; #{boost}")
 
-      {value, nil, entries} when is_binary(value) and value != "" and entries != [] ->
+      {value, nil, picked, []} when is_binary(value) and value != "" and is_binary(picked) ->
+        append_follow_up_additional_detail(work_item, "#{value}; #{picked}")
+
+      {value, boost, picked, []}
+      when is_binary(value) and value != "" and is_binary(boost) and is_binary(picked) ->
+        append_follow_up_additional_detail(work_item, "#{value}; #{boost}; #{picked}")
+
+      {value, nil, nil, entries} when is_binary(value) and value != "" and entries != [] ->
         append_follow_up_additional_detail(
           work_item,
           "#{value}; alternatives #{Enum.join(entries, ", ")}"
         )
 
-      {value, boost, entries}
+      {value, boost, nil, entries}
       when is_binary(value) and value != "" and is_binary(boost) and entries != [] ->
         append_follow_up_additional_detail(
           work_item,
           "#{value}; #{boost}; alternatives #{Enum.join(entries, ", ")}"
+        )
+
+      {value, nil, picked, entries}
+      when is_binary(value) and value != "" and is_binary(picked) and entries != [] ->
+        append_follow_up_additional_detail(
+          work_item,
+          "#{value}; #{picked}; alternatives #{Enum.join(entries, ", ")}"
+        )
+
+      {value, boost, picked, entries}
+      when is_binary(value) and value != "" and is_binary(boost) and is_binary(picked) and
+             entries != [] ->
+        append_follow_up_additional_detail(
+          work_item,
+          "#{value}; #{boost}; #{picked}; alternatives #{Enum.join(entries, ", ")}"
         )
 
       _ ->

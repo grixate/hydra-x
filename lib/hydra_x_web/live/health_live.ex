@@ -2917,6 +2917,7 @@ defmodule HydraXWeb.HealthLive do
         count = autonomy_follow_up_count(item)
         strategy = autonomy_follow_up_strategy_detail(item)
         priority = autonomy_follow_up_priority_detail(item)
+        selection = autonomy_follow_up_selection_detail(item)
         alternatives = autonomy_follow_up_alternative_detail(item)
         additional = autonomy_follow_up_additional_detail(item)
 
@@ -2924,7 +2925,7 @@ defmodule HydraXWeb.HealthLive do
           "replan" ->
             [
               "replan queued #{count}",
-              [strategy, priority, alternatives, additional]
+              [strategy, priority, selection, alternatives, additional]
               |> Enum.reject(&is_nil_or_empty/1)
               |> case do
                 [] -> nil
@@ -3125,6 +3126,25 @@ defmodule HydraXWeb.HealthLive do
     end
   end
 
+  defp autonomy_follow_up_selection_detail(item) do
+    case autonomy_follow_up_entries(item) do
+      [%{} = entry | _] ->
+        cond do
+          is_binary(Map.get(entry, "deescalated_from")) ->
+            "de-escalated from #{humanize_follow_up_strategy(Map.get(entry, "deescalated_from"))}"
+
+          is_binary(Map.get(entry, "selection_reason")) ->
+            Map.get(entry, "selection_reason")
+
+          true ->
+            nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
   defp autonomy_follow_up_additional_detail(item) do
     entries = autonomy_follow_up_entries(item)
 
@@ -3271,12 +3291,13 @@ defmodule HydraXWeb.HealthLive do
       count = autonomy_follow_up_count(item)
       strategy = autonomy_follow_up_strategy_detail(item)
       priority = autonomy_follow_up_priority_detail(item)
+      selection = autonomy_follow_up_selection_detail(item)
       alternatives = autonomy_follow_up_alternative_detail(item)
       additional = autonomy_follow_up_additional_detail(item)
 
       [
         "replan queued #{count}",
-        [strategy, priority, alternatives, additional]
+        [strategy, priority, selection, alternatives, additional]
         |> Enum.reject(&is_nil_or_empty/1)
         |> case do
           [] -> nil

@@ -2118,6 +2118,7 @@ defmodule HydraXWeb.AgentsLive do
         count = follow_up_queue_count(work_item)
         strategy = follow_up_queue_strategy_detail(work_item)
         priority = follow_up_queue_priority_detail(work_item)
+        selection = follow_up_queue_selection_detail(work_item)
         alternatives = follow_up_queue_alternative_detail(work_item)
         additional = follow_up_queue_additional_detail(work_item)
 
@@ -2125,7 +2126,7 @@ defmodule HydraXWeb.AgentsLive do
           "replan" ->
             [
               "replan follow-up queued #{count}",
-              [strategy, priority, alternatives, additional]
+              [strategy, priority, selection, alternatives, additional]
               |> Enum.reject(&(&1 in [nil, ""]))
               |> case do
                 [] -> nil
@@ -2572,6 +2573,27 @@ defmodule HydraXWeb.AgentsLive do
     end
   end
 
+  defp follow_up_queue_selection_detail(work_item) do
+    case follow_up_summary_entries(work_item) do
+      [%{} = entry | _] ->
+        cond do
+          is_binary(Map.get(entry, "deescalated_from")) and
+              Map.get(entry, "deescalated_from") != "" ->
+            "de-escalated from #{humanize_follow_up_strategy(Map.get(entry, "deescalated_from"))}"
+
+          is_binary(Map.get(entry, "selection_reason")) and
+              Map.get(entry, "selection_reason") != "" ->
+            Map.get(entry, "selection_reason")
+
+          true ->
+            nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
   defp follow_up_queue_additional_detail(work_item) do
     entries = follow_up_summary_entries(work_item)
 
@@ -2731,12 +2753,13 @@ defmodule HydraXWeb.AgentsLive do
       count = follow_up_queue_count(work_item)
       strategy = follow_up_queue_strategy_detail(work_item)
       priority = follow_up_queue_priority_detail(work_item)
+      selection = follow_up_queue_selection_detail(work_item)
       alternatives = follow_up_queue_alternative_detail(work_item)
       additional = follow_up_queue_additional_detail(work_item)
 
       [
         "replan queued #{count}",
-        [strategy, priority, alternatives, additional]
+        [strategy, priority, selection, alternatives, additional]
         |> Enum.reject(&(&1 in [nil, ""]))
         |> case do
           [] -> nil

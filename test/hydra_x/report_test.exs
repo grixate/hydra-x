@@ -987,6 +987,9 @@ defmodule HydraX.ReportTest do
                 "type" => "replan",
                 "strategy" => "operator_guided_replan",
                 "summary" => "Operator-guided recovery",
+                "deescalated_from" => "operator_guided_replan",
+                "selection_reason" =>
+                  "de-escalated from Operator-guided recovery under existing planner recovery pressure (1 existing)",
                 "alternative_strategies" => ["narrow_delegate_batch"],
                 "alternative_summaries" => ["Narrowed delegation batch"],
                 "priority_boost" => 3
@@ -1138,6 +1141,9 @@ defmodule HydraX.ReportTest do
                 "type" => "replan",
                 "strategy" => "operator_guided_replan",
                 "summary" => "Operator-guided recovery",
+                "deescalated_from" => "operator_guided_replan",
+                "selection_reason" =>
+                  "de-escalated from Operator-guided recovery under existing planner recovery pressure (1 existing)",
                 "alternative_strategies" => ["narrow_delegate_batch"],
                 "alternative_summaries" => ["Narrowed delegation batch"],
                 "priority_boost" => 3
@@ -1200,7 +1206,7 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "Required warnings:"
 
     assert File.read!(export.markdown_path) =~
-             "replan queued 2 (Operator-guided recovery; priority +3; alternatives Narrowed delegation batch; +1 more: Reviewer-guided recovery)"
+             "replan queued 2 (Operator-guided recovery; priority +3; de-escalated from operator-guided; alternatives Narrowed delegation batch; +1 more: Reviewer-guided recovery)"
 
     work_items_json = Jason.decode!(File.read!(Path.join(export.bundle_dir, "work_items.json")))
 
@@ -1211,6 +1217,9 @@ defmodule HydraX.ReportTest do
              item["goal"] == "Re-plan the constrained publish escalation." and
                follow_up["strategy_key"] == "operator_guided_replan" and
                follow_up["strategy"] == "Operator-guided recovery" and
+               follow_up["deescalated_from"] == "operator_guided_replan" and
+               follow_up["selection_reason"] ==
+                 "de-escalated from Operator-guided recovery under existing planner recovery pressure (1 existing)" and
                follow_up["additional_entries_count"] == 1 and
                follow_up["additional_summaries"] == ["Reviewer-guided recovery"] and
                follow_up["additional_summary_preview"] ==
@@ -1222,6 +1231,9 @@ defmodule HydraX.ReportTest do
                length(entries) == 2 and
                Enum.at(entries, 0)["strategy"] == "operator_guided_replan" and
                Enum.at(entries, 0)["summary"] == "Operator-guided recovery" and
+               Enum.at(entries, 0)["deescalated_from"] == "operator_guided_replan" and
+               Enum.at(entries, 0)["selection_reason"] ==
+                 "de-escalated from Operator-guided recovery under existing planner recovery pressure (1 existing)" and
                Enum.at(entries, 0)["priority_boost"] == 3 and
                Enum.at(entries, 1)["strategy"] == "review_guided_replan" and
                Enum.at(entries, 1)["summary"] == "Reviewer-guided recovery" and
@@ -1259,7 +1271,7 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "publish=queued 1"
 
     assert File.read!(export.markdown_path) =~
-             "publish=replan queued 2 (Operator-guided recovery; priority +3; alternatives Narrowed delegation batch; +1 more: Reviewer-guided recovery)"
+             "publish=replan queued 2 (Operator-guided recovery; priority +3; de-escalated from operator-guided; alternatives Narrowed delegation batch; +1 more: Reviewer-guided recovery)"
 
     assert File.read!(export.markdown_path) =~ "publish=delivered telegram -> ops-room"
     assert File.read!(export.markdown_path) =~ "assignment=report-agent:role_capability_match"

@@ -466,6 +466,9 @@ defmodule HydraXWeb.HealthLiveTest do
                 "type" => "replan",
                 "strategy" => "operator_guided_replan",
                 "summary" => "Operator-guided recovery",
+                "deescalated_from" => "operator_guided_replan",
+                "selection_reason" =>
+                  "de-escalated from Operator-guided recovery under existing planner recovery pressure (1 existing)",
                 "priority_boost" => 3
               },
               %{
@@ -843,6 +846,9 @@ defmodule HydraXWeb.HealthLiveTest do
                 "type" => "replan",
                 "strategy" => "operator_guided_replan",
                 "summary" => "Operator-guided recovery",
+                "deescalated_from" => "operator_guided_replan",
+                "selection_reason" =>
+                  "de-escalated from Operator-guided recovery under existing planner recovery pressure (1 existing)",
                 "alternative_strategies" => ["narrow_delegate_batch"],
                 "alternative_summaries" => ["Narrowed delegation batch"],
                 "priority_boost" => 3
@@ -929,7 +935,7 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "delivery internal"
 
     assert html =~
-             "replan queued 2 (Operator-guided recovery; priority +3; alternatives Narrowed delegation batch; +1 more: Reviewer-guided recovery)"
+             "replan queued 2 (Operator-guided recovery; priority +3; de-escalated from operator-guided; alternatives Narrowed delegation batch; +1 more: Reviewer-guided recovery)"
 
     assert html =~ "operator intervention prepared role_capacity_constrained"
 
