@@ -313,50 +313,80 @@ defmodule Mix.Tasks.HydraX.Work do
 
   defp work_item_follow_up_lines(work_item) do
     summary = get_in(work_item.result_refs || %{}, ["follow_up_summary"]) || %{}
+    entries = follow_up_entries(summary)
 
     types =
-      summary
-      |> Map.get("types", [])
-      |> List.wrap()
+      case entries do
+        [%{} | _] -> Enum.map(entries, &Map.get(&1, "type")) |> Enum.reject(&(&1 in [nil, ""]))
+        _ -> summary |> Map.get("types", []) |> List.wrap()
+      end
 
     strategies =
-      summary
-      |> Map.get("strategies", [])
-      |> List.wrap()
+      case entries do
+        [%{} | _] ->
+          entries |> Enum.map(&Map.get(&1, "strategy")) |> Enum.reject(&(&1 in [nil, ""]))
 
-    summaries =
-      summary
-      |> Map.get("summaries", [])
-      |> List.wrap()
-      |> case do
-        [] ->
+        _ ->
           summary
           |> Map.get("strategies", [])
           |> List.wrap()
-          |> Enum.map(&humanize_follow_up_strategy_summary/1)
+      end
 
-        entries ->
-          entries
+    summaries =
+      case entries do
+        [%{} | _] ->
+          entries |> Enum.map(&Map.get(&1, "summary")) |> Enum.reject(&(&1 in [nil, ""]))
+
+        _ ->
+          summary
+          |> Map.get("summaries", [])
+          |> List.wrap()
+          |> case do
+            [] ->
+              summary
+              |> Map.get("strategies", [])
+              |> List.wrap()
+              |> Enum.map(&humanize_follow_up_strategy_summary/1)
+
+            values ->
+              values
+          end
       end
 
     alternative_strategies =
-      summary
-      |> Map.get("alternative_strategies", [])
-      |> List.wrap()
+      case entries do
+        [%{} = entry | _] ->
+          entry
+          |> Map.get("alternative_strategies", [])
+          |> List.wrap()
 
-    alternative_summaries =
-      summary
-      |> Map.get("alternative_summaries", [])
-      |> List.wrap()
-      |> case do
-        [] ->
+        _ ->
           summary
           |> Map.get("alternative_strategies", [])
           |> List.wrap()
-          |> Enum.map(&humanize_follow_up_strategy_summary/1)
+      end
 
-        entries ->
-          entries
+    alternative_summaries =
+      case entries do
+        [%{} = entry | _] ->
+          entry
+          |> Map.get("alternative_summaries", [])
+          |> List.wrap()
+
+        _ ->
+          summary
+          |> Map.get("alternative_summaries", [])
+          |> List.wrap()
+          |> case do
+            [] ->
+              summary
+              |> Map.get("alternative_strategies", [])
+              |> List.wrap()
+              |> Enum.map(&humanize_follow_up_strategy_summary/1)
+
+            values ->
+              values
+          end
       end
 
     count =
@@ -370,6 +400,7 @@ defmodule Mix.Tasks.HydraX.Work do
     base_lines =
       []
       |> maybe_prepend_follow_up_line("follow_up_count", count)
+      |> maybe_prepend_follow_up_line("follow_up_entries", length(entries))
       |> maybe_prepend_follow_up_line("follow_up_types", Enum.join(types, ","))
       |> maybe_prepend_follow_up_line("follow_up_strategies", Enum.join(strategies, ","))
       |> maybe_prepend_follow_up_line("follow_up_summaries", Enum.join(summaries, ","))
@@ -406,6 +437,31 @@ defmodule Mix.Tasks.HydraX.Work do
           "follow_up_detail\t#{work_item.id}\trecovery_alternative_#{index}\t#{summary}"
         end)
       )
+      |> Kernel.++(
+        entries
+        |> Enum.with_index(1)
+        |> Enum.flat_map(fn {entry, index} ->
+          []
+          |> maybe_append_follow_up_entry_detail(
+            work_item.id,
+            index,
+            "type",
+            Map.get(entry, "type")
+          )
+          |> maybe_append_follow_up_entry_detail(
+            work_item.id,
+            index,
+            "strategy",
+            Map.get(entry, "strategy")
+          )
+          |> maybe_append_follow_up_entry_detail(
+            work_item.id,
+            index,
+            "summary",
+            Map.get(entry, "summary")
+          )
+        end)
+      )
 
     base_lines ++ detail_lines
   end
@@ -418,10 +474,18 @@ defmodule Mix.Tasks.HydraX.Work do
   end
 
   defp follow_up_priority_boosts(summary) do
-    summary
-    |> Map.get("priority_boosts", [])
-    |> List.wrap()
-    |> Enum.filter(&is_integer/1)
+    case follow_up_entries(summary) do
+      [%{} | _] = entries ->
+        entries
+        |> Enum.map(&Map.get(&1, "priority_boost"))
+        |> Enum.filter(&is_integer/1)
+
+      _ ->
+        summary
+        |> Map.get("priority_boosts", [])
+        |> List.wrap()
+        |> Enum.filter(&is_integer/1)
+    end
   end
 
   defp work_item_list_detail(work_item) do
@@ -440,38 +504,67 @@ defmodule Mix.Tasks.HydraX.Work do
   end
 
   defp follow_up_list_detail(work_item) do
-    summary =
-      work_item
-      |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "summaries"]))
-      |> List.wrap()
-      |> case do
-        [] ->
-          work_item
-          |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "strategies"]))
-          |> List.wrap()
-          |> Enum.map(&humanize_follow_up_strategy_summary/1)
+    entries =
+      get_in(work_item.result_refs || %{}, ["follow_up_summary"])
+      |> Kernel.||(%{})
+      |> follow_up_entries()
 
-        entries ->
-          entries
+    summary =
+      case entries do
+        [%{"summary" => value} | _] when is_binary(value) and value != "" ->
+          value
+
+        _ ->
+          work_item
+          |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "summaries"]))
+          |> List.wrap()
+          |> case do
+            [] ->
+              work_item
+              |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "strategies"]))
+              |> List.wrap()
+              |> Enum.map(&humanize_follow_up_strategy_summary/1)
+
+            values ->
+              values
+          end
+          |> List.first()
       end
-      |> List.first()
 
     priority =
-      work_item
-      |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "priority_boosts"]))
-      |> List.wrap()
-      |> Enum.filter(&is_integer/1)
-      |> Enum.max(fn -> nil end)
+      case entries do
+        [%{} | _] ->
+          entries
+          |> Enum.map(&Map.get(&1, "priority_boost"))
+          |> Enum.filter(&is_integer/1)
+          |> Enum.max(fn -> nil end)
+
+        _ ->
+          work_item
+          |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "priority_boosts"]))
+          |> List.wrap()
+          |> Enum.filter(&is_integer/1)
+          |> Enum.max(fn -> nil end)
+      end
       |> case do
         value when is_integer(value) and value > 0 -> "priority +#{value}"
         _ -> nil
       end
 
     alternatives =
-      work_item
-      |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "alternative_summaries"]))
-      |> List.wrap()
-      |> Enum.reject(&(&1 in [nil, ""]))
+      case entries do
+        [%{} = entry | _] ->
+          entry
+          |> Map.get("alternative_summaries", [])
+          |> List.wrap()
+          |> Enum.reject(&(&1 in [nil, ""]))
+
+        _ ->
+          work_item
+          |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "alternative_summaries"]))
+          |> List.wrap()
+          |> Enum.reject(&(&1 in [nil, ""]))
+      end
 
     case {summary, priority, alternatives} do
       {value, nil, []} when is_binary(value) and value != "" ->
@@ -490,6 +583,20 @@ defmodule Mix.Tasks.HydraX.Work do
       _ ->
         nil
     end
+  end
+
+  defp follow_up_entries(summary) do
+    summary
+    |> Map.get("entries", [])
+    |> List.wrap()
+    |> Enum.filter(&is_map/1)
+  end
+
+  defp maybe_append_follow_up_entry_detail(lines, _work_item_id, _index, _label, nil), do: lines
+  defp maybe_append_follow_up_entry_detail(lines, _work_item_id, _index, _label, ""), do: lines
+
+  defp maybe_append_follow_up_entry_detail(lines, work_item_id, index, label, value) do
+    lines ++ ["follow_up_entry\t#{work_item_id}\t#{index}\t#{label}\t#{value}"]
   end
 
   defp derived_recovery_strategy_summary(metadata) do

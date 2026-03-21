@@ -1175,7 +1175,18 @@ defmodule HydraX.ReportTest do
                item["follow_up"]["priority_boost"] == 3 and
                item["follow_up"]["priority_boosts"] == [3] and
                item["follow_up"]["alternatives"] == ["Narrowed delegation batch"] and
-               item["follow_up"]["alternative_strategies"] == ["narrow_delegate_batch"]
+               item["follow_up"]["alternative_strategies"] == ["narrow_delegate_batch"] and
+               item["follow_up"]["entries"] == [
+                 %{
+                   "work_item_id" => nil,
+                   "type" => "replan",
+                   "strategy" => "operator_guided_replan",
+                   "summary" => "Operator-guided recovery",
+                   "alternative_strategies" => ["narrow_delegate_batch"],
+                   "alternative_summaries" => ["Narrowed delegation batch"],
+                   "priority_boost" => 3
+                 }
+               ]
            end)
 
     assert File.read!(export.markdown_path) =~

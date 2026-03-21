@@ -10397,12 +10397,22 @@ defmodule HydraX.Runtime.WorkItems do
       |> Enum.filter(&is_integer/1)
       |> Enum.uniq()
 
+    follow_up_entries =
+      result_refs
+      |> Kernel.||(%{})
+      |> get_in(["follow_up_summary", "entries"])
+      |> List.wrap()
+      |> Enum.filter(&is_map/1)
+      |> Enum.reject(&(Map.get(&1, "work_item_id") == follow_up_work_item.id))
+      |> Kernel.++([follow_up_summary_entry(follow_up_work_item, type)])
+
     follow_up_summary =
       %{
         "count" => length(ids),
         "types" => types,
         "strategies" => strategies,
-        "summaries" => summaries
+        "summaries" => summaries,
+        "entries" => follow_up_entries
       }
       |> maybe_put_follow_up_summary_list("alternative_strategies", alternative_strategies)
       |> maybe_put_follow_up_summary_list("alternative_summaries", alternative_summaries)
@@ -10414,7 +10424,8 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp follow_up_summary_strategy(%WorkItem{} = follow_up_work_item) do
-    get_in(follow_up_work_item.metadata || %{}, ["pressure_follow_up_strategy"]) ||
+    get_in(follow_up_work_item.metadata || %{}, ["preferred_recovery_strategy"]) ||
+      get_in(follow_up_work_item.metadata || %{}, ["pressure_follow_up_strategy"]) ||
       get_in(follow_up_work_item.metadata || %{}, ["task_type"])
   end
 
@@ -10460,6 +10471,24 @@ defmodule HydraX.Runtime.WorkItems do
       _ -> nil
     end
   end
+
+  defp follow_up_summary_entry(%WorkItem{} = follow_up_work_item, type) do
+    %{
+      "work_item_id" => follow_up_work_item.id,
+      "type" => type,
+      "strategy" => follow_up_summary_strategy(follow_up_work_item),
+      "summary" => follow_up_summary_summary(follow_up_work_item),
+      "alternative_strategies" => follow_up_summary_alternative_strategies(follow_up_work_item),
+      "alternative_summaries" => follow_up_summary_alternative_summaries(follow_up_work_item)
+    }
+    |> maybe_put_follow_up_entry_priority(follow_up_summary_priority_boost(follow_up_work_item))
+  end
+
+  defp maybe_put_follow_up_entry_priority(entry, value) when is_integer(value) do
+    Map.put(entry, "priority_boost", value)
+  end
+
+  defp maybe_put_follow_up_entry_priority(entry, _value), do: entry
 
   defp maybe_put_follow_up_summary_list(summary, _key, []), do: summary
   defp maybe_put_follow_up_summary_list(summary, key, values), do: Map.put(summary, key, values)

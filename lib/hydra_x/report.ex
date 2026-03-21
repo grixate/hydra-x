@@ -2549,10 +2549,18 @@ defmodule HydraX.Report do
       get_in(item.result_refs || %{}, ["follow_up_summary", "count"]) ||
         length(List.wrap(get_in(item.result_refs || %{}, ["follow_up_work_item_ids"])))
 
+    entries = follow_up_summary_entries(item)
+
     types =
-      item
-      |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "types"]))
-      |> List.wrap()
+      case entries do
+        [%{"type" => type} | _] when is_binary(type) and type != "" ->
+          Enum.map(entries, &Map.get(&1, "type"))
+
+        _ ->
+          item
+          |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "types"]))
+          |> List.wrap()
+      end
 
     type =
       cond do
@@ -2564,31 +2572,44 @@ defmodule HydraX.Report do
     %{
       type: type,
       count: count,
+      entries: entries,
       strategy_key:
-        item
-        |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "strategies"]))
-        |> List.wrap()
-        |> List.first(),
-      strategy:
-        item
-        |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "summaries"]))
-        |> List.wrap()
+        entries
+        |> List.first()
         |> case do
-          [] ->
-            item
-            |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "strategies"]))
-            |> List.wrap()
-            |> List.first()
-            |> case do
-              value when is_binary(value) -> humanize_follow_up_strategy_summary(value)
-              _ -> nil
-            end
-            |> List.wrap()
+          %{"strategy" => value} when is_binary(value) and value != "" -> value
+          _ -> nil
+        end ||
+          item
+          |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "strategies"]))
+          |> List.wrap()
+          |> List.first(),
+      strategy:
+        entries
+        |> List.first()
+        |> case do
+          %{"summary" => value} when is_binary(value) and value != "" -> value
+          _ -> nil
+        end ||
+          item
+          |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "summaries"]))
+          |> List.wrap()
+          |> case do
+            [] ->
+              item
+              |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "strategies"]))
+              |> List.wrap()
+              |> List.first()
+              |> case do
+                value when is_binary(value) -> humanize_follow_up_strategy_summary(value)
+                _ -> nil
+              end
+              |> List.wrap()
 
-          entries ->
-            entries
-        end
-        |> List.first() ||
+            values ->
+              values
+          end
+          |> List.first() ||
           item
           |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "strategies"]))
           |> List.wrap()
@@ -2598,40 +2619,180 @@ defmodule HydraX.Report do
             _ -> nil
           end,
       alternatives:
-        item
-        |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "alternative_summaries"]))
-        |> List.wrap()
-        |> case do
-          [] ->
+        case entries do
+          [%{} = entry | _] ->
+            entry
+            |> Map.get("alternative_summaries", [])
+            |> List.wrap()
+            |> Enum.reject(&is_nil_or_empty/1)
+
+          _ ->
+            item
+            |> then(
+              &get_in(&1.result_refs || %{}, ["follow_up_summary", "alternative_summaries"])
+            )
+            |> List.wrap()
+            |> case do
+              [] ->
+                item
+                |> then(
+                  &get_in(&1.result_refs || %{}, ["follow_up_summary", "alternative_strategies"])
+                )
+                |> List.wrap()
+                |> Enum.map(&humanize_follow_up_strategy_summary/1)
+
+              values ->
+                values
+            end
+            |> Enum.reject(&is_nil_or_empty/1)
+        end,
+      alternative_strategies:
+        case entries do
+          [%{} = entry | _] ->
+            entry
+            |> Map.get("alternative_strategies", [])
+            |> List.wrap()
+            |> Enum.reject(&is_nil_or_empty/1)
+
+          _ ->
             item
             |> then(
               &get_in(&1.result_refs || %{}, ["follow_up_summary", "alternative_strategies"])
             )
             |> List.wrap()
-            |> Enum.map(&humanize_follow_up_strategy_summary/1)
-
-          entries ->
-            entries
-        end
-        |> Enum.reject(&is_nil_or_empty/1),
-      alternative_strategies:
-        item
-        |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "alternative_strategies"]))
-        |> List.wrap()
-        |> Enum.reject(&is_nil_or_empty/1),
+            |> Enum.reject(&is_nil_or_empty/1)
+        end,
       priority_boost:
-        item
-        |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "priority_boosts"]))
-        |> List.wrap()
-        |> Enum.filter(&is_integer/1)
-        |> Enum.max(fn -> nil end),
+        case entries do
+          [%{} = entry | _] ->
+            case Map.get(entry, "priority_boost") do
+              value when is_integer(value) -> value
+              _ -> nil
+            end
+
+          _ ->
+            item
+            |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "priority_boosts"]))
+            |> List.wrap()
+            |> Enum.filter(&is_integer/1)
+            |> Enum.max(fn -> nil end)
+        end,
       priority_boosts:
-        item
-        |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "priority_boosts"]))
-        |> List.wrap()
-        |> Enum.filter(&is_integer/1)
+        case entries do
+          [%{} | _] ->
+            entries
+            |> Enum.map(&Map.get(&1, "priority_boost"))
+            |> Enum.filter(&is_integer/1)
+
+          _ ->
+            item
+            |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "priority_boosts"]))
+            |> List.wrap()
+            |> Enum.filter(&is_integer/1)
+        end
     }
   end
+
+  defp follow_up_summary_entries(item) do
+    summary = get_in(item.result_refs || %{}, ["follow_up_summary"]) || %{}
+
+    case summary |> Map.get("entries", []) |> List.wrap() |> Enum.filter(&is_map/1) do
+      [] ->
+        build_follow_up_summary_entries(summary)
+
+      entries ->
+        Enum.map(entries, &normalize_follow_up_summary_entry/1)
+    end
+  end
+
+  defp build_follow_up_summary_entries(summary) do
+    types = summary |> Map.get("types", []) |> List.wrap()
+    strategies = summary |> Map.get("strategies", []) |> List.wrap()
+
+    summaries =
+      summary
+      |> Map.get("summaries", [])
+      |> List.wrap()
+      |> case do
+        [] -> Enum.map(strategies, &humanize_follow_up_strategy_summary/1)
+        values -> values
+      end
+
+    alternative_strategies = summary |> Map.get("alternative_strategies", []) |> List.wrap()
+
+    alternative_summaries =
+      summary
+      |> Map.get("alternative_summaries", [])
+      |> List.wrap()
+      |> case do
+        [] -> Enum.map(alternative_strategies, &humanize_follow_up_strategy_summary/1)
+        values -> values
+      end
+
+    priority_boosts =
+      summary
+      |> Map.get("priority_boosts", [])
+      |> List.wrap()
+      |> Enum.filter(&is_integer/1)
+
+    max_len =
+      [length(types), length(strategies), length(summaries), max(length(priority_boosts), 1)]
+      |> Enum.max(fn -> 0 end)
+
+    if max_len <= 0 do
+      []
+    else
+      for index <- 0..(max_len - 1) do
+        %{
+          "type" => Enum.at(types, index) || List.first(types),
+          "strategy" => Enum.at(strategies, index) || List.first(strategies),
+          "summary" => Enum.at(summaries, index) || List.first(summaries),
+          "alternative_strategies" => alternative_strategies,
+          "alternative_summaries" => alternative_summaries
+        }
+        |> maybe_put_follow_up_entry_export_priority(
+          Enum.at(priority_boosts, index) || List.first(priority_boosts)
+        )
+        |> normalize_follow_up_summary_entry()
+      end
+    end
+  end
+
+  defp normalize_follow_up_summary_entry(entry) do
+    %{
+      "work_item_id" => Map.get(entry, "work_item_id"),
+      "type" => Map.get(entry, "type"),
+      "strategy" => Map.get(entry, "strategy"),
+      "summary" => Map.get(entry, "summary"),
+      "alternative_strategies" =>
+        entry
+        |> Map.get("alternative_strategies", [])
+        |> List.wrap()
+        |> Enum.reject(&is_nil_or_empty/1),
+      "alternative_summaries" =>
+        entry
+        |> Map.get("alternative_summaries", [])
+        |> List.wrap()
+        |> case do
+          [] ->
+            entry
+            |> Map.get("alternative_strategies", [])
+            |> List.wrap()
+            |> Enum.map(&humanize_follow_up_strategy_summary/1)
+
+          values ->
+            values
+        end
+        |> Enum.reject(&is_nil_or_empty/1)
+    }
+    |> maybe_put_follow_up_entry_export_priority(Map.get(entry, "priority_boost"))
+  end
+
+  defp maybe_put_follow_up_entry_export_priority(entry, value) when is_integer(value) do
+    Map.put(entry, "priority_boost", value)
+  end
+
+  defp maybe_put_follow_up_entry_export_priority(entry, _value), do: entry
 
   defp humanize_follow_up_strategy("review_guided_replan"), do: "review-guided"
   defp humanize_follow_up_strategy("operator_guided_replan"), do: "operator-guided"

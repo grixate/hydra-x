@@ -4259,7 +4259,7 @@ defmodule HydraX.RuntimeTest do
 
     assert Enum.any?(delegated_context, fn memory ->
              "follow-up strategy" in (memory["reasons"] || []) and
-               memory["content"] == "Recovery strategy: constraint_replan"
+               memory["content"] == "Recovery strategy: narrowed delegation batch"
            end)
   end
 
@@ -4359,6 +4359,18 @@ defmodule HydraX.RuntimeTest do
 
     assert get_in(parent.result_refs || %{}, ["follow_up_summary", "alternative_summaries"]) == [
              "Narrowed delegation batch"
+           ]
+
+    assert get_in(parent.result_refs || %{}, ["follow_up_summary", "entries"]) == [
+             %{
+               "work_item_id" => replan_item.id,
+               "type" => "replan",
+               "strategy" => "operator_guided_replan",
+               "summary" => "Operator-guided recovery with narrowed delegation fallback",
+               "alternative_strategies" => ["narrow_delegate_batch"],
+               "alternative_summaries" => ["Narrowed delegation batch"],
+               "priority_boost" => 3
+             }
            ]
   end
 

@@ -27,6 +27,17 @@ defmodule HydraX.WorkTaskTest do
             "count" => 1,
             "types" => ["replan"],
             "strategies" => ["operator_guided_replan"],
+            "entries" => [
+              %{
+                "work_item_id" => 91_001,
+                "type" => "replan",
+                "strategy" => "operator_guided_replan",
+                "summary" => "Operator-guided recovery",
+                "alternative_strategies" => ["narrow_delegate_batch"],
+                "alternative_summaries" => ["Narrowed delegation batch"],
+                "priority_boost" => 3
+              }
+            ],
             "priority_boosts" => [3],
             "alternative_strategies" => ["narrow_delegate_batch"]
           }
@@ -117,6 +128,7 @@ defmodule HydraX.WorkTaskTest do
 
     assert show_output =~ "recovery_strategy_priority_boost=3"
     assert show_output =~ "follow_up_count=1"
+    assert show_output =~ "follow_up_entries=1"
     assert show_output =~ "follow_up_types=replan"
     assert show_output =~ "follow_up_strategies=operator_guided_replan"
     assert show_output =~ "follow_up_summaries=Operator-guided recovery"
@@ -132,6 +144,12 @@ defmodule HydraX.WorkTaskTest do
 
     assert show_output =~
              "follow_up_detail\t#{work_item.id}\trecovery_alternative_1\tNarrowed delegation batch"
+
+    assert show_output =~
+             "follow_up_entry\t#{work_item.id}\t1\tstrategy\toperator_guided_replan"
+
+    assert show_output =~
+             "follow_up_entry\t#{work_item.id}\t1\tsummary\tOperator-guided recovery"
 
     assert show_output =~ "artifact\tcode_change_set"
     assert show_output =~ "artifact_detail"

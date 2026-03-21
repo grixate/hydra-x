@@ -2940,11 +2940,17 @@ defmodule HydraXWeb.HealthLive do
   end
 
   defp autonomy_follow_up_type(item) do
-    item
-    |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "types"]))
-    |> List.wrap()
-    |> List.first()
-    |> Kernel.||("publish")
+    case autonomy_follow_up_entries(item) do
+      [%{"type" => type} | _] when is_binary(type) and type != "" ->
+        type
+
+      _ ->
+        item
+        |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "types"]))
+        |> List.wrap()
+        |> List.first()
+        |> Kernel.||("publish")
+    end
   end
 
   defp autonomy_follow_up_count(item) do
@@ -2957,25 +2963,31 @@ defmodule HydraXWeb.HealthLive do
 
   defp autonomy_follow_up_strategy_detail(item) do
     summary =
-      item
-      |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "summaries"]))
-      |> List.wrap()
-      |> case do
-        [] ->
-          item
-          |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "strategies"]))
-          |> List.wrap()
-          |> List.first()
-          |> case do
-            value when is_binary(value) -> humanize_follow_up_strategy_summary(value)
-            _ -> nil
-          end
-          |> List.wrap()
+      case autonomy_follow_up_entries(item) do
+        [%{"summary" => value} | _] when is_binary(value) and value != "" ->
+          value
 
-        entries ->
-          entries
+        _ ->
+          item
+          |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "summaries"]))
+          |> List.wrap()
+          |> case do
+            [] ->
+              item
+              |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "strategies"]))
+              |> List.wrap()
+              |> List.first()
+              |> case do
+                value when is_binary(value) -> humanize_follow_up_strategy_summary(value)
+                _ -> nil
+              end
+              |> List.wrap()
+
+            values ->
+              values
+          end
+          |> List.first()
       end
-      |> List.first()
 
     if is_binary(summary) and summary != "" do
       summary
@@ -2989,28 +3001,45 @@ defmodule HydraXWeb.HealthLive do
   end
 
   defp autonomy_follow_up_strategy(item) do
-    item
-    |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "strategies"]))
-    |> List.wrap()
-    |> List.first()
+    case autonomy_follow_up_entries(item) do
+      [%{"strategy" => value} | _] when is_binary(value) and value != "" ->
+        value
+
+      _ ->
+        item
+        |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "strategies"]))
+        |> List.wrap()
+        |> List.first()
+    end
   end
 
   defp autonomy_follow_up_alternative_detail(item) do
     alternatives =
-      item
-      |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "alternative_summaries"]))
-      |> List.wrap()
-      |> case do
-        [] ->
-          item
-          |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "alternative_strategies"]))
+      case autonomy_follow_up_entries(item) do
+        [%{} = entry | _] ->
+          entry
+          |> Map.get("alternative_summaries", [])
           |> List.wrap()
-          |> Enum.map(&humanize_follow_up_strategy_summary/1)
+          |> Enum.reject(&is_nil_or_empty/1)
 
-        entries ->
-          entries
+        _ ->
+          item
+          |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "alternative_summaries"]))
+          |> List.wrap()
+          |> case do
+            [] ->
+              item
+              |> then(
+                &get_in(&1.result_refs || %{}, ["follow_up_summary", "alternative_strategies"])
+              )
+              |> List.wrap()
+              |> Enum.map(&humanize_follow_up_strategy_summary/1)
+
+            values ->
+              values
+          end
+          |> Enum.reject(&is_nil_or_empty/1)
       end
-      |> Enum.reject(&is_nil_or_empty/1)
 
     if alternatives == [] do
       nil
@@ -3021,14 +3050,31 @@ defmodule HydraXWeb.HealthLive do
 
   defp autonomy_follow_up_priority_detail(item) do
     boosts =
-      item
-      |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "priority_boosts"]))
-      |> List.wrap()
-      |> Enum.filter(&is_integer/1)
+      case autonomy_follow_up_entries(item) do
+        [%{} | _] = entries ->
+          entries
+          |> Enum.map(&Map.get(&1, "priority_boost"))
+          |> Enum.filter(&is_integer/1)
+
+        _ ->
+          item
+          |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "priority_boosts"]))
+          |> List.wrap()
+          |> Enum.filter(&is_integer/1)
+      end
 
     case Enum.max(boosts, fn -> nil end) do
       value when is_integer(value) and value > 0 -> "priority +#{value}"
       _ -> nil
+    end
+  end
+
+  defp autonomy_follow_up_entries(item) do
+    summary = get_in(item.result_refs || %{}, ["follow_up_summary"]) || %{}
+
+    case summary |> Map.get("entries", []) |> List.wrap() |> Enum.filter(&is_map/1) do
+      [] -> []
+      entries -> entries
     end
   end
 

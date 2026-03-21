@@ -2368,11 +2368,17 @@ defmodule HydraXWeb.AgentsLive do
   defp humanize_assignment_strategy(_strategy), do: "assignment"
 
   defp follow_up_queue_type(work_item) do
-    work_item
-    |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "types"]))
-    |> List.wrap()
-    |> List.first()
-    |> Kernel.||("publish")
+    case follow_up_summary_entries(work_item) do
+      [%{"type" => type} | _] when is_binary(type) and type != "" ->
+        type
+
+      _ ->
+        work_item
+        |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "types"]))
+        |> List.wrap()
+        |> List.first()
+        |> Kernel.||("publish")
+    end
   end
 
   defp follow_up_queue_count(work_item) do
@@ -2385,25 +2391,31 @@ defmodule HydraXWeb.AgentsLive do
 
   defp follow_up_queue_strategy_detail(work_item) do
     summary =
-      work_item
-      |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "summaries"]))
-      |> List.wrap()
-      |> case do
-        [] ->
-          work_item
-          |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "strategies"]))
-          |> List.wrap()
-          |> List.first()
-          |> case do
-            value when is_binary(value) -> humanize_follow_up_strategy_summary(value)
-            _ -> nil
-          end
-          |> List.wrap()
+      case follow_up_summary_entries(work_item) do
+        [%{"summary" => value} | _] when is_binary(value) and value != "" ->
+          value
 
-        entries ->
-          entries
+        _ ->
+          work_item
+          |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "summaries"]))
+          |> List.wrap()
+          |> case do
+            [] ->
+              work_item
+              |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "strategies"]))
+              |> List.wrap()
+              |> List.first()
+              |> case do
+                value when is_binary(value) -> humanize_follow_up_strategy_summary(value)
+                _ -> nil
+              end
+              |> List.wrap()
+
+            values ->
+              values
+          end
+          |> List.first()
       end
-      |> List.first()
 
     if is_binary(summary) and summary != "" do
       summary
@@ -2417,28 +2429,45 @@ defmodule HydraXWeb.AgentsLive do
   end
 
   defp follow_up_queue_strategy(work_item) do
-    work_item
-    |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "strategies"]))
-    |> List.wrap()
-    |> List.first()
+    case follow_up_summary_entries(work_item) do
+      [%{"strategy" => value} | _] when is_binary(value) and value != "" ->
+        value
+
+      _ ->
+        work_item
+        |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "strategies"]))
+        |> List.wrap()
+        |> List.first()
+    end
   end
 
   defp follow_up_queue_alternative_detail(work_item) do
     alternatives =
-      work_item
-      |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "alternative_summaries"]))
-      |> List.wrap()
-      |> case do
-        [] ->
-          work_item
-          |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "alternative_strategies"]))
+      case follow_up_summary_entries(work_item) do
+        [%{} = entry | _] ->
+          entry
+          |> Map.get("alternative_summaries", [])
           |> List.wrap()
-          |> Enum.map(&humanize_follow_up_strategy_summary/1)
+          |> Enum.reject(&(&1 in [nil, ""]))
 
-        entries ->
-          entries
+        _ ->
+          work_item
+          |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "alternative_summaries"]))
+          |> List.wrap()
+          |> case do
+            [] ->
+              work_item
+              |> then(
+                &get_in(&1.result_refs || %{}, ["follow_up_summary", "alternative_strategies"])
+              )
+              |> List.wrap()
+              |> Enum.map(&humanize_follow_up_strategy_summary/1)
+
+            values ->
+              values
+          end
+          |> Enum.reject(&(&1 in [nil, ""]))
       end
-      |> Enum.reject(&(&1 in [nil, ""]))
 
     if alternatives == [] do
       nil
@@ -2449,14 +2478,31 @@ defmodule HydraXWeb.AgentsLive do
 
   defp follow_up_queue_priority_detail(work_item) do
     boosts =
-      work_item
-      |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "priority_boosts"]))
-      |> List.wrap()
-      |> Enum.filter(&is_integer/1)
+      case follow_up_summary_entries(work_item) do
+        [%{} | _] = entries ->
+          entries
+          |> Enum.map(&Map.get(&1, "priority_boost"))
+          |> Enum.filter(&is_integer/1)
+
+        _ ->
+          work_item
+          |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "priority_boosts"]))
+          |> List.wrap()
+          |> Enum.filter(&is_integer/1)
+      end
 
     case Enum.max(boosts, fn -> nil end) do
       value when is_integer(value) and value > 0 -> "priority +#{value}"
       _ -> nil
+    end
+  end
+
+  defp follow_up_summary_entries(work_item) do
+    summary = get_in(work_item.result_refs || %{}, ["follow_up_summary"]) || %{}
+
+    case summary |> Map.get("entries", []) |> List.wrap() |> Enum.filter(&is_map/1) do
+      [] -> []
+      entries -> entries
     end
   end
 
