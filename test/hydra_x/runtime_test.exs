@@ -8099,6 +8099,11 @@ defmodule HydraX.RuntimeTest do
     assert status.delegation_medium_pressure_batch_count >= 0
     assert status.delegation_repeatedly_deferred_batch_count >= 0
     assert status.delegation_required_role_gap_count >= 1
+    assert status.delegation_intervention_batch_count >= 1
+    assert status.delegation_operator_guided_batch_count >= 1
+    assert status.delegation_review_guided_batch_count == 0
+    assert status.delegation_request_review_batch_count == 0
+    assert status.delegation_dominant_recovery_batches == %{"operator_guided_replan" => 1}
 
     assert Enum.any?(
              status.role_queue_backlog,

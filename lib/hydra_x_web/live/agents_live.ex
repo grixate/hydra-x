@@ -1579,6 +1579,7 @@ defmodule HydraXWeb.AgentsLive do
       delegation_supervision_budget_label(summary),
       delegation_supervision_batch_budget_label(summary),
       delegation_supervision_urgent_batches_label(summary),
+      delegation_supervision_intervention_label(summary),
       delegation_supervision_dominant_recovery_label(summary),
       delegation_supervision_recovery_mix_label(summary),
       delegation_supervision_missing_roles_label(summary),
@@ -1644,6 +1645,16 @@ defmodule HydraXWeb.AgentsLive do
   end
 
   defp delegation_supervision_urgent_batches_label(_summary), do: nil
+
+  defp delegation_supervision_intervention_label(summary) when is_map(summary) do
+    strategy = summary[:dominant_recovery_strategy]
+
+    if strategy in ["operator_guided_replan", "review_guided_replan", "request_review"] do
+      "intervention-heavy"
+    end
+  end
+
+  defp delegation_supervision_intervention_label(_summary), do: nil
 
   defp delegation_supervision_dominant_recovery_label(summary) when is_map(summary) do
     strategy = summary[:dominant_recovery_strategy]

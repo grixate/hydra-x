@@ -689,6 +689,9 @@ defmodule HydraX.Runtime.WorkItems do
     delegation_supervision =
       build_delegation_supervision(all_work_items, autonomy_agents, worker_pressure)
 
+    dominant_recovery_batches =
+      delegation_dominant_recovery_batches(delegation_supervision)
+
     delegation_urgent_batch_count =
       Enum.reduce(delegation_supervision, 0, fn entry, acc ->
         acc + (entry.urgent_batches || 0)
@@ -713,6 +716,19 @@ defmodule HydraX.Runtime.WorkItems do
       Enum.reduce(delegation_supervision, 0, fn entry, acc ->
         acc + (entry.repeatedly_deferred_batches || 0)
       end)
+
+    delegation_operator_guided_batch_count =
+      Map.get(dominant_recovery_batches, "operator_guided_replan", 0)
+
+    delegation_review_guided_batch_count =
+      Map.get(dominant_recovery_batches, "review_guided_replan", 0)
+
+    delegation_request_review_batch_count =
+      Map.get(dominant_recovery_batches, "request_review", 0)
+
+    delegation_intervention_batch_count =
+      delegation_operator_guided_batch_count +
+        delegation_review_guided_batch_count + delegation_request_review_batch_count
 
     capability_drifts =
       autonomy_agents
@@ -757,6 +773,11 @@ defmodule HydraX.Runtime.WorkItems do
       delegation_high_pressure_batch_count: delegation_high_pressure_batch_count,
       delegation_medium_pressure_batch_count: delegation_medium_pressure_batch_count,
       delegation_repeatedly_deferred_batch_count: delegation_repeatedly_deferred_batch_count,
+      delegation_dominant_recovery_batches: dominant_recovery_batches,
+      delegation_operator_guided_batch_count: delegation_operator_guided_batch_count,
+      delegation_review_guided_batch_count: delegation_review_guided_batch_count,
+      delegation_request_review_batch_count: delegation_request_review_batch_count,
+      delegation_intervention_batch_count: delegation_intervention_batch_count,
       autonomy_agent_count: length(autonomy_agents),
       active_roles: autonomy_agents |> Enum.map(& &1.role) |> Enum.frequencies(),
       role_queue_backlog: role_queue_backlog,
@@ -1059,6 +1080,21 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp aggregate_follow_up_recovery_mix(_entries), do: %{}
+
+  defp delegation_dominant_recovery_batches(entries) when is_list(entries) do
+    Enum.reduce(entries, %{}, fn entry, acc ->
+      strategy = entry[:dominant_recovery_strategy] || entry["dominant_recovery_strategy"]
+      count = entry[:active_batches] || entry["active_batches"] || 0
+
+      if is_binary(strategy) and strategy != "" and count > 0 do
+        Map.update(acc, strategy, count, &(&1 + count))
+      else
+        acc
+      end
+    end)
+  end
+
+  defp delegation_dominant_recovery_batches(_entries), do: %{}
 
   defp dominant_follow_up_recovery_strategy(mix) when is_map(mix) do
     mix

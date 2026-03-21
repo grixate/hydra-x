@@ -1346,6 +1346,11 @@ defmodule HydraXWeb.HealthLive do
               {@autonomy_status.delegation_medium_pressure_batch_count || 0} · repeat
               deferrals {@autonomy_status.delegation_repeatedly_deferred_batch_count || 0}
             </p>
+            <p class="mt-1 text-xs text-[var(--hx-mute)]">
+              intervention batches {@autonomy_status.delegation_intervention_batch_count || 0} ·
+              operator-guided {@autonomy_status.delegation_operator_guided_batch_count || 0} ·
+              reviewer-guided {@autonomy_status.delegation_review_guided_batch_count || 0}
+            </p>
           </article>
         </div>
         <div class="mt-4 grid gap-3 lg:grid-cols-2">
@@ -1538,6 +1543,9 @@ defmodule HydraXWeb.HealthLive do
                   </span>
                   <span :if={autonomy_delegation_dominant_recovery_label(entry)}>
                     {" "}· {autonomy_delegation_dominant_recovery_label(entry)}
+                  </span>
+                  <span :if={autonomy_delegation_intervention_label(entry)}>
+                    {" "}· {autonomy_delegation_intervention_label(entry)}
                   </span>
                   <span :if={autonomy_delegation_recovery_mix_label(entry)}>
                     {" "}· {autonomy_delegation_recovery_mix_label(entry)}
@@ -2759,6 +2767,16 @@ defmodule HydraXWeb.HealthLive do
   end
 
   defp autonomy_delegation_dominant_recovery_label(_entry), do: nil
+
+  defp autonomy_delegation_intervention_label(entry) when is_map(entry) do
+    strategy = entry[:dominant_recovery_strategy] || entry["dominant_recovery_strategy"]
+
+    if strategy in ["operator_guided_replan", "review_guided_replan", "request_review"] do
+      "intervention-heavy"
+    end
+  end
+
+  defp autonomy_delegation_intervention_label(_entry), do: nil
 
   defp autonomy_delegation_recovery_mix_label(entry) when is_map(entry) do
     case entry[:recovery_mix] || entry["recovery_mix"] || %{} do
