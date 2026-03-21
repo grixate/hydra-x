@@ -4488,6 +4488,186 @@ defmodule HydraX.RuntimeTest do
            ]
   end
 
+  test "completed planner follow-up entries use entry priority to guide future delegation context" do
+    planner =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, planner} = Runtime.save_agent(planner, %{"role" => "planner"})
+
+    researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, _researcher} = Runtime.save_agent(researcher, %{"role" => "researcher"})
+
+    {:ok, _completed_parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Recover the delegated publish plan with guided review context.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "status" => "completed",
+        "priority" => 8,
+        "result_refs" => %{
+          "follow_up_summary" => %{
+            "count" => 2,
+            "types" => ["replan"],
+            "strategies" => ["operator_guided_replan", "review_guided_replan"],
+            "entries" => [
+              %{
+                "work_item_id" => 91_001,
+                "type" => "replan",
+                "strategy" => "operator_guided_replan",
+                "summary" => "Operator-guided recovery",
+                "priority_boost" => 1
+              },
+              %{
+                "work_item_id" => 91_002,
+                "type" => "replan",
+                "strategy" => "review_guided_replan",
+                "summary" => "Reviewer-guided recovery",
+                "alternative_strategies" => ["operator_guided_replan"],
+                "alternative_summaries" => ["Operator-guided recovery"],
+                "priority_boost" => 3
+              }
+            ]
+          }
+        }
+      })
+
+    {:ok, follow_up_parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Recover the delegated publish plan with guided review context.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "execution_mode" => "delegate",
+        "priority" => 7,
+        "metadata" => %{"delegate_role" => "researcher"}
+      })
+
+    assert {:ok, follow_up_summary} = Runtime.run_autonomy_cycle(planner.id)
+    assert follow_up_summary.action == "delegated"
+
+    follow_up_parent = Runtime.get_work_item!(follow_up_parent.id)
+    [child_id] = follow_up_parent.result_refs["child_work_item_ids"]
+    child = Runtime.get_work_item!(child_id)
+
+    assert child.review_required == true
+
+    assert get_in(child.metadata || %{}, ["preferred_recovery_strategy"]) ==
+             "review_guided_replan"
+
+    assert get_in(child.metadata || %{}, ["recovery_strategy_behavior"]) ==
+             "review_after_execution"
+
+    assert get_in(child.metadata || %{}, ["recovery_strategy_alternatives"]) == [
+             "operator_guided_replan"
+           ]
+
+    assert get_in(
+             child.metadata || %{},
+             ["recovery_strategy_alternative_summaries"]
+           ) == ["Operator-guided recovery"]
+  end
+
+  test "intervention pressure counts selected queued follow-up entries instead of fallback strategies" do
+    planner =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, planner} = Runtime.save_agent(planner, %{"role" => "planner"})
+
+    researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, researcher} = Runtime.save_agent(researcher, %{"role" => "researcher"})
+
+    {:ok, _pressure_parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Keep a reviewer-guided delegation tree open.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "status" => "blocked",
+        "execution_mode" => "delegate",
+        "priority" => 10,
+        "result_refs" => %{
+          "follow_up_summary" => %{
+            "count" => 1,
+            "types" => ["replan"],
+            "strategies" => ["operator_guided_replan", "review_guided_replan"],
+            "entries" => [
+              %{
+                "work_item_id" => 92_001,
+                "type" => "replan",
+                "strategy" => "review_guided_replan",
+                "summary" => "Reviewer-guided recovery",
+                "alternative_strategies" => ["operator_guided_replan"],
+                "alternative_summaries" => ["Operator-guided recovery"],
+                "priority_boost" => 3
+              }
+            ]
+          }
+        }
+      })
+
+    {:ok, parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Recover a constrained branch without unnecessary de-escalation.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "execution_mode" => "delegate",
+        "priority" => 7,
+        "metadata" => %{"delegate_role" => "researcher"},
+        "budget" => %{"token_budget" => 5}
+      })
+
+    assert {:ok, planner_summary} = Runtime.run_autonomy_cycle(planner.id)
+    assert planner_summary.action == "delegated"
+
+    parent = Runtime.get_work_item!(parent.id)
+    [child_id] = parent.result_refs["child_work_item_ids"]
+    child = Runtime.get_work_item!(child_id)
+
+    {:ok, _usage} =
+      Budget.record_usage(researcher.id, nil,
+        tokens_in: 4,
+        tokens_out: 2,
+        metadata: %{purpose: "autonomy_research", work_item_id: child.id}
+      )
+
+    assert {:ok, researcher_summary} = Runtime.run_autonomy_cycle(researcher.id)
+    assert researcher_summary.action == "policy_blocked"
+
+    parent = Runtime.get_work_item!(parent.id)
+
+    {:ok, _parent} =
+      Runtime.save_work_item(parent, %{
+        "result_refs" =>
+          (parent.result_refs || %{})
+          |> Map.put("follow_up_summary", %{
+            "count" => 1,
+            "types" => ["replan"],
+            "strategies" => ["operator_guided_replan", "review_guided_replan"]
+          })
+      })
+
+    assert {:ok, finalize_summary} = Runtime.run_autonomy_cycle(planner.id)
+    assert finalize_summary.action == "finalized_blocked_parent"
+
+    replan_item = Runtime.get_work_item!(finalize_summary.follow_up_work_item.id)
+
+    assert get_in(replan_item.metadata || %{}, ["preferred_recovery_strategy"]) ==
+             "operator_guided_replan"
+
+    assert get_in(replan_item.metadata || %{}, ["recovery_strategy_deescalated_from"]) == nil
+    assert get_in(replan_item.metadata || %{}, ["recovery_strategy_selection_reason"]) == nil
+  end
+
   test "planner delegate batches create multiple child work items and batch snapshots" do
     planner =
       create_agent()

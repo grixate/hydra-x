@@ -1122,21 +1122,109 @@ defmodule HydraX.Runtime.WorkItems do
   defp follow_up_recovery_strategy_rank(_strategy), do: 0
 
   defp work_item_follow_up_recovery_strategies(%WorkItem{} = work_item) do
+    work_item
+    |> work_item_follow_up_entries()
+    |> Enum.map(&Map.get(&1, "strategy"))
+    |> Enum.reject(&(&1 in [nil, ""]))
+  end
+
+  defp work_item_follow_up_entries(%WorkItem{} = work_item) do
     summary = get_in(work_item.result_refs || %{}, ["follow_up_summary"]) || %{}
 
     case summary |> Map.get("entries", []) |> List.wrap() |> Enum.filter(&is_map/1) do
       [] ->
-        summary
-        |> Map.get("strategies", [])
-        |> List.wrap()
-        |> Enum.reject(&(&1 in [nil, ""]))
+        build_work_item_follow_up_entries(summary)
 
       entries ->
-        entries
-        |> Enum.map(&Map.get(&1, "strategy"))
-        |> Enum.reject(&(&1 in [nil, ""]))
+        Enum.map(entries, &normalize_work_item_follow_up_entry/1)
     end
   end
+
+  defp build_work_item_follow_up_entries(summary) when is_map(summary) do
+    strategies = summary |> Map.get("strategies", []) |> List.wrap()
+    summaries = summary |> Map.get("summaries", []) |> List.wrap()
+    alternative_strategies = summary |> Map.get("alternative_strategies", []) |> List.wrap()
+
+    alternative_summaries =
+      summary
+      |> Map.get("alternative_summaries", [])
+      |> List.wrap()
+      |> case do
+        [] -> Enum.map(alternative_strategies, &recovery_strategy_summary/1)
+        values -> values
+      end
+
+    priority_boosts =
+      summary
+      |> Map.get("priority_boosts", [])
+      |> List.wrap()
+      |> Enum.filter(&is_integer/1)
+
+    max_len =
+      [
+        length(strategies),
+        length(summaries),
+        length(alternative_summaries),
+        length(priority_boosts)
+      ]
+      |> Enum.max(fn -> 0 end)
+
+    if max_len <= 0 do
+      []
+    else
+      for index <- 0..(max_len - 1) do
+        %{
+          "strategy" => Enum.at(strategies, index) || List.first(strategies),
+          "summary" =>
+            Enum.at(summaries, index) ||
+              recovery_strategy_summary(Enum.at(strategies, index) || List.first(strategies)),
+          "alternative_strategies" => alternative_strategies,
+          "alternative_summaries" => alternative_summaries
+        }
+        |> maybe_put_follow_up_entry_detail(
+          "priority_boost",
+          Enum.at(priority_boosts, index) || List.first(priority_boosts)
+        )
+        |> normalize_work_item_follow_up_entry()
+      end
+    end
+  end
+
+  defp build_work_item_follow_up_entries(_summary), do: []
+
+  defp normalize_work_item_follow_up_entry(entry) when is_map(entry) do
+    %{
+      "work_item_id" => Map.get(entry, "work_item_id"),
+      "type" => Map.get(entry, "type"),
+      "strategy" => Map.get(entry, "strategy"),
+      "summary" => Map.get(entry, "summary"),
+      "deescalated_from" => Map.get(entry, "deescalated_from"),
+      "selection_reason" => Map.get(entry, "selection_reason"),
+      "alternative_strategies" =>
+        entry
+        |> Map.get("alternative_strategies", [])
+        |> List.wrap()
+        |> Enum.reject(&(&1 in [nil, ""])),
+      "alternative_summaries" =>
+        entry
+        |> Map.get("alternative_summaries", [])
+        |> List.wrap()
+        |> case do
+          [] ->
+            entry
+            |> Map.get("alternative_strategies", [])
+            |> List.wrap()
+            |> Enum.map(&recovery_strategy_summary/1)
+
+          values ->
+            values
+        end
+        |> Enum.reject(&(&1 in [nil, ""]))
+    }
+    |> maybe_put_follow_up_entry_detail("priority_boost", Map.get(entry, "priority_boost"))
+  end
+
+  defp normalize_work_item_follow_up_entry(_entry), do: %{}
 
   defp delegation_batch_repeatedly_deferred?(%{} = snapshot) do
     (snapshot["expansion_deferred_count"] || 0) > 1
@@ -7187,33 +7275,30 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp follow_up_strategy_entries(%WorkItem{} = work_item) do
-    strategies =
-      work_item
-      |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "strategies"]))
-      |> List.wrap()
-      |> Enum.reject(&(&1 in [nil, ""]))
-      |> Enum.uniq()
-
-    case preferred_follow_up_strategy(
-           strategies,
-           intervention_pressure: follow_up_strategy_intervention_pressure(work_item)
-         ) do
+    case preferred_work_item_follow_up_selection(work_item) do
       nil ->
         []
 
-      strategy ->
-        alternative_strategies = Enum.reject(strategies, &(&1 == strategy))
-
+      %{strategy: strategy} = selection ->
         [
           %{
             "memory_id" => nil,
             "type" => "RecoveryStrategy",
             "content" => follow_up_strategy_context_content(strategy),
-            "score" => preferred_follow_up_strategy_score(strategy),
-            "reasons" => preferred_follow_up_strategy_reasons(strategy, alternative_strategies),
+            "score" =>
+              preferred_follow_up_strategy_score(
+                strategy,
+                selection[:priority_boost]
+              ),
+            "reasons" =>
+              preferred_follow_up_strategy_reasons(
+                strategy,
+                selection[:alternative_strategies] || [],
+                selection[:selection_reason]
+              ),
             "source_artifact_type" => "follow_up_summary",
             "strategy" => strategy,
-            "alternative_strategies" => alternative_strategies
+            "alternative_strategies" => selection[:alternative_strategies] || []
           }
         ]
     end
@@ -7308,15 +7393,25 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp preferred_follow_up_strategy_rank(_strategy), do: 0
 
-  defp preferred_follow_up_strategy_score(strategy),
+  defp preferred_follow_up_strategy_score(strategy, boost) when is_integer(boost) do
+    1.0 + preferred_follow_up_strategy_rank(strategy) / 100.0 + boost / 100.0
+  end
+
+  defp preferred_follow_up_strategy_score(strategy, _boost),
     do: 1.0 + preferred_follow_up_strategy_rank(strategy) / 100.0
 
-  defp preferred_follow_up_strategy_reasons(strategy, alternative_strategies) do
+  defp preferred_follow_up_strategy_reasons(strategy, alternative_strategies, selection_reason) do
     [
       "follow-up strategy",
       "preferred recovery strategy: #{strategy}"
       | if(alternative_strategies != [], do: ["multiple recovery strategies observed"], else: [])
     ]
+    |> then(fn reasons ->
+      case selection_reason do
+        value when is_binary(value) and value != "" -> reasons ++ [value]
+        _ -> reasons
+      end
+    end)
   end
 
   defp follow_up_strategy_context_content("operator_guided_replan"),
@@ -10676,32 +10771,123 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp preferred_work_item_follow_up_selection(%WorkItem{} = work_item) do
-    strategies = work_item_follow_up_strategies(work_item)
-    intervention_pressure = follow_up_strategy_intervention_pressure(work_item)
+    case base_work_item_follow_up_selection(work_item) do
+      %{source: :entry} = selection ->
+        Map.drop(selection, [:source])
 
-    preferred =
-      preferred_follow_up_strategy(strategies, intervention_pressure: intervention_pressure)
+      %{strategy: base} = selection when is_binary(base) and base != "" ->
+        strategies = work_item_follow_up_strategies(work_item)
+        intervention_pressure = follow_up_strategy_intervention_pressure(work_item)
 
-    case {base_follow_up_strategy_choice(strategies), preferred} do
-      {_base, nil} ->
+        case preferred_follow_up_strategy(strategies,
+               intervention_pressure: intervention_pressure
+             ) do
+          strategy when is_binary(strategy) and strategy != "" ->
+            %{
+              strategy: strategy,
+              alternative_strategies: Enum.reject(strategies, &(&1 in [nil, "", strategy])),
+              deescalated_from:
+                if(is_binary(base) and base != strategy,
+                  do: base,
+                  else: selection[:deescalated_from]
+                ),
+              selection_reason:
+                follow_up_strategy_selection_reason(base, strategy, intervention_pressure) ||
+                  selection[:selection_reason]
+            }
+
+          _ ->
+            nil
+        end
+
+      _ ->
         nil
-
-      {base, strategy} ->
-        %{
-          strategy: strategy,
-          alternative_strategies: Enum.reject(strategies, &(&1 in [nil, "", strategy])),
-          deescalated_from:
-            if(is_binary(base) and base != "" and base != strategy, do: base, else: nil),
-          selection_reason:
-            follow_up_strategy_selection_reason(base, strategy, intervention_pressure)
-        }
     end
   end
 
+  defp base_work_item_follow_up_selection(%WorkItem{} = work_item) do
+    case preferred_follow_up_entry(explicit_work_item_follow_up_entries(work_item)) do
+      %{} = entry ->
+        strategy = Map.get(entry, "strategy")
+
+        if is_binary(strategy) and strategy != "" do
+          %{
+            source: :entry,
+            strategy: strategy,
+            summary: Map.get(entry, "summary"),
+            alternative_strategies:
+              entry
+              |> Map.get("alternative_strategies", [])
+              |> List.wrap()
+              |> Enum.reject(&(&1 in [nil, "", strategy]))
+              |> Enum.uniq(),
+            alternative_summaries:
+              entry
+              |> Map.get("alternative_summaries", [])
+              |> List.wrap()
+              |> Enum.reject(&(&1 in [nil, ""])),
+            deescalated_from: Map.get(entry, "deescalated_from"),
+            selection_reason: Map.get(entry, "selection_reason"),
+            priority_boost:
+              case Map.get(entry, "priority_boost") do
+                value when is_integer(value) -> value
+                _ -> nil
+              end
+          }
+        end
+
+      _ ->
+        strategies = work_item_follow_up_strategies(work_item)
+
+        case base_follow_up_strategy_choice(strategies) do
+          strategy when is_binary(strategy) and strategy != "" ->
+            %{
+              source: :strategy,
+              strategy: strategy,
+              alternative_strategies: Enum.reject(strategies, &(&1 in [nil, "", strategy]))
+            }
+
+          _ ->
+            nil
+        end
+    end
+  end
+
+  defp explicit_work_item_follow_up_entries(%WorkItem{} = work_item) do
+    work_item
+    |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "entries"]))
+    |> List.wrap()
+    |> Enum.filter(&is_map/1)
+    |> Enum.map(&normalize_work_item_follow_up_entry/1)
+  end
+
+  defp preferred_follow_up_entry(entries) when is_list(entries) do
+    entries
+    |> Enum.filter(&is_map/1)
+    |> Enum.reject(fn entry -> Map.get(entry, "strategy") in [nil, ""] end)
+    |> Enum.max_by(
+      fn entry ->
+        strategy = Map.get(entry, "strategy")
+        alternatives = entry |> Map.get("alternative_strategies", []) |> List.wrap()
+
+        boost =
+          case Map.get(entry, "priority_boost") do
+            value when is_integer(value) -> value
+            _ -> recovery_strategy_priority_boost(strategy, alternatives)
+          end
+
+        {boost, preferred_follow_up_strategy_rank(strategy), strategy}
+      end,
+      fn -> nil end
+    )
+  end
+
+  defp preferred_follow_up_entry(_entries), do: nil
+
   defp work_item_follow_up_strategies(%WorkItem{} = work_item) do
     work_item
-    |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "strategies"]))
-    |> List.wrap()
+    |> work_item_follow_up_entries()
+    |> Enum.map(&Map.get(&1, "strategy"))
     |> Enum.reject(&(&1 in [nil, ""]))
     |> Enum.uniq()
   end
@@ -10728,10 +10914,8 @@ defmodule HydraX.Runtime.WorkItems do
       |> limit(20)
       |> Repo.all()
       |> Enum.reduce(%{}, fn item, acc ->
-        case item
-             |> work_item_follow_up_recovery_strategies()
-             |> base_follow_up_strategy_choice() do
-          strategy when is_binary(strategy) and strategy != "" ->
+        case base_work_item_follow_up_selection(item) do
+          %{strategy: strategy} when is_binary(strategy) and strategy != "" ->
             Map.update(acc, strategy, 1, &(&1 + 1))
 
           _ ->
@@ -10748,6 +10932,7 @@ defmodule HydraX.Runtime.WorkItems do
     metadata
     |> Helpers.normalize_string_keys()
     |> maybe_put_follow_up_selection_metadata(selection)
+    |> maybe_put_follow_up_selection_alternative_summaries(selection)
     |> apply_follow_up_strategy_to_follow_up_metadata(strategy)
   end
 
@@ -10777,6 +10962,16 @@ defmodule HydraX.Runtime.WorkItems do
       metadata
     end
   end
+
+  defp maybe_put_follow_up_selection_alternative_summaries(
+         metadata,
+         %{alternative_summaries: alternatives}
+       )
+       when is_map(metadata) and is_list(alternatives) and alternatives != [] do
+    Map.put(metadata, "recovery_strategy_alternative_summaries", alternatives)
+  end
+
+  defp maybe_put_follow_up_selection_alternative_summaries(metadata, _selection), do: metadata
 
   defp maybe_put_follow_up_selection_metadata(metadata, %{deescalated_from: from} = selection)
        when is_map(metadata) do
