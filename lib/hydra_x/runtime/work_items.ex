@@ -736,6 +736,12 @@ defmodule HydraX.Runtime.WorkItems do
       delegation_operator_guided_batch_count +
         delegation_review_guided_batch_count + delegation_request_review_batch_count
 
+    delegation_selected_intervention_batch_count =
+      intervention_recovery_batch_count(delegation_selected_recovery_batches)
+
+    delegation_fallback_intervention_batch_count =
+      intervention_recovery_batch_count(delegation_alternative_recovery_batches)
+
     capability_drifts =
       autonomy_agents
       |> Enum.map(fn agent ->
@@ -786,6 +792,8 @@ defmodule HydraX.Runtime.WorkItems do
       delegation_review_guided_batch_count: delegation_review_guided_batch_count,
       delegation_request_review_batch_count: delegation_request_review_batch_count,
       delegation_intervention_batch_count: delegation_intervention_batch_count,
+      delegation_selected_intervention_batch_count: delegation_selected_intervention_batch_count,
+      delegation_fallback_intervention_batch_count: delegation_fallback_intervention_batch_count,
       autonomy_agent_count: length(autonomy_agents),
       active_roles: autonomy_agents |> Enum.map(& &1.role) |> Enum.frequencies(),
       role_queue_backlog: role_queue_backlog,
@@ -1174,6 +1182,20 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp delegation_recovery_batches(_entries, _field), do: %{}
+
+  defp intervention_recovery_batch_count(mix) when is_map(mix) do
+    Enum.reduce(mix, 0, fn
+      {strategy, count}, acc
+      when strategy in ["operator_guided_replan", "review_guided_replan", "request_review"] and
+             is_integer(count) and count > 0 ->
+        acc + count
+
+      _, acc ->
+        acc
+    end)
+  end
+
+  defp intervention_recovery_batch_count(_mix), do: 0
 
   defp dominant_follow_up_recovery_strategy(mix) when is_map(mix) do
     mix

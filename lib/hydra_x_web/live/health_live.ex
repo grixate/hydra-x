@@ -1349,7 +1349,11 @@ defmodule HydraXWeb.HealthLive do
             <p class="mt-1 text-xs text-[var(--hx-mute)]">
               intervention batches {@autonomy_status.delegation_intervention_batch_count || 0} ·
               operator-guided {@autonomy_status.delegation_operator_guided_batch_count || 0} ·
-              reviewer-guided {@autonomy_status.delegation_review_guided_batch_count || 0}
+              reviewer-guided {@autonomy_status.delegation_review_guided_batch_count || 0} ·
+              selected intervention{" "}
+              {@autonomy_status.delegation_selected_intervention_batch_count || 0} · fallback
+              intervention{" "}
+              {@autonomy_status.delegation_fallback_intervention_batch_count || 0}
             </p>
             <p class="mt-1 text-xs text-[var(--hx-mute)]">
               selected recovery {autonomy_delegation_summary_recovery_mix(
