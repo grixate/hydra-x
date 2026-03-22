@@ -7450,10 +7450,11 @@ defmodule HydraX.Runtime.WorkItems do
          pressure
        )
        when is_list(alternatives) and is_map(pressure) do
-    if Map.get(pressure, "operator_guided_replan", 0) > 0 do
-      Enum.find(
+    if follow_up_strategy_selected_pressure(pressure, "operator_guided_replan") > 0 do
+      best_deescalated_follow_up_strategy(
         ["review_guided_replan", "request_review", "constraint_replan", "narrow_delegate_batch"],
-        &Enum.member?(alternatives, &1)
+        alternatives,
+        pressure
       ) || "operator_guided_replan"
     else
       "operator_guided_replan"
@@ -7466,10 +7467,11 @@ defmodule HydraX.Runtime.WorkItems do
          pressure
        )
        when is_list(alternatives) and is_map(pressure) do
-    if Map.get(pressure, "review_guided_replan", 0) > 0 do
-      Enum.find(
+    if follow_up_strategy_selected_pressure(pressure, "review_guided_replan") > 0 do
+      best_deescalated_follow_up_strategy(
         ["request_review", "constraint_replan", "narrow_delegate_batch"],
-        &Enum.member?(alternatives, &1)
+        alternatives,
+        pressure
       ) || "review_guided_replan"
     else
       "review_guided_replan"
@@ -7477,6 +7479,29 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp maybe_deescalate_follow_up_strategy(strategy, _alternatives, _pressure), do: strategy
+
+  defp best_deescalated_follow_up_strategy(candidates, alternatives, pressure)
+       when is_list(candidates) and is_list(alternatives) and is_map(pressure) do
+    candidates
+    |> Enum.with_index()
+    |> Enum.filter(fn {strategy, _index} -> Enum.member?(alternatives, strategy) end)
+    |> Enum.min_by(
+      fn {strategy, index} ->
+        {
+          follow_up_strategy_selected_pressure(pressure, strategy),
+          follow_up_strategy_fallback_pressure(pressure, strategy),
+          index
+        }
+      end,
+      fn -> nil end
+    )
+    |> case do
+      {strategy, _index} -> strategy
+      nil -> nil
+    end
+  end
+
+  defp best_deescalated_follow_up_strategy(_candidates, _alternatives, _pressure), do: nil
 
   defp preferred_follow_up_strategy_rank("operator_guided_replan"), do: 90
   defp preferred_follow_up_strategy_rank("review_guided_replan"), do: 80
@@ -10995,7 +11020,7 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp follow_up_strategy_selection_reason(base, preferred, intervention_pressure)
        when is_binary(base) and is_binary(preferred) and base != preferred do
-    pressure_count = Map.get(intervention_pressure, base, 0)
+    pressure_count = follow_up_strategy_selected_pressure(intervention_pressure, base)
 
     "de-escalated from #{recovery_strategy_summary(base)} under existing planner recovery pressure#{if(pressure_count > 0, do: " (#{pressure_count} existing)", else: "")}"
   end
@@ -11014,18 +11039,54 @@ defmodule HydraX.Runtime.WorkItems do
       )
       |> limit(20)
       |> Repo.all()
-      |> Enum.reduce(%{}, fn item, acc ->
+      |> Enum.reduce(%{selected: %{}, fallback: %{}}, fn item, acc ->
         case base_work_item_follow_up_selection(item) do
-          %{strategy: strategy} when is_binary(strategy) and strategy != "" ->
-            Map.update(acc, strategy, 1, &(&1 + 1))
+          %{strategy: strategy, alternative_strategies: alternatives}
+          when is_binary(strategy) and strategy != "" ->
+            acc
+            |> update_follow_up_strategy_pressure(:selected, strategy)
+            |> update_follow_up_strategy_pressure(:fallback, alternatives)
 
           _ ->
             acc
         end
       end)
     else
-      %{}
+      %{selected: %{}, fallback: %{}}
     end
+  end
+
+  defp follow_up_strategy_selected_pressure(%{selected: selected}, strategy)
+       when is_map(selected) and is_binary(strategy) do
+    Map.get(selected, strategy, 0)
+  end
+
+  defp follow_up_strategy_selected_pressure(pressure, strategy)
+       when is_map(pressure) and is_binary(strategy) do
+    Map.get(pressure, strategy, 0)
+  end
+
+  defp follow_up_strategy_selected_pressure(_pressure, _strategy), do: 0
+
+  defp follow_up_strategy_fallback_pressure(%{fallback: fallback}, strategy)
+       when is_map(fallback) and is_binary(strategy) do
+    Map.get(fallback, strategy, 0)
+  end
+
+  defp follow_up_strategy_fallback_pressure(_pressure, _strategy), do: 0
+
+  defp update_follow_up_strategy_pressure(acc, key, strategies)
+       when is_map(acc) and key in [:selected, :fallback] do
+    strategies
+    |> List.wrap()
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> Enum.uniq()
+    |> Enum.reduce(acc, fn strategy, current ->
+      update_in(current, [key], fn bucket ->
+        bucket = if is_map(bucket), do: bucket, else: %{}
+        Map.update(bucket, strategy, 1, &(&1 + 1))
+      end)
+    end)
   end
 
   defp apply_follow_up_strategy_to_follow_up_metadata(metadata, %{strategy: strategy} = selection)
