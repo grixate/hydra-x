@@ -766,7 +766,77 @@ defmodule Mix.Tasks.HydraX.Work do
       _ ->
         :ok
     end
+
+    case recovery_strategy_pressure_summary(metadata["recovery_strategy_pressure_snapshot"]) do
+      value when is_binary(value) and value != "" ->
+        Mix.shell().info("recovery_strategy_pressure=#{value}")
+
+      _ ->
+        :ok
+    end
   end
+
+  defp recovery_strategy_pressure_summary(snapshot) when is_map(snapshot) do
+    base =
+      case snapshot["base"] do
+        value when is_binary(value) and value != "" ->
+          "base=#{value}:s#{snapshot["base_selected_count"] || 0}:d#{snapshot["base_deescalated_count"] || 0}"
+
+        _ ->
+          nil
+      end
+
+    preferred =
+      case snapshot["preferred"] do
+        value when is_binary(value) and value != "" ->
+          "preferred=#{value}:s#{snapshot["preferred_selected_count"] || 0}:f#{snapshot["preferred_fallback_count"] || 0}:d#{snapshot["preferred_deescalated_count"] || 0}"
+
+        _ ->
+          nil
+      end
+
+    alternatives =
+      snapshot
+      |> recovery_strategy_pressure_alternatives_summary()
+      |> case do
+        nil -> nil
+        value -> "alternatives=#{value}"
+      end
+
+    [base, preferred, alternatives]
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> case do
+      [] -> nil
+      parts -> Enum.join(parts, "|")
+    end
+  end
+
+  defp recovery_strategy_pressure_summary(_snapshot), do: nil
+
+  defp recovery_strategy_pressure_alternatives_summary(snapshot) when is_map(snapshot) do
+    strategies =
+      [
+        Map.keys(snapshot["alternative_selected_counts"] || %{}),
+        Map.keys(snapshot["alternative_fallback_counts"] || %{}),
+        Map.keys(snapshot["alternative_deescalated_counts"] || %{})
+      ]
+      |> List.flatten()
+      |> Enum.reject(&(&1 in [nil, ""]))
+      |> Enum.uniq()
+      |> Enum.sort()
+
+    case strategies do
+      [] ->
+        nil
+
+      entries ->
+        Enum.map_join(entries, ",", fn strategy ->
+          "#{strategy}:s#{get_in(snapshot, ["alternative_selected_counts", strategy]) || 0}:f#{get_in(snapshot, ["alternative_fallback_counts", strategy]) || 0}:d#{get_in(snapshot, ["alternative_deescalated_counts", strategy]) || 0}"
+        end)
+    end
+  end
+
+  defp recovery_strategy_pressure_alternatives_summary(_snapshot), do: nil
 
   defp base_recovery_strategy_summary("review_guided_replan"), do: "Reviewer-guided recovery"
   defp base_recovery_strategy_summary("operator_guided_replan"), do: "Operator-guided recovery"

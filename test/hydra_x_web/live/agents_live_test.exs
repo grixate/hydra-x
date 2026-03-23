@@ -575,6 +575,18 @@ defmodule HydraXWeb.AgentsLiveTest do
           "recovery_strategy_priority_boost" => 3,
           "recovery_strategy_alternatives" => ["narrow_delegate_batch"],
           "recovery_strategy_alternative_summaries" => ["Narrowed delegation batch"],
+          "recovery_strategy_pressure_snapshot" => %{
+            "base" => "operator_guided_replan",
+            "base_selected_count" => 1,
+            "base_deescalated_count" => 1,
+            "preferred" => "operator_guided_replan",
+            "preferred_selected_count" => 1,
+            "preferred_deescalated_count" => 2,
+            "preferred_fallback_count" => 0,
+            "alternative_selected_counts" => %{"narrow_delegate_batch" => 1},
+            "alternative_fallback_counts" => %{},
+            "alternative_deescalated_counts" => %{"narrow_delegate_batch" => 2}
+          },
           "recovery_strategy_selection_reason" =>
             "de-escalated from Operator-guided recovery under existing planner recovery pressure (1 existing)"
         }
@@ -588,6 +600,10 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "strategy behavior operator review after execution"
     assert html =~ "strategy priority +3"
     assert html =~ "alternative strategies Narrowed delegation batch"
+    assert html =~ "pressure base operator-guided s1 d1"
+    assert html =~ "preferred operator-guided s1 f0 d2"
+    assert html =~ "alternatives"
+    assert html =~ "s1 f0 d2"
 
     assert html =~
              "selection reason de-escalated from Operator-guided recovery under existing planner recovery pressure (1 existing)"

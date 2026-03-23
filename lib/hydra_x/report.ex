@@ -1038,6 +1038,7 @@ defmodule HydraX.Report do
     alternatives = work_item_recovery_alternatives(metadata)
     selection_reason = metadata["recovery_strategy_selection_reason"]
     deescalated_from = metadata["recovery_strategy_deescalated_from"]
+    pressure_snapshot = metadata["recovery_strategy_pressure_snapshot"]
 
     [
       strategy && "recovery_preferred=#{humanize_follow_up_strategy(strategy)}",
@@ -1048,10 +1049,73 @@ defmodule HydraX.Report do
       is_binary(deescalated_from) && deescalated_from != "" &&
         "recovery_deescalated_from=#{humanize_follow_up_strategy(deescalated_from)}",
       is_binary(selection_reason) && selection_reason != "" &&
-        "recovery_selection_reason=#{selection_reason}"
+        "recovery_selection_reason=#{selection_reason}",
+      recovery_pressure_detail(pressure_snapshot)
     ]
     |> Enum.reject(&is_nil_or_empty/1)
   end
+
+  defp recovery_pressure_detail(snapshot) when is_map(snapshot) do
+    base =
+      case snapshot["base"] do
+        value when is_binary(value) and value != "" ->
+          "base=#{humanize_follow_up_strategy(value)}:s#{snapshot["base_selected_count"] || 0}:d#{snapshot["base_deescalated_count"] || 0}"
+
+        _ ->
+          nil
+      end
+
+    preferred =
+      case snapshot["preferred"] do
+        value when is_binary(value) and value != "" ->
+          "preferred=#{humanize_follow_up_strategy(value)}:s#{snapshot["preferred_selected_count"] || 0}:f#{snapshot["preferred_fallback_count"] || 0}:d#{snapshot["preferred_deescalated_count"] || 0}"
+
+        _ ->
+          nil
+      end
+
+    alternatives =
+      snapshot
+      |> recovery_pressure_alternative_summary()
+      |> case do
+        nil -> nil
+        value -> "alternatives=#{value}"
+      end
+
+    [base, preferred, alternatives]
+    |> Enum.reject(&is_nil_or_empty/1)
+    |> case do
+      [] -> nil
+      parts -> "recovery_pressure=#{Enum.join(parts, "|")}"
+    end
+  end
+
+  defp recovery_pressure_detail(_snapshot), do: nil
+
+  defp recovery_pressure_alternative_summary(snapshot) when is_map(snapshot) do
+    strategies =
+      [
+        Map.keys(snapshot["alternative_selected_counts"] || %{}),
+        Map.keys(snapshot["alternative_fallback_counts"] || %{}),
+        Map.keys(snapshot["alternative_deescalated_counts"] || %{})
+      ]
+      |> List.flatten()
+      |> Enum.reject(&(&1 in [nil, ""]))
+      |> Enum.uniq()
+      |> Enum.sort()
+
+    case strategies do
+      [] ->
+        nil
+
+      entries ->
+        Enum.map_join(entries, ",", fn strategy ->
+          "#{humanize_follow_up_strategy(strategy)}:s#{get_in(snapshot, ["alternative_selected_counts", strategy]) || 0}:f#{get_in(snapshot, ["alternative_fallback_counts", strategy]) || 0}:d#{get_in(snapshot, ["alternative_deescalated_counts", strategy]) || 0}"
+        end)
+    end
+  end
+
+  defp recovery_pressure_alternative_summary(_snapshot), do: nil
 
   defp work_item_recovery_alternatives(metadata) do
     metadata["recovery_strategy_alternative_summaries"] ||

@@ -1549,11 +1549,14 @@ defmodule HydraX.ReportTest do
           "recovery_strategy_pressure_snapshot" => %{
             "base" => "operator_guided_replan",
             "base_selected_count" => 1,
+            "base_deescalated_count" => 1,
             "preferred" => "operator_guided_replan",
             "preferred_selected_count" => 1,
+            "preferred_deescalated_count" => 2,
             "preferred_fallback_count" => 0,
-            "alternative_selected_counts" => %{},
-            "alternative_fallback_counts" => %{}
+            "alternative_selected_counts" => %{"narrow_delegate_batch" => 1},
+            "alternative_fallback_counts" => %{},
+            "alternative_deescalated_counts" => %{"narrow_delegate_batch" => 2}
           },
           "recovery_strategy_deescalated_from" => "operator_guided_replan",
           "recovery_strategy_selection_reason" =>
@@ -1576,6 +1579,10 @@ defmodule HydraX.ReportTest do
     assert markdown =~ "recovery_priority_boost=3"
     assert markdown =~ "recovery_alternatives=Narrowed delegation batch"
     assert markdown =~ "recovery_deescalated_from=operator-guided"
+    assert markdown =~ "recovery_pressure=base=operator-guided:s1:d1"
+    assert markdown =~ "preferred=operator-guided:s1:f0:d2"
+    assert markdown =~ "alternatives="
+    assert markdown =~ ":s1:f0:d2"
 
     assert markdown =~
              "recovery_selection_reason=de-escalated from Operator-guided recovery under existing planner recovery pressure (1 existing)"
@@ -1590,11 +1597,14 @@ defmodule HydraX.ReportTest do
                item["recovery_strategy_pressure_snapshot"] == %{
                  "base" => "operator_guided_replan",
                  "base_selected_count" => 1,
+                 "base_deescalated_count" => 1,
                  "preferred" => "operator_guided_replan",
                  "preferred_selected_count" => 1,
+                 "preferred_deescalated_count" => 2,
                  "preferred_fallback_count" => 0,
-                 "alternative_selected_counts" => %{},
-                 "alternative_fallback_counts" => %{}
+                 "alternative_selected_counts" => %{"narrow_delegate_batch" => 1},
+                 "alternative_fallback_counts" => %{},
+                 "alternative_deescalated_counts" => %{"narrow_delegate_batch" => 2}
                } and
                item["recovery_strategy_deescalated_from"] == "operator_guided_replan" and
                item["recovery_strategy_selection_reason"] ==
