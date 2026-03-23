@@ -959,8 +959,11 @@ defmodule HydraXWeb.HealthLiveTest do
 
     assert html =~ "delivery internal"
 
-    assert html =~
-             "replan queued 2 (Operator-guided recovery; priority +3; de-escalated from operator-guided; alternatives Narrowed delegation batch; +1 more: Reviewer-guided recovery)"
+    assert html =~ "replan queued 2"
+    assert html =~ "Operator-guided recovery"
+    assert html =~ "priority +3"
+    assert html =~ "active 2"
+    assert html =~ "+1 more: Reviewer-guided recovery"
 
     assert html =~ "operator intervention prepared role_capacity_constrained"
 

@@ -4363,7 +4363,10 @@ defmodule HydraX.RuntimeTest do
 
     assert get_in(parent.result_refs || %{}, ["follow_up_summary", "entries"]) == [
              %{
+               "active" => true,
+               "approval_stage" => "draft",
                "work_item_id" => replan_item.id,
+               "status" => "planned",
                "type" => "replan",
                "strategy" => "operator_guided_replan",
                "summary" => "Operator-guided recovery with narrowed delegation fallback",
@@ -4381,6 +4384,9 @@ defmodule HydraX.RuntimeTest do
                "priority_boost" => 3
              }
            ]
+
+    assert get_in(parent.result_refs || %{}, ["follow_up_summary", "active_count"]) == 1
+    assert get_in(parent.result_refs || %{}, ["follow_up_summary", "inactive_count"]) == 0
   end
 
   test "guided constraint replans de-escalate under existing operator-guided pressure" do
@@ -4501,7 +4507,10 @@ defmodule HydraX.RuntimeTest do
 
     assert get_in(parent.result_refs || %{}, ["follow_up_summary", "entries"]) == [
              %{
+               "active" => true,
+               "approval_stage" => "draft",
                "work_item_id" => replan_item.id,
+               "status" => "planned",
                "type" => "replan",
                "strategy" => "review_guided_replan",
                "summary" => "Reviewer-guided recovery",
@@ -4520,6 +4529,93 @@ defmodule HydraX.RuntimeTest do
                "alternative_strategies" => ["operator_guided_replan"],
                "alternative_summaries" => ["Operator-guided recovery"],
                "priority_boost" => 3
+             }
+           ]
+
+    assert get_in(parent.result_refs || %{}, ["follow_up_summary", "active_count"]) == 1
+    assert get_in(parent.result_refs || %{}, ["follow_up_summary", "inactive_count"]) == 0
+  end
+
+  test "parent follow-up summary refreshes tracked follow-up state when the follow-up completes" do
+    planner =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, planner} = Runtime.save_agent(planner, %{"role" => "planner"})
+
+    {:ok, parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Keep follow-up state aligned with the actual queued recovery work.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "status" => "blocked",
+        "priority" => 8
+      })
+
+    {:ok, follow_up_item} =
+      Runtime.save_work_item(%{
+        "kind" => "plan",
+        "goal" => "Recover the blocked branch with reviewer guidance.",
+        "parent_work_item_id" => parent.id,
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "status" => "planned",
+        "approval_stage" => "proposal_only",
+        "priority" => 9,
+        "metadata" => %{
+          "task_type" => "delegation_pressure_replan",
+          "preferred_recovery_strategy" => "review_guided_replan",
+          "recovery_strategy_summary" => "Reviewer-guided recovery",
+          "recovery_strategy_priority_boost" => 2
+        }
+      })
+
+    {:ok, _parent} =
+      Runtime.save_work_item(parent, %{
+        "result_refs" => %{
+          "follow_up_work_item_ids" => [follow_up_item.id],
+          "follow_up_summary" => %{
+            "count" => 1,
+            "entries" => [
+              %{
+                "work_item_id" => follow_up_item.id,
+                "type" => "replan",
+                "status" => "planned",
+                "approval_stage" => "proposal_only",
+                "active" => true,
+                "strategy" => "review_guided_replan",
+                "summary" => "Reviewer-guided recovery",
+                "priority_boost" => 2
+              }
+            ]
+          }
+        }
+      })
+
+    {:ok, _completed_follow_up} =
+      Runtime.save_work_item(follow_up_item, %{
+        "status" => "completed",
+        "approval_stage" => "validated"
+      })
+
+    parent = Runtime.get_work_item!(parent.id)
+
+    assert get_in(parent.result_refs || %{}, ["follow_up_summary", "active_count"]) == 0
+    assert get_in(parent.result_refs || %{}, ["follow_up_summary", "inactive_count"]) == 1
+
+    assert get_in(parent.result_refs || %{}, ["follow_up_summary", "entries"]) == [
+             %{
+               "active" => false,
+               "alternative_strategies" => [],
+               "alternative_summaries" => [],
+               "approval_stage" => "validated",
+               "priority_boost" => 2,
+               "status" => "completed",
+               "strategy" => "review_guided_replan",
+               "summary" => "Reviewer-guided recovery",
+               "type" => "replan",
+               "work_item_id" => follow_up_item.id
              }
            ]
   end

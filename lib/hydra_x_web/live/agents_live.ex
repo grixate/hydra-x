@@ -2216,6 +2216,7 @@ defmodule HydraXWeb.AgentsLive do
         count = follow_up_queue_count(work_item)
         strategy = follow_up_queue_strategy_detail(work_item)
         priority = follow_up_queue_priority_detail(work_item)
+        activity = follow_up_queue_activity_detail(work_item)
         selection = follow_up_queue_selection_detail(work_item)
         alternatives = follow_up_queue_alternative_detail(work_item)
         additional = follow_up_queue_additional_detail(work_item)
@@ -2224,7 +2225,7 @@ defmodule HydraXWeb.AgentsLive do
           "replan" ->
             [
               "replan follow-up queued #{count}",
-              [strategy, priority, selection, alternatives, additional]
+              [strategy, priority, activity, selection, alternatives, additional]
               |> Enum.reject(&(&1 in [nil, ""]))
               |> case do
                 [] -> nil
@@ -2671,6 +2672,29 @@ defmodule HydraXWeb.AgentsLive do
     end
   end
 
+  defp follow_up_queue_activity_detail(work_item) do
+    summary = get_in(work_item.result_refs || %{}, ["follow_up_summary"]) || %{}
+    entries = follow_up_summary_entries(work_item)
+
+    active_count =
+      case Map.get(summary, "active_count") do
+        value when is_integer(value) -> value
+        _ -> Enum.count(entries, &follow_up_entry_active?/1)
+      end
+
+    inactive_count =
+      case Map.get(summary, "inactive_count") do
+        value when is_integer(value) -> value
+        _ -> Enum.count(entries, &(not follow_up_entry_active?(&1)))
+      end
+
+    cond do
+      inactive_count > 0 -> "active #{active_count} of #{active_count + inactive_count}"
+      active_count > 0 -> "active #{active_count}"
+      true -> nil
+    end
+  end
+
   defp follow_up_queue_selection_detail(work_item) do
     case follow_up_summary_entries(work_item) do
       [%{} = entry | _] ->
@@ -2715,7 +2739,7 @@ defmodule HydraXWeb.AgentsLive do
 
     case summary |> Map.get("entries", []) |> List.wrap() |> Enum.filter(&is_map/1) do
       [] -> []
-      entries -> entries
+      entries -> sort_follow_up_summary_entries(entries)
     end
   end
 
@@ -2727,6 +2751,37 @@ defmodule HydraXWeb.AgentsLive do
     )
     |> Enum.reject(&(&1 in [nil, ""]))
   end
+
+  defp sort_follow_up_summary_entries(entries) when is_list(entries) do
+    Enum.sort_by(entries, fn entry ->
+      {
+        if(follow_up_entry_active?(entry), do: 0, else: 1),
+        follow_up_entry_status_rank(Map.get(entry, "status")),
+        -(Map.get(entry, "priority_boost") || 0),
+        Map.get(entry, "strategy") || ""
+      }
+    end)
+  end
+
+  defp sort_follow_up_summary_entries(_entries), do: []
+
+  defp follow_up_entry_active?(entry) when is_map(entry) do
+    case Map.get(entry, "active") do
+      value when is_boolean(value) -> value
+      _ -> Map.get(entry, "status") not in ["completed", "failed", "canceled"]
+    end
+  end
+
+  defp follow_up_entry_active?(_entry), do: false
+
+  defp follow_up_entry_status_rank(status)
+       when status in ["planned", "claimed", "running", "blocked"],
+       do: 0
+
+  defp follow_up_entry_status_rank("replayed"), do: 1
+  defp follow_up_entry_status_rank("completed"), do: 2
+  defp follow_up_entry_status_rank("failed"), do: 3
+  defp follow_up_entry_status_rank(_status), do: 4
 
   defp humanize_follow_up_strategy("review_guided_replan"), do: "review-guided"
   defp humanize_follow_up_strategy("operator_guided_replan"), do: "operator-guided"
@@ -2916,13 +2971,14 @@ defmodule HydraXWeb.AgentsLive do
       count = follow_up_queue_count(work_item)
       strategy = follow_up_queue_strategy_detail(work_item)
       priority = follow_up_queue_priority_detail(work_item)
+      activity = follow_up_queue_activity_detail(work_item)
       selection = follow_up_queue_selection_detail(work_item)
       alternatives = follow_up_queue_alternative_detail(work_item)
       additional = follow_up_queue_additional_detail(work_item)
 
       [
         "replan queued #{count}",
-        [strategy, priority, selection, alternatives, additional]
+        [strategy, priority, activity, selection, alternatives, additional]
         |> Enum.reject(&(&1 in [nil, ""]))
         |> case do
           [] -> nil

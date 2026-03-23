@@ -2529,6 +2529,8 @@ defmodule HydraX.Report do
             _ -> nil
           end
 
+        activity = follow_up_activity_detail(snapshot)
+
         additional =
           case Map.get(snapshot, :additional_summary_preview) do
             value when is_binary(value) and value != "" ->
@@ -2543,7 +2545,7 @@ defmodule HydraX.Report do
 
         [
           "replan queued #{count}",
-          [strategy, priority, selection, alternatives, additional]
+          [strategy, priority, activity, selection, alternatives, additional]
           |> Enum.reject(&is_nil_or_empty/1)
           |> case do
             [] -> nil
@@ -2755,6 +2757,16 @@ defmodule HydraX.Report do
       type: type,
       count: count,
       entries: entries,
+      active_entries_count:
+        case get_in(item.result_refs || %{}, ["follow_up_summary", "active_count"]) do
+          value when is_integer(value) -> value
+          _ -> Enum.count(entries, &follow_up_entry_active?/1)
+        end,
+      inactive_entries_count:
+        case get_in(item.result_refs || %{}, ["follow_up_summary", "inactive_count"]) do
+          value when is_integer(value) -> value
+          _ -> Enum.count(entries, &(not follow_up_entry_active?(&1)))
+        end,
       additional_entries_count: max(count - 1, 0),
       additional_summaries:
         entries
@@ -2929,6 +2941,7 @@ defmodule HydraX.Report do
 
       entries ->
         Enum.map(entries, &normalize_follow_up_summary_entry/1)
+        |> sort_follow_up_summary_entries()
     end
   end
 
@@ -2989,6 +3002,7 @@ defmodule HydraX.Report do
         )
         |> normalize_follow_up_summary_entry()
       end
+      |> sort_follow_up_summary_entries()
     end
   end
 
@@ -2996,6 +3010,9 @@ defmodule HydraX.Report do
     %{
       "work_item_id" => Map.get(entry, "work_item_id"),
       "type" => Map.get(entry, "type"),
+      "status" => Map.get(entry, "status"),
+      "approval_stage" => Map.get(entry, "approval_stage"),
+      "active" => Map.get(entry, "active"),
       "strategy" => Map.get(entry, "strategy"),
       "summary" => Map.get(entry, "summary"),
       "deescalated_from" => Map.get(entry, "deescalated_from"),
@@ -3030,6 +3047,55 @@ defmodule HydraX.Report do
   end
 
   defp maybe_put_follow_up_entry_export_priority(entry, _value), do: entry
+
+  defp follow_up_activity_detail(snapshot) when is_map(snapshot) do
+    active_count = Map.get(snapshot, :active_entries_count)
+    inactive_count = Map.get(snapshot, :inactive_entries_count)
+
+    cond do
+      is_integer(active_count) and is_integer(inactive_count) and inactive_count > 0 ->
+        "active #{active_count} of #{active_count + inactive_count}"
+
+      is_integer(active_count) and active_count > 0 ->
+        "active #{active_count}"
+
+      true ->
+        nil
+    end
+  end
+
+  defp follow_up_activity_detail(_snapshot), do: nil
+
+  defp sort_follow_up_summary_entries(entries) when is_list(entries) do
+    Enum.sort_by(entries, fn entry ->
+      {
+        if(follow_up_entry_active?(entry), do: 0, else: 1),
+        follow_up_entry_status_rank(Map.get(entry, "status")),
+        -(Map.get(entry, "priority_boost") || 0),
+        Map.get(entry, "strategy") || ""
+      }
+    end)
+  end
+
+  defp sort_follow_up_summary_entries(_entries), do: []
+
+  defp follow_up_entry_active?(entry) when is_map(entry) do
+    case Map.get(entry, "active") do
+      value when is_boolean(value) -> value
+      _ -> Map.get(entry, "status") not in ["completed", "failed", "canceled"]
+    end
+  end
+
+  defp follow_up_entry_active?(_entry), do: false
+
+  defp follow_up_entry_status_rank(status)
+       when status in ["planned", "claimed", "running", "blocked"],
+       do: 0
+
+  defp follow_up_entry_status_rank("replayed"), do: 1
+  defp follow_up_entry_status_rank("completed"), do: 2
+  defp follow_up_entry_status_rank("failed"), do: 3
+  defp follow_up_entry_status_rank(_status), do: 4
 
   defp humanize_follow_up_strategy("review_guided_replan"), do: "review-guided"
   defp humanize_follow_up_strategy("operator_guided_replan"), do: "operator-guided"
@@ -3104,6 +3170,8 @@ defmodule HydraX.Report do
               _ -> nil
             end
 
+          activity = follow_up_activity_detail(follow_up)
+
           additional =
             case Map.get(follow_up, :additional_summary_preview) do
               value when is_binary(value) and value != "" ->
@@ -3118,7 +3186,14 @@ defmodule HydraX.Report do
 
           [
             "replan queued #{count}",
-            [Map.get(follow_up, :strategy), priority, selection, alternatives, additional]
+            [
+              Map.get(follow_up, :strategy),
+              priority,
+              activity,
+              selection,
+              alternatives,
+              additional
+            ]
             |> Enum.reject(&is_nil_or_empty/1)
             |> case do
               [] -> nil

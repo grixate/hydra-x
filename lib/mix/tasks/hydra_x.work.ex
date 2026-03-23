@@ -402,6 +402,14 @@ defmodule Mix.Tasks.HydraX.Work do
       |> maybe_prepend_follow_up_line("follow_up_count", count)
       |> maybe_prepend_follow_up_line("follow_up_entries", length(entries))
       |> maybe_prepend_follow_up_line(
+        "follow_up_active_entries",
+        Enum.count(entries, &follow_up_entry_active?/1)
+      )
+      |> maybe_prepend_follow_up_line(
+        "follow_up_inactive_entries",
+        Enum.count(entries, &(not follow_up_entry_active?(&1)))
+      )
+      |> maybe_prepend_follow_up_line(
         "follow_up_additional_entries",
         if(is_integer(count) and count > 1, do: count - 1, else: nil)
       )
@@ -451,6 +459,12 @@ defmodule Mix.Tasks.HydraX.Work do
             index,
             "type",
             Map.get(entry, "type")
+          )
+          |> maybe_append_follow_up_entry_detail(
+            work_item.id,
+            index,
+            "status",
+            Map.get(entry, "status")
           )
           |> maybe_append_follow_up_entry_detail(
             work_item.id,
@@ -567,6 +581,19 @@ defmodule Mix.Tasks.HydraX.Work do
         _ -> nil
       end
 
+    activity =
+      case {Enum.count(entries, &follow_up_entry_active?/1),
+            Enum.count(entries, &(not follow_up_entry_active?(&1)))} do
+        {active, inactive} when active > 0 and inactive > 0 ->
+          "active #{active} of #{active + inactive}"
+
+        {active, 0} when active > 0 ->
+          "active #{active}"
+
+        _ ->
+          nil
+      end
+
     alternatives =
       case entries do
         [%{} = entry | _] ->
@@ -602,36 +629,62 @@ defmodule Mix.Tasks.HydraX.Work do
 
     case {summary, priority, selection, alternatives} do
       {value, nil, nil, []} when is_binary(value) and value != "" ->
-        append_follow_up_additional_detail(work_item, value)
+        append_follow_up_additional_detail(
+          work_item,
+          join_follow_up_detail_parts([value, activity])
+        )
 
       {value, boost, nil, []} when is_binary(value) and value != "" and is_binary(boost) ->
-        append_follow_up_additional_detail(work_item, "#{value}; #{boost}")
+        append_follow_up_additional_detail(
+          work_item,
+          join_follow_up_detail_parts([value, boost, activity])
+        )
 
       {value, nil, picked, []} when is_binary(value) and value != "" and is_binary(picked) ->
-        append_follow_up_additional_detail(work_item, "#{value}; #{picked}")
+        append_follow_up_additional_detail(
+          work_item,
+          join_follow_up_detail_parts([value, activity, picked])
+        )
 
       {value, boost, picked, []}
       when is_binary(value) and value != "" and is_binary(boost) and is_binary(picked) ->
-        append_follow_up_additional_detail(work_item, "#{value}; #{boost}; #{picked}")
+        append_follow_up_additional_detail(
+          work_item,
+          join_follow_up_detail_parts([value, boost, activity, picked])
+        )
 
       {value, nil, nil, entries} when is_binary(value) and value != "" and entries != [] ->
         append_follow_up_additional_detail(
           work_item,
-          "#{value}; alternatives #{Enum.join(entries, ", ")}"
+          join_follow_up_detail_parts([
+            value,
+            activity,
+            "alternatives #{Enum.join(entries, ", ")}"
+          ])
         )
 
       {value, boost, nil, entries}
       when is_binary(value) and value != "" and is_binary(boost) and entries != [] ->
         append_follow_up_additional_detail(
           work_item,
-          "#{value}; #{boost}; alternatives #{Enum.join(entries, ", ")}"
+          join_follow_up_detail_parts([
+            value,
+            boost,
+            activity,
+            "alternatives #{Enum.join(entries, ", ")}"
+          ])
         )
 
       {value, nil, picked, entries}
       when is_binary(value) and value != "" and is_binary(picked) and entries != [] ->
         append_follow_up_additional_detail(
           work_item,
-          "#{value}; #{picked}; alternatives #{Enum.join(entries, ", ")}"
+          join_follow_up_detail_parts([
+            value,
+            activity,
+            picked,
+            "alternatives #{Enum.join(entries, ", ")}"
+          ])
         )
 
       {value, boost, picked, entries}
@@ -639,7 +692,13 @@ defmodule Mix.Tasks.HydraX.Work do
              entries != [] ->
         append_follow_up_additional_detail(
           work_item,
-          "#{value}; #{boost}; #{picked}; alternatives #{Enum.join(entries, ", ")}"
+          join_follow_up_detail_parts([
+            value,
+            boost,
+            activity,
+            picked,
+            "alternatives #{Enum.join(entries, ", ")}"
+          ])
         )
 
       _ ->
@@ -663,6 +722,7 @@ defmodule Mix.Tasks.HydraX.Work do
     |> Map.get("entries", [])
     |> List.wrap()
     |> Enum.filter(&is_map/1)
+    |> sort_follow_up_entries()
   end
 
   defp additional_follow_up_detail(summary) do
@@ -696,6 +756,43 @@ defmodule Mix.Tasks.HydraX.Work do
   defp maybe_append_follow_up_entry_detail(lines, work_item_id, index, label, value) do
     lines ++ ["follow_up_entry\t#{work_item_id}\t#{index}\t#{label}\t#{value}"]
   end
+
+  defp join_follow_up_detail_parts(parts) do
+    parts
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> Enum.join("; ")
+  end
+
+  defp sort_follow_up_entries(entries) when is_list(entries) do
+    Enum.sort_by(entries, fn entry ->
+      {
+        if(follow_up_entry_active?(entry), do: 0, else: 1),
+        follow_up_entry_status_rank(Map.get(entry, "status")),
+        -(Map.get(entry, "priority_boost") || 0),
+        Map.get(entry, "strategy") || ""
+      }
+    end)
+  end
+
+  defp sort_follow_up_entries(_entries), do: []
+
+  defp follow_up_entry_active?(entry) when is_map(entry) do
+    case Map.get(entry, "active") do
+      value when is_boolean(value) -> value
+      _ -> Map.get(entry, "status") not in ["completed", "failed", "canceled"]
+    end
+  end
+
+  defp follow_up_entry_active?(_entry), do: false
+
+  defp follow_up_entry_status_rank(status)
+       when status in ["planned", "claimed", "running", "blocked"],
+       do: 0
+
+  defp follow_up_entry_status_rank("replayed"), do: 1
+  defp follow_up_entry_status_rank("completed"), do: 2
+  defp follow_up_entry_status_rank("failed"), do: 3
+  defp follow_up_entry_status_rank(_status), do: 4
 
   defp derived_recovery_strategy_summary(metadata) do
     case metadata["recovery_strategy_summary"] do

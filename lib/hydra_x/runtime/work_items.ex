@@ -91,6 +91,7 @@ defmodule HydraX.Runtime.WorkItems do
       |> WorkItem.changeset(normalize_work_item_attrs(attrs, work_item))
       |> Repo.insert_or_update()
     end)
+    |> maybe_refresh_parent_follow_up_summary()
   end
 
   def list_artifacts(opts \\ []) do
@@ -1376,6 +1377,9 @@ defmodule HydraX.Runtime.WorkItems do
     %{
       "work_item_id" => Map.get(entry, "work_item_id"),
       "type" => Map.get(entry, "type"),
+      "status" => Map.get(entry, "status"),
+      "approval_stage" => Map.get(entry, "approval_stage"),
+      "active" => Map.get(entry, "active"),
       "strategy" => Map.get(entry, "strategy"),
       "summary" => Map.get(entry, "summary"),
       "deescalated_from" => Map.get(entry, "deescalated_from"),
@@ -1406,6 +1410,84 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp normalize_work_item_follow_up_entry(_entry), do: %{}
+
+  defp hydrate_follow_up_entry_states(entries) when is_list(entries) do
+    ids =
+      entries
+      |> Enum.map(&Map.get(&1, "work_item_id"))
+      |> Enum.filter(&is_integer/1)
+      |> Enum.uniq()
+
+    states_by_id =
+      if ids == [] do
+        %{}
+      else
+        WorkItem
+        |> where([item], item.id in ^ids)
+        |> select([item], {item.id, item.status, item.approval_stage})
+        |> Repo.all()
+        |> Map.new(fn {id, status, approval_stage} ->
+          {id,
+           %{
+             "status" => status,
+             "approval_stage" => approval_stage,
+             "active" => status not in @terminal_work_item_statuses
+           }}
+        end)
+      end
+
+    Enum.map(entries, fn entry ->
+      case Map.get(states_by_id, Map.get(entry, "work_item_id")) do
+        %{} = state ->
+          Map.merge(entry, state)
+
+        _ ->
+          Map.put_new(
+            entry,
+            "active",
+            follow_up_entry_status(Map.get(entry, "status")) not in @terminal_work_item_statuses
+          )
+      end
+    end)
+  end
+
+  defp hydrate_follow_up_entry_states(_entries), do: []
+
+  defp sort_follow_up_entries(entries) when is_list(entries) do
+    Enum.sort_by(entries, fn entry ->
+      strategy = Map.get(entry, "strategy")
+      alternatives = entry |> Map.get("alternative_strategies", []) |> List.wrap()
+
+      priority =
+        Map.get(entry, "priority_boost") ||
+          recovery_strategy_priority_boost(strategy, alternatives)
+
+      {
+        if(follow_up_entry_active?(entry), do: 0, else: 1),
+        follow_up_status_rank(follow_up_entry_status(Map.get(entry, "status"))),
+        -priority,
+        -preferred_follow_up_strategy_rank(strategy),
+        strategy || ""
+      }
+    end)
+  end
+
+  defp sort_follow_up_entries(_entries), do: []
+
+  defp follow_up_entry_active?(entry) when is_map(entry) do
+    case Map.get(entry, "active") do
+      value when is_boolean(value) ->
+        value
+
+      _ ->
+        follow_up_entry_status(Map.get(entry, "status")) not in @terminal_work_item_statuses
+    end
+  end
+
+  defp follow_up_entry_active?(_entry), do: false
+
+  defp follow_up_entry_status(status) when is_binary(status), do: status
+  defp follow_up_entry_status(_status), do: "planned"
 
   defp delegation_batch_repeatedly_deferred?(%{} = snapshot) do
     (snapshot["expansion_deferred_count"] || 0) > 1
@@ -10899,16 +10981,16 @@ defmodule HydraX.Runtime.WorkItems do
       |> Kernel.++([follow_up_summary_entry(follow_up_work_item, type)])
 
     follow_up_summary =
-      %{
-        "count" => length(ids),
-        "types" => types,
-        "strategies" => strategies,
-        "summaries" => summaries,
-        "entries" => follow_up_entries
-      }
-      |> maybe_put_follow_up_summary_list("alternative_strategies", alternative_strategies)
-      |> maybe_put_follow_up_summary_list("alternative_summaries", alternative_summaries)
-      |> maybe_put_follow_up_summary_list("priority_boosts", priority_boosts)
+      summarize_follow_up_entries(
+        follow_up_entries,
+        ids,
+        types,
+        strategies,
+        summaries,
+        alternative_strategies,
+        alternative_summaries,
+        priority_boosts
+      )
 
     (result_refs || %{})
     |> Map.put("follow_up_work_item_ids", ids)
@@ -10968,6 +11050,9 @@ defmodule HydraX.Runtime.WorkItems do
     %{
       "work_item_id" => follow_up_work_item.id,
       "type" => type,
+      "status" => follow_up_work_item.status,
+      "approval_stage" => follow_up_work_item.approval_stage,
+      "active" => follow_up_work_item.status not in @terminal_work_item_statuses,
       "strategy" => follow_up_summary_strategy(follow_up_work_item),
       "summary" => follow_up_summary_summary(follow_up_work_item),
       "alternative_strategies" => follow_up_summary_alternative_strategies(follow_up_work_item),
@@ -10996,6 +11081,34 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp maybe_put_follow_up_entry_detail(entry, _key, value) when value in [nil, ""], do: entry
   defp maybe_put_follow_up_entry_detail(entry, key, value), do: Map.put(entry, key, value)
+
+  defp summarize_follow_up_entries(
+         follow_up_entries,
+         ids,
+         types,
+         strategies,
+         summaries,
+         alternative_strategies,
+         alternative_summaries,
+         priority_boosts
+       ) do
+    sorted_entries = sort_follow_up_entries(follow_up_entries)
+    active_count = Enum.count(sorted_entries, &follow_up_entry_active?/1)
+    inactive_count = max(length(sorted_entries) - active_count, 0)
+
+    %{
+      "count" => length(ids),
+      "active_count" => active_count,
+      "inactive_count" => inactive_count,
+      "types" => types,
+      "strategies" => strategies,
+      "summaries" => summaries,
+      "entries" => sorted_entries
+    }
+    |> maybe_put_follow_up_summary_list("alternative_strategies", alternative_strategies)
+    |> maybe_put_follow_up_summary_list("alternative_summaries", alternative_summaries)
+    |> maybe_put_follow_up_summary_list("priority_boosts", priority_boosts)
+  end
 
   defp maybe_put_follow_up_summary_list(summary, _key, []), do: summary
   defp maybe_put_follow_up_summary_list(summary, key, values), do: Map.put(summary, key, values)
@@ -11104,12 +11217,21 @@ defmodule HydraX.Runtime.WorkItems do
     |> List.wrap()
     |> Enum.filter(&is_map/1)
     |> Enum.map(&normalize_work_item_follow_up_entry/1)
+    |> hydrate_follow_up_entry_states()
+    |> sort_follow_up_entries()
   end
 
   defp preferred_follow_up_entry(entries) when is_list(entries) do
-    entries
-    |> Enum.filter(&is_map/1)
-    |> Enum.reject(fn entry -> Map.get(entry, "strategy") in [nil, ""] end)
+    candidate_entries =
+      entries
+      |> Enum.filter(&is_map/1)
+      |> Enum.reject(fn entry -> Map.get(entry, "strategy") in [nil, ""] end)
+      |> then(fn filtered ->
+        active_entries = Enum.filter(filtered, &follow_up_entry_active?/1)
+        if active_entries == [], do: filtered, else: active_entries
+      end)
+
+    candidate_entries
     |> Enum.max_by(
       fn entry ->
         strategy = Map.get(entry, "strategy")
@@ -11528,6 +11650,138 @@ defmodule HydraX.Runtime.WorkItems do
   defp follow_up_status_rank("completed"), do: 2
   defp follow_up_status_rank("failed"), do: 3
   defp follow_up_status_rank(_status), do: 4
+
+  defp maybe_refresh_parent_follow_up_summary({:ok, %WorkItem{} = work_item} = result) do
+    refresh_parent_follow_up_summary(work_item)
+    result
+  end
+
+  defp maybe_refresh_parent_follow_up_summary(result), do: result
+
+  defp refresh_parent_follow_up_summary(%WorkItem{parent_work_item_id: parent_id} = work_item)
+       when is_integer(parent_id) do
+    case Repo.get(WorkItem, parent_id) do
+      %WorkItem{} = parent ->
+        tracked_ids =
+          parent.result_refs
+          |> Map.get("follow_up_work_item_ids", [])
+          |> List.wrap()
+          |> Enum.filter(&is_integer/1)
+
+        if work_item.id in tracked_ids do
+          existing_entries =
+            parent.result_refs
+            |> get_in(["follow_up_summary", "entries"])
+            |> List.wrap()
+            |> Enum.filter(&is_map/1)
+            |> Enum.map(&normalize_work_item_follow_up_entry/1)
+
+          tracked_follow_ups =
+            list_work_items(parent_work_item_id: parent.id, limit: 50, preload: false)
+            |> Enum.filter(&(&1.id in tracked_ids))
+
+          refreshed_entries =
+            tracked_ids
+            |> Enum.map(fn id ->
+              Enum.find(tracked_follow_ups, &(&1.id == id)) ||
+                Enum.find(existing_entries, &(Map.get(&1, "work_item_id") == id))
+            end)
+            |> Enum.reject(&is_nil/1)
+            |> Enum.map(fn
+              %WorkItem{} = follow_up_item ->
+                type =
+                  existing_entries
+                  |> Enum.find(&(Map.get(&1, "work_item_id") == follow_up_item.id))
+                  |> case do
+                    %{"type" => value} when is_binary(value) and value != "" -> value
+                    _ -> infer_follow_up_entry_type(follow_up_item)
+                  end
+
+                follow_up_summary_entry(follow_up_item, type)
+
+              %{} = entry ->
+                normalize_work_item_follow_up_entry(entry)
+            end)
+
+          refreshed_ids =
+            refreshed_entries
+            |> Enum.map(&Map.get(&1, "work_item_id"))
+            |> Enum.filter(&is_integer/1)
+            |> Enum.uniq()
+
+          refreshed_types =
+            refreshed_entries
+            |> Enum.map(&Map.get(&1, "type"))
+            |> Enum.reject(&(&1 in [nil, ""]))
+            |> Enum.uniq()
+
+          refreshed_strategies =
+            refreshed_entries
+            |> Enum.map(&Map.get(&1, "strategy"))
+            |> Enum.reject(&(&1 in [nil, ""]))
+            |> Enum.uniq()
+
+          refreshed_summaries =
+            refreshed_entries
+            |> Enum.map(&Map.get(&1, "summary"))
+            |> Enum.reject(&(&1 in [nil, ""]))
+            |> Enum.uniq()
+
+          refreshed_alternative_strategies =
+            refreshed_entries
+            |> Enum.flat_map(&(Map.get(&1, "alternative_strategies", []) |> List.wrap()))
+            |> Enum.reject(&(&1 in [nil, ""]))
+            |> Enum.uniq()
+
+          refreshed_alternative_summaries =
+            refreshed_entries
+            |> Enum.flat_map(&(Map.get(&1, "alternative_summaries", []) |> List.wrap()))
+            |> Enum.reject(&(&1 in [nil, ""]))
+            |> Enum.uniq()
+
+          refreshed_priority_boosts =
+            refreshed_entries
+            |> Enum.map(&Map.get(&1, "priority_boost"))
+            |> Enum.filter(&is_integer/1)
+            |> Enum.uniq()
+
+          refreshed_result_refs =
+            (parent.result_refs || %{})
+            |> Map.put("follow_up_work_item_ids", refreshed_ids)
+            |> Map.put(
+              "follow_up_summary",
+              summarize_follow_up_entries(
+                refreshed_entries,
+                refreshed_ids,
+                refreshed_types,
+                refreshed_strategies,
+                refreshed_summaries,
+                refreshed_alternative_strategies,
+                refreshed_alternative_summaries,
+                refreshed_priority_boosts
+              )
+            )
+
+          if refreshed_result_refs != (parent.result_refs || %{}) do
+            _ = save_work_item(parent, %{"result_refs" => refreshed_result_refs})
+          end
+        end
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp refresh_parent_follow_up_summary(_work_item), do: :ok
+
+  defp infer_follow_up_entry_type(%WorkItem{} = follow_up_item) do
+    case get_in(follow_up_item.metadata || %{}, ["task_type"]) do
+      "publish_summary" -> "publish"
+      "publish_approval" -> "publish"
+      "delegation_pressure_operator_follow_up" -> "operator"
+      _ -> "replan"
+    end
+  end
 
   defp sortable_datetime(%DateTime{} = datetime), do: DateTime.to_unix(datetime, :microsecond)
   defp sortable_datetime(_datetime), do: 0
