@@ -4965,6 +4965,147 @@ defmodule HydraX.RuntimeTest do
            ]
   end
 
+  test "guided constraint replans avoid candidates already under de-escalated pressure" do
+    planner =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, planner} = Runtime.save_agent(planner, %{"role" => "planner"})
+
+    researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, researcher} = Runtime.save_agent(researcher, %{"role" => "researcher"})
+
+    {:ok, _operator_pressure_parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Keep an operator-guided delegation tree open.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "status" => "blocked",
+        "execution_mode" => "delegate",
+        "priority" => 10,
+        "result_refs" => %{
+          "follow_up_summary" => %{
+            "count" => 1,
+            "types" => ["replan"],
+            "entries" => [
+              %{
+                "work_item_id" => 94_050,
+                "type" => "replan",
+                "strategy" => "operator_guided_replan",
+                "summary" => "Operator-guided recovery",
+                "priority_boost" => 3
+              }
+            ]
+          }
+        }
+      })
+
+    {:ok, _deescalated_review_parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Keep a review-guided path already stepped down to constraint-first.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "status" => "blocked",
+        "execution_mode" => "delegate",
+        "priority" => 9,
+        "result_refs" => %{
+          "follow_up_summary" => %{
+            "count" => 1,
+            "types" => ["replan"],
+            "entries" => [
+              %{
+                "work_item_id" => 94_051,
+                "type" => "replan",
+                "strategy" => "constraint_replan",
+                "summary" => "Constraint-first recovery",
+                "deescalated_from" => "review_guided_replan",
+                "priority_boost" => 1
+              }
+            ]
+          }
+        }
+      })
+
+    {:ok, parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" =>
+          "Recover a constrained branch without piling onto a review path already being stepped down.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "execution_mode" => "delegate",
+        "priority" => 7,
+        "metadata" => %{"delegate_role" => "researcher"},
+        "budget" => %{"token_budget" => 5}
+      })
+
+    assert {:ok, planner_summary} = Runtime.run_autonomy_cycle(planner.id)
+    assert planner_summary.action == "delegated"
+
+    parent = Runtime.get_work_item!(parent.id)
+    [child_id] = parent.result_refs["child_work_item_ids"]
+    child = Runtime.get_work_item!(child_id)
+
+    {:ok, _usage} =
+      Budget.record_usage(researcher.id, nil,
+        tokens_in: 4,
+        tokens_out: 2,
+        metadata: %{purpose: "autonomy_research", work_item_id: child.id}
+      )
+
+    assert {:ok, researcher_summary} = Runtime.run_autonomy_cycle(researcher.id)
+    assert researcher_summary.action == "policy_blocked"
+
+    parent = Runtime.get_work_item!(parent.id)
+
+    {:ok, _parent} =
+      Runtime.save_work_item(parent, %{
+        "result_refs" =>
+          (parent.result_refs || %{})
+          |> Map.put("follow_up_summary", %{
+            "count" => 1,
+            "types" => ["replan"],
+            "strategies" => [
+              "operator_guided_replan",
+              "review_guided_replan",
+              "request_review"
+            ]
+          })
+      })
+
+    assert {:ok, finalize_summary} = Runtime.run_autonomy_cycle(planner.id)
+    assert finalize_summary.action == "finalized_blocked_parent"
+
+    replan_item = Runtime.get_work_item!(finalize_summary.follow_up_work_item.id)
+
+    assert get_in(replan_item.metadata || %{}, ["preferred_recovery_strategy"]) ==
+             "request_review"
+
+    assert get_in(replan_item.metadata || %{}, ["recovery_strategy_deescalated_from"]) ==
+             "operator_guided_replan"
+
+    assert get_in(replan_item.metadata || %{}, ["recovery_strategy_pressure_snapshot"]) == %{
+             "base" => "operator_guided_replan",
+             "base_selected_count" => 1,
+             "preferred" => "request_review",
+             "preferred_selected_count" => 0,
+             "preferred_fallback_count" => 0,
+             "alternative_selected_counts" => %{"operator_guided_replan" => 1},
+             "alternative_fallback_counts" => %{},
+             "alternative_deescalated_counts" => %{"review_guided_replan" => 1}
+           }
+
+    assert get_in(replan_item.metadata || %{}, ["recovery_strategy_alternatives"]) == [
+             "operator_guided_replan",
+             "review_guided_replan"
+           ]
+  end
+
   test "guided constraint replans de-escalate under existing de-escalated operator pressure" do
     planner =
       create_agent()
@@ -5063,6 +5204,7 @@ defmodule HydraX.RuntimeTest do
              "de-escalated from Operator-guided recovery under existing planner de-escalation pressure (1 existing)"
 
     assert get_in(replan_item.metadata || %{}, ["recovery_strategy_pressure_snapshot"]) == %{
+             "alternative_deescalated_counts" => %{"operator_guided_replan" => 1},
              "base" => "operator_guided_replan",
              "base_selected_count" => 0,
              "base_deescalated_count" => 1,

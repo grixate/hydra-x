@@ -7595,6 +7595,7 @@ defmodule HydraX.Runtime.WorkItems do
       fn {strategy, index} ->
         {
           follow_up_strategy_selected_pressure(pressure, strategy),
+          follow_up_strategy_deescalated_pressure(pressure, strategy),
           follow_up_strategy_fallback_pressure(pressure, strategy),
           index
         }
@@ -11158,19 +11159,29 @@ defmodule HydraX.Runtime.WorkItems do
   defp follow_up_strategy_pressure_snapshot(base, preferred, alternatives, intervention_pressure)
        when is_binary(base) and is_binary(preferred) and is_list(alternatives) and
               is_map(intervention_pressure) do
-    snapshot = %{
-      "base" => base,
-      "base_selected_count" => follow_up_strategy_selected_pressure(intervention_pressure, base),
-      "preferred" => preferred,
-      "preferred_selected_count" =>
-        follow_up_strategy_selected_pressure(intervention_pressure, preferred),
-      "preferred_fallback_count" =>
-        follow_up_strategy_fallback_pressure(intervention_pressure, preferred),
-      "alternative_selected_counts" =>
-        follow_up_strategy_pressure_counts(alternatives, intervention_pressure, :selected),
-      "alternative_fallback_counts" =>
-        follow_up_strategy_pressure_counts(alternatives, intervention_pressure, :fallback)
-    }
+    snapshot =
+      %{
+        "base" => base,
+        "base_selected_count" =>
+          follow_up_strategy_selected_pressure(intervention_pressure, base),
+        "preferred" => preferred,
+        "preferred_selected_count" =>
+          follow_up_strategy_selected_pressure(intervention_pressure, preferred),
+        "preferred_fallback_count" =>
+          follow_up_strategy_fallback_pressure(intervention_pressure, preferred),
+        "alternative_selected_counts" =>
+          follow_up_strategy_pressure_counts(alternatives, intervention_pressure, :selected),
+        "alternative_fallback_counts" =>
+          follow_up_strategy_pressure_counts(alternatives, intervention_pressure, :fallback)
+      }
+      |> maybe_put_pressure_snapshot_count(
+        "preferred_deescalated_count",
+        follow_up_strategy_deescalated_pressure(intervention_pressure, preferred)
+      )
+      |> maybe_put_pressure_snapshot_map(
+        "alternative_deescalated_counts",
+        follow_up_strategy_pressure_counts(alternatives, intervention_pressure, :deescalated)
+      )
 
     case follow_up_strategy_deescalated_pressure(intervention_pressure, base) do
       count when is_integer(count) and count > 0 ->
@@ -11259,7 +11270,8 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp follow_up_strategy_pressure_counts(strategies, pressure, mode)
-       when is_list(strategies) and is_map(pressure) and mode in [:selected, :fallback] do
+       when is_list(strategies) and is_map(pressure) and
+              mode in [:selected, :fallback, :deescalated] do
     strategies
     |> Enum.reject(&(&1 in [nil, ""]))
     |> Enum.uniq()
@@ -11268,6 +11280,7 @@ defmodule HydraX.Runtime.WorkItems do
         case mode do
           :selected -> follow_up_strategy_selected_pressure(pressure, strategy)
           :fallback -> follow_up_strategy_fallback_pressure(pressure, strategy)
+          :deescalated -> follow_up_strategy_deescalated_pressure(pressure, strategy)
         end
 
       if count > 0 do
@@ -11279,6 +11292,22 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp follow_up_strategy_pressure_counts(_strategies, _pressure, _mode), do: %{}
+
+  defp maybe_put_pressure_snapshot_count(snapshot, _key, count)
+       when not is_map(snapshot) or not is_integer(count) or count <= 0,
+       do: snapshot
+
+  defp maybe_put_pressure_snapshot_count(snapshot, key, count) do
+    Map.put(snapshot, key, count)
+  end
+
+  defp maybe_put_pressure_snapshot_map(snapshot, _key, values)
+       when not is_map(snapshot) or not is_map(values) or map_size(values) == 0,
+       do: snapshot
+
+  defp maybe_put_pressure_snapshot_map(snapshot, key, values) do
+    Map.put(snapshot, key, values)
+  end
 
   defp apply_follow_up_strategy_to_follow_up_metadata(metadata, %{strategy: strategy} = selection)
        when is_binary(strategy) do
