@@ -765,6 +765,12 @@ defmodule HydraX.Runtime.WorkItems do
     delegation_selected_intervention_portfolio_count =
       Enum.count(delegation_supervision, &((&1.selected_intervention_batches || 0) > 0))
 
+    delegation_active_selected_intervention_portfolio_count =
+      Enum.count(delegation_supervision, &((&1.active_selected_intervention_batches || 0) > 0))
+
+    delegation_inactive_selected_intervention_portfolio_count =
+      Enum.count(delegation_supervision, &((&1.inactive_selected_intervention_batches || 0) > 0))
+
     delegation_fallback_intervention_portfolio_count =
       Enum.count(delegation_supervision, fn entry ->
         (entry.selected_intervention_batches || 0) == 0 and
@@ -851,6 +857,10 @@ defmodule HydraX.Runtime.WorkItems do
       delegation_fallback_intervention_batch_count: delegation_fallback_intervention_batch_count,
       delegation_selected_intervention_portfolio_count:
         delegation_selected_intervention_portfolio_count,
+      delegation_active_selected_intervention_portfolio_count:
+        delegation_active_selected_intervention_portfolio_count,
+      delegation_inactive_selected_intervention_portfolio_count:
+        delegation_inactive_selected_intervention_portfolio_count,
       delegation_fallback_intervention_portfolio_count:
         delegation_fallback_intervention_portfolio_count,
       delegation_deescalated_portfolio_count: delegation_deescalated_portfolio_count,
@@ -1160,11 +1170,12 @@ defmodule HydraX.Runtime.WorkItems do
     |> Enum.sort_by(fn entry ->
       {
         -(entry.active_selected_intervention_batches || 0),
+        -(entry.inactive_selected_intervention_batches || 0),
         -(entry.active_follow_up_batches || 0),
+        -(entry.stale_follow_up_batches || 0),
         -(entry.selected_intervention_batches || 0),
         -(entry.deescalation_pressure_total || 0),
         -(entry.deescalated_batches || 0),
-        -(entry.stale_follow_up_batches || 0),
         -(entry.fallback_intervention_batches || 0),
         -(entry.dominant_recovery_score || 0),
         -(entry.dominant_recovery_count || 0),
@@ -11292,34 +11303,7 @@ defmodule HydraX.Runtime.WorkItems do
   defp base_work_item_follow_up_selection(%WorkItem{} = work_item) do
     case preferred_follow_up_entry(explicit_work_item_follow_up_entries(work_item)) do
       %{} = entry ->
-        strategy = Map.get(entry, "strategy")
-
-        if is_binary(strategy) and strategy != "" do
-          %{
-            source: :entry,
-            strategy: strategy,
-            summary: Map.get(entry, "summary"),
-            alternative_strategies:
-              entry
-              |> Map.get("alternative_strategies", [])
-              |> List.wrap()
-              |> Enum.reject(&(&1 in [nil, "", strategy]))
-              |> Enum.uniq(),
-            alternative_summaries:
-              entry
-              |> Map.get("alternative_summaries", [])
-              |> List.wrap()
-              |> Enum.reject(&(&1 in [nil, ""])),
-            deescalated_from: Map.get(entry, "deescalated_from"),
-            pressure_snapshot: Map.get(entry, "pressure_snapshot"),
-            selection_reason: Map.get(entry, "selection_reason"),
-            priority_boost:
-              case Map.get(entry, "priority_boost") do
-                value when is_integer(value) -> value
-                _ -> nil
-              end
-          }
-        end
+        follow_up_entry_selection(entry)
 
       _ ->
         strategies = work_item_follow_up_strategies(work_item)
@@ -11343,6 +11327,7 @@ defmodule HydraX.Runtime.WorkItems do
     |> explicit_work_item_follow_up_entries()
     |> Enum.filter(&follow_up_entry_active?/1)
     |> preferred_follow_up_entry()
+    |> follow_up_entry_selection()
   end
 
   defp inactive_work_item_follow_up_selection(%WorkItem{} = work_item) do
@@ -11350,7 +11335,41 @@ defmodule HydraX.Runtime.WorkItems do
     |> explicit_work_item_follow_up_entries()
     |> Enum.reject(&follow_up_entry_active?/1)
     |> preferred_follow_up_entry()
+    |> follow_up_entry_selection()
   end
+
+  defp follow_up_entry_selection(%{} = entry) do
+    strategy = Map.get(entry, "strategy")
+
+    if is_binary(strategy) and strategy != "" do
+      %{
+        source: :entry,
+        strategy: strategy,
+        summary: Map.get(entry, "summary"),
+        alternative_strategies:
+          entry
+          |> Map.get("alternative_strategies", [])
+          |> List.wrap()
+          |> Enum.reject(&(&1 in [nil, "", strategy]))
+          |> Enum.uniq(),
+        alternative_summaries:
+          entry
+          |> Map.get("alternative_summaries", [])
+          |> List.wrap()
+          |> Enum.reject(&(&1 in [nil, ""])),
+        deescalated_from: Map.get(entry, "deescalated_from"),
+        pressure_snapshot: Map.get(entry, "pressure_snapshot"),
+        selection_reason: Map.get(entry, "selection_reason"),
+        priority_boost:
+          case Map.get(entry, "priority_boost") do
+            value when is_integer(value) -> value
+            _ -> nil
+          end
+      }
+    end
+  end
+
+  defp follow_up_entry_selection(_entry), do: nil
 
   defp explicit_work_item_follow_up_entries(%WorkItem{} = work_item) do
     work_item

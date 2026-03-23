@@ -9409,6 +9409,8 @@ defmodule HydraX.RuntimeTest do
     assert status.delegation_selected_intervention_batch_count == 1
     assert status.delegation_fallback_intervention_batch_count == 1
     assert status.delegation_selected_intervention_portfolio_count == 1
+    assert status.delegation_active_selected_intervention_portfolio_count == 1
+    assert status.delegation_inactive_selected_intervention_portfolio_count == 0
     assert status.delegation_fallback_intervention_portfolio_count == 0
     assert status.delegation_deescalated_portfolio_count == 1
     assert status.delegation_deescalated_batch_count == 1
@@ -9556,6 +9558,218 @@ defmodule HydraX.RuntimeTest do
     assert Enum.at(status.delegation_supervision, 0).deescalation_pressure_total == 3
     assert Enum.at(status.delegation_supervision, 1).agent_id == planner_two.id
     assert Enum.at(status.delegation_supervision, 1).deescalation_pressure_total == 1
+  end
+
+  test "delegation supervision prioritizes active selected intervention over stale and fallback portfolios" do
+    planner_active =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, planner_active} = Runtime.save_agent(planner_active, %{"role" => "planner"})
+
+    planner_stale =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, planner_stale} = Runtime.save_agent(planner_stale, %{"role" => "planner"})
+
+    planner_fallback =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, planner_fallback} = Runtime.save_agent(planner_fallback, %{"role" => "planner"})
+
+    {:ok, active_follow_up} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Guide active planner recovery.",
+        "assigned_agent_id" => planner_active.id,
+        "assigned_role" => "planner",
+        "status" => "planned",
+        "priority" => 70
+      })
+
+    {:ok, stale_follow_up} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Record stale planner recovery guidance.",
+        "assigned_agent_id" => planner_stale.id,
+        "assigned_role" => "planner",
+        "status" => "completed",
+        "priority" => 69
+      })
+
+    {:ok, fallback_follow_up} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Record fallback-only planner recovery guidance.",
+        "assigned_agent_id" => planner_fallback.id,
+        "assigned_role" => "planner",
+        "status" => "planned",
+        "priority" => 68
+      })
+
+    {:ok, fallback_request_review} =
+      Runtime.save_work_item(%{
+        "kind" => "task",
+        "goal" => "Record request-review fallback guidance.",
+        "assigned_agent_id" => planner_fallback.id,
+        "assigned_role" => "planner",
+        "status" => "planned",
+        "priority" => 67
+      })
+
+    {:ok, _active_parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Carry active selected intervention pressure.",
+        "assigned_agent_id" => planner_active.id,
+        "assigned_role" => "planner",
+        "status" => "blocked",
+        "execution_mode" => "delegate",
+        "priority" => 90,
+        "result_refs" => %{
+          "follow_up_summary" => %{
+            "count" => 1,
+            "types" => ["replan"],
+            "entries" => [
+              %{
+                "work_item_id" => active_follow_up.id,
+                "type" => "replan",
+                "strategy" => "operator_guided_replan",
+                "summary" => "Operator-guided recovery",
+                "priority_boost" => 3
+              }
+            ]
+          }
+        },
+        "metadata" => %{
+          "delegation_batch" => %{
+            "mode" => "parallel",
+            "expected_count" => 2,
+            "items" => [
+              %{
+                "child_key" => "active-child-1",
+                "assigned_role" => "researcher",
+                "status" => "pending_dispatch"
+              },
+              %{
+                "child_key" => "active-child-2",
+                "assigned_role" => "operator",
+                "status" => "pending_dispatch"
+              }
+            ],
+            "pending_roles" => %{"researcher" => 1, "operator" => 1}
+          }
+        }
+      })
+
+    {:ok, _stale_parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Carry stale selected intervention pressure.",
+        "assigned_agent_id" => planner_stale.id,
+        "assigned_role" => "planner",
+        "status" => "blocked",
+        "execution_mode" => "delegate",
+        "priority" => 90,
+        "result_refs" => %{
+          "follow_up_summary" => %{
+            "count" => 1,
+            "types" => ["replan"],
+            "entries" => [
+              %{
+                "work_item_id" => stale_follow_up.id,
+                "type" => "replan",
+                "strategy" => "operator_guided_replan",
+                "summary" => "Operator-guided recovery",
+                "priority_boost" => 3
+              }
+            ]
+          }
+        },
+        "metadata" => %{
+          "delegation_batch" => %{
+            "mode" => "parallel",
+            "expected_count" => 2,
+            "items" => [
+              %{
+                "child_key" => "stale-child-1",
+                "assigned_role" => "researcher",
+                "status" => "pending_dispatch"
+              },
+              %{
+                "child_key" => "stale-child-2",
+                "assigned_role" => "operator",
+                "status" => "pending_dispatch"
+              }
+            ],
+            "pending_roles" => %{"researcher" => 1, "operator" => 1}
+          }
+        }
+      })
+
+    {:ok, _fallback_parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Carry fallback-only intervention pressure.",
+        "assigned_agent_id" => planner_fallback.id,
+        "assigned_role" => "planner",
+        "status" => "blocked",
+        "execution_mode" => "delegate",
+        "priority" => 90,
+        "result_refs" => %{
+          "follow_up_summary" => %{
+            "count" => 1,
+            "types" => ["replan"],
+            "entries" => [
+              %{
+                "work_item_id" => fallback_follow_up.id,
+                "type" => "replan",
+                "strategy" => "constraint_replan",
+                "summary" => "Constraint-first recovery",
+                "priority_boost" => 1
+              },
+              %{
+                "work_item_id" => fallback_request_review.id,
+                "type" => "replan",
+                "strategy" => "request_review",
+                "summary" => "Request review",
+                "priority_boost" => 0
+              }
+            ]
+          }
+        },
+        "metadata" => %{
+          "delegation_batch" => %{
+            "mode" => "parallel",
+            "expected_count" => 2,
+            "items" => [
+              %{
+                "child_key" => "fallback-child-1",
+                "assigned_role" => "researcher",
+                "status" => "pending_dispatch"
+              },
+              %{
+                "child_key" => "fallback-child-2",
+                "assigned_role" => "operator",
+                "status" => "pending_dispatch"
+              }
+            ],
+            "pending_roles" => %{"researcher" => 1, "operator" => 1}
+          }
+        }
+      })
+
+    status = Runtime.autonomy_status()
+
+    assert status.delegation_active_selected_intervention_portfolio_count == 1
+    assert status.delegation_inactive_selected_intervention_portfolio_count == 1
+    assert status.delegation_fallback_intervention_portfolio_count == 1
+
+    assert Enum.at(status.delegation_supervision, 0).agent_id == planner_active.id
+    assert Enum.at(status.delegation_supervision, 1).agent_id == planner_stale.id
+    assert Enum.at(status.delegation_supervision, 2).agent_id == planner_fallback.id
   end
 
   test "autonomy cycle releases local work item ownership after completion" do

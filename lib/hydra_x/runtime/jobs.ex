@@ -144,9 +144,11 @@ defmodule HydraX.Runtime.Jobs do
       |> Map.put("run_retention_days", run_retention_days)
       |> Map.put("next_run_at", next_run_at)
 
-    job
-    |> ScheduledJob.changeset(attrs)
-    |> Repo.insert_or_update()
+    retry_on_busy(fn ->
+      job
+      |> ScheduledJob.changeset(attrs)
+      |> Repo.insert_or_update()
+    end)
   end
 
   def delete_scheduled_job!(id) do
@@ -1339,37 +1341,55 @@ defmodule HydraX.Runtime.Jobs do
   # -- Scheduling --
 
   defp ensure_named_job!(agent_id, kind, name, attrs) do
-    jobs =
-      ScheduledJob
-      |> where([job], job.agent_id == ^agent_id and job.kind == ^kind and job.name == ^name)
-      |> order_by([job], asc: job.inserted_at, asc: job.id)
-      |> Repo.all()
+    retry_on_busy(fn ->
+      jobs =
+        ScheduledJob
+        |> where([job], job.agent_id == ^agent_id and job.kind == ^kind and job.name == ^name)
+        |> order_by([job], asc: job.inserted_at, asc: job.id)
+        |> Repo.all()
 
-    case jobs do
-      [] ->
-        {:ok, job} =
-          save_scheduled_job(
-            Map.merge(attrs, %{
-              agent_id: agent_id,
-              name: name,
-              kind: kind
+      case jobs do
+        [] ->
+          {:ok, job} =
+            save_scheduled_job(
+              Map.merge(attrs, %{
+                agent_id: agent_id,
+                name: name,
+                kind: kind
+              })
+            )
+
+          job
+
+        [job | rest] ->
+          Enum.each(rest, &Repo.delete!/1)
+
+          {:ok, job} =
+            save_scheduled_job(job, %{
+              interval_minutes: attrs[:interval_minutes],
+              enabled: attrs[:enabled]
             })
-          )
 
-        job
-
-      [job | rest] ->
-        Enum.each(rest, &Repo.delete!/1)
-
-        {:ok, job} =
-          save_scheduled_job(job, %{
-            interval_minutes: attrs[:interval_minutes],
-            enabled: attrs[:enabled]
-          })
-
-        job
-    end
+          job
+      end
+    end)
   end
+
+  defp retry_on_busy(fun, attempts \\ 20)
+
+  defp retry_on_busy(fun, attempts) when is_function(fun, 0) and attempts > 1 do
+    fun.()
+  rescue
+    error ->
+      if String.contains?(Exception.message(error), "Database busy") do
+        Process.sleep(50)
+        retry_on_busy(fun, attempts - 1)
+      else
+        reraise(error, __STACKTRACE__)
+      end
+  end
+
+  defp retry_on_busy(fun, _attempts), do: fun.()
 
   defp next_run_at(%ScheduledJob{} = job), do: next_run_at(job, DateTime.utc_now())
 

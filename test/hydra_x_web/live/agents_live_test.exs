@@ -476,7 +476,7 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "role quorum operator x1 met"
     assert html =~ "quorum skipped 1"
     assert html =~ "urgent 1"
-    assert html =~ "selected-intervention-heavy"
+    assert html =~ "selected-active-intervention-heavy"
     assert html =~ "dominant operator-guided x1"
     assert html =~ "selected mix operator-guided x1"
     assert html =~ "fallback mix review-guided x1"

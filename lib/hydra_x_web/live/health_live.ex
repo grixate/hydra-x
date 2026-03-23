@@ -1358,6 +1358,10 @@ defmodule HydraXWeb.HealthLive do
             <p class="mt-1 text-xs text-[var(--hx-mute)]">
               selected-heavy portfolios{" "}
               {@autonomy_status.delegation_selected_intervention_portfolio_count || 0} ·
+              selected-active portfolios{" "}
+              {@autonomy_status.delegation_active_selected_intervention_portfolio_count || 0} ·
+              selected-stale portfolios{" "}
+              {@autonomy_status.delegation_inactive_selected_intervention_portfolio_count || 0} ·
               selected-active batches{" "}
               {@autonomy_status.delegation_active_selected_intervention_batch_count || 0} ·
               selected-stale batches{" "}
