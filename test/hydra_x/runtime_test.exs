@@ -8841,6 +8841,137 @@ defmodule HydraX.RuntimeTest do
     assert Enum.any?(status.recent_work_items, &(&1.id == work_item.id))
   end
 
+  test "delegation supervision prioritizes higher de-escalation pressure across planners" do
+    planner_one =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, planner_one} = Runtime.save_agent(planner_one, %{"role" => "planner"})
+
+    planner_two =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, planner_two} = Runtime.save_agent(planner_two, %{"role" => "planner"})
+
+    {:ok, _higher_pressure_parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Carry heavier de-escalation pressure.",
+        "assigned_agent_id" => planner_one.id,
+        "assigned_role" => "planner",
+        "status" => "blocked",
+        "execution_mode" => "delegate",
+        "priority" => 90,
+        "result_refs" => %{
+          "follow_up_summary" => %{
+            "count" => 1,
+            "types" => ["replan"],
+            "entries" => [
+              %{
+                "work_item_id" => 96_001,
+                "type" => "replan",
+                "strategy" => "review_guided_replan",
+                "summary" => "Reviewer-guided recovery",
+                "deescalated_from" => "operator_guided_replan",
+                "pressure_snapshot" => %{
+                  "base" => "operator_guided_replan",
+                  "base_selected_count" => 3,
+                  "preferred" => "review_guided_replan",
+                  "preferred_selected_count" => 0,
+                  "preferred_fallback_count" => 0,
+                  "alternative_selected_counts" => %{"operator_guided_replan" => 3},
+                  "alternative_fallback_counts" => %{}
+                },
+                "priority_boost" => 3
+              }
+            ]
+          }
+        },
+        "metadata" => %{
+          "delegation_batch" => %{
+            "mode" => "parallel",
+            "expected_count" => 2,
+            "items" => [
+              %{
+                "child_key" => "researcher-high",
+                "assigned_role" => "researcher",
+                "status" => "pending_dispatch"
+              },
+              %{
+                "child_key" => "operator-high",
+                "assigned_role" => "operator",
+                "status" => "pending_dispatch"
+              }
+            ],
+            "pending_roles" => %{"operator" => 1, "researcher" => 1}
+          }
+        }
+      })
+
+    {:ok, _lower_pressure_parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Carry lighter de-escalation pressure.",
+        "assigned_agent_id" => planner_two.id,
+        "assigned_role" => "planner",
+        "status" => "blocked",
+        "execution_mode" => "delegate",
+        "priority" => 90,
+        "result_refs" => %{
+          "follow_up_summary" => %{
+            "count" => 1,
+            "types" => ["replan"],
+            "entries" => [
+              %{
+                "work_item_id" => 96_002,
+                "type" => "replan",
+                "strategy" => "review_guided_replan",
+                "summary" => "Reviewer-guided recovery",
+                "deescalated_from" => "operator_guided_replan",
+                "pressure_snapshot" => %{
+                  "base" => "operator_guided_replan",
+                  "base_selected_count" => 1,
+                  "preferred" => "review_guided_replan",
+                  "preferred_selected_count" => 0,
+                  "preferred_fallback_count" => 0,
+                  "alternative_selected_counts" => %{"operator_guided_replan" => 1},
+                  "alternative_fallback_counts" => %{}
+                },
+                "priority_boost" => 3
+              }
+            ]
+          }
+        },
+        "metadata" => %{
+          "delegation_batch" => %{
+            "mode" => "parallel",
+            "expected_count" => 2,
+            "items" => [
+              %{
+                "child_key" => "researcher-low",
+                "assigned_role" => "researcher",
+                "status" => "pending_dispatch"
+              },
+              %{
+                "child_key" => "operator-low",
+                "assigned_role" => "operator",
+                "status" => "pending_dispatch"
+              }
+            ],
+            "pending_roles" => %{"operator" => 1, "researcher" => 1}
+          }
+        }
+      })
+
+    status = Runtime.autonomy_status()
+
+    assert Enum.at(status.delegation_supervision, 0).agent_id == planner_one.id
+    assert Enum.at(status.delegation_supervision, 0).deescalation_pressure_total == 3
+    assert Enum.at(status.delegation_supervision, 1).agent_id == planner_two.id
+    assert Enum.at(status.delegation_supervision, 1).deescalation_pressure_total == 1
+  end
+
   test "autonomy cycle releases local work item ownership after completion" do
     agent =
       create_agent()

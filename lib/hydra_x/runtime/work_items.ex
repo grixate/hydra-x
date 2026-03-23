@@ -1105,6 +1105,7 @@ defmodule HydraX.Runtime.WorkItems do
     |> Enum.sort_by(fn entry ->
       {
         -(entry.selected_intervention_batches || 0),
+        -(entry.deescalation_pressure_total || 0),
         -(entry.deescalated_batches || 0),
         -(entry.fallback_intervention_batches || 0),
         -(entry.dominant_recovery_score || 0),
