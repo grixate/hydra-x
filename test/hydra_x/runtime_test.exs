@@ -4620,6 +4620,102 @@ defmodule HydraX.RuntimeTest do
            ]
   end
 
+  test "delegation supervision separates active and stale selected recovery mixes" do
+    planner =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, planner} = Runtime.save_agent(planner, %{"role" => "planner"})
+
+    {:ok, _active_parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Keep an active reviewer-guided recovery open.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "status" => "blocked",
+        "execution_mode" => "delegate",
+        "priority" => 9,
+        "metadata" => %{
+          "delegation_batch" => %{
+            "expected_count" => 2
+          }
+        },
+        "result_refs" => %{
+          "follow_up_summary" => %{
+            "count" => 2,
+            "active_count" => 1,
+            "inactive_count" => 1,
+            "entries" => [
+              %{
+                "work_item_id" => 96_001,
+                "type" => "replan",
+                "status" => "planned",
+                "approval_stage" => "draft",
+                "active" => true,
+                "strategy" => "review_guided_replan",
+                "summary" => "Reviewer-guided recovery",
+                "priority_boost" => 2
+              },
+              %{
+                "work_item_id" => 96_002,
+                "type" => "replan",
+                "status" => "completed",
+                "approval_stage" => "validated",
+                "active" => false,
+                "strategy" => "operator_guided_replan",
+                "summary" => "Operator-guided recovery",
+                "priority_boost" => 3
+              }
+            ]
+          }
+        }
+      })
+
+    {:ok, _stale_parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => "Keep only stale operator-guided recovery on record.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "status" => "blocked",
+        "execution_mode" => "delegate",
+        "priority" => 8,
+        "metadata" => %{
+          "delegation_batch" => %{
+            "expected_count" => 2
+          }
+        },
+        "result_refs" => %{
+          "follow_up_summary" => %{
+            "count" => 1,
+            "active_count" => 0,
+            "inactive_count" => 1,
+            "entries" => [
+              %{
+                "work_item_id" => 96_003,
+                "type" => "replan",
+                "status" => "completed",
+                "approval_stage" => "validated",
+                "active" => false,
+                "strategy" => "operator_guided_replan",
+                "summary" => "Operator-guided recovery",
+                "priority_boost" => 3
+              }
+            ]
+          }
+        }
+      })
+
+    autonomy = Runtime.autonomy_status()
+    [entry] = autonomy.delegation_supervision
+
+    assert entry.active_follow_up_batches == 1
+    assert entry.stale_follow_up_batches == 1
+
+    assert autonomy.delegation_stale_follow_up_batch_count == 1
+  end
+
   test "completed planner follow-up entries use entry priority to guide future delegation context" do
     planner =
       create_agent()

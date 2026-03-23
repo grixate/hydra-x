@@ -78,7 +78,9 @@ defmodule HydraX.Runtime.Agents do
           end
 
         if record.is_default do
-          from(other in AgentProfile, where: other.id != ^record.id and other.is_default == true)
+          from(other in AgentProfile,
+            where: other.id != ^record.id and other.is_default == true
+          )
           |> Repo.update_all(set: [is_default: false])
         end
 
@@ -498,14 +500,14 @@ defmodule HydraX.Runtime.Agents do
   defp readiness_status(true, "mock"), do: "mock"
   defp readiness_status(true, _), do: "degraded"
 
-  defp retry_busy_transaction(fun, attempts \\ 3)
+  defp retry_busy_transaction(fun, attempts \\ 6)
 
   defp retry_busy_transaction(fun, attempts) when attempts > 1 do
     fun.()
   rescue
     error in Exqlite.Error ->
       if String.contains?(Exception.message(error), "Database busy") do
-        Process.sleep(40)
+        Process.sleep((7 - attempts) * 40)
         retry_busy_transaction(fun, attempts - 1)
       else
         reraise error, __STACKTRACE__

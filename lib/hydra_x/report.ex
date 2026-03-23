@@ -218,7 +218,7 @@ defmodule HydraX.Report do
     #{render_conversations(snapshot.conversations)}
 
     ## Autonomous Work Items
-    - active_jobs=#{snapshot.autonomy.active_autonomy_job_count} unsafe_requests=#{snapshot.autonomy.unsafe_request_count} budget_blocked=#{snapshot.autonomy.budget_blocked_count} auto_assigned=#{snapshot.autonomy.auto_assigned_count} fallback_assigned=#{snapshot.autonomy.capability_fallback_count} role_only_open=#{snapshot.autonomy.role_only_open_count} active_claimed=#{snapshot.autonomy.active_claimed_count} stale_claimed=#{snapshot.autonomy.stale_claimed_count} remote_claimed=#{snapshot.autonomy.remote_claimed_count} orphaned_assignments=#{snapshot.autonomy.orphaned_assignment_count} deferred_role_backlog=#{snapshot.autonomy.deferred_role_queue_count || 0} urgent_role_backlog=#{snapshot.autonomy.urgent_role_queue_count || 0} urgent_deferred_role_backlog=#{snapshot.autonomy.urgent_deferred_role_queue_count || 0} role_backlog=#{render_role_queue_backlog_summary(snapshot.autonomy.role_queue_backlog)} saturated_workers=#{Enum.count(snapshot.autonomy.worker_pressure, &(&1.capacity_posture == "saturated"))} delegation_batches=#{Enum.reduce(snapshot.autonomy.delegation_supervision || [], 0, &(&1.active_batches + &2))} urgent_delegation_batches=#{snapshot.autonomy.delegation_urgent_batch_count || 0} intervention_batches=#{snapshot.autonomy.delegation_intervention_batch_count || 0} operator_guided_batches=#{snapshot.autonomy.delegation_operator_guided_batch_count || 0} review_guided_batches=#{snapshot.autonomy.delegation_review_guided_batch_count || 0} request_review_batches=#{snapshot.autonomy.delegation_request_review_batch_count || 0} selected_intervention_batches=#{snapshot.autonomy.delegation_selected_intervention_batch_count || 0} fallback_intervention_batches=#{snapshot.autonomy.delegation_fallback_intervention_batch_count || 0} selected_intervention_portfolios=#{snapshot.autonomy.delegation_selected_intervention_portfolio_count || 0} fallback_intervention_portfolios=#{snapshot.autonomy.delegation_fallback_intervention_portfolio_count || 0} deescalated_portfolios=#{snapshot.autonomy.delegation_deescalated_portfolio_count || 0} deescalated_batches=#{snapshot.autonomy.delegation_deescalated_batch_count || 0} deescalation_pressure=#{snapshot.autonomy.delegation_deescalation_pressure_total || 0} selected_recovery_batches=#{report_recovery_mix_or_none(snapshot.autonomy.delegation_selected_recovery_batches || %{})} fallback_recovery_batches=#{report_recovery_mix_or_none(snapshot.autonomy.delegation_alternative_recovery_batches || %{})} deescalated_recovery_batches=#{report_recovery_mix_or_none(snapshot.autonomy.delegation_deescalated_recovery_batches || %{})} high_pressure_batches=#{snapshot.autonomy.delegation_high_pressure_batch_count || 0} medium_pressure_batches=#{snapshot.autonomy.delegation_medium_pressure_batch_count || 0} repeated_deferred_batches=#{snapshot.autonomy.delegation_repeatedly_deferred_batch_count || 0} delegation_role_gaps=#{snapshot.autonomy.delegation_required_role_gap_count || 0} capability_drift=#{length(snapshot.autonomy.capability_drifts)}
+    - active_jobs=#{snapshot.autonomy.active_autonomy_job_count} unsafe_requests=#{snapshot.autonomy.unsafe_request_count} budget_blocked=#{snapshot.autonomy.budget_blocked_count} auto_assigned=#{snapshot.autonomy.auto_assigned_count} fallback_assigned=#{snapshot.autonomy.capability_fallback_count} role_only_open=#{snapshot.autonomy.role_only_open_count} active_claimed=#{snapshot.autonomy.active_claimed_count} stale_claimed=#{snapshot.autonomy.stale_claimed_count} remote_claimed=#{snapshot.autonomy.remote_claimed_count} orphaned_assignments=#{snapshot.autonomy.orphaned_assignment_count} deferred_role_backlog=#{snapshot.autonomy.deferred_role_queue_count || 0} urgent_role_backlog=#{snapshot.autonomy.urgent_role_queue_count || 0} urgent_deferred_role_backlog=#{snapshot.autonomy.urgent_deferred_role_queue_count || 0} role_backlog=#{render_role_queue_backlog_summary(snapshot.autonomy.role_queue_backlog)} saturated_workers=#{Enum.count(snapshot.autonomy.worker_pressure, &(&1.capacity_posture == "saturated"))} delegation_batches=#{Enum.reduce(snapshot.autonomy.delegation_supervision || [], 0, &(&1.active_batches + &2))} urgent_delegation_batches=#{snapshot.autonomy.delegation_urgent_batch_count || 0} intervention_batches=#{snapshot.autonomy.delegation_intervention_batch_count || 0} operator_guided_batches=#{snapshot.autonomy.delegation_operator_guided_batch_count || 0} review_guided_batches=#{snapshot.autonomy.delegation_review_guided_batch_count || 0} request_review_batches=#{snapshot.autonomy.delegation_request_review_batch_count || 0} selected_intervention_batches=#{snapshot.autonomy.delegation_selected_intervention_batch_count || 0} active_selected_intervention_batches=#{snapshot.autonomy.delegation_active_selected_intervention_batch_count || 0} inactive_selected_intervention_batches=#{snapshot.autonomy.delegation_inactive_selected_intervention_batch_count || 0} fallback_intervention_batches=#{snapshot.autonomy.delegation_fallback_intervention_batch_count || 0} selected_intervention_portfolios=#{snapshot.autonomy.delegation_selected_intervention_portfolio_count || 0} fallback_intervention_portfolios=#{snapshot.autonomy.delegation_fallback_intervention_portfolio_count || 0} deescalated_portfolios=#{snapshot.autonomy.delegation_deescalated_portfolio_count || 0} deescalated_batches=#{snapshot.autonomy.delegation_deescalated_batch_count || 0} stale_follow_up_batches=#{snapshot.autonomy.delegation_stale_follow_up_batch_count || 0} deescalation_pressure=#{snapshot.autonomy.delegation_deescalation_pressure_total || 0} selected_recovery_batches=#{report_recovery_mix_or_none(snapshot.autonomy.delegation_selected_recovery_batches || %{})} fallback_recovery_batches=#{report_recovery_mix_or_none(snapshot.autonomy.delegation_alternative_recovery_batches || %{})} deescalated_recovery_batches=#{report_recovery_mix_or_none(snapshot.autonomy.delegation_deescalated_recovery_batches || %{})} high_pressure_batches=#{snapshot.autonomy.delegation_high_pressure_batch_count || 0} medium_pressure_batches=#{snapshot.autonomy.delegation_medium_pressure_batch_count || 0} repeated_deferred_batches=#{snapshot.autonomy.delegation_repeatedly_deferred_batch_count || 0} delegation_role_gaps=#{snapshot.autonomy.delegation_required_role_gap_count || 0} capability_drift=#{length(snapshot.autonomy.capability_drifts)}
     ### Role Queue Backlog
     #{render_role_queue_backlog(snapshot.autonomy.role_queue_backlog)}
 
@@ -415,6 +415,24 @@ defmodule HydraX.Report do
                 " selected_recovery_mix=#{report_recovery_mix(mix)}"
             end
 
+          active_selected_recovery_mix =
+            case entry.active_selected_recovery_mix || %{} do
+              mix when mix == %{} ->
+                nil
+
+              mix ->
+                " active_selected_recovery_mix=#{report_recovery_mix(mix)}"
+            end
+
+          inactive_selected_recovery_mix =
+            case entry.inactive_selected_recovery_mix || %{} do
+              mix when mix == %{} ->
+                nil
+
+              mix ->
+                " inactive_selected_recovery_mix=#{report_recovery_mix(mix)}"
+            end
+
           alternative_recovery_mix =
             case entry.alternative_recovery_mix || %{} do
               mix when mix == %{} ->
@@ -449,6 +467,12 @@ defmodule HydraX.Report do
 
           intervention =
             cond do
+              (entry.active_selected_intervention_batches || 0) > 0 ->
+                " intervention=selected-active-heavy"
+
+              (entry.inactive_selected_intervention_batches || 0) > 0 ->
+                " intervention=selected-stale-heavy"
+
               (entry.selected_intervention_batches || 0) > 0 ->
                 " intervention=selected-heavy"
 
@@ -468,6 +492,8 @@ defmodule HydraX.Report do
             (deescalation || "") <>
             (dominant_recovery || "") <>
             (selected_recovery_mix || "") <>
+            (active_selected_recovery_mix || "") <>
+            (inactive_selected_recovery_mix || "") <>
             (alternative_recovery_mix || "") <>
             (deescalated_recovery_mix || "") <>
             (recovery_mix || "") <>

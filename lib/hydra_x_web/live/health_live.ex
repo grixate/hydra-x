@@ -1358,6 +1358,10 @@ defmodule HydraXWeb.HealthLive do
             <p class="mt-1 text-xs text-[var(--hx-mute)]">
               selected-heavy portfolios{" "}
               {@autonomy_status.delegation_selected_intervention_portfolio_count || 0} ·
+              selected-active batches{" "}
+              {@autonomy_status.delegation_active_selected_intervention_batch_count || 0} ·
+              selected-stale batches{" "}
+              {@autonomy_status.delegation_inactive_selected_intervention_batch_count || 0} ·
               fallback-heavy portfolios{" "}
               {@autonomy_status.delegation_fallback_intervention_portfolio_count || 0} ·
               de-escalated portfolios{" "}
@@ -1366,6 +1370,10 @@ defmodule HydraXWeb.HealthLive do
             <p class="mt-1 text-xs text-[var(--hx-mute)]">
               selected recovery {autonomy_delegation_summary_recovery_mix(
                 @autonomy_status.delegation_selected_recovery_batches
+              )} · active selected recovery {autonomy_delegation_summary_recovery_mix(
+                @autonomy_status.delegation_active_selected_recovery_batches
+              )} · stale selected recovery {autonomy_delegation_summary_recovery_mix(
+                @autonomy_status.delegation_inactive_selected_recovery_batches
               )} · fallback recovery {autonomy_delegation_summary_recovery_mix(
                 @autonomy_status.delegation_alternative_recovery_batches
               )} · de-escalated recovery {autonomy_delegation_summary_recovery_mix(
@@ -1374,6 +1382,7 @@ defmodule HydraXWeb.HealthLive do
             </p>
             <p class="mt-1 text-xs text-[var(--hx-mute)]">
               de-escalated batches {@autonomy_status.delegation_deescalated_batch_count || 0} ·
+              stale follow-up batches {@autonomy_status.delegation_stale_follow_up_batch_count || 0} ·
               de-escalation pressure{" "}
               {@autonomy_status.delegation_deescalation_pressure_total || 0}
             </p>
@@ -1578,6 +1587,12 @@ defmodule HydraXWeb.HealthLive do
                   </span>
                   <span :if={autonomy_delegation_selected_recovery_mix_label(entry)}>
                     {" "}· {autonomy_delegation_selected_recovery_mix_label(entry)}
+                  </span>
+                  <span :if={autonomy_delegation_active_selected_recovery_mix_label(entry)}>
+                    {" "}· {autonomy_delegation_active_selected_recovery_mix_label(entry)}
+                  </span>
+                  <span :if={autonomy_delegation_inactive_selected_recovery_mix_label(entry)}>
+                    {" "}· {autonomy_delegation_inactive_selected_recovery_mix_label(entry)}
                   </span>
                   <span :if={autonomy_delegation_alternative_recovery_mix_label(entry)}>
                     {" "}· {autonomy_delegation_alternative_recovery_mix_label(entry)}
@@ -2808,6 +2823,15 @@ defmodule HydraXWeb.HealthLive do
 
   defp autonomy_delegation_intervention_label(entry) when is_map(entry) do
     cond do
+      (entry[:active_selected_intervention_batches] ||
+         entry["active_selected_intervention_batches"] ||
+         0) > 0 ->
+        "selected-active-intervention-heavy"
+
+      (entry[:inactive_selected_intervention_batches] ||
+         entry["inactive_selected_intervention_batches"] || 0) > 0 ->
+        "selected-stale-intervention-heavy"
+
       (entry[:selected_intervention_batches] || entry["selected_intervention_batches"] || 0) > 0 ->
         "selected-intervention-heavy"
 
@@ -2844,6 +2868,30 @@ defmodule HydraXWeb.HealthLive do
   end
 
   defp autonomy_delegation_selected_recovery_mix_label(_entry), do: nil
+
+  defp autonomy_delegation_active_selected_recovery_mix_label(entry) when is_map(entry) do
+    case entry[:active_selected_recovery_mix] || entry["active_selected_recovery_mix"] || %{} do
+      mix when mix == %{} ->
+        nil
+
+      mix ->
+        "active selected mix #{autonomy_recovery_mix(mix)}"
+    end
+  end
+
+  defp autonomy_delegation_active_selected_recovery_mix_label(_entry), do: nil
+
+  defp autonomy_delegation_inactive_selected_recovery_mix_label(entry) when is_map(entry) do
+    case entry[:inactive_selected_recovery_mix] || entry["inactive_selected_recovery_mix"] || %{} do
+      mix when mix == %{} ->
+        nil
+
+      mix ->
+        "stale selected mix #{autonomy_recovery_mix(mix)}"
+    end
+  end
+
+  defp autonomy_delegation_inactive_selected_recovery_mix_label(_entry), do: nil
 
   defp autonomy_delegation_deescalation_label(entry) when is_map(entry) do
     count = entry[:deescalated_batches] || entry["deescalated_batches"] || 0

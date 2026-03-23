@@ -315,7 +315,10 @@ defmodule HydraX.Runtime.Conversations do
           attrs
           |> Map.get(:content, Map.get(attrs, "content"))
           |> normalize_turn_content(),
-        "metadata" => Map.get(attrs, :metadata, Map.get(attrs, "metadata", %{}))
+        "metadata" =>
+          attrs
+          |> Map.get(:metadata, Map.get(attrs, "metadata", %{}))
+          |> normalize_turn_metadata()
       })
 
     Repo.transaction(fn ->
@@ -471,6 +474,44 @@ defmodule HydraX.Runtime.Conversations do
     |> List.flatten()
     |> Enum.join("\n")
   end
+
+  defp normalize_turn_metadata(metadata) when is_map(metadata) do
+    metadata
+    |> Enum.reduce(%{}, fn {key, value}, acc ->
+      normalized_key =
+        case key do
+          atom when is_atom(atom) -> Atom.to_string(atom)
+          other -> other
+        end
+
+      Map.put(acc, normalized_key, normalize_turn_metadata_value(value))
+    end)
+  end
+
+  defp normalize_turn_metadata(metadata), do: metadata
+
+  defp normalize_turn_metadata_value(value) when is_map(value) do
+    value
+    |> Enum.reduce(%{}, fn {key, nested_value}, acc ->
+      normalized_key =
+        case key do
+          atom when is_atom(atom) -> Atom.to_string(atom)
+          other -> other
+        end
+
+      Map.put(acc, normalized_key, normalize_turn_metadata_value(nested_value))
+    end)
+  end
+
+  defp normalize_turn_metadata_value(value) when is_list(value) do
+    Enum.map(value, &normalize_turn_metadata_value/1)
+  end
+
+  defp normalize_turn_metadata_value(value) when is_reference(value), do: inspect(value)
+  defp normalize_turn_metadata_value(value) when is_tuple(value), do: inspect(value)
+  defp normalize_turn_metadata_value(value) when is_pid(value), do: inspect(value)
+  defp normalize_turn_metadata_value(value) when is_atom(value), do: Atom.to_string(value)
+  defp normalize_turn_metadata_value(value), do: value
 
   defp render_transcript_steps([]), do: []
 

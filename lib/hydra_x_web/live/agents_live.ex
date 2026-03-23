@@ -1412,6 +1412,16 @@ defmodule HydraXWeb.AgentsLive do
             acc[:selected_recovery_mix],
             entry[:selected_recovery_mix]
           ),
+        active_selected_recovery_mix:
+          merge_role_frequency_maps(
+            acc[:active_selected_recovery_mix],
+            entry[:active_selected_recovery_mix]
+          ),
+        inactive_selected_recovery_mix:
+          merge_role_frequency_maps(
+            acc[:inactive_selected_recovery_mix],
+            entry[:inactive_selected_recovery_mix]
+          ),
         alternative_recovery_mix:
           merge_role_frequency_maps(
             acc[:alternative_recovery_mix],
@@ -1430,9 +1440,19 @@ defmodule HydraXWeb.AgentsLive do
         selected_intervention_batches:
           (acc[:selected_intervention_batches] || 0) +
             (entry[:selected_intervention_batches] || 0),
+        active_selected_intervention_batches:
+          (acc[:active_selected_intervention_batches] || 0) +
+            (entry[:active_selected_intervention_batches] || 0),
+        inactive_selected_intervention_batches:
+          (acc[:inactive_selected_intervention_batches] || 0) +
+            (entry[:inactive_selected_intervention_batches] || 0),
         fallback_intervention_batches:
           (acc[:fallback_intervention_batches] || 0) +
             (entry[:fallback_intervention_batches] || 0),
+        stale_follow_up_batches:
+          (acc[:stale_follow_up_batches] || 0) + (entry[:stale_follow_up_batches] || 0),
+        active_follow_up_batches:
+          (acc[:active_follow_up_batches] || 0) + (entry[:active_follow_up_batches] || 0),
         missing_required_roles:
           merge_role_frequency_maps(
             acc[:missing_required_roles],
@@ -1474,7 +1494,10 @@ defmodule HydraXWeb.AgentsLive do
   defp put_merged_dominant_recovery(summary) when is_map(summary) do
     {strategy, count, score} =
       summary
-      |> Map.get(:selected_recovery_mix, %{})
+      |> Map.get(:active_selected_recovery_mix, %{})
+      |> then(fn mix ->
+        if mix == %{}, do: Map.get(summary, :selected_recovery_mix, %{}), else: mix
+      end)
       |> dominant_recovery_from_mix()
 
     summary
@@ -1625,6 +1648,8 @@ defmodule HydraXWeb.AgentsLive do
       delegation_supervision_deescalation_label(summary),
       delegation_supervision_dominant_recovery_label(summary),
       delegation_supervision_selected_recovery_mix_label(summary),
+      delegation_supervision_active_selected_recovery_mix_label(summary),
+      delegation_supervision_inactive_selected_recovery_mix_label(summary),
       delegation_supervision_alternative_recovery_mix_label(summary),
       delegation_supervision_deescalated_recovery_mix_label(summary),
       delegation_supervision_recovery_mix_label(summary),
@@ -1694,6 +1719,12 @@ defmodule HydraXWeb.AgentsLive do
 
   defp delegation_supervision_intervention_label(summary) when is_map(summary) do
     cond do
+      (summary[:active_selected_intervention_batches] || 0) > 0 ->
+        "selected-active-intervention-heavy"
+
+      (summary[:inactive_selected_intervention_batches] || 0) > 0 ->
+        "selected-stale-intervention-heavy"
+
       (summary[:selected_intervention_batches] || 0) > 0 ->
         "selected-intervention-heavy"
 
@@ -1752,6 +1783,31 @@ defmodule HydraXWeb.AgentsLive do
   end
 
   defp delegation_supervision_selected_recovery_mix_label(_summary), do: nil
+
+  defp delegation_supervision_active_selected_recovery_mix_label(summary) when is_map(summary) do
+    case summary[:active_selected_recovery_mix] || %{} do
+      mix when mix == %{} ->
+        nil
+
+      mix ->
+        "active selected mix #{format_recovery_mix(mix)}"
+    end
+  end
+
+  defp delegation_supervision_active_selected_recovery_mix_label(_summary), do: nil
+
+  defp delegation_supervision_inactive_selected_recovery_mix_label(summary)
+       when is_map(summary) do
+    case summary[:inactive_selected_recovery_mix] || %{} do
+      mix when mix == %{} ->
+        nil
+
+      mix ->
+        "stale selected mix #{format_recovery_mix(mix)}"
+    end
+  end
+
+  defp delegation_supervision_inactive_selected_recovery_mix_label(_summary), do: nil
 
   defp delegation_supervision_alternative_recovery_mix_label(summary) when is_map(summary) do
     case summary[:alternative_recovery_mix] || %{} do

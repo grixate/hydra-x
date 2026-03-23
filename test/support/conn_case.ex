@@ -68,20 +68,36 @@ defmodule HydraXWeb.ConnCase do
     changeset =
       HydraX.Runtime.AgentProfile.changeset(%HydraX.Runtime.AgentProfile{}, attrs)
 
-    HydraX.Repo.insert(
-      changeset,
-      on_conflict: [
-        set: [
-          name: attrs.name,
-          status: attrs.status,
-          description: attrs.description,
-          is_default: attrs.is_default,
-          workspace_root: attrs.workspace_root,
-          runtime_state: attrs.runtime_state,
-          updated_at: DateTime.utc_now()
-        ]
-      ],
-      conflict_target: :slug
-    )
+    retry_on_busy(fn ->
+      HydraX.Repo.insert(
+        changeset,
+        on_conflict: [
+          set: [
+            name: attrs.name,
+            status: attrs.status,
+            description: attrs.description,
+            is_default: attrs.is_default,
+            workspace_root: attrs.workspace_root,
+            runtime_state: attrs.runtime_state,
+            updated_at: DateTime.utc_now()
+          ]
+        ],
+        conflict_target: :slug
+      )
+    end)
+  end
+
+  defp retry_on_busy(fun, attempts \\ 10)
+
+  defp retry_on_busy(fun, attempts) do
+    fun.()
+  rescue
+    error in Exqlite.Error ->
+      if attempts > 1 and String.contains?(Exception.message(error), "Database busy") do
+        Process.sleep((11 - attempts) * 25)
+        retry_on_busy(fun, attempts - 1)
+      else
+        reraise error, __STACKTRACE__
+      end
   end
 end

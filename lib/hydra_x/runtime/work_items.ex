@@ -721,6 +721,12 @@ defmodule HydraX.Runtime.WorkItems do
     delegation_selected_recovery_batches =
       delegation_recovery_batches(delegation_supervision, :selected_recovery_mix)
 
+    delegation_active_selected_recovery_batches =
+      delegation_recovery_batches(delegation_supervision, :active_selected_recovery_mix)
+
+    delegation_inactive_selected_recovery_batches =
+      delegation_recovery_batches(delegation_supervision, :inactive_selected_recovery_mix)
+
     delegation_alternative_recovery_batches =
       delegation_recovery_batches(delegation_supervision, :alternative_recovery_mix)
 
@@ -743,6 +749,16 @@ defmodule HydraX.Runtime.WorkItems do
     delegation_selected_intervention_batch_count =
       intervention_recovery_batch_count(delegation_selected_recovery_batches)
 
+    delegation_active_selected_intervention_batch_count =
+      Enum.reduce(delegation_supervision, 0, fn entry, acc ->
+        acc + (entry.active_selected_intervention_batches || 0)
+      end)
+
+    delegation_inactive_selected_intervention_batch_count =
+      Enum.reduce(delegation_supervision, 0, fn entry, acc ->
+        acc + (entry.inactive_selected_intervention_batches || 0)
+      end)
+
     delegation_fallback_intervention_batch_count =
       intervention_recovery_batch_count(delegation_alternative_recovery_batches)
 
@@ -761,6 +777,11 @@ defmodule HydraX.Runtime.WorkItems do
     delegation_deescalated_batch_count =
       Enum.reduce(delegation_supervision, 0, fn entry, acc ->
         acc + (entry.deescalated_batches || 0)
+      end)
+
+    delegation_stale_follow_up_batch_count =
+      Enum.reduce(delegation_supervision, 0, fn entry, acc ->
+        acc + (entry.stale_follow_up_batches || 0)
       end)
 
     delegation_deescalation_pressure_total =
@@ -813,6 +834,9 @@ defmodule HydraX.Runtime.WorkItems do
       delegation_repeatedly_deferred_batch_count: delegation_repeatedly_deferred_batch_count,
       delegation_dominant_recovery_batches: dominant_recovery_batches,
       delegation_selected_recovery_batches: delegation_selected_recovery_batches,
+      delegation_active_selected_recovery_batches: delegation_active_selected_recovery_batches,
+      delegation_inactive_selected_recovery_batches:
+        delegation_inactive_selected_recovery_batches,
       delegation_alternative_recovery_batches: delegation_alternative_recovery_batches,
       delegation_deescalated_recovery_batches: delegation_deescalated_recovery_batches,
       delegation_operator_guided_batch_count: delegation_operator_guided_batch_count,
@@ -820,6 +844,10 @@ defmodule HydraX.Runtime.WorkItems do
       delegation_request_review_batch_count: delegation_request_review_batch_count,
       delegation_intervention_batch_count: delegation_intervention_batch_count,
       delegation_selected_intervention_batch_count: delegation_selected_intervention_batch_count,
+      delegation_active_selected_intervention_batch_count:
+        delegation_active_selected_intervention_batch_count,
+      delegation_inactive_selected_intervention_batch_count:
+        delegation_inactive_selected_intervention_batch_count,
       delegation_fallback_intervention_batch_count: delegation_fallback_intervention_batch_count,
       delegation_selected_intervention_portfolio_count:
         delegation_selected_intervention_portfolio_count,
@@ -827,6 +855,7 @@ defmodule HydraX.Runtime.WorkItems do
         delegation_fallback_intervention_portfolio_count,
       delegation_deescalated_portfolio_count: delegation_deescalated_portfolio_count,
       delegation_deescalated_batch_count: delegation_deescalated_batch_count,
+      delegation_stale_follow_up_batch_count: delegation_stale_follow_up_batch_count,
       delegation_deescalation_pressure_total: delegation_deescalation_pressure_total,
       autonomy_agent_count: length(autonomy_agents),
       active_roles: autonomy_agents |> Enum.map(& &1.role) |> Enum.frequencies(),
@@ -1020,6 +1049,11 @@ defmodule HydraX.Runtime.WorkItems do
       snapshots = Enum.map(entries, fn {_work_item, snapshot} -> snapshot end)
       recovery_mix = aggregate_follow_up_recovery_mix(entries)
       selected_recovery_mix = aggregate_selected_follow_up_recovery_mix(entries)
+      active_selected_recovery_mix = aggregate_selected_follow_up_recovery_mix(entries, :active)
+
+      inactive_selected_recovery_mix =
+        aggregate_selected_follow_up_recovery_mix(entries, :inactive)
+
       alternative_recovery_mix = aggregate_alternative_follow_up_recovery_mix(entries)
       deescalated_recovery_mix = aggregate_selected_follow_up_deescalation_mix(entries)
 
@@ -1028,10 +1062,22 @@ defmodule HydraX.Runtime.WorkItems do
 
       deescalation_pressure_total = aggregate_selected_follow_up_deescalation_pressure(entries)
       selected_intervention_batches = intervention_recovery_batch_count(selected_recovery_mix)
+
+      active_selected_intervention_batches =
+        intervention_recovery_batch_count(active_selected_recovery_mix)
+
+      inactive_selected_intervention_batches =
+        intervention_recovery_batch_count(inactive_selected_recovery_mix)
+
       fallback_intervention_batches = intervention_recovery_batch_count(alternative_recovery_mix)
 
       {dominant_recovery_strategy, dominant_recovery_count, dominant_recovery_score} =
-        dominant_follow_up_recovery_strategy(selected_recovery_mix)
+        dominant_follow_up_recovery_strategy(
+          if(active_selected_recovery_mix == %{},
+            do: selected_recovery_mix,
+            else: active_selected_recovery_mix
+          )
+        )
 
       constrained_roles = aggregate_constrained_pending_roles(snapshots, role_capacity)
       constrained_role_pressure = constrained_role_pressure(constrained_roles, role_capacity)
@@ -1061,6 +1107,8 @@ defmodule HydraX.Runtime.WorkItems do
 
       active_children = Enum.reduce(snapshots, 0, &((&1["active_count"] || 0) + &2))
       occupied_batches = Enum.count(snapshots, &delegation_batch_occupies_supervision_slot?/1)
+      stale_follow_up_batches = Enum.count(entries, &stale_follow_up_batch?/1)
+      active_follow_up_batches = Enum.count(entries, &active_follow_up_batch?/1)
 
       %{
         agent_id: agent_id,
@@ -1076,12 +1124,18 @@ defmodule HydraX.Runtime.WorkItems do
         constrained_role_pressure: constrained_role_pressure,
         recovery_mix: recovery_mix,
         selected_recovery_mix: selected_recovery_mix,
+        active_selected_recovery_mix: active_selected_recovery_mix,
+        inactive_selected_recovery_mix: inactive_selected_recovery_mix,
         alternative_recovery_mix: alternative_recovery_mix,
         deescalated_recovery_mix: deescalated_recovery_mix,
         deescalated_batches: deescalated_batches,
         deescalation_pressure_total: deescalation_pressure_total,
         selected_intervention_batches: selected_intervention_batches,
+        active_selected_intervention_batches: active_selected_intervention_batches,
+        inactive_selected_intervention_batches: inactive_selected_intervention_batches,
         fallback_intervention_batches: fallback_intervention_batches,
+        stale_follow_up_batches: stale_follow_up_batches,
+        active_follow_up_batches: active_follow_up_batches,
         dominant_recovery_strategy: dominant_recovery_strategy,
         dominant_recovery_count: dominant_recovery_count,
         dominant_recovery_score: dominant_recovery_score,
@@ -1105,9 +1159,12 @@ defmodule HydraX.Runtime.WorkItems do
     end)
     |> Enum.sort_by(fn entry ->
       {
+        -(entry.active_selected_intervention_batches || 0),
+        -(entry.active_follow_up_batches || 0),
         -(entry.selected_intervention_batches || 0),
         -(entry.deescalation_pressure_total || 0),
         -(entry.deescalated_batches || 0),
+        -(entry.stale_follow_up_batches || 0),
         -(entry.fallback_intervention_batches || 0),
         -(entry.dominant_recovery_score || 0),
         -(entry.dominant_recovery_count || 0),
@@ -1152,9 +1209,19 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp aggregate_follow_up_recovery_mix(_entries), do: %{}
 
-  defp aggregate_selected_follow_up_recovery_mix(entries) when is_list(entries) do
+  defp aggregate_selected_follow_up_recovery_mix(entries, mode \\ :all)
+
+  defp aggregate_selected_follow_up_recovery_mix(entries, mode)
+       when is_list(entries) and mode in [:all, :active, :inactive] do
     Enum.reduce(entries, %{}, fn {work_item, _snapshot}, acc ->
-      case base_work_item_follow_up_selection(work_item) do
+      selection =
+        case mode do
+          :all -> base_work_item_follow_up_selection(work_item)
+          :active -> active_work_item_follow_up_selection(work_item)
+          :inactive -> inactive_work_item_follow_up_selection(work_item)
+        end
+
+      case selection do
         %{strategy: strategy} when is_binary(strategy) and strategy != "" ->
           Map.update(acc, strategy, 1, &(&1 + 1))
 
@@ -1164,7 +1231,7 @@ defmodule HydraX.Runtime.WorkItems do
     end)
   end
 
-  defp aggregate_selected_follow_up_recovery_mix(_entries), do: %{}
+  defp aggregate_selected_follow_up_recovery_mix(_entries, _mode), do: %{}
 
   defp aggregate_alternative_follow_up_recovery_mix(entries) when is_list(entries) do
     Enum.reduce(entries, %{}, fn {work_item, _snapshot}, acc ->
@@ -11211,6 +11278,20 @@ defmodule HydraX.Runtime.WorkItems do
     end
   end
 
+  defp active_work_item_follow_up_selection(%WorkItem{} = work_item) do
+    work_item
+    |> explicit_work_item_follow_up_entries()
+    |> Enum.filter(&follow_up_entry_active?/1)
+    |> preferred_follow_up_entry()
+  end
+
+  defp inactive_work_item_follow_up_selection(%WorkItem{} = work_item) do
+    work_item
+    |> explicit_work_item_follow_up_entries()
+    |> Enum.reject(&follow_up_entry_active?/1)
+    |> preferred_follow_up_entry()
+  end
+
   defp explicit_work_item_follow_up_entries(%WorkItem{} = work_item) do
     work_item
     |> then(&get_in(&1.result_refs || %{}, ["follow_up_summary", "entries"]))
@@ -11258,6 +11339,19 @@ defmodule HydraX.Runtime.WorkItems do
     |> Enum.reject(&(&1 in [nil, ""]))
     |> Enum.uniq()
   end
+
+  defp active_follow_up_batch?({%WorkItem{} = work_item, _snapshot}) do
+    active_work_item_follow_up_selection(work_item) != nil
+  end
+
+  defp active_follow_up_batch?(_entry), do: false
+
+  defp stale_follow_up_batch?({%WorkItem{} = work_item, _snapshot}) do
+    entries = explicit_work_item_follow_up_entries(work_item)
+    entries != [] and Enum.all?(entries, &(not follow_up_entry_active?(&1)))
+  end
+
+  defp stale_follow_up_batch?(_entry), do: false
 
   defp follow_up_strategy_selection_reason(base, preferred, intervention_pressure)
        when is_binary(base) and is_binary(preferred) and base != preferred do
@@ -11878,14 +11972,14 @@ defmodule HydraX.Runtime.WorkItems do
   defp maybe_filter_approval_decision(query, decision),
     do: where(query, [record], record.decision == ^decision)
 
-  defp retry_on_busy(fun, attempts \\ 5)
+  defp retry_on_busy(fun, attempts \\ 10)
 
   defp retry_on_busy(fun, attempts) do
     fun.()
   rescue
     error in Exqlite.Error ->
       if attempts > 1 and String.contains?(Exception.message(error), "Database busy") do
-        Process.sleep(50)
+        Process.sleep((11 - attempts) * 25)
         retry_on_busy(fun, attempts - 1)
       else
         reraise error, __STACKTRACE__
