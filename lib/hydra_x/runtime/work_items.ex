@@ -7530,7 +7530,9 @@ defmodule HydraX.Runtime.WorkItems do
          pressure
        )
        when is_list(alternatives) and is_map(pressure) do
-    operator_pressure = follow_up_strategy_selected_pressure(pressure, "operator_guided_replan")
+    operator_pressure =
+      follow_up_strategy_selected_pressure(pressure, "operator_guided_replan") +
+        follow_up_strategy_deescalated_pressure(pressure, "operator_guided_replan")
 
     if operator_pressure > 0 do
       best_deescalated_follow_up_strategy(
@@ -7549,7 +7551,9 @@ defmodule HydraX.Runtime.WorkItems do
          pressure
        )
        when is_list(alternatives) and is_map(pressure) do
-    review_pressure = follow_up_strategy_selected_pressure(pressure, "review_guided_replan")
+    review_pressure =
+      follow_up_strategy_selected_pressure(pressure, "review_guided_replan") +
+        follow_up_strategy_deescalated_pressure(pressure, "review_guided_replan")
 
     if review_pressure > 0 do
       best_deescalated_follow_up_strategy(
@@ -11135,14 +11139,18 @@ defmodule HydraX.Runtime.WorkItems do
   defp follow_up_strategy_selection_reason(base, preferred, intervention_pressure)
        when is_binary(base) and is_binary(preferred) and base != preferred do
     pressure_count = follow_up_strategy_selected_pressure(intervention_pressure, base)
+    deescalated_count = follow_up_strategy_deescalated_pressure(intervention_pressure, base)
+    total_pressure_count = pressure_count + deescalated_count
 
     pressure_phrase =
       cond do
         pressure_count > 1 -> "under sustained planner recovery pressure"
-        true -> "under existing planner recovery pressure"
+        pressure_count > 0 -> "under existing planner recovery pressure"
+        deescalated_count > 1 -> "under sustained planner de-escalation pressure"
+        true -> "under existing planner de-escalation pressure"
       end
 
-    "de-escalated from #{recovery_strategy_summary(base)} #{pressure_phrase}#{if(pressure_count > 0, do: " (#{pressure_count} existing)", else: "")}"
+    "de-escalated from #{recovery_strategy_summary(base)} #{pressure_phrase}#{if(total_pressure_count > 0, do: " (#{total_pressure_count} existing)", else: "")}"
   end
 
   defp follow_up_strategy_selection_reason(_base, _preferred, _intervention_pressure), do: nil
@@ -11150,7 +11158,7 @@ defmodule HydraX.Runtime.WorkItems do
   defp follow_up_strategy_pressure_snapshot(base, preferred, alternatives, intervention_pressure)
        when is_binary(base) and is_binary(preferred) and is_list(alternatives) and
               is_map(intervention_pressure) do
-    %{
+    snapshot = %{
       "base" => base,
       "base_selected_count" => follow_up_strategy_selected_pressure(intervention_pressure, base),
       "preferred" => preferred,
@@ -11163,6 +11171,14 @@ defmodule HydraX.Runtime.WorkItems do
       "alternative_fallback_counts" =>
         follow_up_strategy_pressure_counts(alternatives, intervention_pressure, :fallback)
     }
+
+    case follow_up_strategy_deescalated_pressure(intervention_pressure, base) do
+      count when is_integer(count) and count > 0 ->
+        Map.put(snapshot, "base_deescalated_count", count)
+
+      _ ->
+        snapshot
+    end
   end
 
   defp follow_up_strategy_pressure_snapshot(_base, _preferred, _alternatives, _pressure),
@@ -11182,11 +11198,16 @@ defmodule HydraX.Runtime.WorkItems do
       |> Repo.all()
       |> Enum.reduce(%{selected: %{}, fallback: %{}}, fn item, acc ->
         case base_work_item_follow_up_selection(item) do
-          %{strategy: strategy, alternative_strategies: alternatives}
+          %{
+            strategy: strategy,
+            alternative_strategies: alternatives,
+            deescalated_from: deescalated_from
+          }
           when is_binary(strategy) and strategy != "" ->
             acc
             |> update_follow_up_strategy_pressure(:selected, strategy)
             |> update_follow_up_strategy_pressure(:fallback, alternatives)
+            |> update_follow_up_strategy_pressure(:deescalated, deescalated_from)
 
           _ ->
             acc
@@ -11216,8 +11237,15 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp follow_up_strategy_fallback_pressure(_pressure, _strategy), do: 0
 
+  defp follow_up_strategy_deescalated_pressure(%{deescalated: deescalated}, strategy)
+       when is_map(deescalated) and is_binary(strategy) do
+    Map.get(deescalated, strategy, 0)
+  end
+
+  defp follow_up_strategy_deescalated_pressure(_pressure, _strategy), do: 0
+
   defp update_follow_up_strategy_pressure(acc, key, strategies)
-       when is_map(acc) and key in [:selected, :fallback] do
+       when is_map(acc) and key in [:selected, :fallback, :deescalated] do
     strategies
     |> List.wrap()
     |> Enum.reject(&(&1 in [nil, ""]))
