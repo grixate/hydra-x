@@ -7548,9 +7548,11 @@ defmodule HydraX.Runtime.WorkItems do
          pressure
        )
        when is_list(alternatives) and is_map(pressure) do
-    if follow_up_strategy_selected_pressure(pressure, "review_guided_replan") > 0 do
+    review_pressure = follow_up_strategy_selected_pressure(pressure, "review_guided_replan")
+
+    if review_pressure > 0 do
       best_deescalated_follow_up_strategy(
-        ["request_review", "constraint_replan", "narrow_delegate_batch"],
+        review_guided_deescalation_candidates(review_pressure),
         alternatives,
         pressure
       ) || "review_guided_replan"
@@ -7568,6 +7570,15 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp operator_guided_deescalation_candidates(_operator_pressure) do
     ["review_guided_replan", "request_review", "constraint_replan", "narrow_delegate_batch"]
+  end
+
+  defp review_guided_deescalation_candidates(review_pressure)
+       when is_integer(review_pressure) and review_pressure > 1 do
+    ["constraint_replan", "request_review", "narrow_delegate_batch"]
+  end
+
+  defp review_guided_deescalation_candidates(_review_pressure) do
+    ["request_review", "constraint_replan", "narrow_delegate_batch"]
   end
 
   defp best_deescalated_follow_up_strategy(candidates, alternatives, pressure)
