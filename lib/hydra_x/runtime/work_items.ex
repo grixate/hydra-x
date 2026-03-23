@@ -742,6 +742,15 @@ defmodule HydraX.Runtime.WorkItems do
     delegation_fallback_intervention_batch_count =
       intervention_recovery_batch_count(delegation_alternative_recovery_batches)
 
+    delegation_selected_intervention_portfolio_count =
+      Enum.count(delegation_supervision, &((&1.selected_intervention_batches || 0) > 0))
+
+    delegation_fallback_intervention_portfolio_count =
+      Enum.count(delegation_supervision, fn entry ->
+        (entry.selected_intervention_batches || 0) == 0 and
+          (entry.fallback_intervention_batches || 0) > 0
+      end)
+
     capability_drifts =
       autonomy_agents
       |> Enum.map(fn agent ->
@@ -794,6 +803,10 @@ defmodule HydraX.Runtime.WorkItems do
       delegation_intervention_batch_count: delegation_intervention_batch_count,
       delegation_selected_intervention_batch_count: delegation_selected_intervention_batch_count,
       delegation_fallback_intervention_batch_count: delegation_fallback_intervention_batch_count,
+      delegation_selected_intervention_portfolio_count:
+        delegation_selected_intervention_portfolio_count,
+      delegation_fallback_intervention_portfolio_count:
+        delegation_fallback_intervention_portfolio_count,
       autonomy_agent_count: length(autonomy_agents),
       active_roles: autonomy_agents |> Enum.map(& &1.role) |> Enum.frequencies(),
       role_queue_backlog: role_queue_backlog,

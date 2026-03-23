@@ -8537,6 +8537,8 @@ defmodule HydraX.RuntimeTest do
     assert status.delegation_request_review_batch_count == 0
     assert status.delegation_selected_intervention_batch_count == 1
     assert status.delegation_fallback_intervention_batch_count == 1
+    assert status.delegation_selected_intervention_portfolio_count == 1
+    assert status.delegation_fallback_intervention_portfolio_count == 0
     assert status.delegation_dominant_recovery_batches == %{"operator_guided_replan" => 1}
     assert status.delegation_selected_recovery_batches == %{"operator_guided_replan" => 1}
     assert status.delegation_alternative_recovery_batches == %{"review_guided_replan" => 1}

@@ -1356,6 +1356,12 @@ defmodule HydraXWeb.HealthLive do
               {@autonomy_status.delegation_fallback_intervention_batch_count || 0}
             </p>
             <p class="mt-1 text-xs text-[var(--hx-mute)]">
+              selected-heavy portfolios{" "}
+              {@autonomy_status.delegation_selected_intervention_portfolio_count || 0} ·
+              fallback-heavy portfolios{" "}
+              {@autonomy_status.delegation_fallback_intervention_portfolio_count || 0}
+            </p>
+            <p class="mt-1 text-xs text-[var(--hx-mute)]">
               selected recovery {autonomy_delegation_summary_recovery_mix(
                 @autonomy_status.delegation_selected_recovery_batches
               )} · fallback recovery {autonomy_delegation_summary_recovery_mix(
