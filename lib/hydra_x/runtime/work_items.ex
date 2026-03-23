@@ -723,6 +723,9 @@ defmodule HydraX.Runtime.WorkItems do
     delegation_alternative_recovery_batches =
       delegation_recovery_batches(delegation_supervision, :alternative_recovery_mix)
 
+    delegation_deescalated_recovery_batches =
+      delegation_recovery_batches(delegation_supervision, :deescalated_recovery_mix)
+
     delegation_operator_guided_batch_count =
       Map.get(dominant_recovery_batches, "operator_guided_replan", 0)
 
@@ -749,6 +752,19 @@ defmodule HydraX.Runtime.WorkItems do
       Enum.count(delegation_supervision, fn entry ->
         (entry.selected_intervention_batches || 0) == 0 and
           (entry.fallback_intervention_batches || 0) > 0
+      end)
+
+    delegation_deescalated_portfolio_count =
+      Enum.count(delegation_supervision, &((&1.deescalated_batches || 0) > 0))
+
+    delegation_deescalated_batch_count =
+      Enum.reduce(delegation_supervision, 0, fn entry, acc ->
+        acc + (entry.deescalated_batches || 0)
+      end)
+
+    delegation_deescalation_pressure_total =
+      Enum.reduce(delegation_supervision, 0, fn entry, acc ->
+        acc + (entry.deescalation_pressure_total || 0)
       end)
 
     capability_drifts =
@@ -797,6 +813,7 @@ defmodule HydraX.Runtime.WorkItems do
       delegation_dominant_recovery_batches: dominant_recovery_batches,
       delegation_selected_recovery_batches: delegation_selected_recovery_batches,
       delegation_alternative_recovery_batches: delegation_alternative_recovery_batches,
+      delegation_deescalated_recovery_batches: delegation_deescalated_recovery_batches,
       delegation_operator_guided_batch_count: delegation_operator_guided_batch_count,
       delegation_review_guided_batch_count: delegation_review_guided_batch_count,
       delegation_request_review_batch_count: delegation_request_review_batch_count,
@@ -807,6 +824,9 @@ defmodule HydraX.Runtime.WorkItems do
         delegation_selected_intervention_portfolio_count,
       delegation_fallback_intervention_portfolio_count:
         delegation_fallback_intervention_portfolio_count,
+      delegation_deescalated_portfolio_count: delegation_deescalated_portfolio_count,
+      delegation_deescalated_batch_count: delegation_deescalated_batch_count,
+      delegation_deescalation_pressure_total: delegation_deescalation_pressure_total,
       autonomy_agent_count: length(autonomy_agents),
       active_roles: autonomy_agents |> Enum.map(& &1.role) |> Enum.frequencies(),
       role_queue_backlog: role_queue_backlog,
@@ -1000,6 +1020,12 @@ defmodule HydraX.Runtime.WorkItems do
       recovery_mix = aggregate_follow_up_recovery_mix(entries)
       selected_recovery_mix = aggregate_selected_follow_up_recovery_mix(entries)
       alternative_recovery_mix = aggregate_alternative_follow_up_recovery_mix(entries)
+      deescalated_recovery_mix = aggregate_selected_follow_up_deescalation_mix(entries)
+
+      deescalated_batches =
+        Enum.reduce(deescalated_recovery_mix, 0, fn {_strategy, count}, acc -> acc + count end)
+
+      deescalation_pressure_total = aggregate_selected_follow_up_deescalation_pressure(entries)
       selected_intervention_batches = intervention_recovery_batch_count(selected_recovery_mix)
       fallback_intervention_batches = intervention_recovery_batch_count(alternative_recovery_mix)
 
@@ -1050,6 +1076,9 @@ defmodule HydraX.Runtime.WorkItems do
         recovery_mix: recovery_mix,
         selected_recovery_mix: selected_recovery_mix,
         alternative_recovery_mix: alternative_recovery_mix,
+        deescalated_recovery_mix: deescalated_recovery_mix,
+        deescalated_batches: deescalated_batches,
+        deescalation_pressure_total: deescalation_pressure_total,
         selected_intervention_batches: selected_intervention_batches,
         fallback_intervention_batches: fallback_intervention_batches,
         dominant_recovery_strategy: dominant_recovery_strategy,
@@ -1076,6 +1105,7 @@ defmodule HydraX.Runtime.WorkItems do
     |> Enum.sort_by(fn entry ->
       {
         -(entry.selected_intervention_batches || 0),
+        -(entry.deescalated_batches || 0),
         -(entry.fallback_intervention_batches || 0),
         -(entry.dominant_recovery_score || 0),
         -(entry.dominant_recovery_count || 0),
@@ -1165,6 +1195,35 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp aggregate_alternative_follow_up_recovery_mix(_entries), do: %{}
+
+  defp aggregate_selected_follow_up_deescalation_mix(entries) when is_list(entries) do
+    Enum.reduce(entries, %{}, fn {work_item, _snapshot}, acc ->
+      case preferred_work_item_follow_up_selection(work_item) do
+        %{deescalated_from: strategy} when is_binary(strategy) and strategy != "" ->
+          Map.update(acc, strategy, 1, &(&1 + 1))
+
+        _ ->
+          acc
+      end
+    end)
+  end
+
+  defp aggregate_selected_follow_up_deescalation_mix(_entries), do: %{}
+
+  defp aggregate_selected_follow_up_deescalation_pressure(entries) when is_list(entries) do
+    Enum.reduce(entries, 0, fn {work_item, _snapshot}, acc ->
+      case preferred_work_item_follow_up_selection(work_item) do
+        %{pressure_snapshot: %{"base_selected_count" => count}}
+        when is_integer(count) and count > 0 ->
+          acc + count
+
+        _ ->
+          acc
+      end
+    end)
+  end
+
+  defp aggregate_selected_follow_up_deescalation_pressure(_entries), do: 0
 
   defp delegation_dominant_recovery_batches(entries) when is_list(entries) do
     Enum.reduce(entries, %{}, fn entry, acc ->
@@ -1341,6 +1400,7 @@ defmodule HydraX.Runtime.WorkItems do
         end
         |> Enum.reject(&(&1 in [nil, ""]))
     }
+    |> maybe_put_follow_up_entry_detail("pressure_snapshot", Map.get(entry, "pressure_snapshot"))
     |> maybe_put_follow_up_entry_detail("priority_boost", Map.get(entry, "priority_boost"))
   end
 
@@ -7469,9 +7529,11 @@ defmodule HydraX.Runtime.WorkItems do
          pressure
        )
        when is_list(alternatives) and is_map(pressure) do
-    if follow_up_strategy_selected_pressure(pressure, "operator_guided_replan") > 0 do
+    operator_pressure = follow_up_strategy_selected_pressure(pressure, "operator_guided_replan")
+
+    if operator_pressure > 0 do
       best_deescalated_follow_up_strategy(
-        ["review_guided_replan", "request_review", "constraint_replan", "narrow_delegate_batch"],
+        operator_guided_deescalation_candidates(operator_pressure),
         alternatives,
         pressure
       ) || "operator_guided_replan"
@@ -7498,6 +7560,15 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp maybe_deescalate_follow_up_strategy(strategy, _alternatives, _pressure), do: strategy
+
+  defp operator_guided_deescalation_candidates(operator_pressure)
+       when is_integer(operator_pressure) and operator_pressure > 1 do
+    ["request_review", "review_guided_replan", "constraint_replan", "narrow_delegate_batch"]
+  end
+
+  defp operator_guided_deescalation_candidates(_operator_pressure) do
+    ["review_guided_replan", "request_review", "constraint_replan", "narrow_delegate_batch"]
+  end
 
   defp best_deescalated_follow_up_strategy(candidates, alternatives, pressure)
        when is_list(candidates) and is_list(alternatives) and is_map(pressure) do
@@ -10893,6 +10964,10 @@ defmodule HydraX.Runtime.WorkItems do
       "selection_reason",
       get_in(follow_up_work_item.metadata || %{}, ["recovery_strategy_selection_reason"])
     )
+    |> maybe_put_follow_up_entry_detail(
+      "pressure_snapshot",
+      get_in(follow_up_work_item.metadata || %{}, ["recovery_strategy_pressure_snapshot"])
+    )
     |> maybe_put_follow_up_entry_priority(follow_up_summary_priority_boost(follow_up_work_item))
   end
 
@@ -10936,6 +11011,13 @@ defmodule HydraX.Runtime.WorkItems do
                   do: base,
                   else: selection[:deescalated_from]
                 ),
+              pressure_snapshot:
+                follow_up_strategy_pressure_snapshot(
+                  base,
+                  strategy,
+                  Enum.reject(strategies, &(&1 in [nil, "", strategy])),
+                  intervention_pressure
+                ),
               selection_reason:
                 follow_up_strategy_selection_reason(base, strategy, intervention_pressure) ||
                   selection[:selection_reason]
@@ -10972,6 +11054,7 @@ defmodule HydraX.Runtime.WorkItems do
               |> List.wrap()
               |> Enum.reject(&(&1 in [nil, ""])),
             deescalated_from: Map.get(entry, "deescalated_from"),
+            pressure_snapshot: Map.get(entry, "pressure_snapshot"),
             selection_reason: Map.get(entry, "selection_reason"),
             priority_boost:
               case Map.get(entry, "priority_boost") do
@@ -11041,10 +11124,37 @@ defmodule HydraX.Runtime.WorkItems do
        when is_binary(base) and is_binary(preferred) and base != preferred do
     pressure_count = follow_up_strategy_selected_pressure(intervention_pressure, base)
 
-    "de-escalated from #{recovery_strategy_summary(base)} under existing planner recovery pressure#{if(pressure_count > 0, do: " (#{pressure_count} existing)", else: "")}"
+    pressure_phrase =
+      cond do
+        pressure_count > 1 -> "under sustained planner recovery pressure"
+        true -> "under existing planner recovery pressure"
+      end
+
+    "de-escalated from #{recovery_strategy_summary(base)} #{pressure_phrase}#{if(pressure_count > 0, do: " (#{pressure_count} existing)", else: "")}"
   end
 
   defp follow_up_strategy_selection_reason(_base, _preferred, _intervention_pressure), do: nil
+
+  defp follow_up_strategy_pressure_snapshot(base, preferred, alternatives, intervention_pressure)
+       when is_binary(base) and is_binary(preferred) and is_list(alternatives) and
+              is_map(intervention_pressure) do
+    %{
+      "base" => base,
+      "base_selected_count" => follow_up_strategy_selected_pressure(intervention_pressure, base),
+      "preferred" => preferred,
+      "preferred_selected_count" =>
+        follow_up_strategy_selected_pressure(intervention_pressure, preferred),
+      "preferred_fallback_count" =>
+        follow_up_strategy_fallback_pressure(intervention_pressure, preferred),
+      "alternative_selected_counts" =>
+        follow_up_strategy_pressure_counts(alternatives, intervention_pressure, :selected),
+      "alternative_fallback_counts" =>
+        follow_up_strategy_pressure_counts(alternatives, intervention_pressure, :fallback)
+    }
+  end
+
+  defp follow_up_strategy_pressure_snapshot(_base, _preferred, _alternatives, _pressure),
+    do: nil
 
   defp follow_up_strategy_intervention_pressure(%WorkItem{} = work_item) do
     if work_item.assigned_role == "planner" do
@@ -11108,6 +11218,28 @@ defmodule HydraX.Runtime.WorkItems do
     end)
   end
 
+  defp follow_up_strategy_pressure_counts(strategies, pressure, mode)
+       when is_list(strategies) and is_map(pressure) and mode in [:selected, :fallback] do
+    strategies
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> Enum.uniq()
+    |> Enum.reduce(%{}, fn strategy, acc ->
+      count =
+        case mode do
+          :selected -> follow_up_strategy_selected_pressure(pressure, strategy)
+          :fallback -> follow_up_strategy_fallback_pressure(pressure, strategy)
+        end
+
+      if count > 0 do
+        Map.put(acc, strategy, count)
+      else
+        acc
+      end
+    end)
+  end
+
+  defp follow_up_strategy_pressure_counts(_strategies, _pressure, _mode), do: %{}
+
   defp apply_follow_up_strategy_to_follow_up_metadata(metadata, %{strategy: strategy} = selection)
        when is_binary(strategy) do
     metadata
@@ -11162,6 +11294,15 @@ defmodule HydraX.Runtime.WorkItems do
         Map.put(current, "recovery_strategy_deescalated_from", from)
       else
         current
+      end
+    end)
+    |> then(fn current ->
+      case selection[:pressure_snapshot] do
+        value when is_map(value) and map_size(value) > 0 ->
+          Map.put(current, "recovery_strategy_pressure_snapshot", value)
+
+        _ ->
+          current
       end
     end)
     |> then(fn current ->

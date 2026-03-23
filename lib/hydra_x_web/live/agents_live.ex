@@ -1417,6 +1417,16 @@ defmodule HydraXWeb.AgentsLive do
             acc[:alternative_recovery_mix],
             entry[:alternative_recovery_mix]
           ),
+        deescalated_recovery_mix:
+          merge_role_frequency_maps(
+            acc[:deescalated_recovery_mix],
+            entry[:deescalated_recovery_mix]
+          ),
+        deescalated_batches:
+          (acc[:deescalated_batches] || 0) + (entry[:deescalated_batches] || 0),
+        deescalation_pressure_total:
+          (acc[:deescalation_pressure_total] || 0) +
+            (entry[:deescalation_pressure_total] || 0),
         selected_intervention_batches:
           (acc[:selected_intervention_batches] || 0) +
             (entry[:selected_intervention_batches] || 0),
@@ -1612,9 +1622,11 @@ defmodule HydraXWeb.AgentsLive do
       delegation_supervision_batch_budget_label(summary),
       delegation_supervision_urgent_batches_label(summary),
       delegation_supervision_intervention_label(summary),
+      delegation_supervision_deescalation_label(summary),
       delegation_supervision_dominant_recovery_label(summary),
       delegation_supervision_selected_recovery_mix_label(summary),
       delegation_supervision_alternative_recovery_mix_label(summary),
+      delegation_supervision_deescalated_recovery_mix_label(summary),
       delegation_supervision_recovery_mix_label(summary),
       delegation_supervision_missing_roles_label(summary),
       delegation_supervision_pressure_label(summary),
@@ -1695,6 +1707,17 @@ defmodule HydraXWeb.AgentsLive do
 
   defp delegation_supervision_intervention_label(_summary), do: nil
 
+  defp delegation_supervision_deescalation_label(summary) when is_map(summary) do
+    count = summary[:deescalated_batches] || 0
+    pressure = summary[:deescalation_pressure_total] || 0
+
+    if count > 0 do
+      "de-escalated #{count} · pressure #{pressure}"
+    end
+  end
+
+  defp delegation_supervision_deescalation_label(_summary), do: nil
+
   defp delegation_supervision_dominant_recovery_label(summary) when is_map(summary) do
     strategy = summary[:dominant_recovery_strategy]
     count = summary[:dominant_recovery_count] || 0
@@ -1741,6 +1764,18 @@ defmodule HydraXWeb.AgentsLive do
   end
 
   defp delegation_supervision_alternative_recovery_mix_label(_summary), do: nil
+
+  defp delegation_supervision_deescalated_recovery_mix_label(summary) when is_map(summary) do
+    case summary[:deescalated_recovery_mix] || %{} do
+      mix when mix == %{} ->
+        nil
+
+      mix ->
+        "de-escalated mix #{format_recovery_mix(mix)}"
+    end
+  end
+
+  defp delegation_supervision_deescalated_recovery_mix_label(_summary), do: nil
 
   defp delegation_supervision_missing_roles_label(summary) when is_map(summary) do
     case summary[:missing_required_roles] || %{} do

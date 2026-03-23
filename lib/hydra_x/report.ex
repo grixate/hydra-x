@@ -218,7 +218,7 @@ defmodule HydraX.Report do
     #{render_conversations(snapshot.conversations)}
 
     ## Autonomous Work Items
-    - active_jobs=#{snapshot.autonomy.active_autonomy_job_count} unsafe_requests=#{snapshot.autonomy.unsafe_request_count} budget_blocked=#{snapshot.autonomy.budget_blocked_count} auto_assigned=#{snapshot.autonomy.auto_assigned_count} fallback_assigned=#{snapshot.autonomy.capability_fallback_count} role_only_open=#{snapshot.autonomy.role_only_open_count} active_claimed=#{snapshot.autonomy.active_claimed_count} stale_claimed=#{snapshot.autonomy.stale_claimed_count} remote_claimed=#{snapshot.autonomy.remote_claimed_count} orphaned_assignments=#{snapshot.autonomy.orphaned_assignment_count} deferred_role_backlog=#{snapshot.autonomy.deferred_role_queue_count || 0} urgent_role_backlog=#{snapshot.autonomy.urgent_role_queue_count || 0} urgent_deferred_role_backlog=#{snapshot.autonomy.urgent_deferred_role_queue_count || 0} role_backlog=#{render_role_queue_backlog_summary(snapshot.autonomy.role_queue_backlog)} saturated_workers=#{Enum.count(snapshot.autonomy.worker_pressure, &(&1.capacity_posture == "saturated"))} delegation_batches=#{Enum.reduce(snapshot.autonomy.delegation_supervision || [], 0, &(&1.active_batches + &2))} urgent_delegation_batches=#{snapshot.autonomy.delegation_urgent_batch_count || 0} intervention_batches=#{snapshot.autonomy.delegation_intervention_batch_count || 0} operator_guided_batches=#{snapshot.autonomy.delegation_operator_guided_batch_count || 0} review_guided_batches=#{snapshot.autonomy.delegation_review_guided_batch_count || 0} request_review_batches=#{snapshot.autonomy.delegation_request_review_batch_count || 0} selected_intervention_batches=#{snapshot.autonomy.delegation_selected_intervention_batch_count || 0} fallback_intervention_batches=#{snapshot.autonomy.delegation_fallback_intervention_batch_count || 0} selected_intervention_portfolios=#{snapshot.autonomy.delegation_selected_intervention_portfolio_count || 0} fallback_intervention_portfolios=#{snapshot.autonomy.delegation_fallback_intervention_portfolio_count || 0} selected_recovery_batches=#{report_recovery_mix_or_none(snapshot.autonomy.delegation_selected_recovery_batches || %{})} fallback_recovery_batches=#{report_recovery_mix_or_none(snapshot.autonomy.delegation_alternative_recovery_batches || %{})} high_pressure_batches=#{snapshot.autonomy.delegation_high_pressure_batch_count || 0} medium_pressure_batches=#{snapshot.autonomy.delegation_medium_pressure_batch_count || 0} repeated_deferred_batches=#{snapshot.autonomy.delegation_repeatedly_deferred_batch_count || 0} delegation_role_gaps=#{snapshot.autonomy.delegation_required_role_gap_count || 0} capability_drift=#{length(snapshot.autonomy.capability_drifts)}
+    - active_jobs=#{snapshot.autonomy.active_autonomy_job_count} unsafe_requests=#{snapshot.autonomy.unsafe_request_count} budget_blocked=#{snapshot.autonomy.budget_blocked_count} auto_assigned=#{snapshot.autonomy.auto_assigned_count} fallback_assigned=#{snapshot.autonomy.capability_fallback_count} role_only_open=#{snapshot.autonomy.role_only_open_count} active_claimed=#{snapshot.autonomy.active_claimed_count} stale_claimed=#{snapshot.autonomy.stale_claimed_count} remote_claimed=#{snapshot.autonomy.remote_claimed_count} orphaned_assignments=#{snapshot.autonomy.orphaned_assignment_count} deferred_role_backlog=#{snapshot.autonomy.deferred_role_queue_count || 0} urgent_role_backlog=#{snapshot.autonomy.urgent_role_queue_count || 0} urgent_deferred_role_backlog=#{snapshot.autonomy.urgent_deferred_role_queue_count || 0} role_backlog=#{render_role_queue_backlog_summary(snapshot.autonomy.role_queue_backlog)} saturated_workers=#{Enum.count(snapshot.autonomy.worker_pressure, &(&1.capacity_posture == "saturated"))} delegation_batches=#{Enum.reduce(snapshot.autonomy.delegation_supervision || [], 0, &(&1.active_batches + &2))} urgent_delegation_batches=#{snapshot.autonomy.delegation_urgent_batch_count || 0} intervention_batches=#{snapshot.autonomy.delegation_intervention_batch_count || 0} operator_guided_batches=#{snapshot.autonomy.delegation_operator_guided_batch_count || 0} review_guided_batches=#{snapshot.autonomy.delegation_review_guided_batch_count || 0} request_review_batches=#{snapshot.autonomy.delegation_request_review_batch_count || 0} selected_intervention_batches=#{snapshot.autonomy.delegation_selected_intervention_batch_count || 0} fallback_intervention_batches=#{snapshot.autonomy.delegation_fallback_intervention_batch_count || 0} selected_intervention_portfolios=#{snapshot.autonomy.delegation_selected_intervention_portfolio_count || 0} fallback_intervention_portfolios=#{snapshot.autonomy.delegation_fallback_intervention_portfolio_count || 0} deescalated_portfolios=#{snapshot.autonomy.delegation_deescalated_portfolio_count || 0} deescalated_batches=#{snapshot.autonomy.delegation_deescalated_batch_count || 0} deescalation_pressure=#{snapshot.autonomy.delegation_deescalation_pressure_total || 0} selected_recovery_batches=#{report_recovery_mix_or_none(snapshot.autonomy.delegation_selected_recovery_batches || %{})} fallback_recovery_batches=#{report_recovery_mix_or_none(snapshot.autonomy.delegation_alternative_recovery_batches || %{})} deescalated_recovery_batches=#{report_recovery_mix_or_none(snapshot.autonomy.delegation_deescalated_recovery_batches || %{})} high_pressure_batches=#{snapshot.autonomy.delegation_high_pressure_batch_count || 0} medium_pressure_batches=#{snapshot.autonomy.delegation_medium_pressure_batch_count || 0} repeated_deferred_batches=#{snapshot.autonomy.delegation_repeatedly_deferred_batch_count || 0} delegation_role_gaps=#{snapshot.autonomy.delegation_required_role_gap_count || 0} capability_drift=#{length(snapshot.autonomy.capability_drifts)}
     ### Role Queue Backlog
     #{render_role_queue_backlog(snapshot.autonomy.role_queue_backlog)}
 
@@ -424,6 +424,15 @@ defmodule HydraX.Report do
                 " fallback_recovery_mix=#{report_recovery_mix(mix)}"
             end
 
+          deescalated_recovery_mix =
+            case entry.deescalated_recovery_mix || %{} do
+              mix when mix == %{} ->
+                nil
+
+              mix ->
+                " deescalated_recovery_mix=#{report_recovery_mix(mix)}"
+            end
+
           dominant_recovery =
             case {entry.dominant_recovery_strategy, entry.dominant_recovery_count} do
               {strategy, count} when is_binary(strategy) and strategy != "" and count > 0 ->
@@ -431,6 +440,11 @@ defmodule HydraX.Report do
 
               _ ->
                 nil
+            end
+
+          deescalation =
+            if (entry.deescalated_batches || 0) > 0 do
+              " deescalated=#{entry.deescalated_batches}:pressure=#{entry.deescalation_pressure_total || 0}"
             end
 
           intervention =
@@ -451,9 +465,11 @@ defmodule HydraX.Report do
               else: ""
             ) <>
             (intervention || "") <>
+            (deescalation || "") <>
             (dominant_recovery || "") <>
             (selected_recovery_mix || "") <>
             (alternative_recovery_mix || "") <>
+            (deescalated_recovery_mix || "") <>
             (recovery_mix || "") <>
             (required_roles || "") <>
             report_delegation_pressure_batches(entry) <>
@@ -2326,6 +2342,8 @@ defmodule HydraX.Report do
         get_in(item.metadata || %{}, ["recovery_strategy_deescalated_from"]),
       recovery_strategy_selection_reason:
         get_in(item.metadata || %{}, ["recovery_strategy_selection_reason"]),
+      recovery_strategy_pressure_snapshot:
+        get_in(item.metadata || %{}, ["recovery_strategy_pressure_snapshot"]),
       delegation_batch: Runtime.delegation_batch_snapshot(item),
       delegation_batch_summary: render_work_item_delegation_summary(item),
       follow_up: follow_up_snapshot(item),
@@ -2711,6 +2729,13 @@ defmodule HydraX.Report do
           %{"selection_reason" => value} when is_binary(value) and value != "" -> value
           _ -> nil
         end,
+      pressure_snapshot:
+        entries
+        |> List.first()
+        |> case do
+          %{"pressure_snapshot" => value} when is_map(value) and map_size(value) > 0 -> value
+          _ -> nil
+        end,
       strategy_key:
         entries
         |> List.first()
@@ -2911,6 +2936,7 @@ defmodule HydraX.Report do
       "summary" => Map.get(entry, "summary"),
       "deescalated_from" => Map.get(entry, "deescalated_from"),
       "selection_reason" => Map.get(entry, "selection_reason"),
+      "pressure_snapshot" => Map.get(entry, "pressure_snapshot"),
       "alternative_strategies" =>
         entry
         |> Map.get("alternative_strategies", [])

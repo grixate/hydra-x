@@ -1359,14 +1359,23 @@ defmodule HydraXWeb.HealthLive do
               selected-heavy portfolios{" "}
               {@autonomy_status.delegation_selected_intervention_portfolio_count || 0} ·
               fallback-heavy portfolios{" "}
-              {@autonomy_status.delegation_fallback_intervention_portfolio_count || 0}
+              {@autonomy_status.delegation_fallback_intervention_portfolio_count || 0} ·
+              de-escalated portfolios{" "}
+              {@autonomy_status.delegation_deescalated_portfolio_count || 0}
             </p>
             <p class="mt-1 text-xs text-[var(--hx-mute)]">
               selected recovery {autonomy_delegation_summary_recovery_mix(
                 @autonomy_status.delegation_selected_recovery_batches
               )} · fallback recovery {autonomy_delegation_summary_recovery_mix(
                 @autonomy_status.delegation_alternative_recovery_batches
+              )} · de-escalated recovery {autonomy_delegation_summary_recovery_mix(
+                @autonomy_status.delegation_deescalated_recovery_batches
               )}
+            </p>
+            <p class="mt-1 text-xs text-[var(--hx-mute)]">
+              de-escalated batches {@autonomy_status.delegation_deescalated_batch_count || 0} ·
+              de-escalation pressure{" "}
+              {@autonomy_status.delegation_deescalation_pressure_total || 0}
             </p>
           </article>
         </div>
@@ -1564,11 +1573,17 @@ defmodule HydraXWeb.HealthLive do
                   <span :if={autonomy_delegation_intervention_label(entry)}>
                     {" "}· {autonomy_delegation_intervention_label(entry)}
                   </span>
+                  <span :if={autonomy_delegation_deescalation_label(entry)}>
+                    {" "}· {autonomy_delegation_deescalation_label(entry)}
+                  </span>
                   <span :if={autonomy_delegation_selected_recovery_mix_label(entry)}>
                     {" "}· {autonomy_delegation_selected_recovery_mix_label(entry)}
                   </span>
                   <span :if={autonomy_delegation_alternative_recovery_mix_label(entry)}>
                     {" "}· {autonomy_delegation_alternative_recovery_mix_label(entry)}
+                  </span>
+                  <span :if={autonomy_delegation_deescalated_recovery_mix_label(entry)}>
+                    {" "}· {autonomy_delegation_deescalated_recovery_mix_label(entry)}
                   </span>
                   <span :if={autonomy_delegation_recovery_mix_label(entry)}>
                     {" "}· {autonomy_delegation_recovery_mix_label(entry)}
@@ -2830,6 +2845,17 @@ defmodule HydraXWeb.HealthLive do
 
   defp autonomy_delegation_selected_recovery_mix_label(_entry), do: nil
 
+  defp autonomy_delegation_deescalation_label(entry) when is_map(entry) do
+    count = entry[:deescalated_batches] || entry["deescalated_batches"] || 0
+    pressure = entry[:deescalation_pressure_total] || entry["deescalation_pressure_total"] || 0
+
+    if count > 0 do
+      "de-escalated #{count} · pressure #{pressure}"
+    end
+  end
+
+  defp autonomy_delegation_deescalation_label(_entry), do: nil
+
   defp autonomy_delegation_alternative_recovery_mix_label(entry) when is_map(entry) do
     case entry[:alternative_recovery_mix] || entry["alternative_recovery_mix"] || %{} do
       mix when mix == %{} ->
@@ -2841,6 +2867,18 @@ defmodule HydraXWeb.HealthLive do
   end
 
   defp autonomy_delegation_alternative_recovery_mix_label(_entry), do: nil
+
+  defp autonomy_delegation_deescalated_recovery_mix_label(entry) when is_map(entry) do
+    case entry[:deescalated_recovery_mix] || entry["deescalated_recovery_mix"] || %{} do
+      mix when mix == %{} ->
+        nil
+
+      mix ->
+        "de-escalated mix #{autonomy_recovery_mix(mix)}"
+    end
+  end
+
+  defp autonomy_delegation_deescalated_recovery_mix_label(_entry), do: nil
 
   defp autonomy_delegation_deferral_pressure_label(entry) when is_map(entry) do
     repeated = entry[:repeatedly_deferred_batches] || 0

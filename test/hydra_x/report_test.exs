@@ -1152,6 +1152,15 @@ defmodule HydraX.ReportTest do
                 "deescalated_from" => "operator_guided_replan",
                 "selection_reason" =>
                   "de-escalated from Operator-guided recovery under existing planner recovery pressure (1 existing)",
+                "pressure_snapshot" => %{
+                  "alternative_fallback_counts" => %{},
+                  "alternative_selected_counts" => %{"operator_guided_replan" => 1},
+                  "base" => "operator_guided_replan",
+                  "base_selected_count" => 1,
+                  "preferred" => "operator_guided_replan",
+                  "preferred_fallback_count" => 0,
+                  "preferred_selected_count" => 1
+                },
                 "alternative_strategies" => ["narrow_delegate_batch"],
                 "alternative_summaries" => ["Narrowed delegation batch"],
                 "priority_boost" => 3
@@ -1228,6 +1237,15 @@ defmodule HydraX.ReportTest do
                follow_up["deescalated_from"] == "operator_guided_replan" and
                follow_up["selection_reason"] ==
                  "de-escalated from Operator-guided recovery under existing planner recovery pressure (1 existing)" and
+               follow_up["pressure_snapshot"] == %{
+                 "alternative_fallback_counts" => %{},
+                 "alternative_selected_counts" => %{"operator_guided_replan" => 1},
+                 "base" => "operator_guided_replan",
+                 "base_selected_count" => 1,
+                 "preferred" => "operator_guided_replan",
+                 "preferred_fallback_count" => 0,
+                 "preferred_selected_count" => 1
+               } and
                follow_up["additional_entries_count"] == 1 and
                follow_up["additional_summaries"] == ["Reviewer-guided recovery"] and
                follow_up["additional_summary_preview"] ==
@@ -1242,6 +1260,15 @@ defmodule HydraX.ReportTest do
                Enum.at(entries, 0)["deescalated_from"] == "operator_guided_replan" and
                Enum.at(entries, 0)["selection_reason"] ==
                  "de-escalated from Operator-guided recovery under existing planner recovery pressure (1 existing)" and
+               Enum.at(entries, 0)["pressure_snapshot"] == %{
+                 "alternative_fallback_counts" => %{},
+                 "alternative_selected_counts" => %{"operator_guided_replan" => 1},
+                 "base" => "operator_guided_replan",
+                 "base_selected_count" => 1,
+                 "preferred" => "operator_guided_replan",
+                 "preferred_fallback_count" => 0,
+                 "preferred_selected_count" => 1
+               } and
                Enum.at(entries, 0)["priority_boost"] == 3 and
                Enum.at(entries, 1)["strategy"] == "review_guided_replan" and
                Enum.at(entries, 1)["summary"] == "Reviewer-guided recovery" and
@@ -1519,6 +1546,15 @@ defmodule HydraX.ReportTest do
           "recovery_strategy_priority_boost" => 3,
           "recovery_strategy_alternatives" => ["narrow_delegate_batch"],
           "recovery_strategy_alternative_summaries" => ["Narrowed delegation batch"],
+          "recovery_strategy_pressure_snapshot" => %{
+            "base" => "operator_guided_replan",
+            "base_selected_count" => 1,
+            "preferred" => "operator_guided_replan",
+            "preferred_selected_count" => 1,
+            "preferred_fallback_count" => 0,
+            "alternative_selected_counts" => %{},
+            "alternative_fallback_counts" => %{}
+          },
           "recovery_strategy_deescalated_from" => "operator_guided_replan",
           "recovery_strategy_selection_reason" =>
             "de-escalated from Operator-guided recovery under existing planner recovery pressure (1 existing)"
@@ -1551,6 +1587,15 @@ defmodule HydraX.ReportTest do
                item["recovery_strategy_behavior"] == "operator_review_after_execution" and
                item["recovery_strategy_priority_boost"] == 3 and
                item["recovery_strategy_alternatives"] == ["Narrowed delegation batch"] and
+               item["recovery_strategy_pressure_snapshot"] == %{
+                 "base" => "operator_guided_replan",
+                 "base_selected_count" => 1,
+                 "preferred" => "operator_guided_replan",
+                 "preferred_selected_count" => 1,
+                 "preferred_fallback_count" => 0,
+                 "alternative_selected_counts" => %{},
+                 "alternative_fallback_counts" => %{}
+               } and
                item["recovery_strategy_deescalated_from"] == "operator_guided_replan" and
                item["recovery_strategy_selection_reason"] ==
                  "de-escalated from Operator-guided recovery under existing planner recovery pressure (1 existing)"
@@ -1715,6 +1760,16 @@ defmodule HydraX.ReportTest do
                 "type" => "replan",
                 "strategy" => "operator_guided_replan",
                 "summary" => "Operator-guided recovery",
+                "deescalated_from" => "operator_guided_replan",
+                "pressure_snapshot" => %{
+                  "alternative_fallback_counts" => %{},
+                  "alternative_selected_counts" => %{"operator_guided_replan" => 1},
+                  "base" => "operator_guided_replan",
+                  "base_selected_count" => 1,
+                  "preferred" => "operator_guided_replan",
+                  "preferred_fallback_count" => 0,
+                  "preferred_selected_count" => 1
+                },
                 "priority_boost" => 3
               },
               %{
@@ -1793,16 +1848,22 @@ defmodule HydraX.ReportTest do
     assert markdown =~ "fallback_intervention_batches=1"
     assert markdown =~ "selected_intervention_portfolios=1"
     assert markdown =~ "fallback_intervention_portfolios=0"
+    assert markdown =~ "deescalated_portfolios=1"
+    assert markdown =~ "deescalated_batches=1"
+    assert markdown =~ "deescalation_pressure=1"
     assert markdown =~ "selected_recovery_batches=operator-guided:1"
     assert markdown =~ "fallback_recovery_batches=review-guided:1"
+    assert markdown =~ "deescalated_recovery_batches=operator-guided:1"
     assert markdown =~ "high_pressure_batches=0"
     assert markdown =~ "medium_pressure_batches=1"
     assert markdown =~ "repeated_deferred_batches=1"
     assert markdown =~ "delegation_role_gaps=1"
     assert markdown =~ "intervention=selected-heavy"
+    assert markdown =~ "deescalated=1:pressure=1"
     assert markdown =~ "dominant_recovery=operator-guided:1"
     assert markdown =~ "selected_recovery_mix=operator-guided:1"
     assert markdown =~ "fallback_recovery_mix=review-guided:1"
+    assert markdown =~ "deescalated_recovery_mix=operator-guided:1"
     assert markdown =~ "pressure=h0/m1/l0"
     assert markdown =~ "repeat_deferrals=1 max_deferrals=2"
     assert markdown =~ "deferred=1"
