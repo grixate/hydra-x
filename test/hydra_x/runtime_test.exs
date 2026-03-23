@@ -5157,6 +5157,141 @@ defmodule HydraX.RuntimeTest do
            ]
   end
 
+  test "guided constraint replans treat sustained stale operator pressure as a softer de-escalation signal" do
+    planner =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, planner} = Runtime.save_agent(planner, %{"role" => "planner"})
+
+    researcher =
+      create_agent()
+      |> then(&Runtime.get_agent!(&1.id))
+
+    {:ok, researcher} = Runtime.save_agent(researcher, %{"role" => "researcher"})
+
+    for index <- 1..2 do
+      {:ok, _stale_pressure_parent} =
+        Runtime.save_work_item(%{
+          "kind" => "research",
+          "goal" => "Keep stale operator-guided delegation tree #{index} on record.",
+          "assigned_agent_id" => planner.id,
+          "assigned_role" => "planner",
+          "status" => "blocked",
+          "execution_mode" => "delegate",
+          "priority" => 10 - index,
+          "result_refs" => %{
+            "follow_up_summary" => %{
+              "count" => 1,
+              "types" => ["replan"],
+              "entries" => [
+                %{
+                  "work_item_id" => 94_020 + index,
+                  "type" => "replan",
+                  "status" => "completed",
+                  "active" => false,
+                  "strategy" => "operator_guided_replan",
+                  "summary" => "Operator-guided recovery",
+                  "priority_boost" => 3
+                }
+              ]
+            }
+          }
+        })
+    end
+
+    {:ok, parent} =
+      Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" =>
+          "Recover a constrained branch without treating stale operator pressure like active load.",
+        "assigned_agent_id" => planner.id,
+        "assigned_role" => "planner",
+        "execution_mode" => "delegate",
+        "priority" => 7,
+        "metadata" => %{"delegate_role" => "researcher"},
+        "budget" => %{"token_budget" => 5}
+      })
+
+    assert {:ok, planner_summary} = Runtime.run_autonomy_cycle(planner.id)
+    assert planner_summary.action == "delegated"
+
+    parent = Runtime.get_work_item!(parent.id)
+    [child_id] = parent.result_refs["child_work_item_ids"]
+    child = Runtime.get_work_item!(child_id)
+
+    {:ok, _usage} =
+      Budget.record_usage(researcher.id, nil,
+        tokens_in: 4,
+        tokens_out: 2,
+        metadata: %{purpose: "autonomy_research", work_item_id: child.id}
+      )
+
+    assert {:ok, researcher_summary} = Runtime.run_autonomy_cycle(researcher.id)
+    assert researcher_summary.action == "policy_blocked"
+
+    parent = Runtime.get_work_item!(parent.id)
+
+    {:ok, _parent} =
+      Runtime.save_work_item(parent, %{
+        "result_refs" =>
+          (parent.result_refs || %{})
+          |> Map.put("follow_up_summary", %{
+            "count" => 1,
+            "types" => ["replan"],
+            "strategies" => [
+              "operator_guided_replan",
+              "review_guided_replan",
+              "request_review"
+            ]
+          })
+      })
+
+    assert {:ok, finalize_summary} = Runtime.run_autonomy_cycle(planner.id)
+    assert finalize_summary.action == "finalized_blocked_parent"
+
+    replan_item = Runtime.get_work_item!(finalize_summary.follow_up_work_item.id)
+
+    preferred_strategy =
+      get_in(replan_item.metadata || %{}, ["preferred_recovery_strategy"])
+
+    assert preferred_strategy in ["review_guided_replan", "request_review"]
+
+    assert get_in(replan_item.metadata || %{}, ["recovery_strategy_deescalated_from"]) ==
+             "operator_guided_replan"
+
+    selection_reason =
+      get_in(replan_item.metadata || %{}, ["recovery_strategy_selection_reason"])
+
+    assert selection_reason =~ "de-escalated from Operator-guided recovery"
+    assert selection_reason =~ "(2 existing)"
+
+    pressure_snapshot =
+      get_in(replan_item.metadata || %{}, ["recovery_strategy_pressure_snapshot"])
+
+    assert pressure_snapshot["base"] == "operator_guided_replan"
+    assert pressure_snapshot["base_selected_count"] == 2
+    assert pressure_snapshot["preferred"] == preferred_strategy
+    assert pressure_snapshot["preferred_selected_count"] == 0
+    assert pressure_snapshot["preferred_fallback_count"] == 0
+    assert pressure_snapshot["alternative_selected_counts"] == %{"operator_guided_replan" => 2}
+
+    if Map.has_key?(pressure_snapshot, "base_inactive_selected_count") do
+      assert pressure_snapshot["base_inactive_selected_count"] == 2
+    end
+
+    if Map.has_key?(pressure_snapshot, "alternative_inactive_selected_counts") do
+      assert pressure_snapshot["alternative_inactive_selected_counts"] == %{
+               "operator_guided_replan" => 2
+             }
+    end
+
+    alternatives = get_in(replan_item.metadata || %{}, ["recovery_strategy_alternatives"]) || []
+
+    assert "operator_guided_replan" in alternatives
+    assert length(alternatives) == 2
+  end
+
   test "guided constraint replans avoid candidates already under de-escalated pressure" do
     planner =
       create_agent()

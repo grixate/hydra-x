@@ -7679,18 +7679,30 @@ defmodule HydraX.Runtime.WorkItems do
          pressure
        )
        when is_list(alternatives) and is_map(pressure) do
-    operator_pressure =
-      follow_up_strategy_selected_pressure(pressure, "operator_guided_replan") +
+    operator_active_pressure =
+      follow_up_strategy_active_selected_pressure(pressure, "operator_guided_replan") +
         follow_up_strategy_deescalated_pressure(pressure, "operator_guided_replan")
 
-    if operator_pressure > 0 do
-      best_deescalated_follow_up_strategy(
-        operator_guided_deescalation_candidates(operator_pressure),
-        alternatives,
-        pressure
-      ) || "operator_guided_replan"
-    else
-      "operator_guided_replan"
+    operator_stale_pressure =
+      follow_up_strategy_inactive_selected_pressure(pressure, "operator_guided_replan")
+
+    cond do
+      operator_active_pressure > 0 ->
+        best_deescalated_follow_up_strategy(
+          operator_guided_deescalation_candidates(operator_active_pressure),
+          alternatives,
+          pressure
+        ) || "operator_guided_replan"
+
+      operator_stale_pressure > 1 ->
+        maybe_choose_stale_operator_guided_follow_up_strategy(
+          alternatives,
+          pressure,
+          operator_stale_pressure
+        ) || "operator_guided_replan"
+
+      true ->
+        "operator_guided_replan"
     end
   end
 
@@ -7700,22 +7712,64 @@ defmodule HydraX.Runtime.WorkItems do
          pressure
        )
        when is_list(alternatives) and is_map(pressure) do
-    review_pressure =
-      follow_up_strategy_selected_pressure(pressure, "review_guided_replan") +
+    review_active_pressure =
+      follow_up_strategy_active_selected_pressure(pressure, "review_guided_replan") +
         follow_up_strategy_deescalated_pressure(pressure, "review_guided_replan")
 
-    if review_pressure > 0 do
-      best_deescalated_follow_up_strategy(
-        review_guided_deescalation_candidates(review_pressure),
-        alternatives,
-        pressure
-      ) || "review_guided_replan"
-    else
-      "review_guided_replan"
+    review_stale_pressure =
+      follow_up_strategy_inactive_selected_pressure(pressure, "review_guided_replan")
+
+    cond do
+      review_active_pressure > 0 ->
+        best_deescalated_follow_up_strategy(
+          review_guided_deescalation_candidates(review_active_pressure),
+          alternatives,
+          pressure
+        ) || "review_guided_replan"
+
+      review_stale_pressure > 1 ->
+        best_deescalated_follow_up_strategy(
+          review_guided_stale_deescalation_candidates(review_stale_pressure),
+          alternatives,
+          pressure
+        ) || "review_guided_replan"
+
+      true ->
+        "review_guided_replan"
     end
   end
 
   defp maybe_deescalate_follow_up_strategy(strategy, _alternatives, _pressure), do: strategy
+
+  defp maybe_choose_stale_operator_guided_follow_up_strategy(
+         alternatives,
+         pressure,
+         stale_pressure
+       )
+       when is_list(alternatives) and is_map(pressure) do
+    cond do
+      Enum.member?(alternatives, "review_guided_replan") ->
+        "review_guided_replan"
+
+      true ->
+        best_deescalated_follow_up_strategy(
+          operator_guided_stale_deescalation_candidates(stale_pressure),
+          alternatives,
+          pressure
+        )
+    end
+  end
+
+  defp maybe_choose_stale_operator_guided_follow_up_strategy(
+         _alternatives,
+         _pressure,
+         _stale_pressure
+       ),
+       do: nil
+
+  defp operator_guided_stale_deescalation_candidates(_operator_pressure) do
+    ["request_review", "review_guided_replan", "constraint_replan", "narrow_delegate_batch"]
+  end
 
   defp operator_guided_deescalation_candidates(operator_pressure)
        when is_integer(operator_pressure) and operator_pressure > 1 do
@@ -7735,6 +7789,10 @@ defmodule HydraX.Runtime.WorkItems do
     ["request_review", "constraint_replan", "narrow_delegate_batch"]
   end
 
+  defp review_guided_stale_deescalation_candidates(_review_pressure) do
+    ["request_review", "constraint_replan", "narrow_delegate_batch"]
+  end
+
   defp best_deescalated_follow_up_strategy(candidates, alternatives, pressure)
        when is_list(candidates) and is_list(alternatives) and is_map(pressure) do
     candidates
@@ -7743,8 +7801,10 @@ defmodule HydraX.Runtime.WorkItems do
     |> Enum.min_by(
       fn {strategy, index} ->
         {
-          follow_up_strategy_selected_pressure(pressure, strategy),
+          follow_up_strategy_active_selected_pressure(pressure, strategy),
           follow_up_strategy_deescalated_pressure(pressure, strategy),
+          follow_up_strategy_inactive_selected_pressure(pressure, strategy),
+          follow_up_strategy_selected_pressure(pressure, strategy),
           follow_up_strategy_fallback_pressure(pressure, strategy),
           index
         }
@@ -11355,16 +11415,23 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp follow_up_strategy_selection_reason(base, preferred, intervention_pressure)
        when is_binary(base) and is_binary(preferred) and base != preferred do
-    pressure_count = follow_up_strategy_selected_pressure(intervention_pressure, base)
+    active_pressure_count =
+      follow_up_strategy_active_selected_pressure(intervention_pressure, base)
+
+    stale_pressure_count =
+      follow_up_strategy_inactive_selected_pressure(intervention_pressure, base)
+
     deescalated_count = follow_up_strategy_deescalated_pressure(intervention_pressure, base)
-    total_pressure_count = pressure_count + deescalated_count
+    total_pressure_count = active_pressure_count + stale_pressure_count + deescalated_count
 
     pressure_phrase =
       cond do
-        pressure_count > 1 -> "under sustained planner recovery pressure"
-        pressure_count > 0 -> "under existing planner recovery pressure"
+        active_pressure_count > 1 -> "under sustained planner recovery pressure"
+        active_pressure_count > 0 -> "under existing planner recovery pressure"
         deescalated_count > 1 -> "under sustained planner de-escalation pressure"
-        true -> "under existing planner de-escalation pressure"
+        deescalated_count > 0 -> "under existing planner de-escalation pressure"
+        stale_pressure_count > 1 -> "under sustained stale planner recovery pressure"
+        true -> "under existing stale planner recovery pressure"
       end
 
     "de-escalated from #{recovery_strategy_summary(base)} #{pressure_phrase}#{if(total_pressure_count > 0, do: " (#{total_pressure_count} existing)", else: "")}"
@@ -11391,8 +11458,24 @@ defmodule HydraX.Runtime.WorkItems do
           follow_up_strategy_pressure_counts(alternatives, intervention_pressure, :fallback)
       }
       |> maybe_put_pressure_snapshot_count(
+        "base_inactive_selected_count",
+        follow_up_strategy_inactive_selected_pressure(intervention_pressure, base)
+      )
+      |> maybe_put_pressure_snapshot_count(
+        "preferred_inactive_selected_count",
+        follow_up_strategy_inactive_selected_pressure(intervention_pressure, preferred)
+      )
+      |> maybe_put_pressure_snapshot_count(
         "preferred_deescalated_count",
         follow_up_strategy_deescalated_pressure(intervention_pressure, preferred)
+      )
+      |> maybe_put_pressure_snapshot_map(
+        "alternative_inactive_selected_counts",
+        follow_up_strategy_pressure_counts(
+          alternatives,
+          intervention_pressure,
+          :inactive_selected
+        )
       )
       |> maybe_put_pressure_snapshot_map(
         "alternative_deescalated_counts",
@@ -11423,27 +11506,70 @@ defmodule HydraX.Runtime.WorkItems do
       )
       |> limit(20)
       |> Repo.all()
-      |> Enum.reduce(%{selected: %{}, fallback: %{}}, fn item, acc ->
-        case base_work_item_follow_up_selection(item) do
-          %{
-            strategy: strategy,
-            alternative_strategies: alternatives,
-            deescalated_from: deescalated_from
-          }
-          when is_binary(strategy) and strategy != "" ->
-            acc
-            |> update_follow_up_strategy_pressure(:selected, strategy)
-            |> update_follow_up_strategy_pressure(:fallback, alternatives)
-            |> update_follow_up_strategy_pressure(:deescalated, deescalated_from)
+      |> Enum.reduce(
+        %{selected: %{}, active_selected: %{}, inactive_selected: %{}, fallback: %{}},
+        fn item, acc ->
+          case base_work_item_follow_up_selection(item) do
+            %{
+              strategy: strategy,
+              alternative_strategies: alternatives,
+              deescalated_from: deescalated_from
+            }
+            when is_binary(strategy) and strategy != "" ->
+              active_selection = active_work_item_follow_up_selection(item)
+              inactive_selection = inactive_work_item_follow_up_selection(item)
 
-          _ ->
-            acc
+              acc
+              |> update_follow_up_strategy_pressure(:selected, strategy)
+              |> update_follow_up_strategy_pressure(
+                :active_selected,
+                if(match?(%{strategy: ^strategy}, active_selection), do: strategy, else: nil)
+              )
+              |> update_follow_up_strategy_pressure(
+                :inactive_selected,
+                if(match?(%{strategy: ^strategy}, inactive_selection), do: strategy, else: nil)
+              )
+              |> update_follow_up_strategy_pressure(:fallback, alternatives)
+              |> update_follow_up_strategy_pressure(:deescalated, deescalated_from)
+
+            _ ->
+              acc
+          end
         end
-      end)
+      )
     else
-      %{selected: %{}, fallback: %{}}
+      %{selected: %{}, active_selected: %{}, inactive_selected: %{}, fallback: %{}}
     end
   end
+
+  defp follow_up_strategy_active_selected_pressure(
+         %{
+           active_selected: active_selected,
+           inactive_selected: inactive_selected,
+           selected: selected
+         },
+         strategy
+       )
+       when is_map(active_selected) and is_map(inactive_selected) and is_map(selected) and
+              is_binary(strategy) do
+    active_count = Map.get(active_selected, strategy, 0)
+    inactive_count = Map.get(inactive_selected, strategy, 0)
+
+    cond do
+      active_count > 0 -> active_count
+      inactive_count > 0 -> 0
+      true -> Map.get(selected, strategy, 0)
+    end
+  end
+
+  defp follow_up_strategy_active_selected_pressure(_pressure, _strategy), do: 0
+
+  defp follow_up_strategy_inactive_selected_pressure(%{inactive_selected: selected}, strategy)
+       when is_map(selected) and is_binary(strategy) do
+    Map.get(selected, strategy, 0)
+  end
+
+  defp follow_up_strategy_inactive_selected_pressure(_pressure, _strategy), do: 0
 
   defp follow_up_strategy_selected_pressure(%{selected: selected}, strategy)
        when is_map(selected) and is_binary(strategy) do
@@ -11472,7 +11598,8 @@ defmodule HydraX.Runtime.WorkItems do
   defp follow_up_strategy_deescalated_pressure(_pressure, _strategy), do: 0
 
   defp update_follow_up_strategy_pressure(acc, key, strategies)
-       when is_map(acc) and key in [:selected, :fallback, :deescalated] do
+       when is_map(acc) and
+              key in [:selected, :active_selected, :inactive_selected, :fallback, :deescalated] do
     strategies
     |> List.wrap()
     |> Enum.reject(&(&1 in [nil, ""]))
@@ -11487,7 +11614,7 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp follow_up_strategy_pressure_counts(strategies, pressure, mode)
        when is_list(strategies) and is_map(pressure) and
-              mode in [:selected, :fallback, :deescalated] do
+              mode in [:selected, :active_selected, :inactive_selected, :fallback, :deescalated] do
     strategies
     |> Enum.reject(&(&1 in [nil, ""]))
     |> Enum.uniq()
@@ -11495,6 +11622,8 @@ defmodule HydraX.Runtime.WorkItems do
       count =
         case mode do
           :selected -> follow_up_strategy_selected_pressure(pressure, strategy)
+          :active_selected -> follow_up_strategy_active_selected_pressure(pressure, strategy)
+          :inactive_selected -> follow_up_strategy_inactive_selected_pressure(pressure, strategy)
           :fallback -> follow_up_strategy_fallback_pressure(pressure, strategy)
           :deescalated -> follow_up_strategy_deescalated_pressure(pressure, strategy)
         end
