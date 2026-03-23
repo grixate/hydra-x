@@ -435,11 +435,11 @@ defmodule HydraX.Report do
 
           intervention =
             cond do
-              intervention_recovery_mix?(entry.selected_recovery_mix) ->
-                " intervention=heavy"
+              (entry.selected_intervention_batches || 0) > 0 ->
+                " intervention=selected-heavy"
 
-              intervention_recovery_mix?(entry.alternative_recovery_mix) ->
-                " intervention=fallback"
+              (entry.fallback_intervention_batches || 0) > 0 ->
+                " intervention=fallback-heavy"
 
               true ->
                 nil
@@ -520,20 +520,6 @@ defmodule HydraX.Report do
     do: report_recovery_mix(mix)
 
   defp report_recovery_mix_or_none(_mix), do: "none"
-
-  defp intervention_recovery_mix?(mix) when is_map(mix) do
-    Enum.any?(mix, fn
-      {strategy, count}
-      when strategy in ["operator_guided_replan", "review_guided_replan", "request_review"] and
-             count not in [nil, 0] ->
-        true
-
-      _ ->
-        false
-    end)
-  end
-
-  defp intervention_recovery_mix?(_mix), do: false
 
   defp report_constraint_pressure_suffix(pressure) when is_map(pressure) do
     urgent_queued = pressure[:urgent_queued_count] || pressure["urgent_queued_count"] || 0

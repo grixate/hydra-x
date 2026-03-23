@@ -2787,13 +2787,11 @@ defmodule HydraXWeb.HealthLive do
 
   defp autonomy_delegation_intervention_label(entry) when is_map(entry) do
     cond do
-      intervention_recovery_mix?(entry[:selected_recovery_mix] || entry["selected_recovery_mix"]) ->
-        "intervention-heavy"
+      (entry[:selected_intervention_batches] || entry["selected_intervention_batches"] || 0) > 0 ->
+        "selected-intervention-heavy"
 
-      intervention_recovery_mix?(
-        entry[:alternative_recovery_mix] || entry["alternative_recovery_mix"]
-      ) ->
-        "fallback-intervention"
+      (entry[:fallback_intervention_batches] || entry["fallback_intervention_batches"] || 0) > 0 ->
+        "fallback-intervention-heavy"
 
       true ->
         nil
@@ -2856,20 +2854,6 @@ defmodule HydraXWeb.HealthLive do
       "#{humanize_follow_up_strategy(strategy)} x#{count}"
     end)
   end
-
-  defp intervention_recovery_mix?(mix) when is_map(mix) do
-    Enum.any?(mix, fn
-      {strategy, count}
-      when strategy in ["operator_guided_replan", "review_guided_replan", "request_review"] and
-             count not in [nil, 0] ->
-        true
-
-      _ ->
-        false
-    end)
-  end
-
-  defp intervention_recovery_mix?(_mix), do: false
 
   defp autonomy_delegation_summary_recovery_mix(mix) when is_map(mix) and map_size(mix) > 0 do
     autonomy_recovery_mix(mix)

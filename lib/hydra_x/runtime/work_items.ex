@@ -987,6 +987,8 @@ defmodule HydraX.Runtime.WorkItems do
       recovery_mix = aggregate_follow_up_recovery_mix(entries)
       selected_recovery_mix = aggregate_selected_follow_up_recovery_mix(entries)
       alternative_recovery_mix = aggregate_alternative_follow_up_recovery_mix(entries)
+      selected_intervention_batches = intervention_recovery_batch_count(selected_recovery_mix)
+      fallback_intervention_batches = intervention_recovery_batch_count(alternative_recovery_mix)
 
       {dominant_recovery_strategy, dominant_recovery_count, dominant_recovery_score} =
         dominant_follow_up_recovery_strategy(selected_recovery_mix)
@@ -1035,6 +1037,8 @@ defmodule HydraX.Runtime.WorkItems do
         recovery_mix: recovery_mix,
         selected_recovery_mix: selected_recovery_mix,
         alternative_recovery_mix: alternative_recovery_mix,
+        selected_intervention_batches: selected_intervention_batches,
+        fallback_intervention_batches: fallback_intervention_batches,
         dominant_recovery_strategy: dominant_recovery_strategy,
         dominant_recovery_count: dominant_recovery_count,
         dominant_recovery_score: dominant_recovery_score,
@@ -1058,6 +1062,8 @@ defmodule HydraX.Runtime.WorkItems do
     end)
     |> Enum.sort_by(fn entry ->
       {
+        -(entry.selected_intervention_batches || 0),
+        -(entry.fallback_intervention_batches || 0),
         -(entry.dominant_recovery_score || 0),
         -(entry.dominant_recovery_count || 0),
         -delegation_pressure_batch_count(entry, :high),

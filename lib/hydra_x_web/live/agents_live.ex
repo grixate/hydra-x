@@ -1417,6 +1417,12 @@ defmodule HydraXWeb.AgentsLive do
             acc[:alternative_recovery_mix],
             entry[:alternative_recovery_mix]
           ),
+        selected_intervention_batches:
+          (acc[:selected_intervention_batches] || 0) +
+            (entry[:selected_intervention_batches] || 0),
+        fallback_intervention_batches:
+          (acc[:fallback_intervention_batches] || 0) +
+            (entry[:fallback_intervention_batches] || 0),
         missing_required_roles:
           merge_role_frequency_maps(
             acc[:missing_required_roles],
@@ -1676,11 +1682,11 @@ defmodule HydraXWeb.AgentsLive do
 
   defp delegation_supervision_intervention_label(summary) when is_map(summary) do
     cond do
-      intervention_recovery_mix?(summary[:selected_recovery_mix]) ->
-        "intervention-heavy"
+      (summary[:selected_intervention_batches] || 0) > 0 ->
+        "selected-intervention-heavy"
 
-      intervention_recovery_mix?(summary[:alternative_recovery_mix]) ->
-        "fallback-intervention"
+      (summary[:fallback_intervention_batches] || 0) > 0 ->
+        "fallback-intervention-heavy"
 
       true ->
         nil
@@ -1784,20 +1790,6 @@ defmodule HydraXWeb.AgentsLive do
       "#{humanize_follow_up_strategy(strategy)} x#{count}"
     end)
   end
-
-  defp intervention_recovery_mix?(mix) when is_map(mix) do
-    Enum.any?(mix, fn
-      {strategy, count}
-      when strategy in ["operator_guided_replan", "review_guided_replan", "request_review"] and
-             count not in [nil, 0] ->
-        true
-
-      _ ->
-        false
-    end)
-  end
-
-  defp intervention_recovery_mix?(_mix), do: false
 
   defp follow_up_recovery_strategy_rank("operator_guided_replan"), do: 4
   defp follow_up_recovery_strategy_rank("review_guided_replan"), do: 3
