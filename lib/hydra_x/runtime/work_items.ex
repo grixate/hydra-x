@@ -7697,10 +7697,25 @@ defmodule HydraX.Runtime.WorkItems do
     operator_stale_pressure =
       follow_up_strategy_inactive_selected_pressure(pressure, "operator_guided_replan")
 
+    active_intervention_portfolio_pressure =
+      follow_up_strategy_active_intervention_portfolio_pressure(pressure)
+
+    inactive_intervention_portfolio_pressure =
+      follow_up_strategy_inactive_intervention_portfolio_pressure(pressure)
+
     cond do
       operator_active_pressure > 0 ->
         best_deescalated_follow_up_strategy(
           operator_guided_deescalation_candidates(operator_active_pressure),
+          alternatives,
+          pressure
+        ) || "operator_guided_replan"
+
+      active_intervention_portfolio_pressure > 1 ->
+        best_deescalated_follow_up_strategy(
+          operator_guided_portfolio_deescalation_candidates(
+            active_intervention_portfolio_pressure
+          ),
           alternatives,
           pressure
         ) || "operator_guided_replan"
@@ -7710,6 +7725,15 @@ defmodule HydraX.Runtime.WorkItems do
           alternatives,
           pressure,
           operator_stale_pressure
+        ) || "operator_guided_replan"
+
+      inactive_intervention_portfolio_pressure > 1 ->
+        best_deescalated_follow_up_strategy(
+          operator_guided_stale_portfolio_deescalation_candidates(
+            inactive_intervention_portfolio_pressure
+          ),
+          alternatives,
+          pressure
         ) || "operator_guided_replan"
 
       true ->
@@ -7730,6 +7754,12 @@ defmodule HydraX.Runtime.WorkItems do
     review_stale_pressure =
       follow_up_strategy_inactive_selected_pressure(pressure, "review_guided_replan")
 
+    active_intervention_portfolio_pressure =
+      follow_up_strategy_active_intervention_portfolio_pressure(pressure)
+
+    inactive_intervention_portfolio_pressure =
+      follow_up_strategy_inactive_intervention_portfolio_pressure(pressure)
+
     cond do
       review_active_pressure > 0 ->
         best_deescalated_follow_up_strategy(
@@ -7738,9 +7768,25 @@ defmodule HydraX.Runtime.WorkItems do
           pressure
         ) || "review_guided_replan"
 
+      active_intervention_portfolio_pressure > 1 ->
+        best_deescalated_follow_up_strategy(
+          review_guided_portfolio_deescalation_candidates(active_intervention_portfolio_pressure),
+          alternatives,
+          pressure
+        ) || "review_guided_replan"
+
       review_stale_pressure > 1 ->
         best_deescalated_follow_up_strategy(
           review_guided_stale_deescalation_candidates(review_stale_pressure),
+          alternatives,
+          pressure
+        ) || "review_guided_replan"
+
+      inactive_intervention_portfolio_pressure > 1 ->
+        best_deescalated_follow_up_strategy(
+          review_guided_stale_portfolio_deescalation_candidates(
+            inactive_intervention_portfolio_pressure
+          ),
           alternatives,
           pressure
         ) || "review_guided_replan"
@@ -7782,6 +7828,14 @@ defmodule HydraX.Runtime.WorkItems do
     ["request_review", "review_guided_replan", "constraint_replan", "narrow_delegate_batch"]
   end
 
+  defp operator_guided_portfolio_deescalation_candidates(_portfolio_pressure) do
+    ["constraint_replan", "request_review", "narrow_delegate_batch", "review_guided_replan"]
+  end
+
+  defp operator_guided_stale_portfolio_deescalation_candidates(_portfolio_pressure) do
+    ["request_review", "constraint_replan", "review_guided_replan", "narrow_delegate_batch"]
+  end
+
   defp operator_guided_deescalation_candidates(operator_pressure)
        when is_integer(operator_pressure) and operator_pressure > 1 do
     ["request_review", "review_guided_replan", "constraint_replan", "narrow_delegate_batch"]
@@ -7801,6 +7855,14 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp review_guided_stale_deescalation_candidates(_review_pressure) do
+    ["request_review", "constraint_replan", "narrow_delegate_batch"]
+  end
+
+  defp review_guided_portfolio_deescalation_candidates(_portfolio_pressure) do
+    ["constraint_replan", "request_review", "narrow_delegate_batch"]
+  end
+
+  defp review_guided_stale_portfolio_deescalation_candidates(_portfolio_pressure) do
     ["request_review", "constraint_replan", "narrow_delegate_batch"]
   end
 
@@ -11441,16 +11503,50 @@ defmodule HydraX.Runtime.WorkItems do
       follow_up_strategy_inactive_selected_pressure(intervention_pressure, base)
 
     deescalated_count = follow_up_strategy_deescalated_pressure(intervention_pressure, base)
-    total_pressure_count = active_pressure_count + stale_pressure_count + deescalated_count
+
+    active_intervention_portfolio_count =
+      follow_up_strategy_active_intervention_portfolio_pressure(intervention_pressure)
+
+    inactive_intervention_portfolio_count =
+      follow_up_strategy_inactive_intervention_portfolio_pressure(intervention_pressure)
+
+    total_pressure_count =
+      max(
+        active_pressure_count + stale_pressure_count + deescalated_count,
+        active_intervention_portfolio_count + inactive_intervention_portfolio_count
+      )
 
     pressure_phrase =
       cond do
-        active_pressure_count > 1 -> "under sustained planner recovery pressure"
-        active_pressure_count > 0 -> "under existing planner recovery pressure"
-        deescalated_count > 1 -> "under sustained planner de-escalation pressure"
-        deescalated_count > 0 -> "under existing planner de-escalation pressure"
-        stale_pressure_count > 1 -> "under sustained stale planner recovery pressure"
-        true -> "under existing stale planner recovery pressure"
+        active_pressure_count > 1 ->
+          "under sustained planner recovery pressure"
+
+        active_pressure_count > 0 ->
+          "under existing planner recovery pressure"
+
+        deescalated_count > 1 ->
+          "under sustained planner de-escalation pressure"
+
+        deescalated_count > 0 ->
+          "under existing planner de-escalation pressure"
+
+        active_intervention_portfolio_count > 1 ->
+          "under active planner intervention portfolio pressure"
+
+        active_intervention_portfolio_count > 0 ->
+          "under existing active planner intervention portfolio pressure"
+
+        stale_pressure_count > 1 ->
+          "under sustained stale planner recovery pressure"
+
+        stale_pressure_count > 0 ->
+          "under existing stale planner recovery pressure"
+
+        inactive_intervention_portfolio_count > 1 ->
+          "under stale planner intervention portfolio pressure"
+
+        true ->
+          "under existing stale planner intervention portfolio pressure"
       end
 
     "de-escalated from #{recovery_strategy_summary(base)} #{pressure_phrase}#{if(total_pressure_count > 0, do: " (#{total_pressure_count} existing)", else: "")}"
@@ -11479,6 +11575,14 @@ defmodule HydraX.Runtime.WorkItems do
       |> maybe_put_pressure_snapshot_count(
         "base_inactive_selected_count",
         follow_up_strategy_inactive_selected_pressure(intervention_pressure, base)
+      )
+      |> maybe_put_pressure_snapshot_count(
+        "planner_active_intervention_portfolios",
+        follow_up_strategy_active_intervention_portfolio_pressure(intervention_pressure)
+      )
+      |> maybe_put_pressure_snapshot_count(
+        "planner_inactive_intervention_portfolios",
+        follow_up_strategy_inactive_intervention_portfolio_pressure(intervention_pressure)
       )
       |> maybe_put_pressure_snapshot_count(
         "preferred_inactive_selected_count",
@@ -11526,7 +11630,14 @@ defmodule HydraX.Runtime.WorkItems do
       |> limit(20)
       |> Repo.all()
       |> Enum.reduce(
-        %{selected: %{}, active_selected: %{}, inactive_selected: %{}, fallback: %{}},
+        %{
+          selected: %{},
+          active_selected: %{},
+          inactive_selected: %{},
+          fallback: %{},
+          active_intervention_portfolios: 0,
+          inactive_intervention_portfolios: 0
+        },
         fn item, acc ->
           case base_work_item_follow_up_selection(item) do
             %{
@@ -11550,6 +11661,10 @@ defmodule HydraX.Runtime.WorkItems do
               )
               |> update_follow_up_strategy_pressure(:fallback, alternatives)
               |> update_follow_up_strategy_pressure(:deescalated, deescalated_from)
+              |> maybe_increment_follow_up_intervention_portfolios(
+                active_selection,
+                inactive_selection
+              )
 
             _ ->
               acc
@@ -11557,9 +11672,47 @@ defmodule HydraX.Runtime.WorkItems do
         end
       )
     else
-      %{selected: %{}, active_selected: %{}, inactive_selected: %{}, fallback: %{}}
+      %{
+        selected: %{},
+        active_selected: %{},
+        inactive_selected: %{},
+        fallback: %{},
+        active_intervention_portfolios: 0,
+        inactive_intervention_portfolios: 0
+      }
     end
   end
+
+  defp maybe_increment_follow_up_intervention_portfolios(
+         acc,
+         active_selection,
+         inactive_selection
+       )
+       when is_map(acc) do
+    cond do
+      intervention_recovery_selection?(active_selection) ->
+        Map.update(acc, :active_intervention_portfolios, 1, &(&1 + 1))
+
+      intervention_recovery_selection?(inactive_selection) ->
+        Map.update(acc, :inactive_intervention_portfolios, 1, &(&1 + 1))
+
+      true ->
+        acc
+    end
+  end
+
+  defp maybe_increment_follow_up_intervention_portfolios(
+         acc,
+         _active_selection,
+         _inactive_selection
+       ),
+       do: acc
+
+  defp intervention_recovery_selection?(%{strategy: strategy})
+       when strategy in ["operator_guided_replan", "review_guided_replan", "request_review"],
+       do: true
+
+  defp intervention_recovery_selection?(_selection), do: false
 
   defp follow_up_strategy_active_selected_pressure(
          %{
@@ -11583,12 +11736,28 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp follow_up_strategy_active_selected_pressure(_pressure, _strategy), do: 0
 
+  defp follow_up_strategy_active_intervention_portfolio_pressure(%{
+         active_intervention_portfolios: count
+       })
+       when is_integer(count),
+       do: count
+
+  defp follow_up_strategy_active_intervention_portfolio_pressure(_pressure), do: 0
+
   defp follow_up_strategy_inactive_selected_pressure(%{inactive_selected: selected}, strategy)
        when is_map(selected) and is_binary(strategy) do
     Map.get(selected, strategy, 0)
   end
 
   defp follow_up_strategy_inactive_selected_pressure(_pressure, _strategy), do: 0
+
+  defp follow_up_strategy_inactive_intervention_portfolio_pressure(%{
+         inactive_intervention_portfolios: count
+       })
+       when is_integer(count),
+       do: count
+
+  defp follow_up_strategy_inactive_intervention_portfolio_pressure(_pressure), do: 0
 
   defp follow_up_strategy_selected_pressure(%{selected: selected}, strategy)
        when is_map(selected) and is_binary(strategy) do

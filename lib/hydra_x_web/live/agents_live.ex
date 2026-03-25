@@ -2923,7 +2923,16 @@ defmodule HydraXWeb.AgentsLive do
         value -> "alternatives #{value}"
       end
 
-    [base, preferred, alternatives]
+    portfolios =
+      case {
+        snapshot["planner_active_intervention_portfolios"] || 0,
+        snapshot["planner_inactive_intervention_portfolios"] || 0
+      } do
+        {0, 0} -> nil
+        {active, inactive} -> "portfolios active #{active} stale #{inactive}"
+      end
+
+    [base, preferred, alternatives, portfolios]
     |> Enum.reject(&is_nil_or_empty/1)
     |> case do
       [] -> nil

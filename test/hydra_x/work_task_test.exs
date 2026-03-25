@@ -29,6 +29,8 @@ defmodule HydraX.WorkTaskTest do
             "preferred_selected_count" => 1,
             "preferred_deescalated_count" => 2,
             "preferred_fallback_count" => 0,
+            "planner_active_intervention_portfolios" => 2,
+            "planner_inactive_intervention_portfolios" => 1,
             "alternative_selected_counts" => %{"narrow_delegate_batch" => 1},
             "alternative_fallback_counts" => %{},
             "alternative_deescalated_counts" => %{"narrow_delegate_batch" => 2}
@@ -145,7 +147,7 @@ defmodule HydraX.WorkTaskTest do
     assert show_output =~ "recovery_strategy_deescalated_from=operator_guided_replan"
 
     assert show_output =~
-             "recovery_strategy_pressure=base=operator_guided_replan:s1:d1|preferred=operator_guided_replan:s1:f0:d2|alternatives=narrow_delegate_batch:s1:f0:d2"
+             "recovery_strategy_pressure=base=operator_guided_replan:s1:d1|preferred=operator_guided_replan:s1:f0:d2|alternatives=narrow_delegate_batch:s1:f0:d2|portfolios=active2:stale1"
 
     assert show_output =~
              "recovery_strategy_selection_reason=de-escalated from Operator-guided recovery under existing planner recovery pressure (1 existing)"

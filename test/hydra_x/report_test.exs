@@ -1560,6 +1560,8 @@ defmodule HydraX.ReportTest do
             "preferred_selected_count" => 1,
             "preferred_deescalated_count" => 2,
             "preferred_fallback_count" => 0,
+            "planner_active_intervention_portfolios" => 2,
+            "planner_inactive_intervention_portfolios" => 1,
             "alternative_selected_counts" => %{"narrow_delegate_batch" => 1},
             "alternative_fallback_counts" => %{},
             "alternative_deescalated_counts" => %{"narrow_delegate_batch" => 2}
@@ -1589,6 +1591,7 @@ defmodule HydraX.ReportTest do
     assert markdown =~ "preferred=operator-guided:s1:f0:d2"
     assert markdown =~ "alternatives="
     assert markdown =~ ":s1:f0:d2"
+    assert markdown =~ "portfolios=active2:stale1"
 
     assert markdown =~
              "recovery_selection_reason=de-escalated from Operator-guided recovery under existing planner recovery pressure (1 existing)"
@@ -1608,6 +1611,8 @@ defmodule HydraX.ReportTest do
                  "preferred_selected_count" => 1,
                  "preferred_deescalated_count" => 2,
                  "preferred_fallback_count" => 0,
+                 "planner_active_intervention_portfolios" => 2,
+                 "planner_inactive_intervention_portfolios" => 1,
                  "alternative_selected_counts" => %{"narrow_delegate_batch" => 1},
                  "alternative_fallback_counts" => %{},
                  "alternative_deescalated_counts" => %{"narrow_delegate_batch" => 2}

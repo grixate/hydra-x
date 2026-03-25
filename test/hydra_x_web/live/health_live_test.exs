@@ -667,6 +667,8 @@ defmodule HydraXWeb.HealthLiveTest do
             "preferred_selected_count" => 1,
             "preferred_deescalated_count" => 2,
             "preferred_fallback_count" => 0,
+            "planner_active_intervention_portfolios" => 2,
+            "planner_inactive_intervention_portfolios" => 1,
             "alternative_selected_counts" => %{"narrow_delegate_batch" => 1},
             "alternative_fallback_counts" => %{},
             "alternative_deescalated_counts" => %{"narrow_delegate_batch" => 2}
@@ -688,6 +690,7 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "preferred operator-guided s1 f0 d2"
     assert html =~ "alternatives"
     assert html =~ "s1 f0 d2"
+    assert html =~ "portfolios active 2 stale 1"
 
     assert html =~
              "selection reason de-escalated from Operator-guided recovery under existing planner recovery pressure (1 existing)"
