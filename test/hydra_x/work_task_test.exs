@@ -158,8 +158,8 @@ defmodule HydraX.WorkTaskTest do
     assert show_output =~ "follow_up_strategies=operator_guided_replan"
     assert show_output =~ "follow_up_summaries=Operator-guided recovery"
     assert show_output =~ "follow_up_priority_boosts=3"
-    assert show_output =~ "follow_up_alternative_strategies=narrow_delegate_batch"
-    assert show_output =~ "follow_up_alternative_summaries=Narrowed delegation batch"
+    assert show_output =~ "follow_up_fallback_strategies=narrow_delegate_batch"
+    assert show_output =~ "follow_up_fallback_summaries=Narrowed delegation batch"
 
     assert show_output =~
              "follow_up_detail\t#{work_item.id}\trecovery_summary_1\tOperator-guided recovery"
@@ -168,7 +168,7 @@ defmodule HydraX.WorkTaskTest do
              "follow_up_detail\t#{work_item.id}\trecovery_priority_1\t+3"
 
     assert show_output =~
-             "follow_up_detail\t#{work_item.id}\trecovery_alternative_1\tNarrowed delegation batch"
+             "follow_up_detail\t#{work_item.id}\trecovery_fallback_1\tNarrowed delegation batch"
 
     assert show_output =~
              "follow_up_entry\t#{work_item.id}\t1\tstrategy\toperator_guided_replan"
@@ -309,6 +309,103 @@ defmodule HydraX.WorkTaskTest do
     assert show_output =~ "review_delivery_decision_1"
     assert show_output =~ "Hold the publish brief on the control plane"
     assert show_output =~ "decision_comparison"
+  end
+
+  test "follow-up entries have deterministic selection with one selected entry" do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, work_item} =
+      Runtime.save_work_item(%{
+        "kind" => "plan",
+        "goal" => "Test follow-up selection.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "planner",
+        "status" => "blocked",
+        "result_refs" => %{
+          "follow_up_summary" => %{
+            "count" => 3,
+            "types" => ["replan"],
+            "entries" => [
+              %{
+                "work_item_id" => 93_001,
+                "type" => "replan",
+                "strategy" => "narrow_delegate_batch",
+                "summary" => "Narrowed delegation batch",
+                "priority_boost" => 0
+              },
+              %{
+                "work_item_id" => 93_002,
+                "type" => "replan",
+                "strategy" => "review_guided_replan",
+                "summary" => "Reviewer-guided recovery",
+                "priority_boost" => 2
+              },
+              %{
+                "work_item_id" => 93_003,
+                "type" => "replan",
+                "strategy" => "operator_guided_replan",
+                "summary" => "Operator-guided recovery",
+                "priority_boost" => 3
+              }
+            ]
+          }
+        }
+      })
+
+    Mix.Task.reenable("hydra_x.work")
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Mix.Tasks.HydraX.Work.run(["show", to_string(work_item.id)])
+      end)
+
+    assert output =~ "follow_up_entries=3"
+    assert output =~ "follow_up_strategies=operator_guided_replan"
+  end
+
+  test "mutual exclusion supersedes constraint_replan when operator_guided exists" do
+    agent = Runtime.ensure_default_agent!()
+
+    {:ok, work_item} =
+      Runtime.save_work_item(%{
+        "kind" => "plan",
+        "goal" => "Test mutual exclusion.",
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "planner",
+        "status" => "blocked",
+        "result_refs" => %{
+          "follow_up_summary" => %{
+            "count" => 2,
+            "types" => ["replan"],
+            "entries" => [
+              %{
+                "work_item_id" => 94_001,
+                "type" => "replan",
+                "strategy" => "operator_guided_replan",
+                "summary" => "Operator-guided recovery",
+                "priority_boost" => 3
+              },
+              %{
+                "work_item_id" => 94_002,
+                "type" => "replan",
+                "strategy" => "constraint_replan",
+                "summary" => "Constraint-first recovery",
+                "priority_boost" => 1
+              }
+            ]
+          }
+        }
+      })
+
+    Mix.Task.reenable("hydra_x.work")
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Mix.Tasks.HydraX.Work.run(["show", to_string(work_item.id)])
+      end)
+
+    assert output =~ "follow_up_entries=2"
+    assert output =~ "follow_up_strategies=operator_guided_replan"
   end
 
   test "work task list shows recovery summaries" do

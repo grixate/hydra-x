@@ -195,12 +195,14 @@ defmodule HydraX.Report do
     - Coordination: #{render_scheduler_coordination(snapshot.scheduler.coordination)}
     - Skip reasons: #{render_skip_reason_counts(snapshot.scheduler.skipped_reason_counts)}
     - Ingress replay: #{render_scheduler_pass(snapshot.scheduler.pending_ingress, "processed_count", "processed")}
-    - Stale claim cleanup: #{render_scheduler_pass(snapshot.scheduler.stale_work_item_claims, "expired_count", "expired")}
+    - Stale claim cleanup: #{render_scheduler_pass(snapshot.scheduler.stale_work_item_claims, "expired_count", "stale")}
     - Assignment recovery: #{render_assignment_recovery_pass(snapshot.scheduler.assignment_recoveries)}
     - Role queue dispatch: #{render_role_queue_dispatch_pass(snapshot.scheduler.role_queue_dispatches)}
     - Work item replay: #{render_scheduler_pass(snapshot.scheduler.work_item_replays, "resumed_count", "resumed")}
     - Ownership replay: #{render_scheduler_pass(snapshot.scheduler.ownership_handoffs, "resumed_count", "resumed")}
     - Deferred delivery replay: #{render_scheduler_pass(snapshot.scheduler.deferred_deliveries, "delivered_count", "delivered")}
+    - Delegation expansion: #{render_scheduler_pass(snapshot.scheduler.delegation_expansions, "processed_count", "expanded")}
+    - Deferred cooldown: #{render_scheduler_pass(snapshot.scheduler.deferred_cooldowns, "processed_count", "ready")}
 
     ### Jobs
     #{render_jobs(snapshot.scheduler.jobs)}
@@ -227,7 +229,14 @@ defmodule HydraX.Report do
 
     ### Delegation Supervision
     #{render_delegation_supervision(snapshot.autonomy.delegation_supervision)}
+
+    ### Planner Quotas
+    - fairness_posture=#{snapshot.autonomy.planner_fairness_posture || "balanced"}
+    #{render_planner_quotas(snapshot.autonomy.planner_quotas)}
     #{render_work_items(snapshot.work_items)}
+
+    ## Capability Marketplace
+    #{render_capability_marketplace(snapshot.skills, snapshot.mcp)}
 
     ## Observability
     #{render_observability_summary(snapshot.observability.telemetry_summary)}
@@ -275,7 +284,9 @@ defmodule HydraX.Report do
       role_queue_dispatches: status.role_queue_dispatches,
       work_item_replays: status.work_item_replays,
       ownership_handoffs: status.ownership_handoffs,
-      deferred_deliveries: status.deferred_deliveries
+      deferred_deliveries: status.deferred_deliveries,
+      delegation_expansions: status.delegation_expansions,
+      deferred_cooldowns: status.deferred_cooldowns
     }
   end
 
@@ -369,6 +380,9 @@ defmodule HydraX.Report do
         "- none"
 
       entries ->
+        posture_line = render_planner_posture(entries)
+
+        posture_line <>
         Enum.map_join(entries, "\n", fn entry ->
           constrained =
             case entry.constrained_roles || %{} do
@@ -433,7 +447,7 @@ defmodule HydraX.Report do
                 " inactive_selected_recovery_mix=#{report_recovery_mix(mix)}"
             end
 
-          alternative_recovery_mix =
+          fallback_recovery_mix =
             case entry.alternative_recovery_mix || %{} do
               mix when mix == %{} ->
                 nil
@@ -494,7 +508,7 @@ defmodule HydraX.Report do
             (selected_recovery_mix || "") <>
             (active_selected_recovery_mix || "") <>
             (inactive_selected_recovery_mix || "") <>
-            (alternative_recovery_mix || "") <>
+            (fallback_recovery_mix || "") <>
             (deescalated_recovery_mix || "") <>
             (recovery_mix || "") <>
             (required_roles || "") <>
@@ -524,6 +538,84 @@ defmodule HydraX.Report do
             )
         end)
     end
+  end
+
+  defp render_planner_posture(entries) when is_list(entries) and entries != [] do
+    operator_count =
+      Enum.count(entries, fn e ->
+        mix = e.active_selected_recovery_mix || %{}
+        Map.get(mix, "operator_guided_replan", 0) > 0
+      end)
+
+    review_count =
+      Enum.count(entries, fn e ->
+        mix = e.active_selected_recovery_mix || %{}
+        Map.get(mix, "review_guided_replan", 0) > 0 or Map.get(mix, "request_review", 0) > 0
+      end)
+
+    stale_count = Enum.reduce(entries, 0, &((&1.stale_follow_up_batches || 0) + &2))
+
+    deescalation_depth = Enum.reduce(entries, 0, &((&1.deescalated_batches || 0) + &2))
+
+    active_intervention_portfolios =
+      Enum.count(entries, &((&1.active_selected_intervention_batches || 0) > 0))
+
+    labels =
+      []
+      |> then(&if(operator_count >= 2, do: ["operator-saturated" | &1], else: &1))
+      |> then(&if(review_count >= 3, do: ["review-saturated" | &1], else: &1))
+      |> then(&if(stale_count >= 2, do: ["stale-heavy" | &1], else: &1))
+      |> then(&if(deescalation_depth >= 3, do: ["deescalation-heavy" | &1], else: &1))
+      |> then(
+        &if(active_intervention_portfolios >= 4,
+          do: ["portfolio-saturated" | &1],
+          else: &1
+        )
+      )
+      |> Enum.reverse()
+
+    posture_label = if labels == [], do: "healthy", else: Enum.join(labels, ",")
+
+    "- planner_posture=#{posture_label} operator_guided=#{operator_count} review_guided=#{review_count} stale=#{stale_count} deescalation_depth=#{deescalation_depth} active_intervention_portfolios=#{active_intervention_portfolios}\n"
+  end
+
+  defp render_planner_posture(_entries), do: ""
+
+  defp render_planner_quotas(quotas) when is_list(quotas) and quotas != [] do
+    Enum.map_join(quotas, "\n", fn quota ->
+      "- #{quota[:agent_name] || quota.agent_name || "planner"}: slots=#{quota.slot_usage}/#{quota.ceiling} remaining=#{quota.remaining} deferred=#{quota.deferred_count} recovery=#{quota.recovery_count}"
+    end)
+  end
+
+  defp render_planner_quotas(_quotas), do: "- none"
+
+  defp render_capability_marketplace(skills, mcp) do
+    skills = List.wrap(skills)
+    mcp = List.wrap(mcp)
+    enabled_skills = Enum.count(skills, & &1.enabled)
+    enabled_mcp = Enum.count(mcp, & &1.enabled)
+
+    skill_lines =
+      Enum.map_join(skills, "\n", fn skill ->
+        posture = HydraX.Runtime.Skills.skill_posture(skill)
+
+        "- #{skill.name} (#{skill.slug}) version=#{posture.version || "none"} rollout=#{posture.rollout_state} risk=#{posture.enablement_risk} compatibility=#{posture.compatibility_posture}"
+      end)
+
+    mcp_lines =
+      Enum.map_join(mcp, "\n", fn config ->
+        posture = HydraX.Runtime.MCPServers.mcp_posture(config)
+
+        "- #{config.name} transport=#{config.transport} rollout=#{posture.rollout_state} risk=#{posture.enablement_risk} health=#{posture.health_posture}"
+      end)
+
+    """
+    - Skills: #{length(skills)} total, #{enabled_skills} enabled
+    #{if(skill_lines == "", do: "- none", else: skill_lines)}
+    - MCP Servers: #{length(mcp)} total, #{enabled_mcp} enabled
+    #{if(mcp_lines == "", do: "- none", else: mcp_lines)}
+    """
+    |> String.trim()
   end
 
   defp report_delegation_pressure_batches(entry) when is_map(entry) do
@@ -849,10 +941,14 @@ defmodule HydraX.Report do
          ranked_memories: ranked_memories
        }) do
     """
+    - Scratch: #{Map.get(counts, "scratch", 0)}
+    - Candidate: #{Map.get(counts, "candidate", 0)}
     - Active: #{Map.get(counts, "active", 0)}
+    - Durable: #{Map.get(counts, "durable", 0)}
     - Conflicted: #{Map.get(counts, "conflicted", 0)}
     - Superseded: #{Map.get(counts, "superseded", 0)}
     - Merged: #{Map.get(counts, "merged", 0)}
+    - Archived: #{Map.get(counts, "archived", 0)}
     - Embeddings: active=#{embedding.active_backend || "none"} model=#{embedding.active_model || "none"} embedded=#{embedding.embedded_count} missing=#{embedding.unembedded_count} stale=#{embedding.stale_count} fallback=#{embedding.fallback_count} degraded=#{yes_no(embedding.degraded?)}
     - Top ranked active memories:
     #{render_ranked_memories(ranked_memories)}
@@ -1005,6 +1101,8 @@ defmodule HydraX.Report do
         work_item_policy_failure(item) && "policy=#{work_item_policy_failure(item)}",
         item.result_refs["extension_enablement_status"] &&
           "enablement=#{item.result_refs["extension_enablement_status"]}",
+        item.result_refs["validation_status"] &&
+          "validation=#{item.result_refs["validation_status"]}",
         artifacts != "" && "artifacts=#{artifacts}",
         promoted_memories != "" && "promoted=#{promoted_memories}",
         delegation && "delegation=#{delegation}",
@@ -2056,7 +2154,9 @@ defmodule HydraX.Report do
         role_queue_dispatches: snapshot.scheduler.role_queue_dispatches,
         work_item_replays: snapshot.scheduler.work_item_replays,
         ownership_handoffs: snapshot.scheduler.ownership_handoffs,
-        deferred_deliveries: snapshot.scheduler.deferred_deliveries
+        deferred_deliveries: snapshot.scheduler.deferred_deliveries,
+        delegation_expansions: snapshot.scheduler.delegation_expansions,
+        deferred_cooldowns: snapshot.scheduler.deferred_cooldowns
       },
       ingest: Enum.map(snapshot.ingest, &json_ingest_run/1),
       observability: %{
@@ -2105,6 +2205,8 @@ defmodule HydraX.Report do
         role_queue_backlog: snapshot.autonomy.role_queue_backlog,
         worker_pressure: snapshot.autonomy.worker_pressure,
         delegation_supervision: snapshot.autonomy.delegation_supervision,
+        planner_quotas: Map.get(snapshot.autonomy, :planner_quotas, []),
+        planner_fairness_posture: Map.get(snapshot.autonomy, :planner_fairness_posture, "balanced"),
         capability_drifts: snapshot.autonomy.capability_drifts
       },
       default_agent: %{

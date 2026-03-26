@@ -3822,7 +3822,7 @@ defmodule HydraX.RuntimeTest do
     assert run.metadata["file_count"] == 1
 
     assert Enum.any?(
-             HydraX.Memory.list_memories(agent_id: agent.id, status: "active", limit: 20),
+             HydraX.Memory.list_memories(agent_id: agent.id, status: "candidate", limit: 20),
              &String.contains?(&1.content, "Scheduled ingest works.")
            )
   end
@@ -4606,20 +4606,21 @@ defmodule HydraX.RuntimeTest do
     assert get_in(parent.result_refs || %{}, ["follow_up_summary", "active_count"]) == 0
     assert get_in(parent.result_refs || %{}, ["follow_up_summary", "inactive_count"]) == 1
 
-    assert get_in(parent.result_refs || %{}, ["follow_up_summary", "entries"]) == [
-             %{
-               "active" => false,
-               "alternative_strategies" => [],
-               "alternative_summaries" => [],
-               "approval_stage" => "validated",
-               "priority_boost" => 2,
-               "status" => "completed",
-               "strategy" => "review_guided_replan",
-               "summary" => "Reviewer-guided recovery",
-               "type" => "replan",
-               "work_item_id" => follow_up_item.id
-             }
-           ]
+    refreshed_entries =
+      get_in(parent.result_refs || %{}, ["follow_up_summary", "entries"])
+
+    assert length(refreshed_entries) == 1
+    [entry] = refreshed_entries
+    assert entry["active"] == false
+    assert entry["status"] == "completed"
+    assert entry["approval_stage"] == "validated"
+    assert entry["strategy"] == "review_guided_replan"
+    assert entry["summary"] == "Reviewer-guided recovery"
+    assert entry["type"] == "replan"
+    assert entry["work_item_id"] == follow_up_item.id
+    assert entry["priority_boost"] == 2
+    assert entry["selected"] == true
+    assert entry["selection_rank"] == 0
   end
 
   test "delegation supervision separates active and stale selected recovery mixes" do
@@ -7515,7 +7516,8 @@ defmodule HydraX.RuntimeTest do
     assert Enum.any?(artifacts, &(&1.type == "decision_ledger"))
 
     promoted_memories =
-      Memory.list_memories(agent_id: researcher.id, status: "active", limit: 50)
+      (Memory.list_memories(agent_id: researcher.id, status: "active", limit: 50) ++
+         Memory.list_memories(agent_id: researcher.id, status: "durable", limit: 50))
       |> Enum.filter(fn entry ->
         metadata = entry.metadata || %{}
         metadata["source_work_item_id"] == work_item.id
@@ -9201,7 +9203,8 @@ defmodule HydraX.RuntimeTest do
     assert length(updated.result_refs["promoted_memory_ids"]) >= 1
 
     promoted_memories =
-      Memory.list_memories(agent_id: researcher.id, status: "active", limit: 50)
+      (Memory.list_memories(agent_id: researcher.id, status: "active", limit: 50) ++
+         Memory.list_memories(agent_id: researcher.id, status: "durable", limit: 50))
       |> Enum.filter(fn entry ->
         metadata = entry.metadata || %{}
         metadata["source_work_item_id"] == work_item.id
@@ -11384,7 +11387,8 @@ defmodule HydraX.RuntimeTest do
     assert Enum.any?(approvals, &(&1.decision == "approved"))
 
     reviewer_memories =
-      Memory.list_memories(agent_id: reviewer.id, status: "active", limit: 50)
+      (Memory.list_memories(agent_id: reviewer.id, status: "active", limit: 50) ++
+         Memory.list_memories(agent_id: reviewer.id, status: "durable", limit: 50))
       |> Enum.filter(fn entry ->
         metadata = entry.metadata || %{}
         metadata["source_work_item_id"] == review_item.id
@@ -11508,10 +11512,12 @@ defmodule HydraX.RuntimeTest do
       })
 
     assert {:ok, summary} = Runtime.run_autonomy_cycle(builder.id)
-    assert summary.action == "engineering_completed"
+    assert summary.action == "engineering_review_requested"
 
     extension_item = Runtime.get_work_item!(extension_item.id)
-    assert extension_item.approval_stage == "validated"
+    assert extension_item.review_required == true
+    assert get_in(extension_item.metadata || %{}, ["review_forced"]) == true
+    assert extension_item.status == "blocked"
 
     patch_bundle =
       Runtime.work_item_artifacts(extension_item.id)
@@ -11528,8 +11534,17 @@ defmodule HydraX.RuntimeTest do
              "operator"
            ]
 
-    {approved_item, record} =
+    {promoted_item, promote_record} =
       Runtime.approve_work_item!(extension_item.id, %{
+        "requested_action" => "promote_code_change",
+        "rationale" => "Promoted extension through review."
+      })
+
+    assert promoted_item.approval_stage == "validated"
+    assert promote_record.requested_action == "promote_code_change"
+
+    {approved_item, record} =
+      Runtime.approve_work_item!(promoted_item.id, %{
         "requested_action" => "enable_extension",
         "rationale" => "Operator approved extension registration."
       })
@@ -11539,7 +11554,6 @@ defmodule HydraX.RuntimeTest do
     assert record.requested_action == "enable_extension"
 
     artifact_approvals = Runtime.artifact_approval_records(patch_bundle.id)
-    assert Enum.any?(artifact_approvals, &(&1.requested_action == "validate_artifact"))
     assert Enum.any?(artifact_approvals, &(&1.requested_action == "enable_extension"))
   end
 

@@ -22,6 +22,7 @@ defmodule HydraX.Runtime.WorkItems do
     Coordination,
     Helpers,
     ScheduledJob,
+    SchedulerPhase,
     WorkItem
   }
 
@@ -29,6 +30,12 @@ defmodule HydraX.Runtime.WorkItems do
   @delegation_required_role_priority_boost 100
   @terminal_work_item_statuses ~w(completed failed canceled)
   @delegation_pressure_replan_threshold 3
+  @operator_guided_saturation_threshold 2
+  @review_guided_saturation_threshold 3
+  @stale_intervention_saturation_threshold 2
+  @deescalation_heavy_portfolio_threshold 3
+  @intervention_portfolio_saturation_threshold 4
+  @default_planner_slot_ceiling 6
 
   def list_work_items(opts \\ []) do
     limit = Keyword.get(opts, :limit, 50)
@@ -182,6 +189,55 @@ defmodule HydraX.Runtime.WorkItems do
       retry_on_busy(fn -> Repo.insert(changeset) end)
     end)
   end
+
+  def create_claimed_artifact(attrs) when is_map(attrs) do
+    normalized = Helpers.normalize_string_keys(attrs)
+    work_item_id = normalized["work_item_id"]
+    artifact_type = normalized["type"] || "note"
+    lease_name = "artifact:#{work_item_id}:#{artifact_type}"
+
+    case Coordination.claim_lease(lease_name,
+           ttl_seconds: 120,
+           metadata: %{"work_item_id" => work_item_id, "type" => artifact_type}
+         ) do
+      {:ok, _lease} ->
+        case find_existing_artifact(work_item_id, artifact_type) do
+          %Artifact{} = existing ->
+            {:ok, existing}
+
+          nil ->
+            owner = Coordination.status().owner
+
+            attrs_with_ownership =
+              Map.update(normalized, "metadata", %{}, fn meta ->
+                Map.put(meta || %{}, "ownership", %{
+                  "owner" => owner,
+                  "active" => true,
+                  "claimed_at" => DateTime.utc_now() |> DateTime.to_iso8601()
+                })
+              end)
+
+            create_artifact(attrs_with_ownership)
+        end
+
+      {:error, {:taken, _lease}} ->
+        case find_existing_artifact(work_item_id, artifact_type) do
+          %Artifact{} = existing -> {:ok, existing}
+          nil -> {:error, :artifact_lease_taken}
+        end
+    end
+  end
+
+  defp find_existing_artifact(work_item_id, artifact_type)
+       when is_integer(work_item_id) and is_binary(artifact_type) do
+    Artifact
+    |> where([a], a.work_item_id == ^work_item_id and a.type == ^artifact_type)
+    |> order_by([a], desc: a.version)
+    |> limit(1)
+    |> Repo.one()
+  end
+
+  defp find_existing_artifact(_work_item_id, _artifact_type), do: nil
 
   def list_approval_records(opts \\ []) do
     limit = Keyword.get(opts, :limit, 50)
@@ -435,6 +491,78 @@ defmodule HydraX.Runtime.WorkItems do
     _ = HydraX.Runtime.Jobs.record_scheduler_pass(:work_item_replays, summary)
     summary
   end
+
+  def process_delegation_expansions(opts \\ []) do
+    owner = Coordination.status().owner
+    limit = Keyword.get(opts, :limit, 50)
+
+    planner_agents =
+      list_autonomy_agents()
+      |> Enum.filter(&(&1.role == "planner" and &1.status == "active"))
+      |> Enum.take(limit)
+
+    counts =
+      Enum.reduce(planner_agents, %{processed: 0, skipped: 0, deferred: 0}, fn agent, acc ->
+        case maybe_expand_blocked_delegation_batch(agent, opts) do
+          {:processed, %{action: "delegated_batch_expanded"}} ->
+            %{acc | processed: acc.processed + 1}
+
+          {:processed, %{action: "delegation_batch_deferred"}} ->
+            %{acc | deferred: acc.deferred + 1}
+
+          {:idle, _} ->
+            %{acc | skipped: acc.skipped + 1}
+
+          _ ->
+            %{acc | skipped: acc.skipped + 1}
+        end
+      end)
+
+    summary = SchedulerPhase.pass_result(:delegation_expansion, owner, counts)
+    _ = HydraX.Runtime.Jobs.record_scheduler_pass(:delegation_expansions, summary)
+    summary
+  end
+
+  def process_deferred_cooldowns(opts \\ []) do
+    owner = Coordination.status().owner
+    limit = Keyword.get(opts, :limit, 50)
+    now = DateTime.utc_now()
+
+    deferred_batches =
+      list_work_items(status: "blocked", limit: limit, preload: false)
+      |> Enum.filter(fn work_item ->
+        work_item.execution_mode == "delegate" and
+          delegation_batch_expansion_deferred?(delegation_batch_snapshot(work_item))
+      end)
+
+    cooling_down =
+      Enum.count(deferred_batches, fn work_item ->
+        snapshot = delegation_batch_snapshot(work_item)
+        deferred_until = snapshot["expansion_deferred_until"]
+        is_binary(deferred_until) and
+          deferred_cooldown_active?(deferred_until, now)
+      end)
+
+    ready_to_expand = length(deferred_batches) - cooling_down
+
+    summary =
+      SchedulerPhase.pass_result(:deferred_cooldown, owner, %{
+        processed: ready_to_expand,
+        deferred: cooling_down
+      })
+
+    _ = HydraX.Runtime.Jobs.record_scheduler_pass(:deferred_cooldowns, summary)
+    summary
+  end
+
+  defp deferred_cooldown_active?(deferred_until, now) when is_binary(deferred_until) do
+    case DateTime.from_iso8601(deferred_until) do
+      {:ok, dt, _} -> DateTime.compare(dt, now) == :gt
+      _ -> false
+    end
+  end
+
+  defp deferred_cooldown_active?(_deferred_until, _now), do: false
 
   def cleanup_stale_work_item_claims(opts \\ []) do
     owner = Coordination.status().owner
@@ -690,6 +818,8 @@ defmodule HydraX.Runtime.WorkItems do
     delegation_supervision =
       build_delegation_supervision(all_work_items, autonomy_agents, worker_pressure)
 
+    planner_quotas = build_planner_quotas(autonomy_agents, all_work_items)
+
     dominant_recovery_batches =
       delegation_dominant_recovery_batches(delegation_supervision)
 
@@ -872,10 +1002,42 @@ defmodule HydraX.Runtime.WorkItems do
       role_queue_backlog: role_queue_backlog,
       worker_pressure: worker_pressure,
       delegation_supervision: delegation_supervision,
+      planner_quotas: planner_quotas,
+      planner_fairness_posture: planner_fairness_posture(planner_quotas),
       capability_drifts: capability_drifts,
       recent_work_items: list_work_items(limit: 6, preload: true),
       recent_approvals: list_approval_records(limit: 6)
     }
+  end
+
+  defp planner_fairness_posture(planner_quotas) when is_list(planner_quotas) do
+    case planner_quotas do
+      [] ->
+        "balanced"
+
+      quotas ->
+        starved = Enum.any?(quotas, &(&1.remaining == 0 and &1.deferred_count > 0))
+        skewed = Enum.any?(quotas, &(&1.remaining == 0)) and Enum.any?(quotas, &(&1.remaining > 2))
+
+        cond do
+          starved -> "starved"
+          skewed -> "skewed"
+          true -> "balanced"
+        end
+    end
+  end
+
+  defp build_planner_quotas(autonomy_agents, all_work_items) do
+    planner_agents =
+      Enum.filter(autonomy_agents, &(&1.role == "planner" and &1.status == "active"))
+
+    blocked_batches =
+      all_work_items
+      |> Enum.filter(&(&1.status == "blocked" and &1.execution_mode == "delegate"))
+      |> Enum.map(fn work_item -> {work_item, delegation_batch_snapshot(work_item)} end)
+      |> Enum.reject(fn {_work_item, snapshot} -> snapshot in [nil, %{}] end)
+
+    Enum.map(planner_agents, &planner_expansion_debt(&1, blocked_batches))
   end
 
   def capability_profile(%AgentProfile{} = agent) do
@@ -894,23 +1056,38 @@ defmodule HydraX.Runtime.WorkItems do
     work_item.status not in @terminal_work_item_statuses and is_nil(work_item.assigned_agent_id)
   end
 
-  defp work_item_ownership_active?(%WorkItem{} = work_item) do
+  defp classify_work_item_ownership(%WorkItem{} = work_item) do
+    classify_work_item_ownership(work_item, Coordination.status().owner)
+  end
+
+  defp classify_work_item_ownership(%WorkItem{} = work_item, coordinator_owner) do
     ownership = get_in(work_item.metadata || %{}, ["ownership"]) || %{}
 
-    ownership["active"] == true and not stale_or_missing_work_item_lease?(work_item)
+    cond do
+      ownership["active"] != true ->
+        :unclaimed
+
+      stale_or_missing_work_item_lease?(work_item) ->
+        :stale
+
+      ownership["owner"] not in [nil, coordinator_owner] ->
+        :remote_active
+
+      true ->
+        :local_active
+    end
+  end
+
+  defp work_item_ownership_active?(%WorkItem{} = work_item) do
+    classify_work_item_ownership(work_item) in [:local_active, :remote_active]
   end
 
   defp stale_work_item_ownership?(%WorkItem{} = work_item) do
-    ownership = get_in(work_item.metadata || %{}, ["ownership"]) || %{}
-
-    ownership["active"] == true and stale_or_missing_work_item_lease?(work_item)
+    classify_work_item_ownership(work_item) == :stale
   end
 
   defp work_item_remotely_owned?(%WorkItem{} = work_item) do
-    ownership = get_in(work_item.metadata || %{}, ["ownership"]) || %{}
-
-    ownership["active"] == true and ownership["owner"] not in [nil, Coordination.status().owner] and
-      not stale_or_missing_work_item_lease?(work_item)
+    classify_work_item_ownership(work_item) == :remote_active
   end
 
   defp build_role_queue_backlog(all_work_items, autonomy_agents) do
@@ -1192,6 +1369,205 @@ defmodule HydraX.Runtime.WorkItems do
     end)
   end
 
+  defp planner_recovery_posture(delegation_supervision) when is_list(delegation_supervision) do
+    operator_guided_saturation =
+      Enum.count(delegation_supervision, fn group ->
+        recovery_mix = group[:active_selected_recovery_mix] || %{}
+        Map.get(recovery_mix, "operator_guided_replan", 0) > 0
+      end)
+
+    review_guided_saturation =
+      Enum.count(delegation_supervision, fn group ->
+        recovery_mix = group[:active_selected_recovery_mix] || %{}
+
+        Map.get(recovery_mix, "review_guided_replan", 0) > 0 or
+          Map.get(recovery_mix, "request_review", 0) > 0
+      end)
+
+    stale_intervention_saturation =
+      Enum.reduce(delegation_supervision, 0, fn group, acc ->
+        acc + (group[:stale_follow_up_batches] || 0)
+      end)
+
+    deescalation_portfolio_depth =
+      Enum.reduce(delegation_supervision, 0, fn group, acc ->
+        acc + (group[:deescalated_batches] || 0)
+      end)
+
+    active_intervention_portfolio_count =
+      Enum.count(delegation_supervision, fn group ->
+        (group[:active_selected_intervention_batches] || 0) > 0
+      end)
+
+    %{
+      operator_guided_saturation: operator_guided_saturation,
+      review_guided_saturation: review_guided_saturation,
+      stale_intervention_saturation: stale_intervention_saturation,
+      deescalation_portfolio_depth: deescalation_portfolio_depth,
+      active_intervention_portfolio_count: active_intervention_portfolio_count,
+      pressure_snapshot: %{
+        "operator_guided_saturation" => operator_guided_saturation,
+        "review_guided_saturation" => review_guided_saturation,
+        "stale_intervention_saturation" => stale_intervention_saturation,
+        "deescalation_portfolio_depth" => deescalation_portfolio_depth,
+        "active_intervention_portfolio_count" => active_intervention_portfolio_count
+      }
+    }
+  end
+
+  defp planner_recovery_posture(_delegation_supervision), do: %{}
+
+  defp planner_recovery_posture_from_parent(%WorkItem{} = parent) do
+    siblings =
+      list_work_items(
+        assigned_agent_id: parent.assigned_agent_id,
+        assigned_role: parent.assigned_role,
+        status: "blocked",
+        limit: 50,
+        preload: false
+      )
+
+    supervision_groups =
+      siblings
+      |> Enum.filter(&(&1.execution_mode == "delegate"))
+      |> Enum.map(fn work_item -> {work_item, delegation_batch_snapshot(work_item)} end)
+      |> Enum.reject(fn {_work_item, snapshot} -> snapshot in [nil, %{}] end)
+      |> Enum.group_by(fn {work_item, _snapshot} ->
+        {work_item.assigned_agent_id, work_item.assigned_role}
+      end)
+      |> Enum.map(fn {{_agent_id, _role}, entries} ->
+        recovery_mix = aggregate_follow_up_recovery_mix(entries)
+        active_selected = aggregate_selected_follow_up_recovery_mix(entries, :active)
+        inactive_selected = aggregate_selected_follow_up_recovery_mix(entries, :inactive)
+        deescalated = aggregate_selected_follow_up_deescalation_mix(entries)
+
+        %{
+          active_selected_recovery_mix: active_selected,
+          inactive_selected_recovery_mix: inactive_selected,
+          active_selected_intervention_batches:
+            intervention_recovery_batch_count(active_selected),
+          stale_follow_up_batches: Enum.count(entries, &stale_follow_up_batch?/1),
+          deescalated_batches:
+            Enum.reduce(deescalated, 0, fn {_s, c}, acc -> acc + c end),
+          recovery_mix: recovery_mix
+        }
+      end)
+
+    planner_recovery_posture(supervision_groups)
+  end
+
+  defp planner_expansion_debt(%AgentProfile{} = agent, all_blocked_batches) do
+    agent_batches =
+      Enum.filter(all_blocked_batches, fn {work_item, _snapshot} ->
+        work_item.delegated_by_agent_id == agent.id or
+          work_item.assigned_agent_id == agent.id
+      end)
+
+    slot_usage =
+      Enum.reduce(agent_batches, 0, fn {_work_item, snapshot}, acc ->
+        acc + (snapshot["active_count"] || 0)
+      end)
+
+    deferred_count =
+      Enum.count(agent_batches, fn {_work_item, snapshot} ->
+        delegation_batch_expansion_deferred?(snapshot)
+      end)
+
+    recovery_count =
+      Enum.count(agent_batches, fn entry -> active_follow_up_batch?(entry) end)
+
+    ceiling = planner_slot_ceiling(agent)
+
+    %{
+      agent_id: agent.id,
+      agent_name: agent.name,
+      slot_usage: slot_usage,
+      deferred_count: deferred_count,
+      recovery_count: recovery_count,
+      ceiling: ceiling,
+      remaining: max(ceiling - slot_usage, 0)
+    }
+  end
+
+  defp planner_slot_ceiling(%AgentProfile{} = agent) do
+    profile = agent.capability_profile || %{}
+
+    case Map.get(profile, "planner_slot_ceiling") || Map.get(profile, :planner_slot_ceiling) do
+      value when is_integer(value) and value > 0 -> value
+      _ -> @default_planner_slot_ceiling
+    end
+  end
+
+  defp planner_recovery_posture_saturated?(posture) when is_map(posture) do
+    reasons =
+      []
+      |> then(fn acc ->
+        if Map.get(posture, :operator_guided_saturation, 0) >=
+             @operator_guided_saturation_threshold,
+           do: [:operator_guided_saturated | acc],
+           else: acc
+      end)
+      |> then(fn acc ->
+        if Map.get(posture, :review_guided_saturation, 0) >=
+             @review_guided_saturation_threshold,
+           do: [:review_guided_saturated | acc],
+           else: acc
+      end)
+      |> then(fn acc ->
+        if Map.get(posture, :stale_intervention_saturation, 0) >=
+             @stale_intervention_saturation_threshold,
+           do: [:stale_intervention_saturated | acc],
+           else: acc
+      end)
+      |> then(fn acc ->
+        if Map.get(posture, :deescalation_portfolio_depth, 0) >=
+             @deescalation_heavy_portfolio_threshold,
+           do: [:deescalation_heavy | acc],
+           else: acc
+      end)
+      |> then(fn acc ->
+        if Map.get(posture, :active_intervention_portfolio_count, 0) >=
+             @intervention_portfolio_saturation_threshold,
+           do: [:intervention_portfolio_saturated | acc],
+           else: acc
+      end)
+
+    {reasons != [], Enum.reverse(reasons)}
+  end
+
+  defp planner_recovery_posture_saturated?(_posture), do: {false, []}
+
+  defp planner_recovery_posture_bias(posture) when is_map(posture) do
+    {saturated?, reasons} = planner_recovery_posture_saturated?(posture)
+
+    if saturated? do
+      cond do
+        :stale_intervention_saturated in reasons and
+            :intervention_portfolio_saturated in reasons ->
+          :force_constraint_first
+
+        :operator_guided_saturated in reasons ->
+          :force_narrow_or_constraint
+
+        :deescalation_heavy in reasons ->
+          :force_narrow_delegate_batch
+
+        :review_guided_saturated in reasons ->
+          :force_narrow
+
+        :stale_intervention_saturated in reasons ->
+          :force_constraint_first
+
+        true ->
+          nil
+      end
+    else
+      nil
+    end
+  end
+
+  defp planner_recovery_posture_bias(_posture), do: nil
+
   defp delegation_pressure_batch_count(entry, severity) when is_map(entry) do
     counts = entry[:pressure_batches] || entry["pressure_batches"] || %{}
     counts[severity] || counts[to_string(severity)] || 0
@@ -1378,6 +1754,7 @@ defmodule HydraX.Runtime.WorkItems do
   defp follow_up_recovery_strategy_rank("request_review"), do: 2
   defp follow_up_recovery_strategy_rank("constraint_replan"), do: 1
   defp follow_up_recovery_strategy_rank("narrow_delegate_batch"), do: 0
+  defp follow_up_recovery_strategy_rank("terminate_internal_only"), do: -1
   defp follow_up_recovery_strategy_rank(_strategy), do: 0
 
   defp work_item_follow_up_recovery_strategies(%WorkItem{} = work_item) do
@@ -1485,6 +1862,15 @@ defmodule HydraX.Runtime.WorkItems do
     }
     |> maybe_put_follow_up_entry_detail("pressure_snapshot", Map.get(entry, "pressure_snapshot"))
     |> maybe_put_follow_up_entry_detail("priority_boost", Map.get(entry, "priority_boost"))
+    |> maybe_put_follow_up_entry_detail("selected", Map.get(entry, "selected"))
+    |> maybe_put_follow_up_entry_detail("selection_rank", Map.get(entry, "selection_rank"))
+    |> maybe_put_follow_up_entry_detail("superseded_at", Map.get(entry, "superseded_at"))
+    |> maybe_put_follow_up_entry_detail("superseded_by", Map.get(entry, "superseded_by"))
+    |> maybe_put_follow_up_entry_detail("recovery_family", Map.get(entry, "recovery_family"))
+    |> maybe_put_follow_up_entry_detail(
+      "convergence_rule_id",
+      Map.get(entry, "convergence_rule_id")
+    )
   end
 
   defp normalize_work_item_follow_up_entry(_entry), do: %{}
@@ -1545,12 +1931,150 @@ defmodule HydraX.Runtime.WorkItems do
         follow_up_status_rank(follow_up_entry_status(Map.get(entry, "status"))),
         -priority,
         -preferred_follow_up_strategy_rank(strategy),
+        if(Map.get(entry, "selected") == true, do: 0, else: 1),
         strategy || ""
       }
     end)
   end
 
   defp sort_follow_up_entries(_entries), do: []
+
+  defp select_follow_up_entries([]), do: []
+
+  defp select_follow_up_entries(entries) when is_list(entries) do
+    active_entries = Enum.filter(entries, &follow_up_entry_active?/1)
+    non_terminal = Enum.reject(entries, &follow_up_entry_terminal?/1)
+
+    selected_entry =
+      cond do
+        active_entries != [] -> List.first(active_entries)
+        non_terminal != [] -> List.last(non_terminal)
+        true -> List.first(entries)
+      end
+
+    entries
+    |> Enum.with_index()
+    |> Enum.map(fn {entry, index} ->
+      is_selected = entry == selected_entry
+
+      entry
+      |> Map.put("selected", is_selected)
+      |> Map.put("selection_rank", if(is_selected, do: 0, else: index + 1))
+    end)
+  end
+
+  defp select_follow_up_entries(_entries), do: []
+
+  defp follow_up_entry_terminal?(entry) when is_map(entry) do
+    follow_up_entry_status(Map.get(entry, "status")) in @terminal_work_item_statuses
+  end
+
+  defp follow_up_entry_terminal?(_entry), do: false
+
+  defp prune_stale_follow_up_entries(entries) when is_list(entries) do
+    {pruned, kept} =
+      Enum.split_with(entries, fn entry ->
+        not follow_up_entry_active?(entry) and
+          follow_up_entry_terminal?(entry) and
+          not is_nil(Map.get(entry, "superseded_by"))
+      end)
+
+    {kept, pruned}
+  end
+
+  defp prune_stale_follow_up_entries(_entries), do: {[], []}
+
+  defp archive_pruned_follow_up_entries(summary, []), do: summary
+
+  defp archive_pruned_follow_up_entries(summary, pruned_entries) when is_map(summary) do
+    existing_pruned =
+      summary
+      |> Map.get("pruned_entries", [])
+      |> List.wrap()
+
+    Map.put(summary, "pruned_entries", existing_pruned ++ pruned_entries)
+  end
+
+  defp apply_mutual_exclusion_rules([]), do: []
+
+  defp apply_mutual_exclusion_rules(entries) when is_list(entries) do
+    entries
+    |> supersede_lower_rank_conflicts()
+    |> supersede_duplicate_strategy_entries()
+  end
+
+  defp apply_mutual_exclusion_rules(_entries), do: []
+
+  defp supersede_lower_rank_conflicts(entries) do
+    strategies = MapSet.new(entries, &Map.get(&1, "strategy"))
+
+    has_operator = MapSet.member?(strategies, "operator_guided_replan")
+    has_review = MapSet.member?(strategies, "review_guided_replan")
+    has_constraint = MapSet.member?(strategies, "constraint_replan")
+
+    higher_rank_entry =
+      cond do
+        has_operator ->
+          Enum.find(entries, &(Map.get(&1, "strategy") == "operator_guided_replan"))
+
+        has_review ->
+          Enum.find(entries, &(Map.get(&1, "strategy") == "review_guided_replan"))
+
+        true ->
+          nil
+      end
+
+    if higher_rank_entry && has_constraint do
+      higher_id = Map.get(higher_rank_entry, "work_item_id")
+
+      Enum.map(entries, fn entry ->
+        if Map.get(entry, "strategy") == "constraint_replan" and
+             is_nil(Map.get(entry, "superseded_by")) do
+          entry
+          |> Map.put("superseded_by", higher_id)
+          |> Map.put("superseded_at", DateTime.utc_now() |> DateTime.to_iso8601())
+        else
+          entry
+        end
+      end)
+    else
+      entries
+    end
+  end
+
+  defp supersede_duplicate_strategy_entries(entries) do
+    entries
+    |> Enum.group_by(&Map.get(&1, "strategy"))
+    |> Enum.flat_map(fn {_strategy, group} ->
+      if length(group) <= 1 do
+        group
+      else
+        sorted =
+          Enum.sort_by(group, fn entry ->
+            case Map.get(entry, "work_item_id") do
+              id when is_integer(id) -> -id
+              id when is_binary(id) -> id
+              _ -> 0
+            end
+          end, :desc)
+
+        [newest | rest] = sorted
+
+        rest_superseded =
+          Enum.map(rest, fn entry ->
+            if is_nil(Map.get(entry, "superseded_by")) do
+              entry
+              |> Map.put("superseded_by", Map.get(newest, "work_item_id"))
+              |> Map.put("superseded_at", DateTime.utc_now() |> DateTime.to_iso8601())
+            else
+              entry
+            end
+          end)
+
+        [newest | rest_superseded]
+      end
+    end)
+  end
 
   defp follow_up_entry_active?(entry) when is_map(entry) do
     case Map.get(entry, "active") do
@@ -1924,7 +2448,10 @@ defmodule HydraX.Runtime.WorkItems do
         delegation_batch_occupies_supervision_slot?(snapshot)
       end)
 
-    remaining_budget = max(supervision_budget - active_children, 0)
+    planner_ceiling = planner_slot_ceiling(agent)
+    planner_remaining = max(planner_ceiling - active_children, 0)
+
+    remaining_budget = min(max(supervision_budget - active_children, 0), planner_remaining)
     remaining_batch_budget = max(supervision_batch_budget - active_batches, 0)
 
     ready_batches =
@@ -2390,8 +2917,16 @@ defmodule HydraX.Runtime.WorkItems do
        ) do
     if parent.assigned_role == "planner" and
          deferred_count >= @delegation_pressure_replan_threshold do
+      posture = planner_recovery_posture_from_parent(parent)
+      posture_bias = planner_recovery_posture_bias(posture)
+
+      enriched_attrs =
+        attrs
+        |> Map.put(:planner_posture_context, posture)
+        |> Map.put(:planner_posture_bias, posture_bias)
+
       follow_up_strategy =
-        delegation_pressure_follow_up_strategy(reason, deferred_count, attrs)
+        delegation_pressure_follow_up_strategy(reason, deferred_count, enriched_attrs)
 
       follow_up_task_type =
         if follow_up_strategy == "request_review",
@@ -2416,6 +2951,9 @@ defmodule HydraX.Runtime.WorkItems do
           "pressure_severity" =>
             delegation_batch_expansion_pressure_severity(attrs["pressure_snapshot"]),
           "pressure_snapshot" => attrs["pressure_snapshot"] || %{},
+          "planner_posture_snapshot" => Map.get(posture, :pressure_snapshot, %{}),
+          "planner_posture_bias" =>
+            if(posture_bias, do: to_string(posture_bias), else: nil),
           "capacity_score" => attrs["capacity_score"],
           "supervision_budget" => attrs["supervision_budget"],
           "active_children" => attrs["active_children"],
@@ -2553,14 +3091,38 @@ defmodule HydraX.Runtime.WorkItems do
     end
   end
 
-  defp delegation_pressure_follow_up_strategy(reason, deferred_count, _attrs) do
-    cond do
-      reason == "role_capacity_constrained" and
-          deferred_count >= @delegation_pressure_replan_threshold + 1 ->
-        "request_review"
+  defp delegation_pressure_follow_up_strategy(reason, deferred_count, attrs) do
+    posture_context = Map.get(attrs, :planner_posture_context, %{})
+    posture_bias = Map.get(attrs, :planner_posture_bias)
 
-      true ->
-        "narrow_delegate_batch"
+    base_strategy =
+      cond do
+        reason == "role_capacity_constrained" and
+            deferred_count >= @delegation_pressure_replan_threshold + 1 ->
+          "request_review"
+
+        true ->
+          "narrow_delegate_batch"
+      end
+
+    if posture_context != %{} do
+      available = ["request_review", "narrow_delegate_batch", "constraint_replan"]
+
+      case converge_recovery_strategy(posture_context, available,
+             intervention_pressure: %{}
+           ) do
+        {_family, converged, rule_id} when rule_id != :rule_fallback ->
+          converged
+
+        _ ->
+          if posture_bias do
+            apply_posture_bias_to_strategy(base_strategy, available, posture_bias)
+          else
+            base_strategy
+          end
+      end
+    else
+      base_strategy
     end
   end
 
@@ -4164,6 +4726,23 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp do_engineering_work_item(agent, work_item) do
+    work_item =
+      if work_item.kind == "extension" and not work_item.review_required do
+        {:ok, forced} =
+          save_work_item(work_item, %{
+            "review_required" => true,
+            "metadata" =>
+              Map.merge(work_item.metadata || %{}, %{
+                "review_forced" => true,
+                "review_forced_reason" => "Extension work items always require review"
+              })
+          })
+
+        forced
+      else
+        work_item
+      end
+
     {:ok, running} =
       save_work_item(work_item, %{
         "status" => "running",
@@ -4175,6 +4754,20 @@ defmodule HydraX.Runtime.WorkItems do
       })
 
     workspace_snapshot = workspace_snapshot(agent.workspace_root, running.goal)
+
+    engineering_contract = build_engineering_contract(running, agent, workspace_snapshot)
+
+    {:ok, running} =
+      save_work_item(running, %{
+        "metadata" =>
+          Map.merge(running.metadata || %{}, %{"engineering_contract" => engineering_contract}),
+        "runtime_state" =>
+          append_history(running.runtime_state, "running", %{
+            "phase" => "engineering_contract",
+            "contract_version" => engineering_contract["contract_version"]
+          })
+      })
+
     proposal_payload = build_engineering_proposal(agent, running, workspace_snapshot)
 
     {:ok, proposal_artifact} =
@@ -4184,10 +4777,28 @@ defmodule HydraX.Runtime.WorkItems do
         "title" => "Engineering proposal",
         "summary" => proposal_payload["summary"],
         "body" => proposal_payload["body"],
-        "payload" => Map.delete(proposal_payload, "body"),
+        "payload" =>
+          proposal_payload
+          |> Map.delete("body")
+          |> Map.put("engineering_contract", engineering_contract),
         "provenance" => %{"source" => "autonomy", "phase" => "engineering_proposal"},
         "confidence" => proposal_payload["confidence"],
         "review_status" => "proposed"
+      })
+
+    {:ok, running} =
+      save_work_item(running, %{
+        "approval_stage" => "proposal_only",
+        "result_refs" =>
+          Map.merge(running.result_refs || %{}, %{
+            "lifecycle_transitions" => [
+              %{
+                "from" => "draft",
+                "to" => "proposal_only",
+                "at" => DateTime.utc_now() |> DateTime.to_iso8601()
+              }
+            ]
+          })
       })
 
     change_set_payload = build_code_change_set(running, workspace_snapshot, proposal_payload)
@@ -4204,6 +4815,38 @@ defmodule HydraX.Runtime.WorkItems do
         "provenance" => %{"source" => "autonomy", "phase" => "engineering_patch"},
         "confidence" => 0.69,
         "review_status" => if(running.review_required, do: "proposed", else: "validated")
+      })
+
+    validation_record =
+      case HydraX.Runtime.ValidationRunner.run_validation_pipeline(running) do
+        {:ok, record} -> record
+        {:error, record} -> record
+      end
+
+    validation_stage =
+      if validation_record["overall_status"] == "passed", do: "validated", else: "patch_ready"
+
+    {:ok, validation_artifact} =
+      create_artifact(%{
+        "work_item_id" => running.id,
+        "type" => "validation_report",
+        "title" => "Validation report",
+        "summary" => validation_record["summary"],
+        "payload" => validation_record,
+        "provenance" => %{"source" => "validation_pipeline", "phase" => "engineering_validation"},
+        "confidence" => if(validation_record["overall_status"] == "passed", do: 0.85, else: 0.3),
+        "review_status" => "validated"
+      })
+
+    {:ok, running} =
+      save_work_item(running, %{
+        "approval_stage" => validation_stage,
+        "result_refs" =>
+          Map.merge(running.result_refs || %{}, %{
+            "validation_record" => validation_record,
+            "validation_status" => validation_record["overall_status"],
+            "validation_artifact_id" => validation_artifact.id
+          })
       })
 
     if running.review_required do
@@ -4223,10 +4866,20 @@ defmodule HydraX.Runtime.WorkItems do
         save_work_item(running, %{
           "status" => "blocked",
           "approval_stage" => "patch_ready",
-          "result_refs" => %{
-            "artifact_ids" => [proposal_artifact.id, change_artifact.id],
-            "child_work_item_ids" => [review_item.id]
-          },
+          "result_refs" =>
+            Map.merge(running.result_refs || %{}, %{
+              "artifact_ids" => [proposal_artifact.id, change_artifact.id],
+              "child_work_item_ids" => [review_item.id],
+              "lifecycle_transitions" =>
+                List.wrap(get_in(running.result_refs || %{}, ["lifecycle_transitions"])) ++
+                  [
+                    %{
+                      "from" => "proposal_only",
+                      "to" => "patch_ready",
+                      "at" => DateTime.utc_now() |> DateTime.to_iso8601()
+                    }
+                  ]
+            }),
           "runtime_state" =>
             append_history(running.runtime_state, "blocked", %{
               "blocked_at" => DateTime.utc_now(),
@@ -4261,10 +4914,20 @@ defmodule HydraX.Runtime.WorkItems do
         save_work_item(running, %{
           "status" => "completed",
           "approval_stage" => "validated",
-          "result_refs" => %{
-            "artifact_ids" => [proposal_artifact.id, change_artifact.id],
-            "approval_record_ids" => [record.id]
-          },
+          "result_refs" =>
+            Map.merge(running.result_refs || %{}, %{
+              "artifact_ids" => [proposal_artifact.id, change_artifact.id],
+              "approval_record_ids" => [record.id],
+              "lifecycle_transitions" =>
+                List.wrap(get_in(running.result_refs || %{}, ["lifecycle_transitions"])) ++
+                  [
+                    %{
+                      "from" => "proposal_only",
+                      "to" => "validated",
+                      "at" => DateTime.utc_now() |> DateTime.to_iso8601()
+                    }
+                  ]
+            }),
           "runtime_state" =>
             append_history(running.runtime_state, "completed", %{
               "completed_at" => DateTime.utc_now(),
@@ -4973,7 +5636,9 @@ defmodule HydraX.Runtime.WorkItems do
         end),
       "risks" => proposal_payload["risks"],
       "rollback_notes" => proposal_payload["rollback_notes"],
-      "promotion_stage" => "patch_ready"
+      "promotion_stage" => "patch_ready",
+      "target_files" => workspace_snapshot["candidate_files"],
+      "contract_ref" => get_in(work_item.metadata || %{}, ["engineering_contract", "contract_version"])
     }
 
     if work_item.kind == "extension" do
@@ -5619,6 +6284,26 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp execute_publish_delivery(agent, channel, target, content) do
+    target_key = if is_binary(target), do: target, else: inspect(target)
+    lease_name = "delivery:#{agent.id}:#{channel}:#{target_key}"
+
+    case Coordination.claim_lease(lease_name, ttl_seconds: 60,
+           metadata: %{"agent_id" => agent.id, "channel" => channel}) do
+      {:ok, _lease} ->
+        execute_publish_delivery_inner(agent, channel, target, content)
+
+      {:error, {:taken, _lease}} ->
+        %{
+          "status" => "skipped",
+          "channel" => channel,
+          "target" => target,
+          "attempted_at" => DateTime.utc_now(),
+          "reason" => "delivery_in_progress"
+        }
+    end
+  end
+
+  defp execute_publish_delivery_inner(agent, channel, target, content) do
     case HydraX.Runtime.authorize_delivery(agent.id, :job, channel) do
       :ok ->
         case deliver_publish_summary(channel, target, content) do
@@ -5927,6 +6612,26 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp engineering_rollback_notes(work_item) do
     "Revert the #{work_item.kind} patch, restore changed files from git history, and rerun validation commands."
+  end
+
+  defp build_engineering_contract(%WorkItem{} = work_item, %AgentProfile{} = agent, workspace_snapshot) do
+    candidate_files = workspace_snapshot["candidate_files"] || []
+
+    %{
+      "repo_context" => %{
+        "workspace_root" => agent.workspace_root,
+        "file_count" => workspace_snapshot["file_count"],
+        "contract_files" => workspace_snapshot["contract_files"]
+      },
+      "target_files" => candidate_files,
+      "intended_patch_shape" => %{
+        "type" => if(work_item.kind == "extension", do: "patch_bundle", else: "code_change_set"),
+        "estimated_file_count" => length(candidate_files)
+      },
+      "required_checks" => default_test_commands(work_item),
+      "rollback_notes" => engineering_rollback_notes(work_item),
+      "contract_version" => 1
+    }
   end
 
   defp review_findings(
@@ -6511,7 +7216,65 @@ defmodule HydraX.Runtime.WorkItems do
   defp recovery_strategy_behavior("request_review"), do: "review_after_execution"
   defp recovery_strategy_behavior("narrow_delegate_batch"), do: "narrow_scope"
   defp recovery_strategy_behavior("constraint_replan"), do: "constraint_first"
+  defp recovery_strategy_behavior("terminate_internal_only"), do: "internal_delivery"
   defp recovery_strategy_behavior(_strategy), do: "strategy_guided"
+
+  defp recovery_family("operator_guided_replan"), do: :human_intervention
+  defp recovery_family("review_guided_replan"), do: :human_intervention
+  defp recovery_family("request_review"), do: :human_intervention
+  defp recovery_family("constraint_replan"), do: :autonomous_recovery
+  defp recovery_family("narrow_delegate_batch"), do: :autonomous_recovery
+  defp recovery_family("terminate_internal_only"), do: :terminal_delivery
+  defp recovery_family(_strategy), do: :autonomous_recovery
+
+  defp recovery_convergence_rules do
+    [
+      {:rule_1, "portfolio_and_stale_saturated",
+       fn ctx ->
+         Map.get(ctx, :active_intervention_portfolio_count, 0) >=
+           @intervention_portfolio_saturation_threshold and
+           Map.get(ctx, :stale_intervention_saturation, 0) >=
+             @stale_intervention_saturation_threshold
+       end, :terminal_delivery, "terminate_internal_only"},
+      {:rule_2, "operator_saturated_deescalation_heavy",
+       fn ctx ->
+         Map.get(ctx, :operator_guided_saturation, 0) >=
+           @operator_guided_saturation_threshold and
+           Map.get(ctx, :deescalation_portfolio_depth, 0) >=
+             @deescalation_heavy_portfolio_threshold
+       end, :autonomous_recovery, "constraint_replan"},
+      {:rule_3, "review_saturated",
+       fn ctx ->
+         Map.get(ctx, :review_guided_saturation, 0) >=
+           @review_guided_saturation_threshold
+       end, :autonomous_recovery, "narrow_delegate_batch"}
+    ]
+  end
+
+  defp converge_recovery_strategy(pressure_context, strategies, opts)
+       when is_map(pressure_context) and is_list(strategies) do
+    case Enum.find(recovery_convergence_rules(), fn {_id, _name, matcher, _family, _strategy} ->
+           matcher.(pressure_context)
+         end) do
+      {rule_id, _name, _matcher, family, strategy} ->
+        {family, strategy, rule_id}
+
+      nil ->
+        pressure = Keyword.get(opts, :intervention_pressure, %{})
+
+        case preferred_follow_up_strategy(strategies, intervention_pressure: pressure) do
+          nil ->
+            {:autonomous_recovery, nil, :rule_fallback}
+
+          strategy ->
+            {recovery_family(strategy), strategy, :rule_fallback}
+        end
+    end
+  end
+
+  defp converge_recovery_strategy(_pressure_context, _strategies, _opts) do
+    {:autonomous_recovery, nil, :rule_fallback}
+  end
 
   defp normalize_delegation_batch_entry(
          entry,
@@ -7220,9 +7983,12 @@ defmodule HydraX.Runtime.WorkItems do
   defp delegation_batch_expandable?(_snapshot), do: false
 
   defp delegation_batch_expansion_priority(%WorkItem{} = work_item, %{} = snapshot, role_capacity) do
+    fairness = planner_fairness_score(work_item)
+
     {
       work_item.priority || 0,
       delegation_missing_role_urgency_score(snapshot),
+      fairness,
       delegation_pending_role_capacity_score(snapshot, role_capacity),
       snapshot["expansion_deferred_count"] || 0,
       -delegation_batch_expansion_pressure_weight(snapshot),
@@ -7233,6 +7999,31 @@ defmodule HydraX.Runtime.WorkItems do
       -(snapshot["active_count"] || 0),
       -(snapshot["terminal_count"] || 0)
     }
+  end
+
+  defp planner_fairness_score(%WorkItem{} = work_item) do
+    agent_id = work_item.assigned_agent_id || work_item.delegated_by_agent_id
+
+    case agent_id && Agents.get_agent!(agent_id) do
+      %AgentProfile{} = agent ->
+        ceiling = planner_slot_ceiling(agent)
+
+        active_count =
+          Repo.one(
+            from w in WorkItem,
+              where:
+                (w.assigned_agent_id == ^agent_id or w.delegated_by_agent_id == ^agent_id) and
+                  w.status not in ^@terminal_work_item_statuses,
+              select: count(w.id)
+          ) || 0
+
+        (ceiling - active_count) / max(ceiling, 1)
+
+      _ ->
+        1.0
+    end
+  rescue
+    _ -> 1.0
   end
 
   defp delegation_batch_expansion_pressure_weight(%{} = snapshot) do
@@ -7647,23 +8438,71 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp preferred_follow_up_strategy(strategies, opts) when is_list(strategies) do
     pressure = Keyword.get(opts, :intervention_pressure, %{})
+    posture_bias = Keyword.get(opts, :planner_posture_bias)
+    posture_context = Keyword.get(opts, :planner_posture_context, %{})
 
-    strategies
-    |> base_follow_up_strategy_choice()
-    |> case do
-      nil ->
-        nil
+    base =
+      strategies
+      |> base_follow_up_strategy_choice()
+      |> case do
+        nil ->
+          nil
 
-      strategy ->
-        strategy
-        |> maybe_deescalate_follow_up_strategy(
-          Enum.reject(strategies, &(&1 in [nil, "", strategy])),
-          pressure
-        )
+        strategy ->
+          strategy
+          |> maybe_deescalate_follow_up_strategy(
+            Enum.reject(strategies, &(&1 in [nil, "", strategy])),
+            pressure
+          )
+      end
+
+    if base != nil and posture_bias != nil do
+      case converge_recovery_strategy(posture_context, strategies, opts) do
+        {_family, converged_strategy, rule_id} when rule_id != :rule_fallback ->
+          converged_strategy
+
+        _ ->
+          apply_posture_bias_to_strategy(base, strategies, posture_bias)
+      end
+    else
+      base
     end
   end
 
   defp preferred_follow_up_strategy(_strategies, _opts), do: nil
+
+  defp apply_posture_bias_to_strategy(strategy, strategies, bias) do
+    excluded = posture_bias_excluded_strategies(bias)
+
+    if strategy in excluded do
+      allowed =
+        strategies
+        |> Enum.reject(&(&1 in [nil, "" | excluded]))
+        |> Enum.sort_by(&preferred_follow_up_strategy_rank/1, :desc)
+
+      List.first(allowed) || strategy
+    else
+      strategy
+    end
+  end
+
+  defp posture_bias_excluded_strategies(:force_narrow_or_constraint) do
+    ["operator_guided_replan"]
+  end
+
+  defp posture_bias_excluded_strategies(:force_narrow) do
+    ["operator_guided_replan", "review_guided_replan"]
+  end
+
+  defp posture_bias_excluded_strategies(:force_constraint_first) do
+    ["operator_guided_replan", "review_guided_replan", "request_review"]
+  end
+
+  defp posture_bias_excluded_strategies(:force_narrow_delegate_batch) do
+    ["operator_guided_replan", "review_guided_replan", "request_review", "constraint_replan"]
+  end
+
+  defp posture_bias_excluded_strategies(_bias), do: []
 
   defp base_follow_up_strategy_choice(strategies) when is_list(strategies) do
     strategies
@@ -7897,6 +8736,7 @@ defmodule HydraX.Runtime.WorkItems do
   defp preferred_follow_up_strategy_rank("request_review"), do: 70
   defp preferred_follow_up_strategy_rank("constraint_replan"), do: 60
   defp preferred_follow_up_strategy_rank("narrow_delegate_batch"), do: 50
+  defp preferred_follow_up_strategy_rank("terminate_internal_only"), do: 10
 
   defp preferred_follow_up_strategy_rank(strategy) when is_binary(strategy) do
     cond do
@@ -8965,6 +9805,7 @@ defmodule HydraX.Runtime.WorkItems do
   defp approval_action_allowed?(%WorkItem{kind: kind, approval_stage: stage}, requested_action) do
     case {kind, requested_action} do
       {"extension", "enable_extension"} -> stage in ["validated", "operator_approved"]
+      {"extension", "rollback_extension"} -> stage in ["operator_approved", "merge_ready"]
       {_, "merge_ready"} -> stage in ["validated", "operator_approved"]
       {_, "promote_code_change"} -> stage in ["patch_ready", "validated"]
       {_, "publish_review_report"} -> stage in ["validated", "operator_approved"]
@@ -8975,6 +9816,9 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp next_approval_stage(%WorkItem{kind: "extension"}, "enable_extension"),
     do: "operator_approved"
+
+  defp next_approval_stage(%WorkItem{kind: "extension"}, "rollback_extension"),
+    do: "patch_ready"
 
   defp next_approval_stage(_work_item, "merge_ready"), do: "merge_ready"
   defp next_approval_stage(_work_item, "promote_code_change"), do: "validated"
@@ -9015,6 +9859,19 @@ defmodule HydraX.Runtime.WorkItems do
     Map.put(result_refs, "extension_enablement_status", "approved_not_enabled")
   end
 
+  defp maybe_put_extension_enablement(
+         result_refs,
+         %WorkItem{kind: "extension"},
+         "rollback_extension"
+       ) do
+    result_refs
+    |> Map.put("extension_enablement_status", "rolled_back")
+    |> Map.put("extension_rollback_audit", %{
+      "rolled_back_at" => DateTime.utc_now() |> DateTime.to_iso8601(),
+      "previous_status" => result_refs["extension_enablement_status"]
+    })
+  end
+
   defp maybe_put_extension_enablement(result_refs, _work_item, _requested_action), do: result_refs
 
   defp promote_artifacts!(%WorkItem{} = work_item, requested_action, parent_record, metadata) do
@@ -9022,6 +9879,7 @@ defmodule HydraX.Runtime.WorkItems do
       case requested_action do
         "merge_ready" -> "approved"
         "enable_extension" -> "approved"
+        "rollback_extension" -> "superseded"
         _ -> "validated"
       end
 
@@ -9740,11 +10598,23 @@ defmodule HydraX.Runtime.WorkItems do
         if existing do
           [existing.id]
         else
+          promoted_status =
+            case artifact.review_status do
+              status when status in ["validated", "approved"] -> "durable"
+              _ -> "candidate"
+            end
+
+          approval_state =
+            case artifact.review_status do
+              status when status in ["validated", "approved"] -> "approved"
+              _ -> "provisional"
+            end
+
           {:ok, memory} =
             Memory.create_memory(%{
               agent_id: target_agent_id,
               type: memory_attrs["type"],
-              status: "active",
+              status: promoted_status,
               content: memory_attrs["content"],
               importance: memory_attrs["importance"],
               metadata:
@@ -9755,7 +10625,8 @@ defmodule HydraX.Runtime.WorkItems do
                 |> Map.put("promotion_slot", memory_attrs["promotion_slot"])
                 |> Map.put("promotion_key", promotion_key)
                 |> Map.put("promotion_index", index)
-                |> Map.put("research_question", work_item.goal),
+                |> Map.put("research_question", work_item.goal)
+                |> Map.put("approval_state", approval_state),
               last_seen_at: DateTime.utc_now()
             })
 
@@ -9778,7 +10649,10 @@ defmodule HydraX.Runtime.WorkItems do
         payload,
         %{
           "expires_at" => DateTime.add(DateTime.utc_now(), 30 * 24 * 60 * 60, :second),
-          "promotion_reason" => "approved_research_claim"
+          "promotion_reason" => "approved_research_claim",
+          "evidence_kind" => "claim",
+          "freshness_at" => DateTime.utc_now() |> DateTime.to_iso8601(),
+          "freshness_ttl_days" => 30
         }
       )
     end)
@@ -9798,7 +10672,7 @@ defmodule HydraX.Runtime.WorkItems do
               "decision_summary",
               0.82,
               payload,
-              %{"promotion_reason" => "approved_research_decision"}
+              %{"promotion_reason" => "approved_research_decision", "evidence_kind" => "inference"}
             )
           ]
       end
@@ -9814,7 +10688,7 @@ defmodule HydraX.Runtime.WorkItems do
           "recommended_actions",
           0.72,
           payload,
-          %{"promotion_reason" => "approved_research_action"}
+          %{"promotion_reason" => "approved_research_action", "evidence_kind" => "inference"}
         )
       end)
 
@@ -9830,7 +10704,7 @@ defmodule HydraX.Runtime.WorkItems do
           "open_questions",
           0.61,
           payload,
-          %{"promotion_reason" => "approved_research_follow_up"}
+          %{"promotion_reason" => "approved_research_follow_up", "evidence_kind" => "inference"}
         )
       end)
 
@@ -9851,7 +10725,7 @@ defmodule HydraX.Runtime.WorkItems do
               "review_decision",
               0.8,
               payload,
-              %{"promotion_reason" => "approved_review_decision"}
+              %{"promotion_reason" => "approved_review_decision", "evidence_kind" => "citation"}
             )
           ]
       end
@@ -9867,7 +10741,7 @@ defmodule HydraX.Runtime.WorkItems do
           "review_actions",
           0.69,
           payload,
-          %{"promotion_reason" => "approved_review_action"}
+          %{"promotion_reason" => "approved_review_action", "evidence_kind" => "citation"}
         )
       end)
 
@@ -11426,7 +12300,9 @@ defmodule HydraX.Runtime.WorkItems do
           case Map.get(entry, "priority_boost") do
             value when is_integer(value) -> value
             _ -> nil
-          end
+          end,
+        recovery_family: Map.get(entry, "recovery_family"),
+        convergence_rule_id: Map.get(entry, "convergence_rule_id")
       }
     end
   end
@@ -11441,6 +12317,8 @@ defmodule HydraX.Runtime.WorkItems do
     |> Enum.map(&normalize_work_item_follow_up_entry/1)
     |> hydrate_follow_up_entry_states()
     |> sort_follow_up_entries()
+    |> apply_mutual_exclusion_rules()
+    |> select_follow_up_entries()
   end
 
   defp preferred_follow_up_entry(entries) when is_list(entries) do
@@ -11978,6 +12856,7 @@ defmodule HydraX.Runtime.WorkItems do
 
   defp recovery_strategy_summary("request_review"), do: "Review-requested recovery"
   defp recovery_strategy_summary("constraint_replan"), do: "Constraint-first recovery"
+  defp recovery_strategy_summary("terminate_internal_only"), do: "Internal-only delivery"
 
   defp recovery_strategy_summary(strategy) when is_binary(strategy) do
     strategy
@@ -12038,7 +12917,24 @@ defmodule HydraX.Runtime.WorkItems do
         {:ok, work_item}
 
       nil ->
-        save_work_item(attrs)
+        lease_name = "follow_up:#{parent.id}:#{task_type}"
+
+        case Coordination.claim_lease(lease_name,
+               ttl_seconds: @claim_ttl_seconds,
+               metadata: %{"parent_id" => parent.id, "task_type" => task_type}
+             ) do
+          {:ok, _lease} ->
+            case existing_follow_up_work_item(parent, task_type, matcher) do
+              %WorkItem{} = work_item -> {:ok, work_item}
+              nil -> save_work_item(attrs)
+            end
+
+          {:error, {:taken, _lease}} ->
+            case existing_follow_up_work_item(parent, task_type, matcher) do
+              %WorkItem{} = work_item -> {:ok, work_item}
+              nil -> {:error, :follow_up_lease_taken}
+            end
+        end
     end
   end
 
@@ -12156,22 +13052,45 @@ defmodule HydraX.Runtime.WorkItems do
             |> Enum.filter(&is_integer/1)
             |> Enum.uniq()
 
+          {active_entries, pruned_entries} =
+            refreshed_entries
+            |> hydrate_follow_up_entry_states()
+            |> sort_follow_up_entries()
+            |> apply_mutual_exclusion_rules()
+            |> select_follow_up_entries()
+            |> prune_stale_follow_up_entries()
+
+          base_summary =
+            summarize_follow_up_entries(
+              active_entries,
+              refreshed_ids,
+              refreshed_types,
+              refreshed_strategies,
+              refreshed_summaries,
+              refreshed_alternative_strategies,
+              refreshed_alternative_summaries,
+              refreshed_priority_boosts
+            )
+
+          existing_summary =
+            get_in(parent.result_refs || %{}, ["follow_up_summary"]) || %{}
+
+          prior_pruned =
+            existing_summary
+            |> Map.get("pruned_entries", [])
+            |> List.wrap()
+
+          all_pruned =
+            (prior_pruned ++ pruned_entries)
+            |> Enum.uniq_by(&Map.get(&1, "work_item_id"))
+
+          summary_with_pruned =
+            archive_pruned_follow_up_entries(base_summary, all_pruned)
+
           refreshed_result_refs =
             (parent.result_refs || %{})
             |> Map.put("follow_up_work_item_ids", refreshed_ids)
-            |> Map.put(
-              "follow_up_summary",
-              summarize_follow_up_entries(
-                refreshed_entries,
-                refreshed_ids,
-                refreshed_types,
-                refreshed_strategies,
-                refreshed_summaries,
-                refreshed_alternative_strategies,
-                refreshed_alternative_summaries,
-                refreshed_priority_boosts
-              )
-            )
+            |> Map.put("follow_up_summary", summary_with_pruned)
 
           if refreshed_result_refs != (parent.result_refs || %{}) do
             _ = save_work_item(parent, %{"result_refs" => refreshed_result_refs})
