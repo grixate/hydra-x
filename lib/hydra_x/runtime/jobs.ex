@@ -344,7 +344,11 @@ defmodule HydraX.Runtime.Jobs do
       ownership_handoffs:
         Map.get(passes, :ownership_handoffs, scheduler_count_snapshot("resumed_count")),
       deferred_deliveries:
-        Map.get(passes, :deferred_deliveries, scheduler_count_snapshot("delivered_count"))
+        Map.get(passes, :deferred_deliveries, scheduler_count_snapshot("delivered_count")),
+      delegation_expansions:
+        Map.get(passes, :delegation_expansions, scheduler_count_snapshot("processed_count")),
+      deferred_cooldowns:
+        Map.get(passes, :deferred_cooldowns, scheduler_count_snapshot("processed_count"))
     }
   end
 
@@ -356,7 +360,9 @@ defmodule HydraX.Runtime.Jobs do
              :role_queue_dispatches,
              :work_item_replays,
              :ownership_handoffs,
-             :deferred_deliveries
+             :deferred_deliveries,
+             :delegation_expansions,
+             :deferred_cooldowns
            ] and
              is_map(summary) do
     passes =
@@ -1073,6 +1079,114 @@ defmodule HydraX.Runtime.Jobs do
          "artifact_count" => length(summary[:artifacts] || []),
          "action" => summary[:action]
        }}
+    end
+  end
+
+  defp execute_scheduled_job(%ScheduledJob{kind: "research"} = job) do
+    with {:ok, agent} <- fetch_job_agent(job) do
+      config = job.config || %{}
+      mode = config["research_mode"] || "refresh_stale"
+
+      case mode do
+        "refresh_stale" ->
+          execute_stale_refresh(agent, config)
+
+        "review_findings" ->
+          execute_findings_review(agent, config)
+
+        "full_research" ->
+          execute_full_research(agent, job, config)
+
+        _ ->
+          {:ok, "Unknown research mode: #{mode}", %{"mode" => mode, "status" => "skipped"}}
+      end
+    end
+  end
+
+  defp execute_stale_refresh(agent, config) do
+    max_findings = config["max_findings_per_run"] || 10
+
+    stale_memories =
+      HydraX.Memory.list_memories(agent_id: agent.id, limit: max_findings)
+      |> Enum.filter(fn entry ->
+        entry.status in ["active", "durable"] and
+          HydraX.Memory.Evidence.stale?(entry.metadata || %{})
+      end)
+
+    refreshed =
+      Enum.reduce(stale_memories, 0, fn entry, count ->
+        refreshed_metadata =
+          HydraX.Memory.Evidence.mark_refreshed(entry.metadata || %{})
+
+        case HydraX.Memory.update_memory(entry, %{metadata: refreshed_metadata}) do
+          {:ok, _} -> count + 1
+          _ -> count
+        end
+      end)
+
+    delta = %{
+      "refreshed" => refreshed,
+      "stale_checked" => length(stale_memories),
+      "mode" => "refresh_stale"
+    }
+
+    {:ok, "Refreshed #{refreshed}/#{length(stale_memories)} stale findings for #{agent.slug}",
+     delta}
+  end
+
+  defp execute_findings_review(agent, _config) do
+    promoted = HydraX.Memory.Lifecycle.promote_candidates!(agent.id)
+    expired = HydraX.Memory.Lifecycle.expire_stale_memories!(agent.id)
+
+    candidates_remaining =
+      HydraX.Memory.list_memories(agent_id: agent.id, status: "candidate", limit: 200)
+      |> length()
+
+    delta = %{
+      "promoted" => promoted,
+      "expired" => expired,
+      "candidates_remaining" => candidates_remaining,
+      "mode" => "review_findings"
+    }
+
+    {:ok,
+     "Promoted #{promoted}, expired #{expired}, #{candidates_remaining} candidates remaining for #{agent.slug}",
+     delta}
+  end
+
+  defp execute_full_research(agent, job, config) do
+    query = config["research_query"] || job.prompt || "Review recent findings and update knowledge."
+
+    {:ok, work_item} =
+      HydraX.Runtime.save_work_item(%{
+        "kind" => "research",
+        "goal" => query,
+        "assigned_agent_id" => agent.id,
+        "assigned_role" => "researcher",
+        "status" => "planned",
+        "metadata" => %{
+          "task_type" => "scheduled_research",
+          "scheduled_job_id" => job.id
+        }
+      })
+
+    case HydraX.Runtime.run_autonomy_cycle(agent.id, work_item_id: work_item.id) do
+      {:ok, summary} ->
+        {:ok, "Research completed for #{agent.slug}: #{summary.status}",
+         %{
+           "work_item_id" => work_item.id,
+           "status" => summary.status,
+           "mode" => "full_research"
+         }}
+
+      {:error, reason} ->
+        {:ok, "Research failed for #{agent.slug}: #{inspect(reason)}",
+         %{
+           "work_item_id" => work_item.id,
+           "status" => "failed",
+           "mode" => "full_research",
+           "error" => inspect(reason)
+         }}
     end
   end
 

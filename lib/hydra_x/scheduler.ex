@@ -6,6 +6,7 @@ defmodule HydraX.Scheduler do
   alias HydraX.Config
   alias HydraX.Gateway
   alias HydraX.Runtime
+  alias HydraX.Runtime.SchedulerPhase
 
   def start_link(_opts) do
     GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
@@ -30,7 +31,9 @@ defmodule HydraX.Scheduler do
        role_queue_dispatches: role_queue_dispatch_snapshot(),
        work_item_replays: work_item_replay_snapshot(),
        ownership_handoffs: ownership_handoff_snapshot(),
-       deferred_deliveries: deferred_delivery_snapshot()
+       deferred_deliveries: deferred_delivery_snapshot(),
+       delegation_expansions: phase_snapshot(:delegation_expansion),
+       deferred_cooldowns: phase_snapshot(:deferred_cooldown)
      }}
   end
 
@@ -67,6 +70,8 @@ defmodule HydraX.Scheduler do
     work_item_replays = Runtime.resume_owned_work_items(limit: 50)
     ownership_handoffs = Runtime.resume_owned_conversations(limit: 50)
     deferred_deliveries = Gateway.process_deferred_deliveries(limit: 50)
+    delegation_expansions = Runtime.process_delegation_expansions(limit: 50)
+    deferred_cooldowns = Runtime.process_deferred_cooldowns(limit: 50)
 
     # Skip jobs that are already in-flight
     new_jobs = Enum.reject(due_jobs, fn job -> MapSet.member?(state.running_jobs, job.id) end)
@@ -99,7 +104,9 @@ defmodule HydraX.Scheduler do
          role_queue_dispatches: role_queue_dispatches,
          work_item_replays: work_item_replays,
          ownership_handoffs: ownership_handoffs,
-         deferred_deliveries: deferred_deliveries
+         deferred_deliveries: deferred_deliveries,
+         delegation_expansions: delegation_expansions,
+         deferred_cooldowns: deferred_cooldowns
      }}
   end
 
@@ -226,5 +233,9 @@ defmodule HydraX.Scheduler do
       error_count: 0,
       results: []
     }
+  end
+
+  defp phase_snapshot(phase) do
+    SchedulerPhase.pass_result(phase, Runtime.coordination_status().owner, %{})
   end
 end

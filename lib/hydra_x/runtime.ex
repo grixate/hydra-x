@@ -111,6 +111,7 @@ defmodule HydraX.Runtime do
   defdelegate refresh_agent_skills(agent_id), to: HydraX.Runtime.Skills
   defdelegate enable_skill!(id), to: HydraX.Runtime.Skills
   defdelegate disable_skill!(id), to: HydraX.Runtime.Skills
+  defdelegate rollback_skill!(id), to: HydraX.Runtime.Skills
   defdelegate skill_prompt_context(agent_id), to: HydraX.Runtime.Skills
   defdelegate skill_prompt_context(agent_id, opts), to: HydraX.Runtime.Skills
 
@@ -218,6 +219,8 @@ defmodule HydraX.Runtime do
   defdelegate recover_orphaned_work_assignments(opts), to: HydraX.Runtime.WorkItems
   defdelegate resume_owned_work_items(), to: HydraX.Runtime.WorkItems
   defdelegate resume_owned_work_items(opts), to: HydraX.Runtime.WorkItems
+  defdelegate process_delegation_expansions(opts), to: HydraX.Runtime.WorkItems
+  defdelegate process_deferred_cooldowns(opts), to: HydraX.Runtime.WorkItems
   defdelegate cancel_work_item!(id), to: HydraX.Runtime.WorkItems
   defdelegate run_autonomy_cycle(agent_id), to: HydraX.Runtime.WorkItems
   defdelegate run_autonomy_cycle(agent_id, opts), to: HydraX.Runtime.WorkItems
