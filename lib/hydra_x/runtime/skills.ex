@@ -169,12 +169,155 @@ defmodule HydraX.Runtime.Skills do
     |> Enum.join("\n")
   end
 
-  defp set_enabled!(id, enabled) do
+  def skill_posture(%SkillInstall{} = skill) do
+    metadata = skill.metadata || %{}
+
+    rollout_state =
+      cond do
+        not skill.enabled -> "disabled"
+        metadata["rollout_state"] in ["canary", "staged"] -> metadata["rollout_state"]
+        true -> "stable"
+      end
+
+    %{
+      rollout_state: rollout_state,
+      compatibility_posture: skill_compatibility_posture_label(skill),
+      enablement_risk: skill_enablement_risk(skill),
+      version: metadata["version"],
+      last_promoted_at: metadata["last_promoted_at"]
+    }
+  end
+
+  def skill_enablement_risk(%SkillInstall{} = skill) do
+    metadata = skill.metadata || %{}
+    validation_errors = metadata["validation_errors"] || []
+    requirement_specs = metadata["requirement_specs"] || []
+
+    cond do
+      validation_errors != [] -> "high"
+      Enum.any?(requirement_specs, &(&1["satisfied"] == false)) -> "medium"
+      true -> "low"
+    end
+  end
+
+  defp skill_compatibility_posture_label(%SkillInstall{} = skill) do
+    metadata = skill.metadata || %{}
+
+    cond do
+      metadata["manifest_valid"] == false -> "incompatible"
+      (metadata["validation_errors"] || []) != [] -> "degraded"
+      true -> "compatible"
+    end
+  end
+
+  def promote_skill_rollout!(id) do
     skill = get_skill!(id)
+
+    new_metadata =
+      (skill.metadata || %{})
+      |> Map.put("rollout_state", "stable")
+      |> Map.put("last_promoted_at", DateTime.utc_now() |> DateTime.to_iso8601())
+      |> Map.update("version_history", [], fn history ->
+        entry = %{
+          "version" => (skill.metadata || %{})["version"],
+          "promoted_at" => DateTime.utc_now() |> DateTime.to_iso8601()
+        }
+
+        (List.wrap(history) ++ [entry]) |> Enum.take(-10)
+      end)
 
     {:ok, updated} =
       skill
-      |> SkillInstall.changeset(%{enabled: enabled})
+      |> SkillInstall.changeset(%{metadata: new_metadata})
+      |> Repo.update()
+
+    agent = Repo.get!(AgentProfile, updated.agent_id)
+
+    Helpers.audit_operator_action(
+      "Promoted skill #{updated.slug} to stable for #{agent.slug}",
+      agent: agent,
+      metadata: %{"skill_id" => updated.id, "rollout_state" => "stable"}
+    )
+
+    {:ok, updated}
+  end
+
+  def stage_skill_rollout!(id, stage \\ "canary") when stage in ["canary", "staged"] do
+    skill = get_skill!(id)
+
+    new_metadata =
+      (skill.metadata || %{})
+      |> Map.put("rollout_state", stage)
+      |> Map.put("staged_at", DateTime.utc_now() |> DateTime.to_iso8601())
+
+    {:ok, updated} =
+      skill
+      |> SkillInstall.changeset(%{metadata: new_metadata})
+      |> Repo.update()
+
+    agent = Repo.get!(AgentProfile, updated.agent_id)
+
+    Helpers.audit_operator_action(
+      "Staged skill #{updated.slug} as #{stage} for #{agent.slug}",
+      agent: agent,
+      metadata: %{"skill_id" => updated.id, "rollout_state" => stage}
+    )
+
+    {:ok, updated}
+  end
+
+  def rollback_skill!(id) do
+    skill = get_skill!(id)
+    history = get_in(skill.metadata || %{}, ["enablement_history"]) || []
+
+    case List.last(history) do
+      nil ->
+        {:error, :no_rollback_available}
+
+      previous ->
+        new_metadata =
+          (skill.metadata || %{})
+          |> Map.put("enablement_history", Enum.drop(history, -1))
+          |> Map.put("rolled_back_at", DateTime.utc_now() |> DateTime.to_iso8601())
+
+        {:ok, updated} =
+          skill
+          |> SkillInstall.changeset(%{enabled: previous["enabled"], metadata: new_metadata})
+          |> Repo.update()
+
+        agent = Repo.get!(AgentProfile, updated.agent_id)
+
+        Helpers.audit_operator_action(
+          "Rolled back skill #{updated.slug} for #{agent.slug}",
+          agent: agent,
+          metadata: %{
+            "skill_id" => updated.id,
+            "skill_slug" => updated.slug,
+            "rolled_back_to" => previous["enabled"]
+          }
+        )
+
+        {:ok, updated}
+    end
+  end
+
+  defp set_enabled!(id, enabled) do
+    skill = get_skill!(id)
+
+    previous_state = %{
+      "enabled" => skill.enabled,
+      "toggled_at" => DateTime.utc_now() |> DateTime.to_iso8601()
+    }
+
+    new_metadata =
+      (skill.metadata || %{})
+      |> Map.update("enablement_history", [previous_state], fn history ->
+        (List.wrap(history) ++ [previous_state]) |> Enum.take(-10)
+      end)
+
+    {:ok, updated} =
+      skill
+      |> SkillInstall.changeset(%{enabled: enabled, metadata: new_metadata})
       |> Repo.update()
 
     agent = Repo.get!(AgentProfile, updated.agent_id)

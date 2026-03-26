@@ -94,7 +94,7 @@ defmodule HydraX.Runtime.Autonomy do
             "workspace_patch",
             "shell_command"
           ],
-          "artifact_types" => ["code_change_set", "proposal", "patch_bundle"],
+          "artifact_types" => ["code_change_set", "proposal", "patch_bundle", "validation_report"],
           "memory_scope" => ["global_agent_memory", "role_memory", "work_item_scratch_memory"],
           "side_effect_classes" => ["read_only", "repo_write", "plugin_install"],
           "delivery_modes" => ["report", "control_plane"],
