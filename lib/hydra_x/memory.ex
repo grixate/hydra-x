@@ -27,6 +27,7 @@ defmodule HydraX.Memory do
     agent_id = Keyword.get(opts, :agent_id)
     type = Keyword.get(opts, :type)
     status = Keyword.get(opts, :status)
+    statuses = Keyword.get(opts, :statuses)
     min_importance = Keyword.get(opts, :min_importance)
     limit = Keyword.get(opts, :limit, 100)
     offset = Keyword.get(opts, :offset, 0)
@@ -35,6 +36,7 @@ defmodule HydraX.Memory do
     |> maybe_filter_agent(agent_id)
     |> maybe_filter_type(type)
     |> maybe_filter_status(status)
+    |> maybe_filter_statuses(statuses)
     |> maybe_filter_min_importance(min_importance)
     |> order_by([entry], desc: entry.importance, desc: entry.updated_at)
     |> preload([:conversation])
@@ -197,14 +199,15 @@ defmodule HydraX.Memory do
       |> search_opts()
       |> then(fn search_opts ->
         if is_nil(search_opts.status),
-          do: Map.put(search_opts, :status, "active"),
+          do: Map.put(search_opts, :statuses, ["active", "durable"]),
           else: search_opts
       end)
 
     Entry
     |> maybe_filter_agent(agent_id)
     |> maybe_filter_type(search_opts.type)
-    |> maybe_filter_status(search_opts.status)
+    |> maybe_filter_status(search_opts[:status])
+    |> maybe_filter_statuses(search_opts[:statuses])
     |> maybe_filter_min_importance(search_opts.min_importance)
     |> order_by([entry], desc: entry.importance, desc: entry.updated_at)
     |> limit(^max(limit * 4, 48))
@@ -491,7 +494,7 @@ defmodule HydraX.Memory do
   end
 
   def render_markdown(agent_id) do
-    list_memories(agent_id: agent_id, limit: 500, status: "active")
+    list_memories(agent_id: agent_id, limit: 500, statuses: ["active", "durable"])
     |> Markdown.render()
   end
 
@@ -514,6 +517,12 @@ defmodule HydraX.Memory do
   defp maybe_filter_status(query, ""), do: query
   defp maybe_filter_status(query, "all"), do: query
   defp maybe_filter_status(query, status), do: where(query, [entry], entry.status == ^status)
+
+  defp maybe_filter_statuses(query, nil), do: query
+  defp maybe_filter_statuses(query, []), do: query
+
+  defp maybe_filter_statuses(query, statuses) when is_list(statuses),
+    do: where(query, [entry], entry.status in ^statuses)
 
   defp maybe_filter_min_importance(query, nil), do: query
 
@@ -627,6 +636,7 @@ defmodule HydraX.Memory do
     %{
       type: Keyword.get(opts, :type),
       status: Keyword.get(opts, :status),
+      statuses: Keyword.get(opts, :statuses),
       min_importance: Keyword.get(opts, :min_importance)
     }
   end

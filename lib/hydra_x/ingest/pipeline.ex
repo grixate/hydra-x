@@ -265,7 +265,7 @@ defmodule HydraX.Ingest.Pipeline do
     %{
       agent_id: agent_id,
       type: @entry_type,
-      status: "active",
+      status: "candidate",
       content: chunk.content,
       importance: @default_importance,
       metadata: memory_metadata(file_path, document_hash, chunk)
@@ -277,7 +277,9 @@ defmodule HydraX.Ingest.Pipeline do
       "source" => "ingest",
       "ingested_at" => DateTime.utc_now() |> DateTime.to_iso8601(),
       "document_hash" => document_hash,
-      "source_path" => Path.expand(file_path)
+      "source_path" => Path.expand(file_path),
+      "approval_state" => "provisional",
+      "lifecycle_scope" => "ingest"
     })
   end
 

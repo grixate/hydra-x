@@ -3,7 +3,7 @@ defmodule HydraX.Memory.Entry do
   import Ecto.Changeset
 
   @types ~w(Fact Preference Decision Identity Event Observation Goal Todo)
-  @statuses ~w(active conflicted superseded merged archived)
+  @statuses ~w(scratch candidate active durable conflicted superseded merged archived)
 
   schema "memory_entries" do
     field :type, :string

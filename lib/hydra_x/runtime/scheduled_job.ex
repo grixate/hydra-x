@@ -2,7 +2,7 @@ defmodule HydraX.Runtime.ScheduledJob do
   use Ecto.Schema
   import Ecto.Changeset
 
-  @kinds ~w(heartbeat prompt backup ingest maintenance autonomy)
+  @kinds ~w(heartbeat prompt backup ingest maintenance autonomy research)
   @schedule_modes ~w(interval daily weekly cron)
   @circuit_states ~w(closed open)
 
