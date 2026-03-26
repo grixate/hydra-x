@@ -111,7 +111,9 @@ defmodule HydraX.Cluster do
       persistence: persistence_label(persistence),
       persistence_backend: persistence.backend,
       persistence_target: persistence.target,
-      multi_node_ready: false
+      multi_node_ready: enabled and HydraX.Config.repo_multi_writer?(),
+      operating_mode: HydraX.Operator.Production.operating_mode(),
+      production_blockers: HydraX.Operator.Production.production_blockers()
     }
     |> Map.put(:detail, detail(enabled, leader_pid, nodes))
   end

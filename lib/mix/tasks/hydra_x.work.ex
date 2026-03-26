@@ -80,6 +80,27 @@ defmodule Mix.Tasks.HydraX.Work do
     work_item_follow_up_lines(work_item)
     |> Enum.each(fn line -> Mix.shell().info(line) end)
 
+    if result_refs = work_item.result_refs do
+      if validation_status = result_refs["validation_status"] do
+        Mix.shell().info("validation_status=#{validation_status}")
+
+        if validation_record = result_refs["validation_record"] do
+          Mix.shell().info("validation_summary=#{validation_record["summary"]}")
+        end
+      end
+
+      if enablement = result_refs["extension_enablement_status"] do
+        Mix.shell().info("extension_enablement=#{enablement}")
+      end
+    end
+
+    if contract = get_in(work_item.metadata || %{}, ["engineering_contract"]) do
+      target_count = length(contract["target_files"] || [])
+      patch_type = get_in(contract, ["intended_patch_shape", "type"]) || "unknown"
+      checks = length(contract["required_checks"] || [])
+      Mix.shell().info("engineering_contract=targets:#{target_count} patch:#{patch_type} checks:#{checks}")
+    end
+
     Enum.each(artifacts, fn artifact ->
       Mix.shell().info(
         Enum.join(
@@ -421,11 +442,11 @@ defmodule Mix.Tasks.HydraX.Work do
         follow_up_priority_boosts(summary) |> Enum.map(&to_string/1) |> Enum.join(",")
       )
       |> maybe_prepend_follow_up_line(
-        "follow_up_alternative_strategies",
+        "follow_up_fallback_strategies",
         Enum.join(alternative_strategies, ",")
       )
       |> maybe_prepend_follow_up_line(
-        "follow_up_alternative_summaries",
+        "follow_up_fallback_summaries",
         Enum.join(alternative_summaries, ",")
       )
 
@@ -446,7 +467,7 @@ defmodule Mix.Tasks.HydraX.Work do
         alternative_summaries
         |> Enum.with_index(1)
         |> Enum.map(fn {summary, index} ->
-          "follow_up_detail\t#{work_item.id}\trecovery_alternative_#{index}\t#{summary}"
+          "follow_up_detail\t#{work_item.id}\trecovery_fallback_#{index}\t#{summary}"
         end)
       )
       |> Kernel.++(

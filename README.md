@@ -196,16 +196,44 @@ Hydra-X supports inbound and operator-controlled workflows across:
 
 Channel ingress is persisted, delivery attempts are tracked, and retries or failures are visible from the control plane.
 
-## Secrets and Production Notes
+## Production Deployment
 
-For production:
+### Operating Modes
 
-- set `HYDRA_X_SECRET_KEY`
-- prefer environment-backed secret references where possible
-- enable an operator password on `/setup`
-- review `/health` for unresolved secret posture or delivery problems
+Hydra-X operates in two modes:
 
-If you want the management UI locked down, configure the operator password and use the normal browser login flow at `/login`.
+- **Local single-node** (default): SQLite, single process. Suitable for development and small deployments.
+- **Production multi-node**: PostgreSQL, OTP clustering. Suitable for production workloads with durability and multi-node coordination.
+
+Run `mix hydra_x.deploy mode` to see the current operating mode.
+
+### Migration from Local to Production
+
+1. Configure PostgreSQL: set `DATABASE_URL` and run `mix hydra_x.migrate`
+2. Set `SECRET_KEY_BASE` (generate with `mix phx.gen.secret`)
+3. Set `HYDRA_X_SECRET_KEY` for at-rest encryption of provider keys and tokens
+4. Configure `PHX_HOST` to your production domain
+5. Set `PHX_SERVER=true` to enable the HTTP endpoint
+6. Configure an operator password via `/setup`
+7. Optionally enable clustering: set `HYDRA_CLUSTER_ENABLED=true` (requires PostgreSQL)
+8. Run `mix hydra_x.deploy check` to verify all requirements
+
+### Secrets
+
+- `HYDRA_X_SECRET_KEY`: AES-256-GCM encryption key for provider tokens, MCP auth, and channel secrets
+- Use `envref:v1:VAR_NAME` references to resolve secrets from environment variables at runtime
+- Review `/health` for unresolved secret posture or delivery problems
+
+### Operator Access
+
+Configure the operator password on `/setup` and use the login flow at `/login` to lock down the management UI.
+
+### Observability
+
+- `/health` for runtime health, readiness, and deployment posture
+- `mix hydra_x.report` for detailed runtime snapshots (markdown + JSON)
+- `mix hydra_x.deploy check` for production readiness checklist
+- Telemetry events for provider calls, tool execution, and gateway delivery
 
 ## Status
 

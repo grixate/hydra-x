@@ -282,6 +282,77 @@ defmodule HydraX.Runtime.MCPServers do
   def enable_agent_mcp_server!(id), do: set_agent_mcp_enabled!(id, true)
   def disable_agent_mcp_server!(id), do: set_agent_mcp_enabled!(id, false)
 
+  def mcp_posture(%MCPServerConfig{} = config) do
+    metadata = config.metadata || %{}
+    status = server_status(config)
+
+    rollout_state =
+      cond do
+        not config.enabled -> "disabled"
+        metadata["rollout_state"] in ["canary", "staged"] -> metadata["rollout_state"]
+        true -> "stable"
+      end
+
+    %{
+      version: metadata["version"],
+      compatibility_posture: if(status.status == :ok, do: "compatible", else: "degraded"),
+      health_posture: status.status,
+      enablement_risk: mcp_enablement_risk(config),
+      rollout_state: rollout_state,
+      last_promoted_at: metadata["last_promoted_at"]
+    }
+  end
+
+  def mcp_enablement_risk(%MCPServerConfig{} = config) do
+    cond do
+      config.transport == "http" and is_nil(config.auth_token) -> "high"
+      config.transport == "http" -> "medium"
+      true -> "low"
+    end
+  end
+
+  def promote_mcp_server!(id) do
+    config = get_mcp_server!(id)
+
+    new_metadata =
+      (config.metadata || %{})
+      |> Map.put("rollout_state", "stable")
+      |> Map.put("last_promoted_at", DateTime.utc_now() |> DateTime.to_iso8601())
+
+    {:ok, updated} =
+      config
+      |> MCPServerConfig.changeset(%{metadata: new_metadata})
+      |> Repo.update()
+
+    Helpers.audit_operator_action(
+      "Promoted MCP server #{updated.name} to stable",
+      metadata: %{"mcp_server_id" => updated.id, "rollout_state" => "stable"}
+    )
+
+    {:ok, updated}
+  end
+
+  def stage_mcp_server!(id, stage \\ "canary") when stage in ["canary", "staged"] do
+    config = get_mcp_server!(id)
+
+    new_metadata =
+      (config.metadata || %{})
+      |> Map.put("rollout_state", stage)
+      |> Map.put("staged_at", DateTime.utc_now() |> DateTime.to_iso8601())
+
+    {:ok, updated} =
+      config
+      |> MCPServerConfig.changeset(%{metadata: new_metadata})
+      |> Repo.update()
+
+    Helpers.audit_operator_action(
+      "Staged MCP server #{updated.name} as #{stage}",
+      metadata: %{"mcp_server_id" => updated.id, "rollout_state" => stage}
+    )
+
+    {:ok, updated}
+  end
+
   defp server_status(config) do
     case probe(config, []) do
       {:ok, result} ->
