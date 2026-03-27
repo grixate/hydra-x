@@ -30,10 +30,10 @@ defmodule HydraX.Simulation.Engine.Tick do
   @spec execute(String.t(), non_neg_integer(), keyword()) :: :ok | {:error, term()}
   def execute(sim_id, tick_number, opts \\ []) do
     start_time = System.monotonic_time(:microsecond)
+    # Start collector outside try so it's always cleaned up in after
+    collector = start_collector()
 
     try do
-      # Set up LLM request collector for this tick
-      collector = start_collector()
 
       # 1. Generate world events
       events = World.generate_events(sim_id)
@@ -94,10 +94,11 @@ defmodule HydraX.Simulation.Engine.Tick do
         %{sim_id: sim_id, tick: tick_number, tiers: tier_counts}
       )
 
-      stop_collector(collector)
       :ok
     rescue
       e -> {:error, {e, __STACKTRACE__}}
+    after
+      stop_collector(collector)
     end
   end
 

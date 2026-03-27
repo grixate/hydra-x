@@ -242,12 +242,13 @@ defmodule HydraX.Simulation.Agent.SimAgent do
 
     new_modifier = set_modifier(data, event, :emotional)
 
-    data = %{data |
-      pending_action: action,
-      rng_seed: new_rng,
-      modifier: new_modifier,
-      modifier_set_tick:
-        if(new_modifier != data.modifier, do: data.current_tick, else: data.modifier_set_tick)
+    data = %{
+      data
+      | pending_action: action,
+        rng_seed: new_rng,
+        modifier: new_modifier,
+        modifier_set_tick:
+          if(new_modifier != data.modifier, do: data.current_tick, else: data.modifier_set_tick)
     }
 
     {:next_state, :acting, data}
@@ -548,7 +549,15 @@ defmodule HydraX.Simulation.Agent.SimAgent do
 
     weights =
       Enum.map(options, fn option ->
-        w = Traits.compute_weight(data.persona.traits, option, data.modifier, relevance, event_source_rel)
+        w =
+          Traits.compute_weight(
+            data.persona.traits,
+            option,
+            data.modifier,
+            relevance,
+            event_source_rel
+          )
+
         {option, w}
       end)
 
@@ -710,7 +719,9 @@ defmodule HydraX.Simulation.Agent.SimAgent do
 
   defp flush_rng(data) do
     case Process.get(:sim_agent_rng) do
-      nil -> data
+      nil ->
+        data
+
       new_rng ->
         Process.delete(:sim_agent_rng)
         %{data | rng_seed: new_rng}

@@ -541,6 +541,8 @@ defmodule HydraX.Simulation.Agent.Traits do
   """
   @spec weighted_random_select([{atom(), float()}], :rand.state()) ::
           {atom(), :rand.state()}
+  def weighted_random_select([], rng_state), do: {:do_nothing, rng_state}
+
   def weighted_random_select(weighted_options, rng_state) do
     total = Enum.reduce(weighted_options, 0.0, fn {_opt, w}, acc -> acc + w end)
 

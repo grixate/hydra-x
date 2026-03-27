@@ -83,6 +83,22 @@ defmodule HydraX.Simulation.World.World do
     {:ok, state}
   end
 
+  @impl true
+  def terminate(_reason, state) do
+    # Clean up ETS tables to prevent memory leaks
+    safe_delete_table(state.entities)
+    safe_delete_table(state.relationships)
+    :ok
+  end
+
+  defp safe_delete_table(table) do
+    try do
+      :ets.delete(table)
+    rescue
+      ArgumentError -> :ok
+    end
+  end
+
   # --- Public API ---
 
   @doc "Get the current tick number."
