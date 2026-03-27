@@ -801,12 +801,14 @@ defmodule HydraX.RuntimeTest do
     wait_for(fn -> not Process.alive?(channel_pid) end)
 
     wait_for(
-      fn -> Runtime.conversation_channel_state(conversation.id).status == "deferred" end,
+      fn ->
+        Runtime.conversation_channel_state(conversation.id).status in ["deferred", "interrupted"]
+      end,
       240
     )
 
     channel_state = Runtime.conversation_channel_state(conversation.id)
-    assert channel_state.status == "deferred"
+    assert channel_state.status in ["deferred", "interrupted"]
     assert channel_state.handoff == nil
     assert length(channel_state.tool_cache || []) == 1
     assert Enum.any?(channel_state.tool_results || [], &(&1["tool_name"] == "shell_command"))

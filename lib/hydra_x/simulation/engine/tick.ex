@@ -34,7 +34,6 @@ defmodule HydraX.Simulation.Engine.Tick do
     collector = start_collector()
 
     try do
-
       # 1. Generate world events
       events = World.generate_events(sim_id)
 
