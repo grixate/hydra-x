@@ -2,12 +2,12 @@ defmodule HydraX.Repo.Migrations.AddAutonomyRuntimeFoundations do
   use Ecto.Migration
 
   def change do
-    alter table(:agent_profiles) do
+    alter table(:hx_agent_profiles) do
       add :role, :string, default: "operator", null: false
       add :capability_profile, :map, default: %{}, null: false
     end
 
-    create table(:work_items) do
+    create table(:hx_work_items) do
       add :kind, :string, null: false, default: "task"
       add :goal, :text, null: false
       add :status, :string, null: false, default: "planned"
@@ -25,21 +25,21 @@ defmodule HydraX.Repo.Migrations.AddAutonomyRuntimeFoundations do
       add :result_refs, :map, null: false, default: %{}
       add :runtime_state, :map, null: false, default: %{}
       add :metadata, :map, null: false, default: %{}
-      add :assigned_agent_id, references(:agent_profiles, on_delete: :nilify_all)
-      add :delegated_by_agent_id, references(:agent_profiles, on_delete: :nilify_all)
-      add :parent_work_item_id, references(:work_items, on_delete: :nilify_all)
+      add :assigned_agent_id, references(:hx_agent_profiles, on_delete: :nilify_all)
+      add :delegated_by_agent_id, references(:hx_agent_profiles, on_delete: :nilify_all)
+      add :parent_work_item_id, references(:hx_work_items, on_delete: :nilify_all)
 
       timestamps(type: :utc_datetime_usec)
     end
 
-    create index(:work_items, [:assigned_agent_id])
-    create index(:work_items, [:delegated_by_agent_id])
-    create index(:work_items, [:parent_work_item_id])
-    create index(:work_items, [:status])
-    create index(:work_items, [:assigned_role])
-    create index(:work_items, [:kind])
+    create index(:hx_work_items, [:assigned_agent_id])
+    create index(:hx_work_items, [:delegated_by_agent_id])
+    create index(:hx_work_items, [:parent_work_item_id])
+    create index(:hx_work_items, [:status])
+    create index(:hx_work_items, [:assigned_role])
+    create index(:hx_work_items, [:kind])
 
-    create table(:artifacts) do
+    create table(:hx_artifacts) do
       add :type, :string, null: false
       add :title, :string, null: false
       add :summary, :text
@@ -50,12 +50,12 @@ defmodule HydraX.Repo.Migrations.AddAutonomyRuntimeFoundations do
       add :confidence, :float
       add :review_status, :string, null: false, default: "draft"
       add :metadata, :map, null: false, default: %{}
-      add :work_item_id, references(:work_items, on_delete: :delete_all), null: false
+      add :work_item_id, references(:hx_work_items, on_delete: :delete_all), null: false
 
       timestamps(type: :utc_datetime_usec)
     end
 
-    create index(:artifacts, [:work_item_id])
-    create index(:artifacts, [:type])
+    create index(:hx_artifacts, [:work_item_id])
+    create index(:hx_artifacts, [:type])
   end
 end

@@ -8,6 +8,7 @@ defmodule HydraX.Agent.Channel do
   alias HydraX.Config
   alias HydraX.Gateway
   alias HydraX.LLM.Router
+  alias HydraX.Product
   alias HydraX.Repo
   alias HydraX.Runtime
   alias HydraX.Safety
@@ -285,6 +286,7 @@ defmodule HydraX.Agent.Channel do
     bulletin = HydraX.Agent.Cortex.current_bulletin(data.agent_id)
     summary = Compactor.current_summary(data.conversation.id)
     tool_policy = Runtime.effective_tool_policy(data.agent_id)
+    extra_tool_modules = Product.tool_modules(data.conversation)
 
     prompt =
       PromptBuilder.build(agent, history, bulletin, summary, %{
@@ -292,9 +294,11 @@ defmodule HydraX.Agent.Channel do
         skill_context:
           Runtime.skill_prompt_context(agent.id, %{
             channel: data.conversation.channel,
-            tool_names: Enum.map(prompt_tools(tool_policy), & &1.name)
+            tool_names: Enum.map(prompt_tools(tool_policy, data.conversation), & &1.name)
           }),
-        mcp_context: Runtime.mcp_prompt_context(agent.id)
+        mcp_context: Runtime.mcp_prompt_context(agent.id),
+        product_context: Product.prompt_context(data.conversation),
+        extra_tool_modules: extra_tool_modules
       })
 
     plan =
@@ -1136,7 +1140,12 @@ defmodule HydraX.Agent.Channel do
     end
   end
 
-  defp prompt_tools(tool_policy), do: HydraX.Tool.Registry.available_schemas(tool_policy)
+  defp prompt_tools(tool_policy, conversation) do
+    HydraX.Tool.Registry.available_schemas(
+      tool_policy,
+      extra_tools: Product.tool_modules(conversation)
+    )
+  end
 
   defp latest_turn_id([]), do: nil
   defp latest_turn_id(turns), do: turns |> List.last() |> then(&(&1 && &1.id))

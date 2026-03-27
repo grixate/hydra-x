@@ -2,7 +2,7 @@ defmodule HydraX.Runtime.Conversation do
   use Ecto.Schema
   import Ecto.Changeset
 
-  schema "conversations" do
+  schema "hx_conversations" do
     field :channel, :string, default: "cli"
     field :external_ref, :string
     field :status, :string, default: "active"
@@ -12,6 +12,7 @@ defmodule HydraX.Runtime.Conversation do
 
     belongs_to :agent, HydraX.Runtime.AgentProfile
     has_many :turns, HydraX.Runtime.Turn
+    has_many :hx_turns, HydraX.Runtime.Turn, foreign_key: :conversation_id
     has_many :checkpoints, HydraX.Runtime.Checkpoint
 
     timestamps(type: :utc_datetime_usec)

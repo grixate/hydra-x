@@ -4,7 +4,7 @@ defmodule HydraX.Runtime.MCPServerConfig do
 
   @transports ~w(stdio http)
 
-  schema "mcp_server_configs" do
+  schema "hx_mcp_server_configs" do
     field :name, :string
     field :transport, :string, default: "stdio"
     field :command, :string

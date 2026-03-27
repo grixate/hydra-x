@@ -64,7 +64,8 @@ defmodule HydraX.Report do
       agents: agent_snapshots(),
       skills: Runtime.list_skills(),
       conversations: Runtime.list_conversations(limit: filters.conversation_limit),
-      work_items: work_item_snapshots(filters.work_item_limit)
+      hx_conversations: Runtime.list_hx_conversations(limit: filters.conversation_limit),
+      hx_work_items: work_item_snapshots(filters.work_item_limit)
     }
   end
 
@@ -214,10 +215,10 @@ defmodule HydraX.Report do
     #{render_lease_owned_skips(snapshot.scheduler.lease_owned_skips)}
 
     ## Ingest
-    #{render_ingest_runs(snapshot.ingest)}
+    #{render_hx_ingest_runs(snapshot.ingest)}
 
     ## Conversations
-    #{render_conversations(snapshot.conversations)}
+    #{render_conversations(snapshot.hx_conversations)}
 
     ## Autonomous Work Items
     - active_jobs=#{snapshot.autonomy.active_autonomy_job_count} unsafe_requests=#{snapshot.autonomy.unsafe_request_count} budget_blocked=#{snapshot.autonomy.budget_blocked_count} auto_assigned=#{snapshot.autonomy.auto_assigned_count} fallback_assigned=#{snapshot.autonomy.capability_fallback_count} role_only_open=#{snapshot.autonomy.role_only_open_count} active_claimed=#{snapshot.autonomy.active_claimed_count} stale_claimed=#{snapshot.autonomy.stale_claimed_count} remote_claimed=#{snapshot.autonomy.remote_claimed_count} orphaned_assignments=#{snapshot.autonomy.orphaned_assignment_count} deferred_role_backlog=#{snapshot.autonomy.deferred_role_queue_count || 0} urgent_role_backlog=#{snapshot.autonomy.urgent_role_queue_count || 0} urgent_deferred_role_backlog=#{snapshot.autonomy.urgent_deferred_role_queue_count || 0} role_backlog=#{render_role_queue_backlog_summary(snapshot.autonomy.role_queue_backlog)} saturated_workers=#{Enum.count(snapshot.autonomy.worker_pressure, &(&1.capacity_posture == "saturated"))} delegation_batches=#{Enum.reduce(snapshot.autonomy.delegation_supervision || [], 0, &(&1.active_batches + &2))} urgent_delegation_batches=#{snapshot.autonomy.delegation_urgent_batch_count || 0} intervention_batches=#{snapshot.autonomy.delegation_intervention_batch_count || 0} operator_guided_batches=#{snapshot.autonomy.delegation_operator_guided_batch_count || 0} review_guided_batches=#{snapshot.autonomy.delegation_review_guided_batch_count || 0} request_review_batches=#{snapshot.autonomy.delegation_request_review_batch_count || 0} selected_intervention_batches=#{snapshot.autonomy.delegation_selected_intervention_batch_count || 0} active_selected_intervention_batches=#{snapshot.autonomy.delegation_active_selected_intervention_batch_count || 0} inactive_selected_intervention_batches=#{snapshot.autonomy.delegation_inactive_selected_intervention_batch_count || 0} fallback_intervention_batches=#{snapshot.autonomy.delegation_fallback_intervention_batch_count || 0} selected_intervention_portfolios=#{snapshot.autonomy.delegation_selected_intervention_portfolio_count || 0} active_selected_intervention_portfolios=#{snapshot.autonomy.delegation_active_selected_intervention_portfolio_count || 0} inactive_selected_intervention_portfolios=#{snapshot.autonomy.delegation_inactive_selected_intervention_portfolio_count || 0} fallback_intervention_portfolios=#{snapshot.autonomy.delegation_fallback_intervention_portfolio_count || 0} deescalated_portfolios=#{snapshot.autonomy.delegation_deescalated_portfolio_count || 0} deescalated_batches=#{snapshot.autonomy.delegation_deescalated_batch_count || 0} stale_follow_up_batches=#{snapshot.autonomy.delegation_stale_follow_up_batch_count || 0} deescalation_pressure=#{snapshot.autonomy.delegation_deescalation_pressure_total || 0} selected_recovery_batches=#{report_recovery_mix_or_none(snapshot.autonomy.delegation_selected_recovery_batches || %{})} fallback_recovery_batches=#{report_recovery_mix_or_none(snapshot.autonomy.delegation_alternative_recovery_batches || %{})} deescalated_recovery_batches=#{report_recovery_mix_or_none(snapshot.autonomy.delegation_deescalated_recovery_batches || %{})} high_pressure_batches=#{snapshot.autonomy.delegation_high_pressure_batch_count || 0} medium_pressure_batches=#{snapshot.autonomy.delegation_medium_pressure_batch_count || 0} repeated_deferred_batches=#{snapshot.autonomy.delegation_repeatedly_deferred_batch_count || 0} delegation_role_gaps=#{snapshot.autonomy.delegation_required_role_gap_count || 0} capability_drift=#{length(snapshot.autonomy.capability_drifts)}
@@ -233,7 +234,7 @@ defmodule HydraX.Report do
     ### Planner Quotas
     - fairness_posture=#{snapshot.autonomy.planner_fairness_posture || "balanced"}
     #{render_planner_quotas(snapshot.autonomy.planner_quotas)}
-    #{render_work_items(snapshot.work_items)}
+    #{render_hx_work_items(snapshot.hx_work_items)}
 
     ## Capability Marketplace
     #{render_capability_marketplace(snapshot.skills, snapshot.mcp)}
@@ -263,7 +264,7 @@ defmodule HydraX.Report do
     #{render_audit_events(snapshot.audit)}
 
     ### Recent Safety Events
-    #{render_safety_events(snapshot.safety.recent_events)}
+    #{render_hx_safety_events(snapshot.safety.recent_events)}
     """
     |> String.trim()
     |> Kernel.<>("\n")
@@ -383,160 +384,160 @@ defmodule HydraX.Report do
         posture_line = render_planner_posture(entries)
 
         posture_line <>
-        Enum.map_join(entries, "\n", fn entry ->
-          constrained =
-            case entry.constrained_roles || %{} do
-              constrained when constrained == %{} ->
-                nil
+          Enum.map_join(entries, "\n", fn entry ->
+            constrained =
+              case entry.constrained_roles || %{} do
+                constrained when constrained == %{} ->
+                  nil
 
-              constrained ->
-                constrained
-                |> Enum.sort_by(fn {role, _count} -> role end)
-                |> Enum.map_join(",", fn {role, count} ->
-                  pressure =
-                    get_in(entry, [:constrained_role_pressure, role]) ||
-                      get_in(entry, ["constrained_role_pressure", role]) || %{}
+                constrained ->
+                  constrained
+                  |> Enum.sort_by(fn {role, _count} -> role end)
+                  |> Enum.map_join(",", fn {role, count} ->
+                    pressure =
+                      get_in(entry, [:constrained_role_pressure, role]) ||
+                        get_in(entry, ["constrained_role_pressure", role]) || %{}
 
-                  "#{role}:#{count}" <> report_constraint_pressure_suffix(pressure)
-                end)
-                |> then(&" constrained=#{&1}")
-            end
+                    "#{role}:#{count}" <> report_constraint_pressure_suffix(pressure)
+                  end)
+                  |> then(&" constrained=#{&1}")
+              end
 
-          required_roles =
-            case entry.missing_required_roles || %{} do
-              requirements when requirements == %{} ->
-                nil
+            required_roles =
+              case entry.missing_required_roles || %{} do
+                requirements when requirements == %{} ->
+                  nil
 
-              requirements ->
-                " required_roles=#{report_delegation_role_requirements(requirements)}"
-            end
+                requirements ->
+                  " required_roles=#{report_delegation_role_requirements(requirements)}"
+              end
 
-          recovery_mix =
-            case entry.recovery_mix || %{} do
-              mix when mix == %{} ->
-                nil
+            recovery_mix =
+              case entry.recovery_mix || %{} do
+                mix when mix == %{} ->
+                  nil
 
-              mix ->
-                " recovery_mix=#{report_recovery_mix(mix)}"
-            end
+                mix ->
+                  " recovery_mix=#{report_recovery_mix(mix)}"
+              end
 
-          selected_recovery_mix =
-            case entry.selected_recovery_mix || %{} do
-              mix when mix == %{} ->
-                nil
+            selected_recovery_mix =
+              case entry.selected_recovery_mix || %{} do
+                mix when mix == %{} ->
+                  nil
 
-              mix ->
-                " selected_recovery_mix=#{report_recovery_mix(mix)}"
-            end
+                mix ->
+                  " selected_recovery_mix=#{report_recovery_mix(mix)}"
+              end
 
-          active_selected_recovery_mix =
-            case entry.active_selected_recovery_mix || %{} do
-              mix when mix == %{} ->
-                nil
+            active_selected_recovery_mix =
+              case entry.active_selected_recovery_mix || %{} do
+                mix when mix == %{} ->
+                  nil
 
-              mix ->
-                " active_selected_recovery_mix=#{report_recovery_mix(mix)}"
-            end
+                mix ->
+                  " active_selected_recovery_mix=#{report_recovery_mix(mix)}"
+              end
 
-          inactive_selected_recovery_mix =
-            case entry.inactive_selected_recovery_mix || %{} do
-              mix when mix == %{} ->
-                nil
+            inactive_selected_recovery_mix =
+              case entry.inactive_selected_recovery_mix || %{} do
+                mix when mix == %{} ->
+                  nil
 
-              mix ->
-                " inactive_selected_recovery_mix=#{report_recovery_mix(mix)}"
-            end
+                mix ->
+                  " inactive_selected_recovery_mix=#{report_recovery_mix(mix)}"
+              end
 
-          fallback_recovery_mix =
-            case entry.alternative_recovery_mix || %{} do
-              mix when mix == %{} ->
-                nil
+            fallback_recovery_mix =
+              case entry.alternative_recovery_mix || %{} do
+                mix when mix == %{} ->
+                  nil
 
-              mix ->
-                " fallback_recovery_mix=#{report_recovery_mix(mix)}"
-            end
+                mix ->
+                  " fallback_recovery_mix=#{report_recovery_mix(mix)}"
+              end
 
-          deescalated_recovery_mix =
-            case entry.deescalated_recovery_mix || %{} do
-              mix when mix == %{} ->
-                nil
+            deescalated_recovery_mix =
+              case entry.deescalated_recovery_mix || %{} do
+                mix when mix == %{} ->
+                  nil
 
-              mix ->
-                " deescalated_recovery_mix=#{report_recovery_mix(mix)}"
-            end
+                mix ->
+                  " deescalated_recovery_mix=#{report_recovery_mix(mix)}"
+              end
 
-          dominant_recovery =
-            case {entry.dominant_recovery_strategy, entry.dominant_recovery_count} do
-              {strategy, count} when is_binary(strategy) and strategy != "" and count > 0 ->
-                " dominant_recovery=#{humanize_follow_up_strategy(strategy)}:#{count}"
+            dominant_recovery =
+              case {entry.dominant_recovery_strategy, entry.dominant_recovery_count} do
+                {strategy, count} when is_binary(strategy) and strategy != "" and count > 0 ->
+                  " dominant_recovery=#{humanize_follow_up_strategy(strategy)}:#{count}"
 
-              _ ->
-                nil
-            end
+                _ ->
+                  nil
+              end
 
-          deescalation =
-            if (entry.deescalated_batches || 0) > 0 do
-              " deescalated=#{entry.deescalated_batches}:pressure=#{entry.deescalation_pressure_total || 0}"
-            end
+            deescalation =
+              if (entry.deescalated_batches || 0) > 0 do
+                " deescalated=#{entry.deescalated_batches}:pressure=#{entry.deescalation_pressure_total || 0}"
+              end
 
-          intervention =
-            cond do
-              (entry.active_selected_intervention_batches || 0) > 0 ->
-                " intervention=selected-active-heavy"
+            intervention =
+              cond do
+                (entry.active_selected_intervention_batches || 0) > 0 ->
+                  " intervention=selected-active-heavy"
 
-              (entry.inactive_selected_intervention_batches || 0) > 0 ->
-                " intervention=selected-stale-heavy"
+                (entry.inactive_selected_intervention_batches || 0) > 0 ->
+                  " intervention=selected-stale-heavy"
 
-              (entry.selected_intervention_batches || 0) > 0 ->
-                " intervention=selected-heavy"
+                (entry.selected_intervention_batches || 0) > 0 ->
+                  " intervention=selected-heavy"
 
-              (entry.fallback_intervention_batches || 0) > 0 ->
-                " intervention=fallback-heavy"
+                (entry.fallback_intervention_batches || 0) > 0 ->
+                  " intervention=fallback-heavy"
 
-              true ->
-                nil
-            end
+                true ->
+                  nil
+              end
 
-          "- #{entry.agent_name || entry.role || "planner"}: batches=#{entry.active_batches} pending=#{entry.pending_children} active=#{entry.active_children} terminal=#{entry.terminal_children} priority=#{entry.highest_priority}#{constrained || ""}" <>
-            if((entry.urgent_batches || 0) > 0,
-              do: " urgent=#{entry.urgent_batches}",
-              else: ""
-            ) <>
-            (intervention || "") <>
-            (deescalation || "") <>
-            (dominant_recovery || "") <>
-            (selected_recovery_mix || "") <>
-            (active_selected_recovery_mix || "") <>
-            (inactive_selected_recovery_mix || "") <>
-            (fallback_recovery_mix || "") <>
-            (deescalated_recovery_mix || "") <>
-            (recovery_mix || "") <>
-            (required_roles || "") <>
-            report_delegation_pressure_batches(entry) <>
-            report_delegation_deferral_batches(entry) <>
-            if((entry.deferred_batches || 0) > 0,
-              do: " deferred=#{entry.deferred_batches}",
-              else: ""
-            ) <>
-            if(is_integer(entry.supervision_budget),
-              do: " budget=#{entry.supervision_budget}",
-              else: ""
-            ) <>
-            if(
-              is_integer(entry.supervision_budget_remaining),
-              do: " remaining=#{entry.supervision_budget_remaining}",
-              else: ""
-            ) <>
-            if(is_integer(entry.supervision_batch_budget),
-              do: " batch_budget=#{entry.supervision_batch_budget}",
-              else: ""
-            ) <>
-            if(
-              is_integer(entry.supervision_batch_budget_remaining),
-              do: " batch_remaining=#{entry.supervision_batch_budget_remaining}",
-              else: ""
-            )
-        end)
+            "- #{entry.agent_name || entry.role || "planner"}: batches=#{entry.active_batches} pending=#{entry.pending_children} active=#{entry.active_children} terminal=#{entry.terminal_children} priority=#{entry.highest_priority}#{constrained || ""}" <>
+              if((entry.urgent_batches || 0) > 0,
+                do: " urgent=#{entry.urgent_batches}",
+                else: ""
+              ) <>
+              (intervention || "") <>
+              (deescalation || "") <>
+              (dominant_recovery || "") <>
+              (selected_recovery_mix || "") <>
+              (active_selected_recovery_mix || "") <>
+              (inactive_selected_recovery_mix || "") <>
+              (fallback_recovery_mix || "") <>
+              (deescalated_recovery_mix || "") <>
+              (recovery_mix || "") <>
+              (required_roles || "") <>
+              report_delegation_pressure_batches(entry) <>
+              report_delegation_deferral_batches(entry) <>
+              if((entry.deferred_batches || 0) > 0,
+                do: " deferred=#{entry.deferred_batches}",
+                else: ""
+              ) <>
+              if(is_integer(entry.supervision_budget),
+                do: " budget=#{entry.supervision_budget}",
+                else: ""
+              ) <>
+              if(
+                is_integer(entry.supervision_budget_remaining),
+                do: " remaining=#{entry.supervision_budget_remaining}",
+                else: ""
+              ) <>
+              if(is_integer(entry.supervision_batch_budget),
+                do: " batch_budget=#{entry.supervision_batch_budget}",
+                else: ""
+              ) <>
+              if(
+                is_integer(entry.supervision_batch_budget_remaining),
+                do: " batch_remaining=#{entry.supervision_batch_budget_remaining}",
+                else: ""
+              )
+          end)
     end
   end
 
@@ -1026,9 +1027,9 @@ defmodule HydraX.Report do
     end)
   end
 
-  defp render_ingest_runs([]), do: "- none"
+  defp render_hx_ingest_runs([]), do: "- none"
 
-  defp render_ingest_runs(runs) do
+  defp render_hx_ingest_runs(runs) do
     Enum.map_join(runs, "\n", fn run ->
       "- #{run.source_file} [#{run.status}] created=#{run.created_count} skipped=#{run.skipped_count} archived=#{run.archived_count} at=#{format_datetime(run.inserted_at)}"
     end)
@@ -1046,10 +1047,10 @@ defmodule HydraX.Report do
     end)
   end
 
-  defp render_work_items([]), do: "- none"
+  defp render_hx_work_items([]), do: "- none"
 
-  defp render_work_items(work_items) do
-    Enum.map_join(work_items, "\n", fn item ->
+  defp render_hx_work_items(hx_work_items) do
+    Enum.map_join(hx_work_items, "\n", fn item ->
       artifacts =
         item.artifacts
         |> Enum.map(fn artifact ->
@@ -1949,9 +1950,9 @@ defmodule HydraX.Report do
   defp transport_semantics_label("transport error"), do: "stream transport error"
   defp transport_semantics_label(_value), do: nil
 
-  defp render_safety_events([]), do: "- none"
+  defp render_hx_safety_events([]), do: "- none"
 
-  defp render_safety_events(events) do
+  defp render_hx_safety_events(events) do
     Enum.map_join(events, "\n", fn event ->
       "- [#{String.upcase(event.level)}] #{event.category}/#{event.status}: #{event.message}"
     end)
@@ -2206,7 +2207,8 @@ defmodule HydraX.Report do
         worker_pressure: snapshot.autonomy.worker_pressure,
         delegation_supervision: snapshot.autonomy.delegation_supervision,
         planner_quotas: Map.get(snapshot.autonomy, :planner_quotas, []),
-        planner_fairness_posture: Map.get(snapshot.autonomy, :planner_fairness_posture, "balanced"),
+        planner_fairness_posture:
+          Map.get(snapshot.autonomy, :planner_fairness_posture, "balanced"),
         capability_drifts: snapshot.autonomy.capability_drifts
       },
       default_agent: %{
@@ -2224,8 +2226,9 @@ defmodule HydraX.Report do
       },
       agents: Enum.map(snapshot.agents, &json_agent_snapshot/1),
       skills: Enum.map(snapshot.skills, &json_skill/1),
-      conversations: Enum.map(snapshot.conversations, &json_conversation/1),
-      work_items: Enum.map(snapshot.work_items, &json_work_item/1)
+      conversations: Enum.map(snapshot.hx_conversations, &json_conversation/1),
+      hx_conversations: Enum.map(snapshot.hx_conversations, &json_conversation/1),
+      hx_work_items: Enum.map(snapshot.hx_work_items, &json_work_item/1)
     }
   end
 
@@ -2346,14 +2349,21 @@ defmodule HydraX.Report do
 
     File.write!(
       Path.join(bundle_dir, "conversations.json"),
-      Jason.encode_to_iodata!(Enum.map(snapshot.conversations, &json_conversation/1),
+      Jason.encode_to_iodata!(Enum.map(snapshot.hx_conversations, &json_conversation/1),
         pretty: true
       )
     )
 
     File.write!(
-      Path.join(bundle_dir, "work_items.json"),
-      Jason.encode_to_iodata!(Enum.map(snapshot.work_items, &json_work_item/1), pretty: true)
+      Path.join(bundle_dir, "hx_conversations.json"),
+      Jason.encode_to_iodata!(Enum.map(snapshot.hx_conversations, &json_conversation/1),
+        pretty: true
+      )
+    )
+
+    File.write!(
+      Path.join(bundle_dir, "hx_work_items.json"),
+      Jason.encode_to_iodata!(Enum.map(snapshot.hx_work_items, &json_work_item/1), pretty: true)
     )
 
     File.write!(
@@ -2389,7 +2399,7 @@ defmodule HydraX.Report do
     }
   end
 
-  defp json_budget(%{policy: nil} = budget), do: Map.put(budget, :safety_events, [])
+  defp json_budget(%{policy: nil} = budget), do: Map.put(budget, :hx_safety_events, [])
 
   defp json_budget(budget) do
     %{
@@ -2418,7 +2428,7 @@ defmodule HydraX.Report do
             metadata: usage.metadata
           }
         end),
-      safety_events: Enum.map(budget.safety_events, &json_safety_event/1)
+      hx_safety_events: Enum.map(budget.hx_safety_events, &json_safety_event/1)
     }
   end
 

@@ -5,7 +5,7 @@ defmodule HydraX.Safety.Event do
   @levels ~w(info warn error)
   @statuses ~w(open acknowledged resolved)
 
-  schema "safety_events" do
+  schema "hx_safety_events" do
     field :category, :string
     field :level, :string
     field :message, :string

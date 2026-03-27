@@ -4,7 +4,7 @@ defmodule HydraX.Memory.Edge do
 
   @kinds ~w(relates_to contradicts supersedes supports part_of)
 
-  schema "memory_edges" do
+  schema "hx_memory_edges" do
     field :kind, :string
     field :weight, :float, default: 1.0
     field :metadata, :map, default: %{}

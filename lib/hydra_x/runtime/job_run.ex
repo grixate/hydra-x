@@ -4,7 +4,7 @@ defmodule HydraX.Runtime.JobRun do
 
   @statuses ~w(running success error timeout skipped)
 
-  schema "job_runs" do
+  schema "hx_job_runs" do
     field :status, :string, default: "running"
     field :started_at, :utc_datetime_usec
     field :finished_at, :utc_datetime_usec

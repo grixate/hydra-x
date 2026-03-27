@@ -9,7 +9,7 @@ defmodule HydraX.Runtime.WorkItem do
   @execution_modes ~w(execute delegate review promote)
   @approval_stages ~w(draft proposal_only patch_ready validated operator_approved merge_ready)
 
-  schema "work_items" do
+  schema "hx_work_items" do
     field :kind, :string, default: "task"
     field :goal, :string
     field :status, :string, default: "planned"

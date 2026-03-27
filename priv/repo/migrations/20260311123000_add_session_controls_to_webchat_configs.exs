@@ -2,7 +2,7 @@ defmodule HydraX.Repo.Migrations.AddSessionControlsToWebchatConfigs do
   use Ecto.Migration
 
   def change do
-    alter table(:webchat_configs) do
+    alter table(:hx_webchat_configs) do
       add :allow_anonymous_messages, :boolean, default: true, null: false
       add :session_max_age_minutes, :integer, default: 24 * 60, null: false
       add :session_idle_timeout_minutes, :integer, default: 120, null: false

@@ -194,12 +194,12 @@ defmodule HydraX.Ingest.Pipeline do
   def list_ingested_files(agent_id) do
     HydraX.Memory.Entry
     |> where([e], e.agent_id == ^agent_id and e.status == "active")
-    |> where([e], fragment("json_extract(?, '$.source')", e.metadata) == "ingest")
+    |> where([e], fragment("?->>'source' = 'ingest'", e.metadata))
     |> select(
       [e],
-      {fragment("json_extract(?, '$.source_file')", e.metadata), count(e.id)}
+      {fragment("?->>'source_file'", e.metadata), count(e.id)}
     )
-    |> group_by([e], fragment("json_extract(?, '$.source_file')", e.metadata))
+    |> group_by([e], fragment("?->>'source_file'", e.metadata))
     |> HydraX.Repo.all()
     |> Enum.map(fn {file, count} -> %{file: file, entries: count} end)
   end
@@ -243,9 +243,9 @@ defmodule HydraX.Ingest.Pipeline do
   defp existing_hashes(agent_id, filename) do
     HydraX.Memory.Entry
     |> where([e], e.agent_id == ^agent_id and e.status == "active")
-    |> where([e], fragment("json_extract(?, '$.source')", e.metadata) == "ingest")
-    |> where([e], fragment("json_extract(?, '$.source_file')", e.metadata) == ^filename)
-    |> select([e], fragment("json_extract(?, '$.content_hash')", e.metadata))
+    |> where([e], fragment("?->>'source' = 'ingest'", e.metadata))
+    |> where([e], fragment("?->>'source_file' = ?", e.metadata, ^filename))
+    |> select([e], fragment("?->>'content_hash'", e.metadata))
     |> HydraX.Repo.all()
     |> MapSet.new()
   end
@@ -253,9 +253,9 @@ defmodule HydraX.Ingest.Pipeline do
   defp archived_entry(agent_id, filename, hash) do
     HydraX.Memory.Entry
     |> where([e], e.agent_id == ^agent_id and e.status == "archived")
-    |> where([e], fragment("json_extract(?, '$.source')", e.metadata) == "ingest")
-    |> where([e], fragment("json_extract(?, '$.source_file')", e.metadata) == ^filename)
-    |> where([e], fragment("json_extract(?, '$.content_hash')", e.metadata) == ^hash)
+    |> where([e], fragment("?->>'source' = 'ingest'", e.metadata))
+    |> where([e], fragment("?->>'source_file' = ?", e.metadata, ^filename))
+    |> where([e], fragment("?->>'content_hash' = ?", e.metadata, ^hash))
     |> order_by([e], desc: e.updated_at)
     |> limit(1)
     |> HydraX.Repo.one()
@@ -265,7 +265,7 @@ defmodule HydraX.Ingest.Pipeline do
     %{
       agent_id: agent_id,
       type: @entry_type,
-      status: "candidate",
+      status: "active",
       content: chunk.content,
       importance: @default_importance,
       metadata: memory_metadata(file_path, document_hash, chunk)
@@ -301,12 +301,9 @@ defmodule HydraX.Ingest.Pipeline do
       {count, _} =
         HydraX.Memory.Entry
         |> where([e], e.agent_id == ^agent_id and e.status == "active")
-        |> where([e], fragment("json_extract(?, '$.source')", e.metadata) == "ingest")
-        |> where([e], fragment("json_extract(?, '$.source_file')", e.metadata) == ^filename)
-        |> where(
-          [e],
-          fragment("json_extract(?, '$.content_hash')", e.metadata) in ^stale_list
-        )
+        |> where([e], fragment("?->>'source' = 'ingest'", e.metadata))
+        |> where([e], fragment("?->>'source_file' = ?", e.metadata, ^filename))
+        |> where([e], fragment("?->>'content_hash'", e.metadata) in ^stale_list)
         |> HydraX.Repo.update_all(set: [status: "archived"])
 
       count
@@ -319,8 +316,8 @@ defmodule HydraX.Ingest.Pipeline do
     {count, _} =
       HydraX.Memory.Entry
       |> where([e], e.agent_id == ^agent_id and e.status == "active")
-      |> where([e], fragment("json_extract(?, '$.source')", e.metadata) == "ingest")
-      |> where([e], fragment("json_extract(?, '$.source_file')", e.metadata) == ^filename)
+      |> where([e], fragment("?->>'source' = 'ingest'", e.metadata))
+      |> where([e], fragment("?->>'source_file' = ?", e.metadata, ^filename))
       |> HydraX.Repo.update_all(set: [status: "archived"])
 
     count

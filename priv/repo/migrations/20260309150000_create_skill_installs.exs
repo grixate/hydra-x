@@ -2,8 +2,8 @@ defmodule HydraX.Repo.Migrations.CreateSkillInstalls do
   use Ecto.Migration
 
   def change do
-    create table(:skill_installs) do
-      add :agent_id, references(:agent_profiles, on_delete: :delete_all), null: false
+    create table(:hx_skill_installs) do
+      add :agent_id, references(:hx_agent_profiles, on_delete: :delete_all), null: false
       add :slug, :string, null: false
       add :name, :string, null: false
       add :path, :string, null: false
@@ -15,7 +15,7 @@ defmodule HydraX.Repo.Migrations.CreateSkillInstalls do
       timestamps(type: :utc_datetime_usec)
     end
 
-    create unique_index(:skill_installs, [:agent_id, :slug])
-    create index(:skill_installs, [:agent_id, :enabled])
+    create unique_index(:hx_skill_installs, [:agent_id, :slug])
+    create index(:hx_skill_installs, [:agent_id, :enabled])
   end
 end

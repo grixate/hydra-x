@@ -2,7 +2,7 @@ defmodule HydraX.Runtime.WebchatConfig do
   use Ecto.Schema
   import Ecto.Changeset
 
-  schema "webchat_configs" do
+  schema "hx_webchat_configs" do
     field :title, :string, default: "Hydra-X Webchat"
     field :subtitle, :string, default: "A public channel into the operator runtime."
     field :welcome_prompt, :string

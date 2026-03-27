@@ -7,22 +7,24 @@ defmodule HydraX.Config do
 
   @spec repo_adapter() :: module()
   def repo_adapter do
-    Application.get_env(:hydra_x, :repo_adapter, Ecto.Adapters.SQLite3)
+    Application.get_env(:hydra_x, :repo_adapter, HydraX.Repo.__adapter__())
   end
 
   @spec repo_backend() :: String.t()
   def repo_backend do
-    case repo_adapter() do
-      Ecto.Adapters.Postgres -> "postgres"
-      _ -> "sqlite"
-    end
+    Application.get_env(:hydra_x, :repo_backend) ||
+      case repo_adapter() do
+        Ecto.Adapters.Postgres -> "postgres"
+        Ecto.Adapters.SQLite3 -> "sqlite"
+        adapter -> adapter |> Module.split() |> List.last() |> Macro.underscore()
+      end
   end
 
   @spec repo_sqlite?() :: boolean()
-  def repo_sqlite?, do: repo_backend() == "sqlite"
+  def repo_sqlite?, do: repo_adapter() == Ecto.Adapters.SQLite3
 
   @spec repo_postgres?() :: boolean()
-  def repo_postgres?, do: repo_backend() == "postgres"
+  def repo_postgres?, do: repo_adapter() == Ecto.Adapters.Postgres
 
   @spec repo_multi_writer?() :: boolean()
   def repo_multi_writer?, do: repo_postgres?()

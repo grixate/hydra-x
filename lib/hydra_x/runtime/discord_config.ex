@@ -2,7 +2,7 @@ defmodule HydraX.Runtime.DiscordConfig do
   use Ecto.Schema
   import Ecto.Changeset
 
-  schema "discord_configs" do
+  schema "hx_discord_configs" do
     field :bot_token, :string
     field :application_id, :string
     field :webhook_secret, :string

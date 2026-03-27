@@ -151,7 +151,7 @@ defmodule HydraX.Tools.ToolSafetyTest do
     refute_received :request_attempted
   end
 
-  test "web search returns parsed search results through the dedicated endpoint" do
+  test "web search rehx_turns parsed search results through the dedicated endpoint" do
     request_fn = fn _opts ->
       {:ok,
        %{

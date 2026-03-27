@@ -30,6 +30,21 @@ defmodule HydraX.Ingest.Parser do
     end
   end
 
+  @doc """
+  Parse already-loaded content using a supported extension or format name.
+  """
+  def parse_content(format, content, path \\ "inline.txt")
+
+  def parse_content(format, content, path) when is_binary(content) do
+    ext = normalize_format(format)
+
+    if ext in @supported_extensions do
+      {:ok, do_parse(ext, content, path)}
+    else
+      {:error, {:unsupported_format, format}}
+    end
+  end
+
   # -- Markdown: split by ## headings --
 
   defp do_parse(".md", content, path) do
@@ -160,6 +175,19 @@ defmodule HydraX.Ingest.Parser do
 
   defp read_content(".pdf", path), do: read_pdf_text(path)
   defp read_content(_ext, path), do: File.read(path)
+
+  defp normalize_format(".md"), do: ".md"
+  defp normalize_format("md"), do: ".md"
+  defp normalize_format("markdown"), do: ".md"
+  defp normalize_format(".txt"), do: ".txt"
+  defp normalize_format("txt"), do: ".txt"
+  defp normalize_format("text"), do: ".txt"
+  defp normalize_format(".json"), do: ".json"
+  defp normalize_format("json"), do: ".json"
+  defp normalize_format(".pdf"), do: ".pdf"
+  defp normalize_format("pdf"), do: ".pdf"
+  defp normalize_format(value) when is_binary(value), do: String.downcase(value)
+  defp normalize_format(value), do: to_string(value)
 
   defp read_pdf_text(path) do
     case Application.get_env(:hydra_x, :pdf_text_extractor) do

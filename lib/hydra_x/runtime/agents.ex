@@ -505,7 +505,7 @@ defmodule HydraX.Runtime.Agents do
   defp retry_busy_transaction(fun, attempts) when attempts > 1 do
     fun.()
   rescue
-    error in Exqlite.Error ->
+    error ->
       if String.contains?(Exception.message(error), "Database busy") do
         Process.sleep((7 - attempts) * 40)
         retry_busy_transaction(fun, attempts - 1)

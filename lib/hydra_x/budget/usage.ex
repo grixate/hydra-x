@@ -2,7 +2,7 @@ defmodule HydraX.Budget.Usage do
   use Ecto.Schema
   import Ecto.Changeset
 
-  schema "budget_usages" do
+  schema "hx_budget_usages" do
     field :scope, :string
     field :tokens_in, :integer, default: 0
     field :tokens_out, :integer, default: 0

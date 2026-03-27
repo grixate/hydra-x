@@ -2,7 +2,7 @@ defmodule HydraX.Runtime.TelegramConfig do
   use Ecto.Schema
   import Ecto.Changeset
 
-  schema "telegram_configs" do
+  schema "hx_telegram_configs" do
     field :bot_token, :string
     field :bot_username, :string
     field :webhook_secret, :string

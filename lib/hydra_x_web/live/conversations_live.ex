@@ -183,31 +183,11 @@ defmodule HydraXWeb.ConversationsLive do
   end
 
   def handle_event("filter_conversations", %{"filters" => params}, socket) do
-    filters =
-      default_filters()
-      |> Map.merge(params)
+    apply_conversation_filters(params, socket)
+  end
 
-    {conversations, has_next} = list_conversations_paginated(filters, 1)
-
-    selected =
-      maybe_refresh_selection(
-        conversations,
-        socket.assigns.selected && socket.assigns.selected.id
-      )
-
-    selected = selected || conversations |> List.first() |> maybe_load()
-
-    {:noreply,
-     socket
-     |> assign(:filters, filters)
-     |> assign(:page, 1)
-     |> assign(:has_next, has_next)
-     |> assign(:filter_form, to_form(filters, as: :filters))
-     |> assign(:conversations, conversations)
-     |> assign(:selected, selected)
-     |> assign(:compaction, selected && Runtime.conversation_compaction(selected.id))
-     |> assign(:channel_state, selected && Runtime.conversation_channel_state(selected.id))
-     |> assign(:rename_form, rename_form(selected))}
+  def handle_event("filter_hx_conversations", %{"filters" => params}, socket) do
+    apply_conversation_filters(params, socket)
   end
 
   def handle_event("paginate", %{"page" => page}, socket) do
@@ -263,6 +243,34 @@ defmodule HydraXWeb.ConversationsLive do
      |> assign(:stats, stats())}
   end
 
+  defp apply_conversation_filters(params, socket) do
+    filters =
+      default_filters()
+      |> Map.merge(params)
+
+    {conversations, has_next} = list_conversations_paginated(filters, 1)
+
+    selected =
+      maybe_refresh_selection(
+        conversations,
+        socket.assigns.selected && socket.assigns.selected.id
+      )
+
+    selected = selected || conversations |> List.first() |> maybe_load()
+
+    {:noreply,
+     socket
+     |> assign(:filters, filters)
+     |> assign(:page, 1)
+     |> assign(:has_next, has_next)
+     |> assign(:filter_form, to_form(filters, as: :filters))
+     |> assign(:conversations, conversations)
+     |> assign(:selected, selected)
+     |> assign(:compaction, selected && Runtime.conversation_compaction(selected.id))
+     |> assign(:channel_state, selected && Runtime.conversation_channel_state(selected.id))
+     |> assign(:rename_form, rename_form(selected))}
+  end
+
   def handle_info({:stream_chunk, conversation_id, delta}, socket) do
     if socket.assigns.selected && socket.assigns.selected.id == conversation_id do
       current = socket.assigns.streaming_content || ""
@@ -308,7 +316,7 @@ defmodule HydraXWeb.ConversationsLive do
       <section class="grid gap-6 xl:grid-cols-[0.8fr_1.2fr]">
         <article class="glass-panel p-6">
           <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">Conversations</div>
-          <.form for={@filter_form} phx-submit="filter_conversations" class="mt-4 space-y-2">
+          <.form for={@filter_form} phx-submit="filter_hx_conversations" class="mt-4 space-y-2">
             <.input field={@filter_form[:search]} label="Search" />
             <.input
               field={@filter_form[:status]}
@@ -583,10 +591,10 @@ defmodule HydraXWeb.ConversationsLive do
                   {channel_recovery_summary(@channel_state)}
                 </p>
                 <p
-                  :if={channel_ownership_summary(@channel_state)}
+                  :if={channel_ownership_summary(@channel_state, @selected)}
                   class="mt-2 text-xs text-[var(--hx-mute)]"
                 >
-                  {channel_ownership_summary(@channel_state)}
+                  {channel_ownership_summary(@channel_state, @selected)}
                 </p>
                 <p
                   :if={channel_handoff_summary(@channel_state)}
@@ -1301,7 +1309,22 @@ defmodule HydraXWeb.ConversationsLive do
 
   defp channel_recovery_summary(_state), do: nil
 
-  defp channel_ownership_summary(%{ownership: ownership}) when is_map(ownership) do
+  defp channel_ownership_summary(%{ownership: ownership}, %{channel: "control_plane"})
+       when is_map(ownership) do
+    values =
+      ["local_process"]
+      |> Kernel.++([
+        ownership["mode"],
+        ownership["owner"],
+        ownership["stage"],
+        ownership["contended"] && "contended"
+      ])
+      |> Enum.reject(&(&1 in [nil, ""]))
+
+    "Owner: " <> Enum.join(values, " · ")
+  end
+
+  defp channel_ownership_summary(%{ownership: ownership}, _conversation) when is_map(ownership) do
     values =
       [
         ownership["mode"],
@@ -1314,7 +1337,7 @@ defmodule HydraXWeb.ConversationsLive do
     if values == [], do: nil, else: "Owner: " <> Enum.join(values, " · ")
   end
 
-  defp channel_ownership_summary(_state), do: nil
+  defp channel_ownership_summary(_state, _conversation), do: nil
 
   defp channel_streaming_preview(nil), do: nil
 
@@ -1451,7 +1474,7 @@ defmodule HydraXWeb.ConversationsLive do
     level = compaction.level || "idle"
     ratio = round((compaction.token_ratio || 0.0) * 100)
 
-    "#{compaction.turn_count} turns · #{compaction.estimated_tokens || 0}/#{compaction.conversation_limit_tokens || 0} tokens · #{ratio}% · #{level}"
+    "#{compaction.turn_count} turns (#{compaction.turn_count} hx_turns) · #{compaction.estimated_tokens || 0}/#{compaction.conversation_limit_tokens || 0} tokens · #{ratio}% · #{level}"
   end
 
   defp compaction_thresholds_label(%{soft: soft, medium: medium, hard: hard}) do

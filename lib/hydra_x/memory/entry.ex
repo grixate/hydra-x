@@ -5,11 +5,12 @@ defmodule HydraX.Memory.Entry do
   @types ~w(Fact Preference Decision Identity Event Observation Goal Todo)
   @statuses ~w(scratch candidate active durable conflicted superseded merged archived)
 
-  schema "memory_entries" do
+  schema "hx_memory_entries" do
     field :type, :string
     field :status, :string, default: "active"
     field :content, :string
     field :importance, :float, default: 0.5
+    field :embedding, Pgvector.Ecto.Vector
     field :metadata, :map, default: %{}
     field :last_seen_at, :utc_datetime_usec
 
@@ -28,6 +29,7 @@ defmodule HydraX.Memory.Entry do
       :status,
       :content,
       :importance,
+      :embedding,
       :metadata,
       :last_seen_at
     ])

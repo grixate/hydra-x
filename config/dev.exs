@@ -2,8 +2,13 @@ import Config
 
 # Configure your database
 config :hydra_x, HydraX.Repo,
-  database: Path.expand("../hydra_x_dev.db", __DIR__),
+  url:
+    System.get_env(
+      "DATABASE_URL",
+      "ecto://#{System.get_env("PGUSER") || System.get_env("USER") || "postgres"}@localhost/hydra_x_dev"
+    ),
   pool_size: 5,
+  types: HydraX.PostgresTypes,
   stacktrace: true,
   show_sensitive_data_on_connection_error: true
 

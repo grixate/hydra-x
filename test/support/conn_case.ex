@@ -92,7 +92,7 @@ defmodule HydraXWeb.ConnCase do
   defp retry_on_busy(fun, attempts) do
     fun.()
   rescue
-    error in Exqlite.Error ->
+    error ->
       if attempts > 1 and String.contains?(Exception.message(error), "Database busy") do
         Process.sleep((11 - attempts) * 25)
         retry_on_busy(fun, attempts - 1)

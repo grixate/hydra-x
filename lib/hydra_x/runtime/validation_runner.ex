@@ -21,8 +21,7 @@ defmodule HydraX.Runtime.ValidationRunner do
             {results_acc ++ [result], skipped_acc}
 
           {:skip, reason} ->
-            {results_acc,
-             skipped_acc ++ [%{"command" => command, "reason" => reason}]}
+            {results_acc, skipped_acc ++ [%{"command" => command, "reason" => reason}]}
         end
       end)
 
@@ -98,7 +97,10 @@ defmodule HydraX.Runtime.ValidationRunner do
 
         true ->
           skipped_note = if skipped != [], do: "; #{length(skipped)} skipped", else: ""
-          scope_note = if changed_files != [], do: "; #{length(changed_files)} files in scope", else: ""
+
+          scope_note =
+            if changed_files != [], do: "; #{length(changed_files)} files in scope", else: ""
+
           "#{passed}/#{total} checks passed#{skipped_note}#{scope_note}"
       end
 

@@ -539,6 +539,7 @@ defmodule HydraX.Runtime.WorkItems do
       Enum.count(deferred_batches, fn work_item ->
         snapshot = delegation_batch_snapshot(work_item)
         deferred_until = snapshot["expansion_deferred_until"]
+
         is_binary(deferred_until) and
           deferred_cooldown_active?(deferred_until, now)
       end)
@@ -569,7 +570,7 @@ defmodule HydraX.Runtime.WorkItems do
     limit = Keyword.get(opts, :limit, 50)
 
     summary =
-      list_stale_claimed_work_items(limit: limit)
+      list_stale_claimed_hx_work_items(limit: limit)
       |> Enum.reduce(stale_claim_cleanup_summary(owner), fn work_item, acc ->
         refreshed = get_work_item!(work_item.id)
 
@@ -699,7 +700,7 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   def autonomy_status do
-    all_work_items = list_work_items(limit: 500, preload: false)
+    all_hx_work_items = list_work_items(limit: 500, preload: false)
 
     counts =
       WorkItem
@@ -766,36 +767,36 @@ defmodule HydraX.Runtime.WorkItems do
 
     unsafe_request_count =
       Enum.count(
-        all_work_items,
+        all_hx_work_items,
         &(not is_nil(get_in(&1.result_refs || %{}, ["policy_failure", "type"])))
       )
 
     budget_blocked_count =
-      Enum.count(all_work_items, &budget_policy_failure?(&1.result_refs || %{}))
+      Enum.count(all_hx_work_items, &budget_policy_failure?(&1.result_refs || %{}))
 
     auto_assigned_count =
-      Enum.count(all_work_items, &assignment_resolved?(&1))
+      Enum.count(all_hx_work_items, &assignment_resolved?(&1))
 
     capability_fallback_count =
-      Enum.count(all_work_items, &(assignment_strategy(&1) == "capability_fallback"))
+      Enum.count(all_hx_work_items, &(assignment_strategy(&1) == "capability_fallback"))
 
     role_only_open_count =
-      Enum.count(all_work_items, &role_only_assignment?(&1))
+      Enum.count(all_hx_work_items, &role_only_assignment?(&1))
 
     active_claimed_count =
-      Enum.count(all_work_items, &work_item_ownership_active?/1)
+      Enum.count(all_hx_work_items, &work_item_ownership_active?/1)
 
     stale_claimed_count =
-      Enum.count(all_work_items, &stale_work_item_ownership?/1)
+      Enum.count(all_hx_work_items, &stale_work_item_ownership?/1)
 
     remote_claimed_count =
-      Enum.count(all_work_items, &work_item_remotely_owned?/1)
+      Enum.count(all_hx_work_items, &work_item_remotely_owned?/1)
 
     orphaned_assignment_count =
-      Enum.count(all_work_items, &orphaned_work_assignment?/1)
+      Enum.count(all_hx_work_items, &orphaned_work_assignment?/1)
 
     role_queue_backlog =
-      build_role_queue_backlog(all_work_items, autonomy_agents)
+      build_role_queue_backlog(all_hx_work_items, autonomy_agents)
 
     deferred_role_queue_count =
       Enum.reduce(role_queue_backlog, 0, fn entry, acc ->
@@ -813,12 +814,12 @@ defmodule HydraX.Runtime.WorkItems do
       end)
 
     worker_pressure =
-      build_worker_pressure(all_work_items, autonomy_agents, role_queue_backlog)
+      build_worker_pressure(all_hx_work_items, autonomy_agents, role_queue_backlog)
 
     delegation_supervision =
-      build_delegation_supervision(all_work_items, autonomy_agents, worker_pressure)
+      build_delegation_supervision(all_hx_work_items, autonomy_agents, worker_pressure)
 
-    planner_quotas = build_planner_quotas(autonomy_agents, all_work_items)
+    planner_quotas = build_planner_quotas(autonomy_agents, all_hx_work_items)
 
     dominant_recovery_batches =
       delegation_dominant_recovery_batches(delegation_supervision)
@@ -1006,6 +1007,7 @@ defmodule HydraX.Runtime.WorkItems do
       planner_fairness_posture: planner_fairness_posture(planner_quotas),
       capability_drifts: capability_drifts,
       recent_work_items: list_work_items(limit: 6, preload: true),
+      recent_hx_work_items: list_work_items(limit: 6, preload: true),
       recent_approvals: list_approval_records(limit: 6)
     }
   end
@@ -1017,7 +1019,9 @@ defmodule HydraX.Runtime.WorkItems do
 
       quotas ->
         starved = Enum.any?(quotas, &(&1.remaining == 0 and &1.deferred_count > 0))
-        skewed = Enum.any?(quotas, &(&1.remaining == 0)) and Enum.any?(quotas, &(&1.remaining > 2))
+
+        skewed =
+          Enum.any?(quotas, &(&1.remaining == 0)) and Enum.any?(quotas, &(&1.remaining > 2))
 
         cond do
           starved -> "starved"
@@ -1027,12 +1031,12 @@ defmodule HydraX.Runtime.WorkItems do
     end
   end
 
-  defp build_planner_quotas(autonomy_agents, all_work_items) do
+  defp build_planner_quotas(autonomy_agents, all_hx_work_items) do
     planner_agents =
       Enum.filter(autonomy_agents, &(&1.role == "planner" and &1.status == "active"))
 
     blocked_batches =
-      all_work_items
+      all_hx_work_items
       |> Enum.filter(&(&1.status == "blocked" and &1.execution_mode == "delegate"))
       |> Enum.map(fn work_item -> {work_item, delegation_batch_snapshot(work_item)} end)
       |> Enum.reject(fn {_work_item, snapshot} -> snapshot in [nil, %{}] end)
@@ -1090,7 +1094,7 @@ defmodule HydraX.Runtime.WorkItems do
     classify_work_item_ownership(work_item) == :remote_active
   end
 
-  defp build_role_queue_backlog(all_work_items, autonomy_agents) do
+  defp build_role_queue_backlog(all_hx_work_items, autonomy_agents) do
     worker_counts =
       autonomy_agents
       |> Enum.map(& &1.role)
@@ -1098,26 +1102,26 @@ defmodule HydraX.Runtime.WorkItems do
       |> Enum.frequencies()
 
     claimed_counts =
-      all_work_items
+      all_hx_work_items
       |> Enum.filter(&work_item_ownership_active?/1)
       |> Enum.map(& &1.assigned_role)
       |> Enum.reject(&is_nil/1)
       |> Enum.frequencies()
 
     stale_claimed_counts =
-      all_work_items
+      all_hx_work_items
       |> Enum.filter(&stale_work_item_ownership?/1)
       |> Enum.map(& &1.assigned_role)
       |> Enum.reject(&is_nil/1)
       |> Enum.frequencies()
 
     queued_by_role =
-      all_work_items
+      all_hx_work_items
       |> Enum.filter(&role_queue_candidate?/1)
       |> Enum.group_by(& &1.assigned_role)
 
     deferred_by_role =
-      all_work_items
+      all_hx_work_items
       |> Enum.filter(fn work_item ->
         metadata = work_item.metadata || %{}
 
@@ -1164,7 +1168,7 @@ defmodule HydraX.Runtime.WorkItems do
     |> Enum.sort_by(fn entry -> {-entry.queued_count, entry.role || ""} end)
   end
 
-  defp build_worker_pressure(all_work_items, autonomy_agents, role_queue_backlog) do
+  defp build_worker_pressure(all_hx_work_items, autonomy_agents, role_queue_backlog) do
     role_queue_counts = Map.new(role_queue_backlog, &{&1.role, &1.queued_count})
 
     urgent_role_queue_counts =
@@ -1176,7 +1180,7 @@ defmodule HydraX.Runtime.WorkItems do
     autonomy_agents
     |> Enum.map(fn agent ->
       assigned_items =
-        Enum.filter(all_work_items, fn work_item ->
+        Enum.filter(all_hx_work_items, fn work_item ->
           work_item.assigned_agent_id == agent.id and
             work_item.status not in @terminal_work_item_statuses
         end)
@@ -1216,11 +1220,11 @@ defmodule HydraX.Runtime.WorkItems do
     end)
   end
 
-  defp build_delegation_supervision(all_work_items, autonomy_agents, worker_pressure) do
+  defp build_delegation_supervision(all_hx_work_items, autonomy_agents, worker_pressure) do
     agents_by_id = Map.new(autonomy_agents, &{&1.id, &1})
     role_capacity = delegation_role_capacity_from_worker_pressure(worker_pressure)
 
-    all_work_items
+    all_hx_work_items
     |> Enum.filter(fn work_item ->
       work_item.status == "blocked" and work_item.execution_mode == "delegate"
     end)
@@ -1447,8 +1451,7 @@ defmodule HydraX.Runtime.WorkItems do
           active_selected_intervention_batches:
             intervention_recovery_batch_count(active_selected),
           stale_follow_up_batches: Enum.count(entries, &stale_follow_up_batch?/1),
-          deescalated_batches:
-            Enum.reduce(deescalated, 0, fn {_s, c}, acc -> acc + c end),
+          deescalated_batches: Enum.reduce(deescalated, 0, fn {_s, c}, acc -> acc + c end),
           recovery_mix: recovery_mix
         }
       end)
@@ -2050,13 +2053,17 @@ defmodule HydraX.Runtime.WorkItems do
         group
       else
         sorted =
-          Enum.sort_by(group, fn entry ->
-            case Map.get(entry, "work_item_id") do
-              id when is_integer(id) -> -id
-              id when is_binary(id) -> id
-              _ -> 0
-            end
-          end, :desc)
+          Enum.sort_by(
+            group,
+            fn entry ->
+              case Map.get(entry, "work_item_id") do
+                id when is_integer(id) -> -id
+                id when is_binary(id) -> id
+                _ -> 0
+              end
+            end,
+            :desc
+          )
 
         [newest | rest] = sorted
 
@@ -2144,7 +2151,9 @@ defmodule HydraX.Runtime.WorkItems do
        when is_list(entries) and is_list(autonomy_agents) do
     override =
       entries
-      |> Enum.map(&delegation_batch_supervision_budget/1)
+      |> Enum.map(fn entry ->
+        delegation_batch_supervision_budget(entry) || delegation_batch_budget(entry)
+      end)
       |> Enum.filter(&is_integer/1)
       |> Enum.max(fn -> nil end)
 
@@ -2158,7 +2167,7 @@ defmodule HydraX.Runtime.WorkItems do
     override || default_budget
   end
 
-  defp delegation_supervision_budget(_agent, _work_items, autonomy_agents)
+  defp delegation_supervision_budget(_agent, _hx_work_items, autonomy_agents)
        when is_list(autonomy_agents) do
     autonomy_agents
     |> Enum.count(&(&1.status == "active" and &1.role != "planner"))
@@ -2784,7 +2793,7 @@ defmodule HydraX.Runtime.WorkItems do
           "payload" => %{
             "delegated_work_item_ids" => Enum.map(delegated_children, & &1.child.id),
             "delegation_batch" => batch_snapshot,
-            "delegated_work_items" =>
+            "delegated_hx_work_items" =>
               Enum.map(delegated_children, fn entry ->
                 %{
                   "id" => entry.child.id,
@@ -2828,7 +2837,7 @@ defmodule HydraX.Runtime.WorkItems do
          work_item: updated,
          artifacts: [artifact],
          action: "delegated_batch_expanded",
-         delegated_work_items: Enum.map(delegated_children, & &1.child)
+         delegated_hx_work_items: Enum.map(delegated_children, & &1.child)
        }}
       |> finalize_claimed_summary(claimed)
     end
@@ -2952,8 +2961,7 @@ defmodule HydraX.Runtime.WorkItems do
             delegation_batch_expansion_pressure_severity(attrs["pressure_snapshot"]),
           "pressure_snapshot" => attrs["pressure_snapshot"] || %{},
           "planner_posture_snapshot" => Map.get(posture, :pressure_snapshot, %{}),
-          "planner_posture_bias" =>
-            if(posture_bias, do: to_string(posture_bias), else: nil),
+          "planner_posture_bias" => if(posture_bias, do: to_string(posture_bias), else: nil),
           "capacity_score" => attrs["capacity_score"],
           "supervision_budget" => attrs["supervision_budget"],
           "active_children" => attrs["active_children"],
@@ -3108,9 +3116,7 @@ defmodule HydraX.Runtime.WorkItems do
     if posture_context != %{} do
       available = ["request_review", "narrow_delegate_batch", "constraint_replan"]
 
-      case converge_recovery_strategy(posture_context, available,
-             intervention_pressure: %{}
-           ) do
+      case converge_recovery_strategy(posture_context, available, intervention_pressure: %{}) do
         {_family, converged, rule_id} when rule_id != :rule_fallback ->
           converged
 
@@ -3485,7 +3491,7 @@ defmodule HydraX.Runtime.WorkItems do
     |> Enum.map(&get_work_item!(&1.id))
   end
 
-  defp list_stale_claimed_work_items(opts) do
+  defp list_stale_claimed_hx_work_items(opts) do
     limit = Keyword.get(opts, :limit, 50)
     owner = Coordination.status().owner
 
@@ -3649,9 +3655,9 @@ defmodule HydraX.Runtime.WorkItems do
     |> List.first()
   end
 
-  defp prioritize_role_queue_candidates(work_items) when is_list(work_items) do
+  defp prioritize_role_queue_candidates(hx_work_items) when is_list(hx_work_items) do
     Enum.sort_by(
-      work_items,
+      hx_work_items,
       fn work_item ->
         {
           -role_queue_missing_role_urgency(work_item),
@@ -3662,7 +3668,7 @@ defmodule HydraX.Runtime.WorkItems do
     )
   end
 
-  defp prioritize_role_queue_candidates(_work_items), do: []
+  defp prioritize_role_queue_candidates(_hx_work_items), do: []
 
   defp role_queue_missing_role_urgency(%WorkItem{metadata: metadata} = work_item) do
     metadata = Helpers.normalize_string_keys(metadata || %{})
@@ -3908,15 +3914,15 @@ defmodule HydraX.Runtime.WorkItems do
   end
 
   defp worker_pressure_entry(agent_id) do
-    all_work_items = list_work_items(limit: 500, preload: false)
+    all_hx_work_items = list_work_items(limit: 500, preload: false)
 
     autonomy_agents =
       Agents.list_agents()
       |> Enum.filter(&(Map.get(capability_profile(&1), "max_autonomy_level") != "observe"))
 
-    role_queue_backlog = build_role_queue_backlog(all_work_items, autonomy_agents)
+    role_queue_backlog = build_role_queue_backlog(all_hx_work_items, autonomy_agents)
 
-    all_work_items
+    all_hx_work_items
     |> build_worker_pressure(autonomy_agents, role_queue_backlog)
     |> Enum.find(&(&1.agent_id == agent_id))
   end
@@ -4246,7 +4252,7 @@ defmodule HydraX.Runtime.WorkItems do
           "assigned_roles" => batch_snapshot["roles"],
           "required_outputs" => work_item.required_outputs,
           "delegation_batch" => batch_snapshot,
-          "delegated_work_items" =>
+          "delegated_hx_work_items" =>
             Enum.map(delegated_children, fn entry ->
               %{
                 "id" => entry.child.id,
@@ -4285,7 +4291,7 @@ defmodule HydraX.Runtime.WorkItems do
        artifacts: [plan_artifact],
        action: "delegated",
        delegated_work_item: first_child,
-       delegated_work_items: children
+       delegated_hx_work_items: children
      }}
   end
 
@@ -5638,7 +5644,8 @@ defmodule HydraX.Runtime.WorkItems do
       "rollback_notes" => proposal_payload["rollback_notes"],
       "promotion_stage" => "patch_ready",
       "target_files" => workspace_snapshot["candidate_files"],
-      "contract_ref" => get_in(work_item.metadata || %{}, ["engineering_contract", "contract_version"])
+      "contract_ref" =>
+        get_in(work_item.metadata || %{}, ["engineering_contract", "contract_version"])
     }
 
     if work_item.kind == "extension" do
@@ -6287,8 +6294,10 @@ defmodule HydraX.Runtime.WorkItems do
     target_key = if is_binary(target), do: target, else: inspect(target)
     lease_name = "delivery:#{agent.id}:#{channel}:#{target_key}"
 
-    case Coordination.claim_lease(lease_name, ttl_seconds: 60,
-           metadata: %{"agent_id" => agent.id, "channel" => channel}) do
+    case Coordination.claim_lease(lease_name,
+           ttl_seconds: 60,
+           metadata: %{"agent_id" => agent.id, "channel" => channel}
+         ) do
       {:ok, _lease} ->
         execute_publish_delivery_inner(agent, channel, target, content)
 
@@ -6614,7 +6623,11 @@ defmodule HydraX.Runtime.WorkItems do
     "Revert the #{work_item.kind} patch, restore changed files from git history, and rerun validation commands."
   end
 
-  defp build_engineering_contract(%WorkItem{} = work_item, %AgentProfile{} = agent, workspace_snapshot) do
+  defp build_engineering_contract(
+         %WorkItem{} = work_item,
+         %AgentProfile{} = agent,
+         workspace_snapshot
+       ) do
     candidate_files = workspace_snapshot["candidate_files"] || []
 
     %{
@@ -7034,10 +7047,10 @@ defmodule HydraX.Runtime.WorkItems do
       Agents.list_agents()
       |> Enum.filter(&(&1.status == "active"))
 
-    all_work_items = list_work_items(limit: 500, preload: false)
-    role_queue_backlog = build_role_queue_backlog(all_work_items, active_agents)
+    all_hx_work_items = list_work_items(limit: 500, preload: false)
+    role_queue_backlog = build_role_queue_backlog(all_hx_work_items, active_agents)
 
-    build_worker_pressure(all_work_items, active_agents, role_queue_backlog)
+    build_worker_pressure(all_hx_work_items, active_agents, role_queue_backlog)
     |> Enum.group_by(& &1.role)
     |> Map.new(fn {role, workers} ->
       {role,
@@ -9071,7 +9084,7 @@ defmodule HydraX.Runtime.WorkItems do
       "resolved_agent_slug" => agent.slug,
       "resolved_role" => agent.role,
       "score" => nil,
-      "pending_work_items" => nil,
+      "pending_hx_work_items" => nil,
       "claim_scope" => get_in(work_item.metadata || %{}, ["claim_scope"]) || "role_pool",
       "reasons" => ["claimed from role pool", "lease acquired"]
     }
@@ -9211,7 +9224,7 @@ defmodule HydraX.Runtime.WorkItems do
           "resolved_agent_slug" => candidate.agent.slug,
           "resolved_role" => candidate.agent.role,
           "score" => Float.round(candidate.score, 2),
-          "pending_work_items" => candidate.pending_count,
+          "pending_hx_work_items" => candidate.pending_count,
           "capacity_posture" => candidate.capacity_posture,
           "active_claimed_count" => candidate.active_claimed_count,
           "shared_role_queue_count" => candidate.shared_role_queue_count,
@@ -9224,10 +9237,10 @@ defmodule HydraX.Runtime.WorkItems do
   defp assignment_worker_pressure([]), do: %{}
 
   defp assignment_worker_pressure(agents) do
-    all_work_items = list_work_items(limit: 500, preload: false)
-    role_queue_backlog = build_role_queue_backlog(all_work_items, agents)
+    all_hx_work_items = list_work_items(limit: 500, preload: false)
+    role_queue_backlog = build_role_queue_backlog(all_hx_work_items, agents)
 
-    all_work_items
+    all_hx_work_items
     |> build_worker_pressure(agents, role_queue_backlog)
     |> Map.new(&{&1.agent_id, &1})
   end
@@ -10672,7 +10685,10 @@ defmodule HydraX.Runtime.WorkItems do
               "decision_summary",
               0.82,
               payload,
-              %{"promotion_reason" => "approved_research_decision", "evidence_kind" => "inference"}
+              %{
+                "promotion_reason" => "approved_research_decision",
+                "evidence_kind" => "inference"
+              }
             )
           ]
       end
@@ -11572,8 +11588,8 @@ defmodule HydraX.Runtime.WorkItems do
          supporting_memories,
          constraint_findings
        ) do
-    approval_records = approval_records_for_subject("work_item", claimed.id)
-    latest_decision = approval_records |> List.first() |> then(&(&1 && &1.decision))
+    hx_approval_records = approval_records_for_subject("work_item", claimed.id)
+    latest_decision = hx_approval_records |> List.first() |> then(&(&1 && &1.decision))
 
     follow_up_context =
       build_follow_up_context(claimed, supporting_memories, summary_artifact, constraint_findings)
@@ -11605,7 +11621,7 @@ defmodule HydraX.Runtime.WorkItems do
         |> Map.merge(%{
           "artifact_ids" => Enum.uniq([summary_artifact.id | artifact_ids]),
           "child_work_item_ids" => Enum.map(children, & &1.id),
-          "approval_record_ids" => Enum.map(approval_records, & &1.id),
+          "approval_record_ids" => Enum.map(hx_approval_records, & &1.id),
           "supporting_memory_ids" =>
             supporting_memories
             |> Enum.map(& &1["memory_id"])
@@ -13213,7 +13229,7 @@ defmodule HydraX.Runtime.WorkItems do
   defp retry_on_busy(fun, attempts) do
     fun.()
   rescue
-    error in Exqlite.Error ->
+    error ->
       if attempts > 1 and String.contains?(Exception.message(error), "Database busy") do
         Process.sleep((11 - attempts) * 25)
         retry_on_busy(fun, attempts - 1)

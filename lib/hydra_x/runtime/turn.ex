@@ -2,7 +2,7 @@ defmodule HydraX.Runtime.Turn do
   use Ecto.Schema
   import Ecto.Changeset
 
-  schema "turns" do
+  schema "hx_turns" do
     field :sequence, :integer
     field :role, :string
     field :kind, :string, default: "message"

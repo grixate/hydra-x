@@ -18,6 +18,7 @@ defmodule HydraX.Application do
         {Registry, keys: :unique, name: HydraX.ProcessRegistry},
         {Phoenix.PubSub, name: HydraX.PubSub},
         {Task.Supervisor, name: HydraX.TaskSupervisor},
+        HydraX.Simulation.Registry,
         HydraX.AgentSupervisor
       ] ++
         scheduler_children() ++

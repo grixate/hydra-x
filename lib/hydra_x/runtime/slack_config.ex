@@ -2,7 +2,7 @@ defmodule HydraX.Runtime.SlackConfig do
   use Ecto.Schema
   import Ecto.Changeset
 
-  schema "slack_configs" do
+  schema "hx_slack_configs" do
     field :bot_token, :string
     field :signing_secret, :string
     field :enabled, :boolean, default: false

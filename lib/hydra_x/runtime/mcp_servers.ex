@@ -303,6 +303,34 @@ defmodule HydraX.Runtime.MCPServers do
     }
   end
 
+  def mcp_posture(config) when is_map(config) do
+    metadata = Map.get(config, :metadata) || Map.get(config, "metadata") || %{}
+    status = Map.get(config, :status) || Map.get(config, "status") || :unknown
+    enabled = Map.get(config, :enabled, Map.get(config, "enabled", false))
+    transport = Map.get(config, :transport) || Map.get(config, "transport")
+
+    rollout_state =
+      cond do
+        not enabled -> "disabled"
+        metadata["rollout_state"] in ["canary", "staged"] -> metadata["rollout_state"]
+        true -> "stable"
+      end
+
+    %{
+      version: metadata["version"],
+      compatibility_posture: if(status == :ok, do: "compatible", else: "degraded"),
+      health_posture: status,
+      enablement_risk:
+        cond do
+          transport == "http" -> "medium"
+          transport in [nil, ""] -> "unknown"
+          true -> "low"
+        end,
+      rollout_state: rollout_state,
+      last_promoted_at: metadata["last_promoted_at"]
+    }
+  end
+
   def mcp_enablement_risk(%MCPServerConfig{} = config) do
     cond do
       config.transport == "http" and is_nil(config.auth_token) -> "high"

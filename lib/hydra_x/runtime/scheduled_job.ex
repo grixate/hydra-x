@@ -6,7 +6,7 @@ defmodule HydraX.Runtime.ScheduledJob do
   @schedule_modes ~w(interval daily weekly cron)
   @circuit_states ~w(closed open)
 
-  schema "scheduled_jobs" do
+  schema "hx_scheduled_jobs" do
     field :name, :string
     field :kind, :string, default: "heartbeat"
     field :prompt, :string

@@ -33,11 +33,11 @@ defmodule HydraXWeb.MemoryLive do
      |> assign(:embedding_status, current_embedding_status(filters))
      |> assign(:ingest_agent, current_ingest_agent(filters))
      |> assign(:ingested_files, load_ingested_files(filters))
-     |> assign(:ingest_runs, load_ingest_runs(filters))
+     |> assign(:hx_ingest_runs, load_hx_ingest_runs(filters))
      |> assign(:memories, memories)
      |> assign(:memory_rankings, memory_rankings)
      |> assign(:selected, selected)
-     |> assign(:selected_ingest_runs, selected_ingest_runs(selected))
+     |> assign(:selected_hx_ingest_runs, selected_hx_ingest_runs(selected))
      |> assign(:edges, load_edges(selected))
      |> assign_form(:memory_form, memory_form(selected), :memory)
      |> assign_form(:edge_form, edge_form(selected), :edge)
@@ -65,9 +65,9 @@ defmodule HydraXWeb.MemoryLive do
      |> assign(:embedding_status, current_embedding_status(filters))
      |> assign(:ingest_agent, current_ingest_agent(filters))
      |> assign(:ingested_files, load_ingested_files(filters))
-     |> assign(:ingest_runs, load_ingest_runs(filters))
+     |> assign(:hx_ingest_runs, load_hx_ingest_runs(filters))
      |> assign(:selected, selected)
-     |> assign(:selected_ingest_runs, selected_ingest_runs(selected))
+     |> assign(:selected_hx_ingest_runs, selected_hx_ingest_runs(selected))
      |> assign(:edges, load_edges(selected))
      |> assign_form(:memory_form, memory_form(selected), :memory)
      |> assign_form(:edge_form, edge_form(selected), :edge)
@@ -95,9 +95,9 @@ defmodule HydraXWeb.MemoryLive do
      |> assign(:embedding_status, current_embedding_status(filters))
      |> assign(:ingest_agent, current_ingest_agent(filters))
      |> assign(:ingested_files, load_ingested_files(filters))
-     |> assign(:ingest_runs, load_ingest_runs(filters))
+     |> assign(:hx_ingest_runs, load_hx_ingest_runs(filters))
      |> assign(:selected, selected)
-     |> assign(:selected_ingest_runs, selected_ingest_runs(selected))
+     |> assign(:selected_hx_ingest_runs, selected_hx_ingest_runs(selected))
      |> assign(:edges, load_edges(selected))
      |> assign_form(:memory_form, memory_form(selected), :memory)
      |> assign_form(:edge_form, edge_form(selected), :edge)
@@ -127,8 +127,8 @@ defmodule HydraXWeb.MemoryLive do
          ingest_message(filename, result)
        )
        |> assign(:ingested_files, load_ingested_files(socket.assigns.filters))
-       |> assign(:ingest_runs, load_ingest_runs(socket.assigns.filters))
-       |> assign(:selected_ingest_runs, selected_ingest_runs(socket.assigns.selected))
+       |> assign(:hx_ingest_runs, load_hx_ingest_runs(socket.assigns.filters))
+       |> assign(:selected_hx_ingest_runs, selected_hx_ingest_runs(socket.assigns.selected))
        |> assign(:stats, stats())}
     else
       nil ->
@@ -158,8 +158,8 @@ defmodule HydraXWeb.MemoryLive do
        socket
        |> put_flash(:info, "Archived #{count} ingest-backed memories for #{filename}")
        |> assign(:ingested_files, load_ingested_files(socket.assigns.filters))
-       |> assign(:ingest_runs, load_ingest_runs(socket.assigns.filters))
-       |> assign(:selected_ingest_runs, selected_ingest_runs(socket.assigns.selected))
+       |> assign(:hx_ingest_runs, load_hx_ingest_runs(socket.assigns.filters))
+       |> assign(:selected_hx_ingest_runs, selected_hx_ingest_runs(socket.assigns.selected))
        |> assign(:stats, stats())}
     else
       nil ->
@@ -182,7 +182,7 @@ defmodule HydraXWeb.MemoryLive do
     {:noreply,
      socket
      |> assign(:selected, memory)
-     |> assign(:selected_ingest_runs, selected_ingest_runs(memory))
+     |> assign(:selected_hx_ingest_runs, selected_hx_ingest_runs(memory))
      |> assign(:edges, load_edges(memory))
      |> assign_form(:memory_form, memory_form(memory), :memory)
      |> assign_form(:edge_form, edge_form(memory), :edge)
@@ -193,7 +193,7 @@ defmodule HydraXWeb.MemoryLive do
     {:noreply,
      socket
      |> assign(:selected, nil)
-     |> assign(:selected_ingest_runs, [])
+     |> assign(:selected_hx_ingest_runs, [])
      |> assign(:edges, [])
      |> assign_form(:memory_form, memory_form(nil), :memory)
      |> assign_form(:edge_form, edge_form(nil), :edge)
@@ -217,7 +217,7 @@ defmodule HydraXWeb.MemoryLive do
      |> assign(:memories, memories)
      |> assign(:memory_rankings, memory_rankings)
      |> assign(:selected, selected)
-     |> assign(:selected_ingest_runs, selected_ingest_runs(selected))
+     |> assign(:selected_hx_ingest_runs, selected_hx_ingest_runs(selected))
      |> assign(:edges, load_edges(selected))
      |> assign(:stats, stats())
      |> assign_form(:memory_form, memory_form(selected), :memory)
@@ -244,7 +244,7 @@ defmodule HydraXWeb.MemoryLive do
          |> assign(:memories, memories)
          |> assign(:memory_rankings, memory_rankings)
          |> assign(:selected, selected)
-         |> assign(:selected_ingest_runs, selected_ingest_runs(selected))
+         |> assign(:selected_hx_ingest_runs, selected_hx_ingest_runs(selected))
          |> assign(:edges, load_edges(selected))
          |> assign(:stats, stats())
          |> assign_form(:memory_form, memory_form(selected), :memory)
@@ -345,7 +345,7 @@ defmodule HydraXWeb.MemoryLive do
          |> assign(:memories, memories)
          |> assign(:memory_rankings, memory_rankings)
          |> assign(:selected, selected)
-         |> assign(:selected_ingest_runs, selected_ingest_runs(selected))
+         |> assign(:selected_hx_ingest_runs, selected_hx_ingest_runs(selected))
          |> assign(:edges, load_edges(selected))
          |> assign(:stats, stats())
          |> assign_form(:memory_form, memory_form(selected), :memory)
@@ -379,7 +379,7 @@ defmodule HydraXWeb.MemoryLive do
      |> assign(:memories, memories)
      |> assign(:memory_rankings, memory_rankings)
      |> assign(:selected, selected)
-     |> assign(:selected_ingest_runs, selected_ingest_runs(selected))
+     |> assign(:selected_hx_ingest_runs, selected_hx_ingest_runs(selected))
      |> assign(:edges, load_edges(selected))
      |> assign_form(:memory_form, memory_form(selected), :memory)
      |> assign_form(:edge_form, edge_form(selected), :edge)
@@ -401,9 +401,9 @@ defmodule HydraXWeb.MemoryLive do
      |> assign(:memory_rankings, memory_rankings)
      |> assign(:embedding_status, current_embedding_status(socket.assigns.filters))
      |> assign(:ingested_files, load_ingested_files(socket.assigns.filters))
-     |> assign(:ingest_runs, load_ingest_runs(socket.assigns.filters))
+     |> assign(:hx_ingest_runs, load_hx_ingest_runs(socket.assigns.filters))
      |> assign(:selected, selected)
-     |> assign(:selected_ingest_runs, selected_ingest_runs(selected))
+     |> assign(:selected_hx_ingest_runs, selected_hx_ingest_runs(selected))
      |> assign(:edges, load_edges(selected))
      |> assign(:stats, stats())}
   end
@@ -544,11 +544,11 @@ defmodule HydraXWeb.MemoryLive do
                 Recent ingest runs
               </div>
               <div class="mt-3 space-y-2">
-                <p :if={@ingest_runs == []} class="text-sm text-[var(--hx-mute)]">
+                <p :if={@hx_ingest_runs == []} class="text-sm text-[var(--hx-mute)]">
                   No ingest history for the selected agent yet.
                 </p>
                 <div
-                  :for={run <- @ingest_runs}
+                  :for={run <- @hx_ingest_runs}
                   class="rounded-xl border border-white/10 bg-black/10 px-3 py-3"
                 >
                   <div class="flex items-center justify-between gap-3">
@@ -788,7 +788,7 @@ defmodule HydraXWeb.MemoryLive do
                 </div>
                 <div class="mt-3 space-y-2">
                   <div
-                    :for={run <- @selected_ingest_runs}
+                    :for={run <- @selected_hx_ingest_runs}
                     class="rounded-xl border border-white/10 bg-black/10 px-3 py-3"
                   >
                     <div class="flex items-center justify-between gap-3">
@@ -803,7 +803,7 @@ defmodule HydraXWeb.MemoryLive do
                       created {run.created_count} - restored {ingest_run_restored_count(run)} - skipped {run.skipped_count} - archived {run.archived_count}
                     </div>
                   </div>
-                  <p :if={@selected_ingest_runs == []} class="text-sm text-[var(--hx-mute)]">
+                  <p :if={@selected_hx_ingest_runs == []} class="text-sm text-[var(--hx-mute)]">
                     No recent ingest runs recorded for this source file.
                   </p>
                 </div>
@@ -1001,16 +1001,16 @@ defmodule HydraXWeb.MemoryLive do
     Memory.embedding_status(parse_integer(filters["agent_id"]))
   end
 
-  defp load_ingest_runs(filters) do
+  defp load_hx_ingest_runs(filters) do
     case current_ingest_agent(filters) do
       nil -> []
       agent -> Runtime.list_ingest_runs(agent.id, 10)
     end
   end
 
-  defp selected_ingest_runs(nil), do: []
+  defp selected_hx_ingest_runs(nil), do: []
 
-  defp selected_ingest_runs(memory) do
+  defp selected_hx_ingest_runs(memory) do
     source_file = get_in(memory.metadata || %{}, ["source_file"])
 
     with true <- ingest_backed_memory?(memory),
@@ -1130,7 +1130,13 @@ defmodule HydraXWeb.MemoryLive do
 
   defp memory_embedding_profile(memory) do
     metadata = memory.metadata || %{}
-    vector = metadata["embedding_vector"] || []
+
+    vector =
+      case memory.embedding do
+        %Pgvector{} = value -> Pgvector.to_list(value)
+        values when is_list(values) -> values
+        _ -> []
+      end
 
     [
       {"backend", metadata["embedding_backend"] || "none"},

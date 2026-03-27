@@ -43,8 +43,8 @@ defmodule HydraX.Tool.Registry do
   Returns tool schemas filtered by the effective tool policy.
   Tools without a policy gate (memory, reply) are always included.
   """
-  def available_schemas(tool_policy \\ %{}) do
-    @all_tools
+  def available_schemas(tool_policy \\ %{}, opts \\ %{}) do
+    all_tools(opts)
     |> Enum.filter(fn {_mod, gate} -> gate == nil or Map.get(tool_policy, gate, true) end)
     |> Enum.map(fn {mod, _gate} -> mod.tool_schema() end)
   end
@@ -52,8 +52,8 @@ defmodule HydraX.Tool.Registry do
   @doc """
   Returns tool modules filtered by the effective tool policy.
   """
-  def available_tools(tool_policy \\ %{}) do
-    @all_tools
+  def available_tools(tool_policy \\ %{}, opts \\ %{}) do
+    all_tools(opts)
     |> Enum.filter(fn {_mod, gate} -> gate == nil or Map.get(tool_policy, gate, true) end)
     |> Enum.map(fn {mod, _gate} -> mod end)
   end
@@ -61,9 +61,24 @@ defmodule HydraX.Tool.Registry do
   @doc """
   Looks up a tool module by name string.
   """
-  def find_tool(name) do
-    Enum.find_value(@all_tools, fn {mod, _gate} ->
+  def find_tool(name, opts \\ %{}) do
+    Enum.find_value(all_tools(opts), fn {mod, _gate} ->
       if mod.name() == name, do: mod
     end)
   end
+
+  defp all_tools(opts) do
+    @all_tools ++ normalize_extra_tools(opts)
+  end
+
+  defp normalize_extra_tools(opts) do
+    opts
+    |> extra_tools()
+    |> Enum.uniq()
+    |> Enum.map(&{&1, nil})
+  end
+
+  defp extra_tools(opts) when is_map(opts), do: Map.get(opts, :extra_tools, [])
+  defp extra_tools(opts) when is_list(opts), do: Keyword.get(opts, :extra_tools, [])
+  defp extra_tools(_opts), do: []
 end

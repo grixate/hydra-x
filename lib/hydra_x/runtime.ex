@@ -144,6 +144,13 @@ defmodule HydraX.Runtime do
   defdelegate invoke_agent_mcp(agent_id, action, params), to: HydraX.Runtime.MCPServers
   defdelegate invoke_agent_mcp(agent_id, action, params, opts), to: HydraX.Runtime.MCPServers
 
+  # Backward-compatible hx_* MCP API aliases
+  def refresh_hx_agent_mcp_servers(agent_id),
+    do: HydraX.Runtime.MCPServers.refresh_agent_mcp_servers(agent_id)
+
+  def list_hx_agent_mcp_servers(agent_id),
+    do: HydraX.Runtime.MCPServers.list_agent_mcp_servers(agent_id)
+
   # ── Conversations ───────────────────────────────────────────────────────
 
   defdelegate list_conversations(), to: HydraX.Runtime.Conversations
@@ -172,6 +179,13 @@ defmodule HydraX.Runtime do
     to: HydraX.Runtime.Conversations
 
   defdelegate update_conversation_metadata(conversation, attrs), to: HydraX.Runtime.Conversations
+
+  # Backward-compatible hx_* conversation API aliases
+  def list_hx_conversations(opts \\ []), do: HydraX.Runtime.Conversations.list_conversations(opts)
+  def list_hx_turns(conversation_id), do: HydraX.Runtime.Conversations.list_turns(conversation_id)
+
+  def resume_owned_hx_conversations(opts \\ []),
+    do: HydraX.Runtime.Conversations.resume_owned_conversations(opts)
 
   # ── Work items ───────────────────────────────────────────────────────────
 
@@ -225,6 +239,21 @@ defmodule HydraX.Runtime do
   defdelegate run_autonomy_cycle(agent_id), to: HydraX.Runtime.WorkItems
   defdelegate run_autonomy_cycle(agent_id, opts), to: HydraX.Runtime.WorkItems
 
+  # Backward-compatible hx_* work item API aliases
+  def list_hx_work_items(opts \\ []), do: HydraX.Runtime.WorkItems.list_work_items(opts)
+
+  def work_item_hx_artifacts(work_item_id),
+    do: HydraX.Runtime.WorkItems.work_item_artifacts(work_item_id)
+
+  def hx_approval_records_for_subject(subject_type, subject_id),
+    do: HydraX.Runtime.WorkItems.approval_records_for_subject(subject_type, subject_id)
+
+  def artifact_hx_approval_records(artifact_id),
+    do: HydraX.Runtime.WorkItems.artifact_approval_records(artifact_id)
+
+  def resume_owned_hx_work_items(opts \\ []),
+    do: HydraX.Runtime.WorkItems.resume_owned_work_items(opts)
+
   # ── Coordination ────────────────────────────────────────────────────────
 
   defdelegate claim_lease(name), to: HydraX.Runtime.Coordination
@@ -258,6 +287,15 @@ defmodule HydraX.Runtime do
   def recent_job_runs(opts) when is_list(opts), do: HydraX.Runtime.Jobs.recent_job_runs(opts)
   defdelegate recent_job_runs_by_status(status), to: HydraX.Runtime.Jobs
   defdelegate recent_job_runs_by_status(status, limit), to: HydraX.Runtime.Jobs
+
+  # Backward-compatible hx_* jobs API aliases
+  def list_hx_scheduled_jobs(opts \\ []), do: HydraX.Runtime.Jobs.list_scheduled_jobs(opts)
+  def list_hx_job_runs(job_id_or_opts), do: HydraX.Runtime.Jobs.list_job_runs(job_id_or_opts)
+  def list_hx_job_runs(job_id, limit), do: HydraX.Runtime.Jobs.list_job_runs(job_id, limit)
+
+  def export_hx_job_runs(output_root, opts \\ []),
+    do: HydraX.Runtime.Jobs.export_job_runs(output_root, opts)
+
   def list_job_runs(job_id) when is_integer(job_id), do: HydraX.Runtime.Jobs.list_job_runs(job_id)
   def list_job_runs(opts) when is_list(opts), do: HydraX.Runtime.Jobs.list_job_runs(opts)
 
@@ -490,12 +528,18 @@ defmodule HydraX.Runtime do
   defp retry_on_busy(fun, attempts) do
     fun.()
   rescue
-    error in Exqlite.Error ->
-      if attempts > 1 and String.contains?(Exception.message(error), "Database busy") do
+    error ->
+      if attempts > 1 and sqlite_busy_error?(error) do
         Process.sleep(50)
         retry_on_busy(fun, attempts - 1)
       else
         reraise error, __STACKTRACE__
       end
+  end
+
+  defp sqlite_busy_error?(error) do
+    error
+    |> Exception.message()
+    |> String.contains?("Database busy")
   end
 end

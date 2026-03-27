@@ -1282,7 +1282,7 @@ defmodule HydraXWeb.AgentsLive do
     %{
       agents: Runtime.list_agents() |> length(),
       providers: Runtime.list_provider_configs() |> length(),
-      work_items: Runtime.list_work_items(limit: 500) |> length(),
+      hx_work_items: Runtime.list_work_items(limit: 500) |> length(),
       turns:
         Runtime.list_conversations(limit: 200)
         |> Enum.flat_map(&Runtime.list_turns(&1.id))
@@ -1350,7 +1350,7 @@ defmodule HydraXWeb.AgentsLive do
       |> Map.put(:compaction_policy, Runtime.compaction_policy(agent.id))
       |> Map.put(
         :recent_work_items,
-        Runtime.list_work_items(agent_id: agent.id, limit: 4)
+        Runtime.list_work_items(agent_id: agent.id, limit: 6)
         |> Enum.map(&attach_promoted_work_item_memories/1)
       )
       |> Map.put(
@@ -2035,7 +2035,8 @@ defmodule HydraXWeb.AgentsLive do
   end
 
   defp work_item_last_action(work_item) do
-    get_in(work_item.result_refs || %{}, ["last_requested_action"])
+    get_in(work_item.result_refs || %{}, ["last_requested_action"]) ||
+      work_item_primary_action(work_item)
   end
 
   defp work_item_enablement_status(work_item) do

@@ -31,7 +31,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
     :ok
   end
 
-  test "conversations page can retry a failed Telegram delivery", %{conn: conn} do
+  test "hx_conversations page can retry a failed Telegram delivery", %{conn: conn} do
     agent = Runtime.ensure_default_agent!()
 
     {:ok, _telegram} =
@@ -66,7 +66,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
         }
       })
 
-    {:ok, view, _html} = live(conn, ~p"/conversations")
+    {:ok, view, _html} = live(conn, ~p"/hx_conversations")
 
     view
     |> element(~s(button[phx-click="retry_delivery"][phx-value-id="#{conversation.id}"]))
@@ -79,7 +79,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
     assert html =~ "delivery delivered"
   end
 
-  test "conversations page can retry a failed Slack delivery", %{conn: conn} do
+  test "hx_conversations page can retry a failed Slack delivery", %{conn: conn} do
     agent = Runtime.ensure_default_agent!()
     test_pid = self()
 
@@ -120,7 +120,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
         }
       })
 
-    {:ok, view, _html} = live(conn, ~p"/conversations")
+    {:ok, view, _html} = live(conn, ~p"/hx_conversations")
 
     view
     |> element(~s(button[phx-click="retry_delivery"][phx-value-id="#{conversation.id}"]))
@@ -133,7 +133,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
     assert html =~ "delivery delivered"
   end
 
-  test "conversations page shows Telegram attachment metadata", %{conn: conn} do
+  test "hx_conversations page shows Telegram attachment metadata", %{conn: conn} do
     agent = Runtime.ensure_default_agent!()
 
     {:ok, conversation} =
@@ -158,14 +158,14 @@ defmodule HydraXWeb.ConversationsLiveTest do
         }
       })
 
-    {:ok, view, _html} = live(conn, ~p"/conversations")
+    {:ok, view, _html} = live(conn, ~p"/hx_conversations")
 
     html = render(view)
     assert html =~ "document: spec.pdf"
     assert html =~ "telegram:file-123"
   end
 
-  test "conversations page shows delivery reply and thread context", %{conn: conn} do
+  test "hx_conversations page shows delivery reply and thread context", %{conn: conn} do
     agent = Runtime.ensure_default_agent!()
 
     {:ok, conversation} =
@@ -203,7 +203,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
         }
       })
 
-    {:ok, view, _html} = live(conn, ~p"/conversations?conversation_id=#{conversation.id}")
+    {:ok, view, _html} = live(conn, ~p"/hx_conversations?conversation_id=#{conversation.id}")
 
     html = render(view)
     assert html =~ "thread 123.456"
@@ -218,7 +218,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
     assert html =~ "&quot;thread_ts&quot;: &quot;123.456&quot;"
   end
 
-  test "conversations page shows streaming delivery diagnostics", %{conn: conn} do
+  test "hx_conversations page shows streaming delivery diagnostics", %{conn: conn} do
     agent = Runtime.ensure_default_agent!()
 
     {:ok, conversation} =
@@ -249,7 +249,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
         }
       })
 
-    {:ok, view, _html} = live(conn, ~p"/conversations?conversation_id=#{conversation.id}")
+    {:ok, view, _html} = live(conn, ~p"/hx_conversations?conversation_id=#{conversation.id}")
 
     html = render(view)
     assert html =~ "delivery streaming"
@@ -259,10 +259,10 @@ defmodule HydraXWeb.ConversationsLiveTest do
     assert html =~ "topic webchat:session:webchat-session-streaming-ui"
   end
 
-  test "conversations page can start and reply to a control-plane conversation", %{conn: conn} do
+  test "hx_conversations page can start and reply to a control-plane conversation", %{conn: conn} do
     agent = Runtime.ensure_default_agent!()
 
-    {:ok, view, _html} = live(conn, ~p"/conversations")
+    {:ok, view, _html} = live(conn, ~p"/hx_conversations")
 
     view
     |> form("form[phx-submit=\"start_conversation\"]", %{
@@ -270,7 +270,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
         "agent_id" => to_string(agent.id),
         "channel" => "control_plane",
         "title" => "UI Chat",
-        "message" => "Remember that the UI can drive conversations."
+        "message" => "Remember that the UI can drive hx_conversations."
       }
     })
     |> render_submit()
@@ -278,7 +278,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
     html = render(view)
     assert html =~ "Conversation started"
     assert html =~ "UI Chat"
-    assert html =~ "Remember that the UI can drive conversations."
+    assert html =~ "Remember that the UI can drive hx_conversations."
     assert html =~ "Execution plan"
     assert html =~ "Execution events"
     assert html =~ "Tool-capable turn"
@@ -287,7 +287,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
     assert html =~ "provider_requested"
     assert html =~ "completed"
 
-    [conversation | _] = Runtime.list_conversations(limit: 5)
+    [conversation | _] = Runtime.list_hx_conversations(limit: 5)
 
     view
     |> form("form[phx-submit=\"send_reply\"]", %{
@@ -296,14 +296,14 @@ defmodule HydraXWeb.ConversationsLiveTest do
     |> render_submit()
 
     refreshed = Runtime.get_conversation!(conversation.id)
-    assert length(refreshed.turns) == 4
+    assert length(refreshed.hx_turns) == 4
 
     html = render(view)
     assert html =~ "Reply sent"
     assert html =~ "Mock response"
   end
 
-  test "conversations page surfaces deferred ownership when replying", %{conn: conn} do
+  test "hx_conversations page surfaces deferred ownership when replying", %{conn: conn} do
     previous_adapter = Application.get_env(:hydra_x, :repo_adapter)
     Application.put_env(:hydra_x, :repo_adapter, Ecto.Adapters.Postgres)
 
@@ -329,7 +329,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
                ttl_seconds: 60
              )
 
-    {:ok, view, _html} = live(conn, ~p"/conversations?conversation_id=#{conversation.id}")
+    {:ok, view, _html} = live(conn, ~p"/hx_conversations?conversation_id=#{conversation.id}")
 
     view
     |> form("form[phx-submit=\"send_reply\"]", %{
@@ -344,12 +344,12 @@ defmodule HydraXWeb.ConversationsLiveTest do
     assert html =~ "node:remote"
 
     refreshed = Runtime.get_conversation!(conversation.id)
-    [turn] = refreshed.turns
+    [turn] = refreshed.hx_turns
     assert turn.content == "Hold this for the owner."
     assert turn.metadata["deferred_to_owner"] == "node:remote"
   end
 
-  test "conversations page shows recovered resumable execution state", %{conn: conn} do
+  test "hx_conversations page shows recovered resumable execution state", %{conn: conn} do
     agent = Runtime.ensure_default_agent!()
 
     {:ok, conversation} =
@@ -387,7 +387,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
         ]
       })
 
-    {:ok, view, _html} = live(conn, ~p"/conversations?conversation_id=#{conversation.id}")
+    {:ok, view, _html} = live(conn, ~p"/hx_conversations?conversation_id=#{conversation.id}")
 
     html = render(view)
     assert html =~ "resumable"
@@ -396,7 +396,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
     assert html =~ "Recovered 1 pending user turn(s) after channel restart"
   end
 
-  test "conversations page shows handoff and partial stream diagnostics", %{conn: conn} do
+  test "hx_conversations page shows handoff and partial stream diagnostics", %{conn: conn} do
     agent = Runtime.ensure_default_agent!()
 
     {:ok, conversation} =
@@ -437,7 +437,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
         ]
       })
 
-    {:ok, view, _html} = live(conn, ~p"/conversations?conversation_id=#{conversation.id}")
+    {:ok, view, _html} = live(conn, ~p"/hx_conversations?conversation_id=#{conversation.id}")
 
     html = render(view)
     assert html =~ "Ownership handoff pending"
@@ -448,7 +448,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
     assert html =~ "resumed after stream_response"
   end
 
-  test "conversations page rebuilds streaming content from checkpoint snapshots", %{conn: conn} do
+  test "hx_conversations page rebuilds streaming content from checkpoint snapshots", %{conn: conn} do
     agent = Runtime.ensure_default_agent!()
 
     {:ok, conversation} =
@@ -468,7 +468,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
         "execution_events" => []
       })
 
-    {:ok, view, _html} = live(conn, ~p"/conversations?conversation_id=#{conversation.id}")
+    {:ok, view, _html} = live(conn, ~p"/hx_conversations?conversation_id=#{conversation.id}")
 
     html = render(view)
     assert html =~ "streaming"
@@ -491,7 +491,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
     assert html =~ "Partial streamed answer with more detail"
   end
 
-  test "conversations page shows stale streaming recovery state", %{conn: conn} do
+  test "hx_conversations page shows stale streaming recovery state", %{conn: conn} do
     agent = Runtime.ensure_default_agent!()
 
     {:ok, conversation} =
@@ -521,7 +521,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
         "execution_events" => []
       })
 
-    {:ok, view, _html} = live(conn, ~p"/conversations?conversation_id=#{conversation.id}")
+    {:ok, view, _html} = live(conn, ~p"/hx_conversations?conversation_id=#{conversation.id}")
 
     html = render(view)
     assert html =~ "replay streaming"
@@ -529,7 +529,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
     assert html =~ "Partial streamed answer"
   end
 
-  test "conversations page shows planner skill hints", %{conn: conn} do
+  test "hx_conversations page shows planner skill hints", %{conn: conn} do
     agent = Runtime.ensure_default_agent!()
 
     {:ok, conversation} =
@@ -575,7 +575,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
         "execution_events" => []
       })
 
-    {:ok, view, _html} = live(conn, ~p"/conversations?conversation_id=#{conversation.id}")
+    {:ok, view, _html} = live(conn, ~p"/hx_conversations?conversation_id=#{conversation.id}")
 
     html = render(view)
     assert html =~ "Skill hints"
@@ -584,7 +584,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
     assert html =~ "Matched 1 skill hints"
   end
 
-  test "conversations page shows normalized lifecycle details for tool, provider, and skill steps",
+  test "hx_conversations page shows normalized lifecycle details for tool, provider, and skill steps",
        %{conn: conn} do
     agent = Runtime.ensure_default_agent!()
 
@@ -656,7 +656,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
         "execution_events" => []
       })
 
-    {:ok, view, _html} = live(conn, ~p"/conversations?conversation_id=#{conversation.id}")
+    {:ok, view, _html} = live(conn, ~p"/hx_conversations?conversation_id=#{conversation.id}")
 
     html = render(view)
     assert html =~ "recalled 2 memories"
@@ -679,7 +679,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
     assert html =~ "Attempts: completed 10:39:00"
   end
 
-  test "conversations page shows typed integration steps", %{conn: conn} do
+  test "hx_conversations page shows typed integration steps", %{conn: conn} do
     agent = Runtime.ensure_default_agent!()
 
     {:ok, conversation} =
@@ -704,7 +704,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
         "execution_events" => []
       })
 
-    {:ok, view, _html} = live(conn, ~p"/conversations?conversation_id=#{conversation.id}")
+    {:ok, view, _html} = live(conn, ~p"/hx_conversations?conversation_id=#{conversation.id}")
 
     html = render(view)
     assert html =~ "integration"
@@ -712,7 +712,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
     assert html =~ "probe enabled MCP integrations"
   end
 
-  test "conversations page shows normalized execution event details", %{conn: conn} do
+  test "hx_conversations page shows normalized execution event details", %{conn: conn} do
     agent = Runtime.ensure_default_agent!()
 
     {:ok, conversation} =
@@ -754,7 +754,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
         ]
       })
 
-    {:ok, view, _html} = live(conn, ~p"/conversations?conversation_id=#{conversation.id}")
+    {:ok, view, _html} = live(conn, ~p"/hx_conversations?conversation_id=#{conversation.id}")
 
     html = render(view)
     assert html =~ "Execution events"
@@ -770,7 +770,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
     assert html =~ "replayed"
   end
 
-  test "conversations page can rename and archive a conversation", %{conn: conn} do
+  test "hx_conversations page can rename and archive a conversation", %{conn: conn} do
     agent = Runtime.ensure_default_agent!()
 
     {:ok, conversation} =
@@ -786,7 +786,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
         metadata: %{}
       })
 
-    {:ok, view, _html} = live(conn, ~p"/conversations?conversation_id=#{conversation.id}")
+    {:ok, view, _html} = live(conn, ~p"/hx_conversations?conversation_id=#{conversation.id}")
 
     view
     |> form("form[phx-submit=\"rename_conversation\"]", %{
@@ -805,7 +805,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
     assert Runtime.get_conversation!(conversation.id).status == "archived"
   end
 
-  test "conversations page can filter archived conversations by search", %{conn: conn} do
+  test "hx_conversations page can filter archived hx_conversations by search", %{conn: conn} do
     agent = Runtime.ensure_default_agent!()
 
     {:ok, _active} =
@@ -822,10 +822,10 @@ defmodule HydraXWeb.ConversationsLiveTest do
 
     Runtime.archive_conversation!(archived.id)
 
-    {:ok, view, _html} = live(conn, ~p"/conversations")
+    {:ok, view, _html} = live(conn, ~p"/hx_conversations")
 
     view
-    |> form("form[phx-submit=\"filter_conversations\"]", %{
+    |> form("form[phx-submit=\"filter_hx_conversations\"]", %{
       "filters" => %{"search" => "Beta", "status" => "archived", "channel" => "control_plane"}
     })
     |> render_submit()
@@ -835,7 +835,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
     refute html =~ "Alpha Active"
   end
 
-  test "conversations page can review and reset compaction", %{conn: conn} do
+  test "hx_conversations page can review and reset compaction", %{conn: conn} do
     agent = Runtime.ensure_default_agent!()
     Runtime.save_compaction_policy!(agent.id, %{"soft" => 4, "medium" => 8, "hard" => 12})
 
@@ -844,10 +844,10 @@ defmodule HydraXWeb.ConversationsLiveTest do
         agent_id: agent.id,
         type: "Decision",
         content:
-          "Conversation turns should preserve the strongest supporting memories when compacting.",
+          "Conversation hx_turns should preserve the strongest supporting memories when compacting.",
         importance: 0.92,
         metadata: %{
-          "source_file" => "ops/conversations.md",
+          "source_file" => "ops/hx_conversations.md",
           "source_channel" => "slack"
         }
       })
@@ -867,7 +867,7 @@ defmodule HydraXWeb.ConversationsLiveTest do
         })
     end)
 
-    {:ok, view, _html} = live(conn, ~p"/conversations?conversation_id=#{conversation.id}")
+    {:ok, view, _html} = live(conn, ~p"/hx_conversations?conversation_id=#{conversation.id}")
 
     view
     |> element(~s(button[phx-click="review_compaction"][phx-value-id="#{conversation.id}"]))
@@ -875,11 +875,11 @@ defmodule HydraXWeb.ConversationsLiveTest do
 
     html = render(view)
     assert html =~ "Conversation compaction reviewed"
-    assert html =~ "12 turns"
+    assert html =~ "12 hx_turns"
     assert html =~ "tokens"
     assert html =~ "Policy thresholds: soft 4 or 80%"
     assert html =~ "Supporting memories"
-    assert html =~ "Conversation turns should preserve the strongest supporting memories"
+    assert html =~ "Conversation hx_turns should preserve the strongest supporting memories"
     assert html =~ "channel slack"
 
     view

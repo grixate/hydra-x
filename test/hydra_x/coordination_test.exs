@@ -3,12 +3,12 @@ defmodule HydraX.CoordinationTest do
 
   alias HydraX.Runtime
 
-  test "coordination status defaults to local single-node mode on sqlite" do
+  test "coordination status defaults to database leases on postgres" do
     status = Runtime.coordination_status()
 
-    assert status.mode == "local_single_node"
-    assert status.backend == "sqlite"
-    refute status.enabled
+    assert status.mode == "database_leases"
+    assert status.backend == "postgres"
+    assert status.enabled
   end
 
   test "leases can be claimed renewed and reassigned after expiry" do

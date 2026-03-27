@@ -88,7 +88,7 @@ defmodule HydraX.JobsCliTest do
     assert output =~ "job="
 
     [job | _] =
-      Runtime.list_scheduled_jobs(limit: 20)
+      Runtime.list_hx_scheduled_jobs(limit: 20)
       |> Enum.filter(&(&1.name == "CLI Retention Job"))
 
     assert job.run_retention_days == 5
@@ -118,7 +118,7 @@ defmodule HydraX.JobsCliTest do
     assert output =~ "weekly tue,thu 07:45"
 
     [job | _] =
-      Runtime.list_scheduled_jobs(limit: 20)
+      Runtime.list_hx_scheduled_jobs(limit: 20)
       |> Enum.filter(&(&1.name == "CLI Natural Schedule Job"))
 
     assert job.schedule_mode == "weekly"

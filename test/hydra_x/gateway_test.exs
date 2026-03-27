@@ -4,7 +4,7 @@ defmodule HydraX.GatewayTest do
   alias HydraX.Gateway.Adapters.{Discord, Slack, Telegram}
   alias HydraX.Runtime
 
-  test "telegram updates are routed into conversations and answered" do
+  test "telegram updates are routed into hx_conversations and answered" do
     agent = create_agent()
     {:ok, pid} = HydraX.Agent.ensure_started(agent)
     on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
@@ -37,9 +37,9 @@ defmodule HydraX.GatewayTest do
     assert_receive {:telegram_reply, %{chat_id: "42", text: content, reply_to_message_id: 501}}
     assert content =~ "Mock response"
 
-    [conversation] = Runtime.list_conversations(agent_id: agent.id, limit: 10)
+    [conversation] = Runtime.list_hx_conversations(agent_id: agent.id, limit: 10)
     assert conversation.channel == "telegram"
-    assert Runtime.list_turns(conversation.id) |> length() == 2
+    assert Runtime.list_hx_turns(conversation.id) |> length() == 2
 
     refreshed = Runtime.get_conversation!(conversation.id)
     assert refreshed.metadata["last_delivery"]["status"] == "delivered"
@@ -96,8 +96,8 @@ defmodule HydraX.GatewayTest do
 
     refute_receive {:telegram_reply, _payload}
 
-    [conversation] = Runtime.list_conversations(agent_id: agent.id, limit: 10)
-    assert Runtime.list_turns(conversation.id) == []
+    [conversation] = Runtime.list_hx_conversations(agent_id: agent.id, limit: 10)
+    assert Runtime.list_hx_turns(conversation.id) == []
 
     checkpoint = Runtime.get_checkpoint(conversation.id, "ingress")
     assert checkpoint.state["status"] == "queued"
@@ -181,7 +181,7 @@ defmodule HydraX.GatewayTest do
     assert refreshed.metadata["last_delivery"]["reason"] =~ "node:remote"
     assert refreshed.metadata["last_delivery"]["reply_context"]["reply_to_message_id"] == 901
 
-    [turn] = Runtime.list_turns(conversation.id)
+    [turn] = Runtime.list_hx_turns(conversation.id)
     assert turn.role == "user"
     assert turn.content == "Route this to the owning node."
   end
@@ -450,7 +450,7 @@ defmodule HydraX.GatewayTest do
     assert delivered_text =~ "Process this queued ingress message."
 
     refreshed = Runtime.get_conversation!(conversation.id)
-    assert length(refreshed.turns) == 2
+    assert length(refreshed.hx_turns) == 2
     assert refreshed.metadata["last_delivery"]["status"] == "delivered"
     assert Runtime.get_checkpoint(conversation.id, "ingress").state["message_count"] == 0
   end
@@ -616,7 +616,7 @@ defmodule HydraX.GatewayTest do
                %{deliver: deliver}
              )
 
-    [conversation] = Runtime.list_conversations(agent_id: agent.id, limit: 10)
+    [conversation] = Runtime.list_hx_conversations(agent_id: agent.id, limit: 10)
     refreshed = Runtime.get_conversation!(conversation.id)
     assert refreshed.metadata["last_delivery"]["status"] == "failed"
     assert refreshed.metadata["last_delivery"]["reason"] =~ ":timeout"
@@ -655,7 +655,7 @@ defmodule HydraX.GatewayTest do
                %{deliver: fn _payload -> {:error, :timeout} end}
              )
 
-    [conversation] = Runtime.list_conversations(agent_id: agent.id, limit: 10)
+    [conversation] = Runtime.list_hx_conversations(agent_id: agent.id, limit: 10)
 
     previous = Application.get_env(:hydra_x, :telegram_deliver)
 
@@ -715,8 +715,8 @@ defmodule HydraX.GatewayTest do
                %{deliver: fn _payload -> :ok end}
              )
 
-    [conversation] = Runtime.list_conversations(agent_id: agent.id, limit: 10)
-    [user_turn | _] = Runtime.list_turns(conversation.id)
+    [conversation] = Runtime.list_hx_conversations(agent_id: agent.id, limit: 10)
+    [user_turn | _] = Runtime.list_hx_turns(conversation.id)
 
     assert user_turn.role == "user"
     assert user_turn.content == "See attached"
@@ -725,7 +725,7 @@ defmodule HydraX.GatewayTest do
              user_turn.metadata["attachments"]
   end
 
-  test "discord updates are routed into conversations and answered" do
+  test "discord updates are routed into hx_conversations and answered" do
     agent = create_agent()
     {:ok, pid} = HydraX.Agent.ensure_started(agent)
     on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
@@ -762,7 +762,7 @@ defmodule HydraX.GatewayTest do
     assert content =~ "Mock response"
     assert metadata == "discord-source-1"
 
-    [conversation] = Runtime.list_conversations(agent_id: agent.id, limit: 10)
+    [conversation] = Runtime.list_hx_conversations(agent_id: agent.id, limit: 10)
     assert conversation.channel == "discord"
 
     refreshed = Runtime.get_conversation!(conversation.id)
@@ -811,8 +811,8 @@ defmodule HydraX.GatewayTest do
                %{deliver: fn _payload -> :ok end}
              )
 
-    [conversation] = Runtime.list_conversations(agent_id: agent.id, limit: 10)
-    [user_turn | _] = Runtime.list_turns(conversation.id)
+    [conversation] = Runtime.list_hx_conversations(agent_id: agent.id, limit: 10)
+    [user_turn | _] = Runtime.list_hx_turns(conversation.id)
 
     assert user_turn.role == "user"
     assert user_turn.content == "[Discord attachments: image/png]"
@@ -883,7 +883,7 @@ defmodule HydraX.GatewayTest do
     assert String.length(second) == 500
   end
 
-  test "slack updates are routed into conversations and answered" do
+  test "slack updates are routed into hx_conversations and answered" do
     agent = create_agent()
     {:ok, pid} = HydraX.Agent.ensure_started(agent)
     on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
@@ -921,7 +921,7 @@ defmodule HydraX.GatewayTest do
     assert content =~ "Mock response"
     assert metadata == "123.456"
 
-    [conversation] = Runtime.list_conversations(agent_id: agent.id, limit: 10)
+    [conversation] = Runtime.list_hx_conversations(agent_id: agent.id, limit: 10)
     assert conversation.channel == "slack"
 
     refreshed = Runtime.get_conversation!(conversation.id)
@@ -972,8 +972,8 @@ defmodule HydraX.GatewayTest do
                %{deliver: fn _payload -> :ok end}
              )
 
-    [conversation] = Runtime.list_conversations(agent_id: agent.id, limit: 10)
-    [user_turn | _] = Runtime.list_turns(conversation.id)
+    [conversation] = Runtime.list_hx_conversations(agent_id: agent.id, limit: 10)
+    [user_turn | _] = Runtime.list_hx_turns(conversation.id)
 
     assert user_turn.role == "user"
     assert user_turn.content == "[Slack attachments: application/pdf]"
@@ -1040,7 +1040,7 @@ defmodule HydraX.GatewayTest do
     assert String.length(second) == 700
   end
 
-  test "webchat messages are routed into conversations and answered" do
+  test "webchat messages are routed into hx_conversations and answered" do
     agent = create_agent()
     {:ok, pid} = HydraX.Agent.ensure_started(agent)
     on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
@@ -1070,9 +1070,9 @@ defmodule HydraX.GatewayTest do
 
     assert_receive {:webchat_delivery, ^session_ref}
 
-    [conversation] = Runtime.list_conversations(agent_id: agent.id, limit: 10)
+    [conversation] = Runtime.list_hx_conversations(agent_id: agent.id, limit: 10)
     assert conversation.channel == "webchat"
-    assert Runtime.list_turns(conversation.id) |> length() == 2
+    assert Runtime.list_hx_turns(conversation.id) |> length() == 2
 
     refreshed = Runtime.get_conversation!(conversation.id)
     assert refreshed.metadata["last_delivery"]["status"] == "delivered"
@@ -1449,8 +1449,8 @@ defmodule HydraX.GatewayTest do
                ]
              })
 
-    [conversation] = Runtime.list_conversations(agent_id: agent.id, limit: 10)
-    [user_turn | _] = Runtime.list_turns(conversation.id)
+    [conversation] = Runtime.list_hx_conversations(agent_id: agent.id, limit: 10)
+    [user_turn | _] = Runtime.list_hx_turns(conversation.id)
 
     assert user_turn.content == "[Webchat attachments: text/plain]"
     assert user_turn.metadata["display_name"] == "Operator Visitor"

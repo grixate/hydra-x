@@ -21,10 +21,10 @@ defmodule HydraX.BackupTest do
     assert manifest["verified"] == true
     assert manifest["missing_entries"] == []
     assert manifest["archive_size_bytes"] > 0
-    assert manifest["persistence"]["backend"] == "sqlite"
-    assert manifest["persistence"]["backup_mode"] == "bundled_database"
+    assert manifest["persistence"]["backend"] == "postgres"
+    assert manifest["persistence"]["backup_mode"] == "external_database"
 
-    assert Enum.any?(manifest["entries"], &(&1["type"] == "database"))
+    assert Enum.any?(manifest["entries"], &(&1["type"] == "database_reference"))
 
     assert Enum.any?(
              manifest["entries"],
@@ -57,7 +57,9 @@ defmodule HydraX.BackupTest do
 
     assert File.read!(restored_workspace) == "Restore workspace"
 
-    database_entry = Enum.find(result["manifest"]["entries"], &(&1["type"] == "database"))
+    database_entry =
+      Enum.find(result["manifest"]["entries"], &(&1["type"] == "database_reference"))
+
     assert File.exists?(Path.join(restore_root, database_entry["bundle_path"]))
   end
 

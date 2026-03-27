@@ -63,7 +63,7 @@ defmodule HydraXWeb.WebchatLiveTest do
     |> render_submit()
 
     assert render(view) =~ "display name required"
-    assert Runtime.list_conversations(agent_id: agent.id, limit: 10) == []
+    assert Runtime.list_hx_conversations(agent_id: agent.id, limit: 10) == []
 
     conn =
       conn

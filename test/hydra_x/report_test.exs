@@ -96,7 +96,7 @@ defmodule HydraX.ReportTest do
                enabled: true
              })
 
-    assert {:ok, _bindings} = Runtime.refresh_agent_mcp_servers(agent.id)
+    assert {:ok, _bindings} = Runtime.refresh_hx_agent_mcp_servers(agent.id)
     assert {:ok, %{count: 1}} = Runtime.list_agent_mcp_actions(agent.id, refresh: true)
 
     Application.put_env(:hydra_x, :mcp_http_request_fn, fn opts ->
@@ -191,7 +191,7 @@ defmodule HydraX.ReportTest do
     assert is_map(snapshot.readiness)
     assert snapshot.provider.kind
     assert snapshot.install.public_url
-    assert is_list(snapshot.conversations)
+    assert is_list(snapshot.hx_conversations)
     assert is_list(snapshot.agents)
     assert is_map(snapshot.channels)
     assert is_map(snapshot.secrets)
@@ -210,7 +210,7 @@ defmodule HydraX.ReportTest do
            )
 
     assert snapshot.cluster.mode == "single_node"
-    assert snapshot.coordination.mode == "local_single_node"
+    assert snapshot.coordination.mode == "database_leases"
     assert is_map(snapshot.incidents)
     assert is_list(snapshot.audit)
     assert Enum.any?(snapshot.ingest, &(&1.source_file == "report.md"))
@@ -235,7 +235,7 @@ defmodule HydraX.ReportTest do
            )
 
     assert Enum.any?(
-             snapshot.conversations,
+             snapshot.hx_conversations,
              &(&1.metadata["last_delivery"]["reply_context"]["thread_ts"] == "123.456")
            )
   end
@@ -466,7 +466,7 @@ defmodule HydraX.ReportTest do
                enabled: true
              })
 
-    assert {:ok, _bindings} = Runtime.refresh_agent_mcp_servers(agent.id)
+    assert {:ok, _bindings} = Runtime.refresh_hx_agent_mcp_servers(agent.id)
     assert {:ok, %{count: 1}} = Runtime.list_agent_mcp_actions(agent.id, refresh: true)
 
     Application.put_env(:hydra_x, :mcp_http_request_fn, fn opts ->
@@ -1204,8 +1204,8 @@ defmodule HydraX.ReportTest do
     assert File.exists?(Path.join(export.bundle_dir, "agent_mcp.json"))
     assert File.exists?(Path.join(export.bundle_dir, "skills.json"))
     assert File.exists?(Path.join(export.bundle_dir, "memory.json"))
-    assert File.exists?(Path.join(export.bundle_dir, "conversations.json"))
-    assert File.exists?(Path.join(export.bundle_dir, "work_items.json"))
+    assert File.exists?(Path.join(export.bundle_dir, "hx_conversations.json"))
+    assert File.exists?(Path.join(export.bundle_dir, "hx_work_items.json"))
     assert File.exists?(Path.join(export.bundle_dir, "incidents.json"))
     assert File.exists?(Path.join(export.bundle_dir, "audit.json"))
     assert File.read!(export.markdown_path) =~ "Hydra-X Operator Report"
@@ -1228,9 +1228,10 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "active 2"
     assert File.read!(export.markdown_path) =~ "+1 more: Reviewer-guided recovery"
 
-    work_items_json = Jason.decode!(File.read!(Path.join(export.bundle_dir, "work_items.json")))
+    hx_work_items_json =
+      Jason.decode!(File.read!(Path.join(export.bundle_dir, "hx_work_items.json")))
 
-    assert Enum.any?(work_items_json, fn item ->
+    assert Enum.any?(hx_work_items_json, fn item ->
              follow_up = item["follow_up"] || %{}
              entries = follow_up["entries"] || []
 
@@ -1376,26 +1377,26 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "channel=slack"
     assert File.read!(export.markdown_path) =~ "Top ranked active memories"
 
-    work_items_json = File.read!(Path.join(export.bundle_dir, "work_items.json"))
+    hx_work_items_json = File.read!(Path.join(export.bundle_dir, "hx_work_items.json"))
 
-    assert work_items_json =~ "\"delivery_decision_kind\": \"review\""
-    assert work_items_json =~ "\"delivery_decision_snapshot\":"
-    assert work_items_json =~ "\"assignment_resolution\":"
-    assert work_items_json =~ "\"resolved_agent_slug\": \"report-agent\""
+    assert hx_work_items_json =~ "\"delivery_decision_kind\": \"review\""
+    assert hx_work_items_json =~ "\"delivery_decision_snapshot\":"
+    assert hx_work_items_json =~ "\"assignment_resolution\":"
+    assert hx_work_items_json =~ "\"resolved_agent_slug\": \"report-agent\""
 
-    assert work_items_json =~
+    assert hx_work_items_json =~
              "\"delivery_decision_summary\": \"Route the revised summary through Slack because the operator requested a channel switch.\""
 
-    assert work_items_json =~ "\"delivery_decision_kind\": \"synthesis\""
+    assert hx_work_items_json =~ "\"delivery_decision_kind\": \"synthesis\""
 
-    assert work_items_json =~
+    assert hx_work_items_json =~
              "\"delivery_decision_summary\": \"Keep the rerouted Slack plan because it preserves operator intent without reopening Telegram delivery.\""
 
     assert File.read!(export.markdown_path) =~ "ops/reporting.md"
     assert File.read!(export.markdown_path) =~ "breakdown="
     assert File.read!(export.markdown_path) =~ "Cluster Posture"
     assert File.read!(export.markdown_path) =~ "Coordination"
-    assert File.read!(export.markdown_path) =~ "Coordination mode: local_single_node"
+    assert File.read!(export.markdown_path) =~ "Coordination mode: database_leases"
     assert File.read!(export.markdown_path) =~ "ctx=777.888/777.888"
     assert File.read!(export.markdown_path) =~ "chunks=2"
     assert File.read!(export.markdown_path) =~ "payload=channel=C555"
@@ -1427,7 +1428,7 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.json_path) =~ "\"source_section\""
     assert File.read!(export.json_path) =~ "\"skills\""
     assert File.read!(export.json_path) =~ "\"top_memories\""
-    assert File.read!(export.json_path) =~ "\"work_items\""
+    assert File.read!(export.json_path) =~ "\"hx_work_items\""
     assert File.read!(export.json_path) =~ "\"active_autonomy_job_count\": 1"
     assert File.read!(export.json_path) =~ "\"unsafe_request_count\": 2"
     assert File.read!(export.json_path) =~ "\"budget_blocked_count\": 1"
@@ -1469,18 +1470,25 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "Work item replay:"
     assert File.read!(export.markdown_path) =~ "Ownership replay:"
     assert File.read!(export.markdown_path) =~ "Deferred delivery replay:"
-    assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~ "\"channel_state\""
-    assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~ "\"compaction\""
 
-    assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~
+    assert File.read!(Path.join(export.bundle_dir, "hx_conversations.json")) =~
+             "\"channel_state\""
+
+    assert File.read!(Path.join(export.bundle_dir, "hx_conversations.json")) =~ "\"compaction\""
+
+    assert File.read!(Path.join(export.bundle_dir, "hx_conversations.json")) =~
              "\"summary_source\": \"provider\""
 
-    assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~
+    assert File.read!(Path.join(export.bundle_dir, "hx_conversations.json")) =~
              "\"supporting_memories\""
 
-    assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~ "\"memory_recall\""
-    assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~ "\"stream_capture\""
-    assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~ "\"retry_state\""
+    assert File.read!(Path.join(export.bundle_dir, "hx_conversations.json")) =~
+             "\"memory_recall\""
+
+    assert File.read!(Path.join(export.bundle_dir, "hx_conversations.json")) =~
+             "\"stream_capture\""
+
+    assert File.read!(Path.join(export.bundle_dir, "hx_conversations.json")) =~ "\"retry_state\""
     assert File.read!(export.json_path) =~ "\"pending_ingress\""
     assert File.read!(export.json_path) =~ "\"stale_work_item_claims\""
     assert File.read!(export.json_path) =~ "\"assignment_recoveries\""
@@ -1489,41 +1497,49 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.json_path) =~ "\"ownership_handoffs\""
     assert File.read!(export.json_path) =~ "\"deferred_deliveries\""
 
-    assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~
+    assert File.read!(Path.join(export.bundle_dir, "hx_conversations.json")) =~
              "\"pending_response\""
 
-    assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~
+    assert File.read!(Path.join(export.bundle_dir, "hx_work_items.json")) =~
              "\"approval_stage\": \"operator_approved\""
 
-    assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~ "\"patch_bundle\""
-    assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~ "\"promoted_memories\""
-    assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~ "\"publish_follow_up\""
+    assert File.read!(Path.join(export.bundle_dir, "hx_work_items.json")) =~ "\"patch_bundle\""
 
-    assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~
+    assert File.read!(Path.join(export.bundle_dir, "hx_work_items.json")) =~
+             "\"promoted_memories\""
+
+    assert File.read!(Path.join(export.bundle_dir, "hx_work_items.json")) =~
+             "\"publish_follow_up\""
+
+    assert File.read!(Path.join(export.bundle_dir, "hx_work_items.json")) =~
              "\"status\": \"delivered\""
 
-    assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~
+    assert File.read!(Path.join(export.bundle_dir, "hx_work_items.json")) =~
              "\"provider_message_id\": \"report-91\""
 
-    assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~ "\"delivery\": {"
-    assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~ "\"ownership_summary\""
+    assert File.read!(Path.join(export.bundle_dir, "hx_work_items.json")) =~ "\"delivery\": {"
 
-    assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~
+    assert File.read!(Path.join(export.bundle_dir, "hx_work_items.json")) =~
+             "\"ownership_summary\""
+
+    assert File.read!(Path.join(export.bundle_dir, "hx_work_items.json")) =~
              "\"assignment_recovery\""
 
-    assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~
+    assert File.read!(Path.join(export.bundle_dir, "hx_work_items.json")) =~
              "\"assignment_recovery_summary\": \"worker_saturated:2026-03-18 10:15:00 UTC\""
 
-    assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~
+    assert File.read!(Path.join(export.bundle_dir, "hx_work_items.json")) =~
              "\"node:report-remote:claimed_remote\""
 
-    assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~ "\"artifact_derived\""
-    assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~ "\"approvals\""
+    assert File.read!(Path.join(export.bundle_dir, "hx_work_items.json")) =~
+             "\"artifact_derived\""
 
-    assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~
+    assert File.read!(Path.join(export.bundle_dir, "hx_work_items.json")) =~ "\"approvals\""
+
+    assert File.read!(Path.join(export.bundle_dir, "hx_work_items.json")) =~
              "\"requested_action\": \"enable_extension\""
 
-    assert File.read!(Path.join(export.bundle_dir, "work_items.json")) =~
+    assert File.read!(Path.join(export.bundle_dir, "hx_work_items.json")) =~
              "\"approved_not_enabled\""
   end
 
@@ -1575,7 +1591,9 @@ defmodule HydraX.ReportTest do
     {:ok, export} = Report.export_snapshot(output_root)
 
     markdown = File.read!(export.markdown_path)
-    work_items_json = Jason.decode!(File.read!(Path.join(export.bundle_dir, "work_items.json")))
+
+    hx_work_items_json =
+      Jason.decode!(File.read!(Path.join(export.bundle_dir, "hx_work_items.json")))
 
     assert markdown =~ work_item.goal
 
@@ -1596,7 +1614,7 @@ defmodule HydraX.ReportTest do
     assert markdown =~
              "recovery_selection_reason=de-escalated from Operator-guided recovery under existing planner recovery pressure (1 existing)"
 
-    assert Enum.any?(work_items_json, fn item ->
+    assert Enum.any?(hx_work_items_json, fn item ->
              item["id"] == work_item.id and
                item["recovery_strategy_summary"] ==
                  "Operator-guided recovery with narrowed delegation fallback" and
@@ -1622,7 +1640,7 @@ defmodule HydraX.ReportTest do
                  "de-escalated from Operator-guided recovery under existing planner recovery pressure (1 existing)"
            end)
 
-    assert Enum.any?(work_items_json, fn item ->
+    assert Enum.any?(hx_work_items_json, fn item ->
              item["id"] == work_item.id and
                item["follow_up"]["strategy_key"] == nil and
                item["follow_up"]["strategy"] == nil
@@ -1673,10 +1691,10 @@ defmodule HydraX.ReportTest do
     assert File.read!(export.markdown_path) =~ "resume_from=streaming"
     assert File.read!(export.markdown_path) =~ "stale_stream=yes"
 
-    assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~
+    assert File.read!(Path.join(export.bundle_dir, "hx_conversations.json")) =~
              "\"resume_stage\": \"streaming\""
 
-    assert File.read!(Path.join(export.bundle_dir, "conversations.json")) =~
+    assert File.read!(Path.join(export.bundle_dir, "hx_conversations.json")) =~
              "\"stale_stream\": true"
   end
 
@@ -1842,7 +1860,7 @@ defmodule HydraX.ReportTest do
     {:ok, export} = Report.export_snapshot(output_root)
 
     markdown = File.read!(export.markdown_path)
-    json = File.read!(Path.join(export.bundle_dir, "work_items.json"))
+    json = File.read!(Path.join(export.bundle_dir, "hx_work_items.json"))
 
     assert markdown =~ "delegation=parallel:2:active=0:terminal=2"
     assert markdown =~ "delegation_roles=researcher,operator"

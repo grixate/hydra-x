@@ -1337,8 +1337,8 @@ defmodule HydraXWeb.HealthLiveTest do
         enabled: true
       })
 
-    assert {:ok, _bindings} = Runtime.refresh_agent_mcp_servers(agent.id)
-    [binding] = Runtime.list_agent_mcp_servers(agent.id)
+    assert {:ok, _bindings} = Runtime.refresh_hx_agent_mcp_servers(agent.id)
+    [binding] = Runtime.list_hx_agent_mcp_servers(agent.id)
     assert binding.mcp_server_config_id == server.id
 
     {:ok, _view, html} = live(conn, ~p"/health")
@@ -1356,11 +1356,11 @@ defmodule HydraXWeb.HealthLiveTest do
 
     assert html =~ "Cluster posture"
     assert html =~ "single_node"
-    assert html =~ "sqlite_single_writer"
-    assert html =~ "Persistence: sqlite"
-    assert html =~ "Backup mode: bundled_database"
+    assert html =~ "postgres_multi_writer_ready"
+    assert html =~ "Persistence: postgres"
+    assert html =~ "Backup mode: external_database"
     assert html =~ "Coordination mode"
-    assert html =~ "local_single_node"
+    assert html =~ "database_leases"
   end
 
   test "health page shows open scheduler circuits", %{conn: conn} do

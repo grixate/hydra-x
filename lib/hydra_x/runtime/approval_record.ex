@@ -5,7 +5,7 @@ defmodule HydraX.Runtime.ApprovalRecord do
   @subject_types ~w(work_item artifact)
   @decisions ~w(requested approved rejected superseded)
 
-  schema "approval_records" do
+  schema "hx_approval_records" do
     field :subject_type, :string
     field :subject_id, :integer
     field :requested_action, :string

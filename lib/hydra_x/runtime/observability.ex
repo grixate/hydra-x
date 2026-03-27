@@ -189,13 +189,13 @@ defmodule HydraX.Runtime.Observability do
         detail: effective_policy_detail(effective_policy)
       },
       (
-        scheduled_jobs = HydraX.Runtime.Jobs.list_scheduled_jobs(limit: 5)
+        hx_scheduled_jobs = HydraX.Runtime.Jobs.list_scheduled_jobs(limit: 5)
 
         %{
           name: "scheduler",
-          status: if(scheduled_jobs == [], do: :warn, else: :ok),
+          status: if(hx_scheduled_jobs == [], do: :warn, else: :ok),
           detail:
-            case scheduled_jobs do
+            case hx_scheduled_jobs do
               [] -> "no scheduled jobs configured"
               jobs -> "#{length(jobs)} jobs configured"
             end
@@ -1066,7 +1066,7 @@ defmodule HydraX.Runtime.Observability do
         agent_id: agent.id,
         policy: policy,
         usage: usage,
-        safety_events: HydraX.Safety.recent_events(agent.id, 10),
+        hx_safety_events: HydraX.Safety.recent_events(agent.id, 10),
         recent_usage: HydraX.Budget.recent_usage(agent.id, 15)
       }
     else
@@ -1075,7 +1075,7 @@ defmodule HydraX.Runtime.Observability do
         agent_id: nil,
         policy: nil,
         usage: nil,
-        safety_events: [],
+        hx_safety_events: [],
         recent_usage: []
       }
     end

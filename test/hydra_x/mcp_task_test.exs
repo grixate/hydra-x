@@ -79,7 +79,7 @@ defmodule HydraX.MCPTaskTest do
                enabled: true
              })
 
-    assert {:ok, _bindings} = Runtime.refresh_agent_mcp_servers(agent.id)
+    assert {:ok, _bindings} = Runtime.refresh_hx_agent_mcp_servers(agent.id)
 
     Mix.Task.reenable("hydra_x.mcp")
 
@@ -129,7 +129,7 @@ defmodule HydraX.MCPTaskTest do
                enabled: true
              })
 
-    assert {:ok, _bindings} = Runtime.refresh_agent_mcp_servers(agent.id)
+    assert {:ok, _bindings} = Runtime.refresh_hx_agent_mcp_servers(agent.id)
 
     Mix.Task.reenable("hydra_x.mcp")
 
@@ -175,7 +175,7 @@ defmodule HydraX.MCPTaskTest do
                enabled: true
              })
 
-    assert {:ok, _bindings} = Runtime.refresh_agent_mcp_servers(agent.id)
+    assert {:ok, _bindings} = Runtime.refresh_hx_agent_mcp_servers(agent.id)
 
     Mix.Task.reenable("hydra_x.mcp")
 
@@ -228,7 +228,7 @@ defmodule HydraX.MCPTaskTest do
                enabled: true
              })
 
-    assert {:ok, _bindings} = Runtime.refresh_agent_mcp_servers(agent.id)
+    assert {:ok, _bindings} = Runtime.refresh_hx_agent_mcp_servers(agent.id)
 
     Mix.Task.reenable("hydra_x.mcp")
 

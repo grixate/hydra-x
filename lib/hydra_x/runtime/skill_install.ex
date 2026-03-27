@@ -2,7 +2,7 @@ defmodule HydraX.Runtime.SkillInstall do
   use Ecto.Schema
   import Ecto.Changeset
 
-  schema "skill_installs" do
+  schema "hx_skill_installs" do
     field :slug, :string
     field :name, :string
     field :path, :string
@@ -20,6 +20,6 @@ defmodule HydraX.Runtime.SkillInstall do
     skill
     |> cast(attrs, [:agent_id, :slug, :name, :path, :description, :source, :enabled, :metadata])
     |> validate_required([:agent_id, :slug, :name, :path, :source])
-    |> unique_constraint([:agent_id, :slug], name: :skill_installs_agent_id_slug_index)
+    |> unique_constraint([:agent_id, :slug], name: :hx_skill_installs_agent_id_slug_index)
   end
 end

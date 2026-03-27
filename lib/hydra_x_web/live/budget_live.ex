@@ -111,13 +111,13 @@ defmodule HydraXWeb.BudgetLive do
               <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
                 Recent safety events
               </div>
-              <div class="mt-3 font-display text-4xl">{length(@status.safety_events)}</div>
+              <div class="mt-3 font-display text-4xl">{length(@status.hx_safety_events)}</div>
             </div>
           </div>
 
           <div class="mt-6 space-y-3">
             <div
-              :for={event <- @status.safety_events}
+              :for={event <- @status.hx_safety_events}
               class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4"
             >
               <div class="flex items-center justify-between gap-4">
@@ -131,7 +131,7 @@ defmodule HydraXWeb.BudgetLive do
               <p class="mt-3 text-sm">{event.message}</p>
             </div>
             <div
-              :if={@status.safety_events == []}
+              :if={@status.hx_safety_events == []}
               class="rounded-2xl border border-dashed border-white/10 px-4 py-8 text-center text-[var(--hx-mute)]"
             >
               No safety events recorded yet.

@@ -2,7 +2,7 @@ defmodule HydraX.Runtime.CoordinationLease do
   use Ecto.Schema
   import Ecto.Changeset
 
-  schema "coordination_leases" do
+  schema "hx_coordination_leases" do
     field :name, :string
     field :owner, :string
     field :owner_node, :string

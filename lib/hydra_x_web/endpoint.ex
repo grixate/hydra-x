@@ -11,6 +11,10 @@ defmodule HydraXWeb.Endpoint do
     same_site: "Lax"
   ]
 
+  socket "/socket", HydraXWeb.UserSocket,
+    websocket: [connect_info: [:user_agent, session: @session_options]],
+    longpoll: false
+
   socket "/live", Phoenix.LiveView.Socket,
     websocket: [connect_info: [:user_agent, session: @session_options]],
     longpoll: [connect_info: [:user_agent, session: @session_options]]

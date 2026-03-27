@@ -43,7 +43,7 @@ defmodule HydraX.RuntimeTest do
     :ok
   end
 
-  test "chat flow persists turns with mock provider" do
+  test "chat flow persists hx_turns with mock provider" do
     agent = create_agent()
     {:ok, pid} = HydraX.Agent.ensure_started(agent)
     on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
@@ -61,7 +61,7 @@ defmodule HydraX.RuntimeTest do
 
     assert response =~ "Mock response"
     assert response =~ "Hello, how are you?"
-    assert length(Runtime.list_turns(conversation.id)) == 2
+    assert length(Runtime.list_hx_turns(conversation.id)) == 2
 
     channel_state = Runtime.conversation_channel_state(conversation.id)
     assert channel_state.status == "completed"
@@ -110,7 +110,7 @@ defmodule HydraX.RuntimeTest do
     assert turn.content == "tool_execution"
 
     assert Enum.any?(
-             Runtime.list_turns(conversation.id),
+             Runtime.list_hx_turns(conversation.id),
              &(&1.id == turn.id and &1.content == "tool_execution")
            )
   end
@@ -368,7 +368,7 @@ defmodule HydraX.RuntimeTest do
 
     assert reason =~ "node:remote"
 
-    [turn] = Runtime.list_turns(conversation.id)
+    [turn] = Runtime.list_hx_turns(conversation.id)
     assert turn.role == "user"
     assert turn.content == "Hold this for the owning node."
     assert turn.metadata["deferred_to_owner"] == "node:remote"
@@ -421,7 +421,7 @@ defmodule HydraX.RuntimeTest do
       end)
 
     wait_for(fn ->
-      Runtime.list_turns(conversation.id) |> length() == 1
+      Runtime.list_hx_turns(conversation.id) |> length() == 1
     end)
 
     stale_lease = Runtime.get_lease("conversation:#{conversation.id}")
@@ -462,7 +462,7 @@ defmodule HydraX.RuntimeTest do
     assert channel_state.resumable
     assert channel_state.ownership["owner"] == "node:remote"
     assert Enum.any?(channel_state.execution_events, &(&1["phase"] == "ownership_lost"))
-    refute Enum.any?(Runtime.list_turns(conversation.id), &(&1.role == "assistant"))
+    refute Enum.any?(Runtime.list_hx_turns(conversation.id), &(&1.role == "assistant"))
   end
 
   test "final provider responses survive ownership handoff without a second provider call" do
@@ -594,7 +594,7 @@ defmodule HydraX.RuntimeTest do
     assert channel_state.pending_response["content"] == "Captured before ownership handoff."
     assert channel_state.pending_response["metadata"]["provider"] == "Handoff Safe Provider"
     assert :atomics.get(counter, 1) == 1
-    refute Enum.any?(Runtime.list_turns(conversation.id), &(&1.role == "assistant"))
+    refute Enum.any?(Runtime.list_hx_turns(conversation.id), &(&1.role == "assistant"))
 
     remote_lease = Runtime.get_lease("conversation:#{conversation.id}")
 
@@ -618,7 +618,7 @@ defmodule HydraX.RuntimeTest do
     wait_for(
       fn ->
         Enum.any?(
-          Runtime.list_turns(conversation.id),
+          Runtime.list_hx_turns(conversation.id),
           &(&1.role == "assistant" and &1.content == "Captured before ownership handoff.")
         )
       end,
@@ -831,7 +831,7 @@ defmodule HydraX.RuntimeTest do
 
     wait_for(
       fn ->
-        Runtime.list_turns(conversation.id)
+        Runtime.list_hx_turns(conversation.id)
         |> Enum.any?(
           &(&1.role == "assistant" and &1.content == "Recovered via cached tool result.")
         )
@@ -1020,7 +1020,7 @@ defmodule HydraX.RuntimeTest do
 
     wait_for(
       fn ->
-        Runtime.list_turns(conversation.id)
+        Runtime.list_hx_turns(conversation.id)
         |> Enum.any?(
           &(&1.role == "assistant" and &1.content == "Recovered after the original channel died.")
         )
@@ -1145,7 +1145,7 @@ defmodule HydraX.RuntimeTest do
 
     wait_for(
       fn ->
-        Runtime.list_turns(conversation.id)
+        Runtime.list_hx_turns(conversation.id)
         |> Enum.any?(
           &(&1.role == "assistant" and
               &1.content == "Recovered after restarting the interrupted stream.")
@@ -1166,7 +1166,7 @@ defmodule HydraX.RuntimeTest do
            end)
   end
 
-  test "owned deferred conversations can be resumed through the runtime" do
+  test "owned deferred hx_conversations can be resumed through the runtime" do
     previous_adapter = Application.get_env(:hydra_x, :repo_adapter)
     Application.put_env(:hydra_x, :repo_adapter, Ecto.Adapters.Postgres)
 
@@ -1208,7 +1208,7 @@ defmodule HydraX.RuntimeTest do
         "execution_events" => []
       })
 
-    summary = Runtime.resume_owned_conversations()
+    summary = Runtime.resume_owned_hx_conversations()
 
     assert summary.resumed_count == 1
     assert [%{conversation_id: conversation_id, status: "resumed"}] = summary.results
@@ -1217,7 +1217,7 @@ defmodule HydraX.RuntimeTest do
     Process.sleep(100)
 
     refreshed = Runtime.get_conversation!(conversation.id)
-    assert List.last(refreshed.turns).role == "assistant"
+    assert List.last(refreshed.hx_turns).role == "assistant"
 
     channel_state = Runtime.conversation_channel_state(conversation.id)
     assert channel_state.status == "completed"
@@ -1286,17 +1286,17 @@ defmodule HydraX.RuntimeTest do
         }
       })
 
-    summary = Runtime.resume_owned_conversations()
+    summary = Runtime.resume_owned_hx_conversations()
 
     assert summary.resumed_count == 1
     Process.sleep(100)
 
     refreshed = Runtime.get_conversation!(conversation.id)
     assert refreshed.metadata["ownership"]["owner"] == Runtime.coordination_status().owner
-    assert List.last(refreshed.turns).role == "assistant"
+    assert List.last(refreshed.hx_turns).role == "assistant"
   end
 
-  test "runtime resumes stale streaming conversations from checkpoint state" do
+  test "runtime resumes stale streaming hx_conversations from checkpoint state" do
     previous_adapter = Application.get_env(:hydra_x, :repo_adapter)
     Application.put_env(:hydra_x, :repo_adapter, Ecto.Adapters.Postgres)
 
@@ -1346,7 +1346,7 @@ defmodule HydraX.RuntimeTest do
     assert channel_state.resume_stage == "streaming"
     assert channel_state.stale_stream
 
-    summary = Runtime.resume_owned_conversations()
+    summary = Runtime.resume_owned_hx_conversations()
 
     assert summary.resumed_count == 1
 
@@ -1358,7 +1358,7 @@ defmodule HydraX.RuntimeTest do
     Process.sleep(100)
 
     refreshed = Runtime.get_conversation!(conversation.id)
-    assert List.last(refreshed.turns).role == "assistant"
+    assert List.last(refreshed.hx_turns).role == "assistant"
 
     channel_state = Runtime.conversation_channel_state(conversation.id)
     assert channel_state.status == "completed"
@@ -1366,7 +1366,7 @@ defmodule HydraX.RuntimeTest do
     assert Enum.any?(channel_state.execution_events, &(&1["phase"] == "recovered_after_restart"))
   end
 
-  test "scheduler poll resumes owned deferred conversations" do
+  test "scheduler poll resumes owned deferred hx_conversations" do
     previous_adapter = Application.get_env(:hydra_x, :repo_adapter)
     Application.put_env(:hydra_x, :repo_adapter, Ecto.Adapters.Postgres)
     previous_deliver = Application.get_env(:hydra_x, :telegram_deliver)
@@ -1463,7 +1463,7 @@ defmodule HydraX.RuntimeTest do
 
     wait_for(
       fn ->
-        Runtime.get_conversation!(conversation.id).turns
+        Runtime.get_conversation!(conversation.id).hx_turns
         |> List.last()
         |> then(&(&1 && &1.role == "assistant"))
       end,
@@ -1471,7 +1471,7 @@ defmodule HydraX.RuntimeTest do
     )
 
     refreshed = Runtime.get_conversation!(conversation.id)
-    assert List.last(refreshed.turns).role == "assistant"
+    assert List.last(refreshed.hx_turns).role == "assistant"
 
     assert_receive {:scheduler_deferred_delivery,
                     %{chat_id: "7171", reply_to_message_id: 808, text: delivered_text}}
@@ -1581,7 +1581,7 @@ defmodule HydraX.RuntimeTest do
     assert delivered_text =~ "Let the scheduler process queued ingress."
 
     refreshed = Runtime.get_conversation!(conversation.id)
-    assert length(refreshed.turns) == 2
+    assert length(refreshed.hx_turns) == 2
     assert refreshed.metadata["last_delivery"]["status"] == "delivered"
     assert Runtime.get_checkpoint(conversation.id, "ingress").state["message_count"] == 0
   end
@@ -1614,7 +1614,7 @@ defmodule HydraX.RuntimeTest do
         enabled: true
       })
 
-    assert {:ok, _bindings} = Runtime.refresh_agent_mcp_servers(agent.id)
+    assert {:ok, _bindings} = Runtime.refresh_hx_agent_mcp_servers(agent.id)
     assert {:ok, _skills} = Runtime.refresh_agent_skills(agent.id)
 
     skills = Runtime.list_skills(agent_id: agent.id)
@@ -1666,7 +1666,7 @@ defmodule HydraX.RuntimeTest do
         enabled: true
       })
 
-    assert {:ok, _bindings} = Runtime.refresh_agent_mcp_servers(agent.id)
+    assert {:ok, _bindings} = Runtime.refresh_hx_agent_mcp_servers(agent.id)
     {:ok, pid} = HydraX.Agent.ensure_started(agent)
     on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
 
@@ -1713,7 +1713,7 @@ defmodule HydraX.RuntimeTest do
         enabled: true
       })
 
-    assert {:ok, _bindings} = Runtime.refresh_agent_mcp_servers(agent.id)
+    assert {:ok, _bindings} = Runtime.refresh_hx_agent_mcp_servers(agent.id)
     {:ok, pid} = HydraX.Agent.ensure_started(agent)
     on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
 
@@ -1770,7 +1770,7 @@ defmodule HydraX.RuntimeTest do
         enabled: true
       })
 
-    assert {:ok, _bindings} = Runtime.refresh_agent_mcp_servers(agent.id)
+    assert {:ok, _bindings} = Runtime.refresh_hx_agent_mcp_servers(agent.id)
     {:ok, pid} = HydraX.Agent.ensure_started(agent)
     on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
 
@@ -1831,7 +1831,7 @@ defmodule HydraX.RuntimeTest do
         enabled: true
       })
 
-    assert {:ok, _bindings} = Runtime.refresh_agent_mcp_servers(agent.id)
+    assert {:ok, _bindings} = Runtime.refresh_hx_agent_mcp_servers(agent.id)
     {:ok, pid} = HydraX.Agent.ensure_started(agent)
     on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
 
@@ -1900,7 +1900,7 @@ defmodule HydraX.RuntimeTest do
         enabled: true
       })
 
-    assert {:ok, _bindings} = Runtime.refresh_agent_mcp_servers(agent.id)
+    assert {:ok, _bindings} = Runtime.refresh_hx_agent_mcp_servers(agent.id)
     {:ok, pid} = HydraX.Agent.ensure_started(agent)
     on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
 
@@ -1960,7 +1960,7 @@ defmodule HydraX.RuntimeTest do
         enabled: true
       })
 
-    assert {:ok, _bindings} = Runtime.refresh_agent_mcp_servers(agent.id)
+    assert {:ok, _bindings} = Runtime.refresh_hx_agent_mcp_servers(agent.id)
     assert {:ok, %{results: [_]}} = Runtime.list_agent_mcp_actions(agent.id, refresh: true)
 
     Application.put_env(:hydra_x, :mcp_http_request_fn, fn _opts ->
@@ -1975,7 +1975,7 @@ defmodule HydraX.RuntimeTest do
              result.action_catalog["actions"]
   end
 
-  test "channel resumes interrupted pending user turns after restart" do
+  test "channel resumes interrupted pending user hx_turns after restart" do
     agent = create_agent()
     {:ok, pid} = HydraX.Agent.ensure_started(agent)
     on_exit(fn -> if Process.alive?(pid), do: shutdown_process(pid) end)
@@ -2024,7 +2024,7 @@ defmodule HydraX.RuntimeTest do
     Process.sleep(100)
 
     refreshed = Runtime.get_conversation!(conversation.id)
-    assert List.last(refreshed.turns).role == "assistant"
+    assert List.last(refreshed.hx_turns).role == "assistant"
 
     channel_state = Runtime.conversation_channel_state(conversation.id)
     assert channel_state.status == "completed"
@@ -2209,7 +2209,7 @@ defmodule HydraX.RuntimeTest do
     assert length(memories) == 1
 
     refreshed = Runtime.get_conversation!(conversation.id)
-    assert List.last(refreshed.turns).content =~ "Recovered without re-running the tool."
+    assert List.last(refreshed.hx_turns).content =~ "Recovered without re-running the tool."
 
     channel_state = Runtime.conversation_channel_state(conversation.id)
 
@@ -2596,7 +2596,7 @@ defmodule HydraX.RuntimeTest do
         enabled: true
       })
 
-    assert {:ok, [binding]} = Runtime.refresh_agent_mcp_servers(agent.id)
+    assert {:ok, [binding]} = Runtime.refresh_hx_agent_mcp_servers(agent.id)
     assert binding.mcp_server_config_id == mcp.id
     assert binding.enabled
 
@@ -2702,9 +2702,9 @@ defmodule HydraX.RuntimeTest do
     [top | _rest] = Memory.search_ranked(agent.id, "cluster worker placement failover", 5)
 
     assert top.entry.id == memory.id
-    assert is_list(get_in(top.entry.metadata || %{}, ["embedding_vector"]))
+    assert length(Pgvector.to_list(top.entry.embedding)) == 768
     assert get_in(top.entry.metadata || %{}, ["embedding_backend"]) == "local_hash_v1"
-    assert get_in(top.entry.metadata || %{}, ["embedding_dimensions"]) == 64
+    assert get_in(top.entry.metadata || %{}, ["embedding_dimensions"]) == 768
     assert is_map(get_in(top.entry.metadata || %{}, ["semantic_vector"]))
     assert top.vector_score > 0.0
     assert "embedding similarity" in top.reasons
@@ -2769,8 +2769,12 @@ defmodule HydraX.RuntimeTest do
 
     assert get_in(memory.metadata || %{}, ["embedding_backend"]) == "openai_compatible"
     assert get_in(memory.metadata || %{}, ["embedding_model"]) == "text-embedding-3-small"
-    assert get_in(memory.metadata || %{}, ["embedding_dimensions"]) == 4
-    assert get_in(memory.metadata || %{}, ["embedding_vector"]) == [0.11, 0.22, 0.33, 0.44]
+    assert get_in(memory.metadata || %{}, ["embedding_dimensions"]) == 768
+
+    assert memory.embedding
+           |> Pgvector.to_list()
+           |> Enum.take(4)
+           |> Enum.map(&Float.round(&1, 2)) == [0.11, 0.22, 0.33, 0.44]
   end
 
   test "memory embedding status tracks fallback and stale records" do
@@ -2897,7 +2901,7 @@ defmodule HydraX.RuntimeTest do
         enabled: true
       })
 
-    assert {:ok, [binding]} = Runtime.refresh_agent_mcp_servers(agent.id)
+    assert {:ok, [binding]} = Runtime.refresh_hx_agent_mcp_servers(agent.id)
     assert binding.mcp_server_config_id == mcp.id
 
     {:ok, conversation} =
@@ -3081,7 +3085,7 @@ defmodule HydraX.RuntimeTest do
     assert Enum.any?(Memory.list_edges_for(winner.id), &(&1.kind == "supersedes"))
   end
 
-  test "workspace read tool returns file contents within workspace" do
+  test "workspace read tool rehx_turns file contents within workspace" do
     agent = create_agent()
     File.write!(Path.join(agent.workspace_root, "SOUL.md"), "Hydra-X workspace directive")
 
@@ -3195,16 +3199,15 @@ defmodule HydraX.RuntimeTest do
     refute mock_caps.streaming
   end
 
-  test "system status exposes the repo database path" do
+  test "system status exposes the repo database url" do
     system = Runtime.system_status()
 
-    assert is_binary(system.database_path)
-    assert String.ends_with?(system.database_path, ".db")
-    assert system.database_url == nil
-    assert system.persistence.backend == "sqlite"
-    assert system.persistence.target == system.database_path
-    assert system.persistence.backup_mode == "bundled_database"
-    assert system.coordination.mode == "local_single_node"
+    assert system.database_path == nil
+    assert is_binary(system.database_url)
+    assert system.persistence.backend == "postgres"
+    assert system.persistence.target == system.database_url
+    assert system.persistence.backup_mode == "external_database"
+    assert system.coordination.mode == "database_leases"
     assert is_list(system.alarms)
   end
 
@@ -3250,28 +3253,28 @@ defmodule HydraX.RuntimeTest do
     snapshot = Runtime.install_snapshot()
 
     assert is_binary(snapshot.public_url)
-    assert is_binary(snapshot.database_path)
-    assert snapshot.database_url == nil
-    assert snapshot.persistence.backend == "sqlite"
-    assert snapshot.persistence.target == snapshot.database_path
-    assert snapshot.coordination.mode == "local_single_node"
+    assert snapshot.database_path == nil
+    assert is_binary(snapshot.database_url)
+    assert snapshot.persistence.backend == "postgres"
+    assert snapshot.persistence.target == snapshot.database_url
+    assert snapshot.coordination.mode == "database_leases"
     assert is_binary(snapshot.workspace_root)
     assert is_binary(snapshot.backup_root)
     assert snapshot.cluster.mode == "single_node"
     assert is_map(snapshot.readiness)
   end
 
-  test "cluster status reports single-node sqlite posture by default" do
+  test "cluster status reports single-node postgres posture by default" do
     status = Runtime.cluster_status()
 
     refute status.enabled
     assert status.mode == "single_node"
-    assert status.persistence == "sqlite_single_writer"
+    assert status.persistence == "postgres_multi_writer_ready"
     refute status.multi_node_ready
     assert status.node_count >= 1
   end
 
-  test "readiness warns when cluster awareness is enabled on sqlite" do
+  test "readiness warns when cluster awareness is enabled before routing is distributed" do
     previous = Application.get_env(:hydra_x, :cluster_enabled)
     Application.put_env(:hydra_x, :cluster_enabled, true)
 
@@ -3288,7 +3291,7 @@ defmodule HydraX.RuntimeTest do
       |> Enum.find(&(&1.id == "cluster"))
 
     assert item.status == :warn
-    assert item.detail =~ "SQLite"
+    assert item.detail =~ "PostgreSQL"
   end
 
   test "heartbeat jobs are ensured once and create persisted job runs" do
@@ -3313,11 +3316,11 @@ defmodule HydraX.RuntimeTest do
     conversation = Runtime.get_conversation!(run.metadata["conversation_id"])
     assert conversation.channel == "scheduler"
 
-    [job_run | _] = Runtime.list_job_runs(job.id, 5)
+    [job_run | _] = Runtime.list_hx_job_runs(job.id, 5)
     assert job_run.id == run.id
   end
 
-  test "backup jobs are ensured once and create portable backup artifacts" do
+  test "backup jobs are ensured once and create portable backup hx_artifacts" do
     agent = create_agent()
 
     job = Runtime.ensure_backup_job!(agent.id)
@@ -3551,11 +3554,11 @@ defmodule HydraX.RuntimeTest do
     assert {:ok, skipped_run} = Runtime.run_scheduled_job(skipped_job)
     assert skipped_run.status == "skipped"
 
-    success_runs = Runtime.list_job_runs(status: "success", kind: "backup", limit: 10)
+    success_runs = Runtime.list_hx_job_runs(status: "success", kind: "backup", limit: 10)
     assert Enum.any?(success_runs, &(&1.id == success_run.id))
     refute Enum.any?(success_runs, &(&1.id == skipped_run.id))
 
-    skipped_runs = Runtime.list_job_runs(search: "Skipped Backup Job", limit: 10)
+    skipped_runs = Runtime.list_hx_job_runs(search: "Skipped Backup Job", limit: 10)
     assert Enum.any?(skipped_runs, &(&1.id == skipped_run.id))
 
     output_root =
@@ -3564,7 +3567,7 @@ defmodule HydraX.RuntimeTest do
     on_exit(fn -> File.rm_rf(output_root) end)
 
     assert {:ok, export} =
-             Runtime.export_job_runs(output_root, status: "success", kind: "backup", limit: 10)
+             Runtime.export_hx_job_runs(output_root, status: "success", kind: "backup", limit: 10)
 
     assert File.read!(export.markdown_path) =~ "Hydra-X Job Runs"
     assert File.read!(export.markdown_path) =~ "Success Backup Job"
@@ -3822,7 +3825,7 @@ defmodule HydraX.RuntimeTest do
     assert run.metadata["file_count"] == 1
 
     assert Enum.any?(
-             HydraX.Memory.list_memories(agent_id: agent.id, status: "candidate", limit: 20),
+             HydraX.Memory.list_memories(agent_id: agent.id, status: "active", limit: 20),
              &String.contains?(&1.content, "Scheduled ingest works.")
            )
   end
@@ -3953,9 +3956,9 @@ defmodule HydraX.RuntimeTest do
     assert get_in(child.metadata || %{}, ["assignment_resolution", "resolved_agent_id"]) ==
              researcher.id
 
-    artifacts = Runtime.work_item_artifacts(child.id)
-    report = Enum.find(artifacts, &(&1.type == "research_report"))
-    decision_ledger = Enum.find(artifacts, &(&1.type == "decision_ledger"))
+    hx_artifacts = Runtime.work_item_hx_artifacts(child.id)
+    report = Enum.find(hx_artifacts, &(&1.type == "research_report"))
+    decision_ledger = Enum.find(hx_artifacts, &(&1.type == "decision_ledger"))
 
     assert report
     assert decision_ledger
@@ -3970,8 +3973,8 @@ defmodule HydraX.RuntimeTest do
     assert parent.status == "completed"
     assert length(parent.result_refs["artifact_ids"]) >= 1
 
-    parent_artifacts = Runtime.work_item_artifacts(parent.id)
-    synthesis = Enum.find(parent_artifacts, &(&1.type == "decision_ledger"))
+    parent_hx_artifacts = Runtime.work_item_hx_artifacts(parent.id)
+    synthesis = Enum.find(parent_hx_artifacts, &(&1.type == "decision_ledger"))
 
     assert synthesis
     assert synthesis.payload["promoted_findings"] != []
@@ -4039,7 +4042,7 @@ defmodule HydraX.RuntimeTest do
     assert researcher_summary.action == "researched"
 
     report =
-      Runtime.work_item_artifacts(child.id)
+      Runtime.work_item_hx_artifacts(child.id)
       |> Enum.find(&(&1.type == "research_report"))
 
     assert report
@@ -4208,7 +4211,7 @@ defmodule HydraX.RuntimeTest do
            )
 
     summary_artifact =
-      Runtime.work_item_artifacts(parent.id)
+      Runtime.work_item_hx_artifacts(parent.id)
       |> Enum.find(&(&1.type == "decision_ledger"))
 
     assert summary_artifact
@@ -5856,12 +5859,12 @@ defmodule HydraX.RuntimeTest do
 
     assert {:ok, planner_summary} = Runtime.run_autonomy_cycle(planner.id)
     assert planner_summary.action == "delegated"
-    assert length(planner_summary.delegated_work_items) == 2
+    assert length(planner_summary.delegated_hx_work_items) == 2
 
     parent = Runtime.get_work_item!(parent.id)
 
     assert Enum.sort(parent.result_refs["child_work_item_ids"]) ==
-             Enum.sort(Enum.map(planner_summary.delegated_work_items, & &1.id))
+             Enum.sort(Enum.map(planner_summary.delegated_hx_work_items, & &1.id))
 
     batch_snapshot = Runtime.delegation_batch_snapshot(parent)
     assert batch_snapshot["mode"] == "parallel"
@@ -5871,7 +5874,7 @@ defmodule HydraX.RuntimeTest do
     assert Enum.sort(batch_snapshot["roles"]) == ["operator", "researcher"]
 
     plan_artifact =
-      Runtime.work_item_artifacts(parent.id)
+      Runtime.work_item_hx_artifacts(parent.id)
       |> Enum.find(&(&1.type == "plan"))
 
     assert plan_artifact
@@ -5897,7 +5900,7 @@ defmodule HydraX.RuntimeTest do
     assert get_in(finalized_parent.metadata || %{}, ["delegation_batch", "completed_count"]) == 2
 
     synthesis =
-      Runtime.work_item_artifacts(finalized_parent.id)
+      Runtime.work_item_hx_artifacts(finalized_parent.id)
       |> Enum.find(&(&1.type == "decision_ledger"))
 
     assert synthesis
@@ -5954,7 +5957,7 @@ defmodule HydraX.RuntimeTest do
 
     assert {:ok, planner_summary} = Runtime.run_autonomy_cycle(planner.id)
     assert planner_summary.action == "delegated"
-    assert length(planner_summary.delegated_work_items) == 2
+    assert length(planner_summary.delegated_hx_work_items) == 2
 
     parent = Runtime.get_work_item!(parent.id)
     initial_batch = Runtime.delegation_batch_snapshot(parent)
@@ -5975,7 +5978,7 @@ defmodule HydraX.RuntimeTest do
 
     assert {:ok, expansion_summary} = Runtime.run_autonomy_cycle(planner.id)
     assert expansion_summary.action == "delegated_batch_expanded"
-    assert length(expansion_summary.delegated_work_items) == 1
+    assert length(expansion_summary.delegated_hx_work_items) == 1
 
     expanded_parent = Runtime.get_work_item!(parent.id)
     expanded_batch = Runtime.delegation_batch_snapshot(expanded_parent)
@@ -6182,7 +6185,7 @@ defmodule HydraX.RuntimeTest do
     assert replan_item.id in follow_up_ids
 
     replan_items =
-      Runtime.list_work_items(parent_work_item_id: parent.id, limit: 10)
+      Runtime.list_hx_work_items(parent_work_item_id: parent.id, limit: 10)
       |> Enum.filter(&(&1.metadata["task_type"] == "delegation_pressure_replan"))
 
     assert Enum.map(replan_items, & &1.id) == [replan_item.id]
@@ -6276,7 +6279,7 @@ defmodule HydraX.RuntimeTest do
 
     assert {:ok, replan_summary} = Runtime.run_autonomy_cycle(planner.id)
     assert replan_summary.action == "delegated"
-    assert length(replan_summary.delegated_work_items) == 1
+    assert length(replan_summary.delegated_hx_work_items) == 1
 
     replan_item = Runtime.get_work_item!(replan_item.id)
     [replan_child_id] = replan_item.result_refs["child_work_item_ids"]
@@ -6383,8 +6386,8 @@ defmodule HydraX.RuntimeTest do
     assert %HydraX.Runtime.WorkItem{} = reviewer_summary.follow_up_work_item
 
     review_item = Runtime.get_work_item!(review_item.id)
-    review_artifacts = Runtime.work_item_artifacts(review_item.id)
-    review_report = Enum.find(review_artifacts, &(&1.type == "review_report"))
+    review_hx_artifacts = Runtime.work_item_hx_artifacts(review_item.id)
+    review_report = Enum.find(review_hx_artifacts, &(&1.type == "review_report"))
     replan_item = Runtime.get_work_item!(reviewer_summary.follow_up_work_item.id)
 
     assert review_item.status == "completed"
@@ -6419,7 +6422,7 @@ defmodule HydraX.RuntimeTest do
 
     assert {:ok, replan_summary} = Runtime.run_autonomy_cycle(planner.id)
     assert replan_summary.action == "delegated"
-    assert length(replan_summary.delegated_work_items) == 1
+    assert length(replan_summary.delegated_hx_work_items) == 1
   end
 
   test "rejected delegation pressure reviews queue operator intervention follow-up" do
@@ -6541,7 +6544,7 @@ defmodule HydraX.RuntimeTest do
 
     operator_follow_up = Runtime.get_work_item!(operator_follow_up.id)
     replan_item = Runtime.get_work_item!(operator_summary.follow_up_work_item.id)
-    [artifact] = Runtime.work_item_artifacts(operator_follow_up.id)
+    [artifact] = Runtime.work_item_hx_artifacts(operator_follow_up.id)
 
     assert operator_follow_up.status == "completed"
     assert operator_follow_up.result_refs["linked_follow_up_work_item_id"] == replan_item.id
@@ -6588,7 +6591,7 @@ defmodule HydraX.RuntimeTest do
 
     assert {:ok, replan_summary} = Runtime.run_autonomy_cycle(planner.id)
     assert replan_summary.action == "delegated"
-    assert length(replan_summary.delegated_work_items) == 1
+    assert length(replan_summary.delegated_hx_work_items) == 1
   end
 
   test "planner prefers the older waiting delegation batch when capacity is otherwise equal" do
@@ -6672,7 +6675,7 @@ defmodule HydraX.RuntimeTest do
     assert {:ok, expansion_summary} = Runtime.run_autonomy_cycle(planner.id)
     assert expansion_summary.action == "delegated_batch_expanded"
 
-    assert Enum.map(expansion_summary.delegated_work_items, & &1.parent_work_item_id) == [
+    assert Enum.map(expansion_summary.delegated_hx_work_items, & &1.parent_work_item_id) == [
              second_parent.id
            ]
 
@@ -6766,7 +6769,7 @@ defmodule HydraX.RuntimeTest do
     assert {:ok, expansion_summary} = Runtime.run_autonomy_cycle(planner.id)
     assert expansion_summary.action == "delegated_batch_expanded"
 
-    assert Enum.map(expansion_summary.delegated_work_items, & &1.parent_work_item_id) == [
+    assert Enum.map(expansion_summary.delegated_hx_work_items, & &1.parent_work_item_id) == [
              healthy_parent.id
            ]
 
@@ -6831,11 +6834,11 @@ defmodule HydraX.RuntimeTest do
 
     assert {:ok, delegated_active} = Runtime.run_autonomy_cycle(planner.id)
     assert delegated_active.action == "delegated"
-    assert length(delegated_active.delegated_work_items) == 1
+    assert length(delegated_active.delegated_hx_work_items) == 1
 
     assert {:ok, delegated_queued} = Runtime.run_autonomy_cycle(planner.id)
     assert delegated_queued.action == "delegated"
-    assert delegated_queued.delegated_work_items == []
+    assert delegated_queued.delegated_hx_work_items == []
 
     active_snapshot = Runtime.delegation_batch_snapshot(Runtime.get_work_item!(active_parent.id))
     queued_work_item = Runtime.get_work_item!(queued_parent.id)
@@ -6905,11 +6908,11 @@ defmodule HydraX.RuntimeTest do
 
     assert {:ok, delegated_active} = Runtime.run_autonomy_cycle(planner.id)
     assert delegated_active.action == "delegated"
-    assert length(delegated_active.delegated_work_items) == 1
+    assert length(delegated_active.delegated_hx_work_items) == 1
 
     assert {:ok, delegated_queued} = Runtime.run_autonomy_cycle(planner.id)
     assert delegated_queued.action == "delegated"
-    assert delegated_queued.delegated_work_items == []
+    assert delegated_queued.delegated_hx_work_items == []
 
     active_snapshot = Runtime.delegation_batch_snapshot(Runtime.get_work_item!(active_parent.id))
     queued_work_item = Runtime.get_work_item!(queued_parent.id)
@@ -6961,7 +6964,7 @@ defmodule HydraX.RuntimeTest do
 
     assert {:ok, delegated} = Runtime.run_autonomy_cycle(planner.id)
     assert delegated.action == "delegated"
-    assert length(delegated.delegated_work_items) == 1
+    assert length(delegated.delegated_hx_work_items) == 1
 
     assert {:ok, researcher_cycle} = Runtime.run_autonomy_cycle(researcher.id)
     assert researcher_cycle.action == "researched"
@@ -6975,7 +6978,7 @@ defmodule HydraX.RuntimeTest do
     assert updated_parent.status == "completed"
 
     assert updated_parent.result_refs["child_work_item_ids"] == [
-             hd(delegated.delegated_work_items).id
+             hd(delegated.delegated_hx_work_items).id
            ]
 
     assert snapshot["completion_quorum"] == 1
@@ -7033,7 +7036,7 @@ defmodule HydraX.RuntimeTest do
 
     assert {:ok, delegated} = Runtime.run_autonomy_cycle(planner.id)
     assert delegated.action == "delegated"
-    assert length(delegated.delegated_work_items) == 2
+    assert length(delegated.delegated_hx_work_items) == 2
 
     assert {:ok, researcher_cycle} = Runtime.run_autonomy_cycle(researcher.id)
     assert researcher_cycle.action == "researched"
@@ -7105,7 +7108,7 @@ defmodule HydraX.RuntimeTest do
 
     assert {:ok, delegated} = Runtime.run_autonomy_cycle(planner.id)
     assert delegated.action == "delegated"
-    assert Enum.map(delegated.delegated_work_items, & &1.assigned_role) == ["researcher"]
+    assert Enum.map(delegated.delegated_hx_work_items, & &1.assigned_role) == ["researcher"]
 
     assert {:ok, researcher_cycle} = Runtime.run_autonomy_cycle(researcher.id)
     assert researcher_cycle.action == "researched"
@@ -7118,7 +7121,7 @@ defmodule HydraX.RuntimeTest do
 
     assert {:ok, expanded} = Runtime.run_autonomy_cycle(planner.id)
     assert expanded.action == "delegated_batch_expanded"
-    assert Enum.map(expanded.delegated_work_items, & &1.assigned_role) == ["operator"]
+    assert Enum.map(expanded.delegated_hx_work_items, & &1.assigned_role) == ["operator"]
   end
 
   test "planner expands the delegation batch with healthier pending role capacity first" do
@@ -7204,7 +7207,7 @@ defmodule HydraX.RuntimeTest do
 
     assert {:ok, expansion_summary} = Runtime.run_autonomy_cycle(planner.id)
     assert expansion_summary.action == "delegated_batch_expanded"
-    assert Enum.map(expansion_summary.delegated_work_items, & &1.assigned_role) == ["operator"]
+    assert Enum.map(expansion_summary.delegated_hx_work_items, & &1.assigned_role) == ["operator"]
 
     expanded_operator_parent = Runtime.get_work_item!(operator_parent.id)
     expanded_research_parent = Runtime.get_work_item!(research_parent.id)
@@ -7298,7 +7301,7 @@ defmodule HydraX.RuntimeTest do
 
     assert {:ok, expansion} = Runtime.run_autonomy_cycle(planner.id)
     assert expansion.action == "delegated_batch_expanded"
-    assert Enum.map(expansion.delegated_work_items, & &1.assigned_role) == ["operator"]
+    assert Enum.map(expansion.delegated_hx_work_items, & &1.assigned_role) == ["operator"]
 
     expanded_urgent_parent = Runtime.get_work_item!(urgent_parent.id)
     expanded_plain_parent = Runtime.get_work_item!(plain_parent.id)
@@ -7347,7 +7350,7 @@ defmodule HydraX.RuntimeTest do
     {:ok, operator_parent} =
       Runtime.save_work_item(%{
         "kind" => "research",
-        "goal" => "Expand into operator capacity when researcher backlog turns urgent.",
+        "goal" => "Expand into operator capacity when researcher backlog hx_turns urgent.",
         "assigned_agent_id" => planner.id,
         "assigned_role" => "planner",
         "execution_mode" => "delegate",
@@ -7397,7 +7400,7 @@ defmodule HydraX.RuntimeTest do
 
     assert {:ok, expansion} = Runtime.run_autonomy_cycle(planner.id)
     assert expansion.action == "delegated_batch_expanded"
-    assert Enum.map(expansion.delegated_work_items, & &1.assigned_role) == ["operator"]
+    assert Enum.map(expansion.delegated_hx_work_items, & &1.assigned_role) == ["operator"]
 
     expanded_researcher_parent = Runtime.get_work_item!(researcher_parent.id)
     expanded_operator_parent = Runtime.get_work_item!(operator_parent.id)
@@ -7458,7 +7461,7 @@ defmodule HydraX.RuntimeTest do
     assert planner_summary.action == "delegated"
 
     delegated_roles =
-      planner_summary.delegated_work_items
+      planner_summary.delegated_hx_work_items
       |> Enum.map(& &1.assigned_role)
       |> Enum.sort()
 
@@ -7511,9 +7514,9 @@ defmodule HydraX.RuntimeTest do
     assert work_item.approval_stage == "operator_approved"
     assert length(work_item.result_refs["promoted_memory_ids"]) >= 1
 
-    artifacts = Runtime.work_item_artifacts(work_item.id)
-    assert Enum.any?(artifacts, &(&1.type == "research_report"))
-    assert Enum.any?(artifacts, &(&1.type == "decision_ledger"))
+    hx_artifacts = Runtime.work_item_hx_artifacts(work_item.id)
+    assert Enum.any?(hx_artifacts, &(&1.type == "research_report"))
+    assert Enum.any?(hx_artifacts, &(&1.type == "decision_ledger"))
 
     promoted_memories =
       (Memory.list_memories(agent_id: researcher.id, status: "active", limit: 50) ++
@@ -7594,7 +7597,7 @@ defmodule HydraX.RuntimeTest do
     assert review_item.metadata["review_target_work_item_id"] == work_item.id
 
     [report_artifact | _] =
-      Runtime.work_item_artifacts(work_item.id)
+      Runtime.work_item_hx_artifacts(work_item.id)
       |> Enum.filter(&(&1.type == "research_report"))
 
     assert report_artifact.review_status == "proposed"
@@ -7608,7 +7611,7 @@ defmodule HydraX.RuntimeTest do
     review_item = Runtime.get_work_item!(review_item.id)
     assert review_item.approval_stage == "validated"
 
-    approvals = Runtime.approval_records_for_subject("work_item", work_item.id)
+    approvals = Runtime.hx_approval_records_for_subject("work_item", work_item.id)
     assert Enum.any?(approvals, &(&1.decision == "approved"))
 
     assert {:ok, finalize_summary} = Runtime.run_autonomy_cycle(researcher.id)
@@ -7689,7 +7692,7 @@ defmodule HydraX.RuntimeTest do
     publish_item = Runtime.get_work_item!(publish_item.id)
     assert publish_item.status == "completed"
 
-    [delivery_brief] = Runtime.work_item_artifacts(publish_item.id)
+    [delivery_brief] = Runtime.work_item_hx_artifacts(publish_item.id)
     assert delivery_brief.type == "delivery_brief"
     assert delivery_brief.payload["delivery_channel"] == "telegram"
     assert delivery_brief.payload["delivery_target"] == "ops-room"
@@ -7905,7 +7908,7 @@ defmodule HydraX.RuntimeTest do
     assert publish_item.result_refs["delivery"]["status"] == "delivered"
     assert publish_item.result_refs["delivery"]["metadata"]["provider_message_id"] == 91
 
-    [delivery_brief] = Runtime.work_item_artifacts(publish_item.id)
+    [delivery_brief] = Runtime.work_item_hx_artifacts(publish_item.id)
     assert delivery_brief.payload["delivery"]["status"] == "delivered"
     assert delivery_brief.payload["delivery"]["metadata"]["provider_message_id"] == 91
   end
@@ -8007,7 +8010,7 @@ defmodule HydraX.RuntimeTest do
     assert approval_item.approval_stage == "validated"
     assert approval_item.result_refs["degraded"] == true
 
-    [delivery_brief] = Runtime.work_item_artifacts(publish_item.id)
+    [delivery_brief] = Runtime.work_item_hx_artifacts(publish_item.id)
     assert delivery_brief.review_status == "proposed"
     assert delivery_brief.payload["degraded"] == true
     assert delivery_brief.payload["delivery"]["status"] == "draft"
@@ -8127,7 +8130,7 @@ defmodule HydraX.RuntimeTest do
     assert publish_item.result_refs["delivery"]["target"] == "control-plane"
     assert publish_item.result_refs["degraded"] == true
 
-    [delivery_brief] = Runtime.work_item_artifacts(publish_item.id)
+    [delivery_brief] = Runtime.work_item_hx_artifacts(publish_item.id)
     assert delivery_brief.review_status == "proposed"
     assert delivery_brief.payload["delivery"]["status"] == "skipped"
     assert delivery_brief.payload["delivery"]["reason"] == "internal_report_recovery"
@@ -8278,7 +8281,7 @@ defmodule HydraX.RuntimeTest do
     assert approval_item.metadata["delivery_decision"]["destination_rationale"] =~
              "rerouted delivery"
 
-    [delivery_brief] = Runtime.work_item_artifacts(publish_item.id)
+    [delivery_brief] = Runtime.work_item_hx_artifacts(publish_item.id)
     assert delivery_brief.payload["delivery"]["channel"] == "slack"
     assert delivery_brief.payload["delivery_recovery"]["strategy"] == "switch_delivery_channel"
     assert delivery_brief.payload["delivery_heading"] == "Revised summary for rerouted delivery"
@@ -8315,7 +8318,7 @@ defmodule HydraX.RuntimeTest do
              "switch_delivery_channel"
 
     [approved_delivery_brief] =
-      Runtime.work_item_artifacts(publish_item.id)
+      Runtime.work_item_hx_artifacts(publish_item.id)
       |> Enum.filter(&(&1.type == "delivery_brief"))
 
     assert approved_delivery_brief.payload["review_outcome"]["decision"] == "approved"
@@ -8468,7 +8471,7 @@ defmodule HydraX.RuntimeTest do
     assert rejected_review.result_refs["linked_follow_up_work_item_id"] == replan_work_item.id
 
     [delivery_brief] =
-      Runtime.work_item_artifacts(publish_item.id)
+      Runtime.work_item_hx_artifacts(publish_item.id)
       |> Enum.filter(&(&1.type == "delivery_brief"))
 
     assert delivery_brief.review_status == "rejected"
@@ -8564,7 +8567,7 @@ defmodule HydraX.RuntimeTest do
     assert replan_ids == [first_replan_id]
 
     replan_items =
-      Runtime.list_work_items(parent_work_item_id: publish_item.id, limit: 10)
+      Runtime.list_hx_work_items(parent_work_item_id: publish_item.id, limit: 10)
       |> Enum.filter(&(&1.metadata["task_type"] == "rejected_publish_replan"))
 
     assert length(replan_items) == 1
@@ -8833,12 +8836,12 @@ defmodule HydraX.RuntimeTest do
     assert reviewer_summary.action == "review_completed"
 
     review_item =
-      Runtime.list_work_items(limit: 20)
+      Runtime.list_hx_work_items(limit: 20)
       |> Enum.find(&(&1.kind == "review" and &1.assigned_role == "reviewer"))
 
-    review_artifacts = Runtime.work_item_artifacts(review_item.id)
-    review_report = Enum.find(review_artifacts, &(&1.type == "review_report"))
-    review_decision = Enum.find(review_artifacts, &(&1.type == "decision_ledger"))
+    review_hx_artifacts = Runtime.work_item_hx_artifacts(review_item.id)
+    review_report = Enum.find(review_hx_artifacts, &(&1.type == "review_report"))
+    review_decision = Enum.find(review_hx_artifacts, &(&1.type == "decision_ledger"))
 
     assert review_report.body =~ "Delivery decision context:"
     assert review_report.body =~ "telegram"
@@ -8887,8 +8890,8 @@ defmodule HydraX.RuntimeTest do
     assert get_in(publish_follow_up.metadata || %{}, ["delivery_recovery", "decision_basis"]) ==
              "explicit_channel_signal"
 
-    replan_artifacts = Runtime.work_item_artifacts(replan_work_item.id)
-    replan_synthesis = Enum.find(replan_artifacts, &(&1.type == "decision_ledger"))
+    replan_hx_artifacts = Runtime.work_item_hx_artifacts(replan_work_item.id)
+    replan_synthesis = Enum.find(replan_hx_artifacts, &(&1.type == "decision_ledger"))
 
     assert replan_synthesis.body =~ "Delivery decisions shaping this synthesis:"
     assert replan_synthesis.body =~ "Slack"
@@ -8918,7 +8921,7 @@ defmodule HydraX.RuntimeTest do
     assert next_approval_item.metadata["delivery"]["channel"] == "slack"
 
     [next_delivery_brief] =
-      Runtime.work_item_artifacts(publish_follow_up.id)
+      Runtime.work_item_hx_artifacts(publish_follow_up.id)
       |> Enum.filter(&(&1.type == "delivery_brief"))
 
     assert next_delivery_brief.payload["delivery_heading"] ==
@@ -9125,7 +9128,7 @@ defmodule HydraX.RuntimeTest do
     assert length(List.wrap(publish_follow_up.result_refs["follow_up_work_item_ids"])) == 1
 
     [retry_delivery_brief] =
-      Runtime.work_item_artifacts(publish_follow_up.id)
+      Runtime.work_item_hx_artifacts(publish_follow_up.id)
       |> Enum.filter(&(&1.type == "delivery_brief"))
 
     assert retry_delivery_brief.payload["delivery_heading"] ==
@@ -9141,7 +9144,7 @@ defmodule HydraX.RuntimeTest do
            end)
   end
 
-  test "approving a research work item promotes memories from report artifacts" do
+  test "approving a research work item promotes memories from report hx_artifacts" do
     researcher =
       create_agent()
       |> then(fn agent -> Runtime.get_agent!(agent.id) end)
@@ -9217,7 +9220,7 @@ defmodule HydraX.RuntimeTest do
              metadata["memory_scope"] == "artifact_derived"
            end)
 
-    artifact_approvals = Runtime.artifact_approval_records(report_artifact.id)
+    artifact_approvals = Runtime.artifact_hx_approval_records(report_artifact.id)
     assert Enum.any?(artifact_approvals, &(&1.requested_action == "promote_work_item"))
 
     bulletin = Runtime.agent_bulletin(researcher.id)
@@ -9257,7 +9260,7 @@ defmodule HydraX.RuntimeTest do
     assert run.output =~ "Autonomy cycle processed"
     assert run.metadata["artifact_count"] >= 1
 
-    [work_item] = Runtime.list_work_items(agent_id: agent.id, limit: 10)
+    [work_item] = Runtime.list_hx_work_items(agent_id: agent.id, limit: 10)
     assert work_item.status == "completed"
   end
 
@@ -9580,7 +9583,7 @@ defmodule HydraX.RuntimeTest do
            )
 
     assert Enum.any?(status.capability_drifts, &(&1.agent_id == agent.id))
-    assert Enum.any?(status.recent_work_items, &(&1.id == work_item.id))
+    assert Enum.any?(status.recent_hx_work_items, &(&1.id == work_item.id))
   end
 
   test "delegation supervision prioritizes higher de-escalation pressure across planners" do
@@ -10021,7 +10024,7 @@ defmodule HydraX.RuntimeTest do
         }
       })
 
-    summary = Runtime.resume_owned_work_items(limit: 10)
+    summary = Runtime.resume_owned_hx_work_items(limit: 10)
 
     assert summary.resumed_count == 1
     assert summary.skipped_count == 0
@@ -10073,7 +10076,7 @@ defmodule HydraX.RuntimeTest do
       Runtime.release_lease("work_item:#{work_item.id}", owner: "node:remote-replay")
     end)
 
-    summary = Runtime.resume_owned_work_items(limit: 10)
+    summary = Runtime.resume_owned_hx_work_items(limit: 10)
 
     assert summary.resumed_count == 0
     assert summary.skipped_count == 1
@@ -10133,7 +10136,7 @@ defmodule HydraX.RuntimeTest do
         }
       })
 
-    summary = Runtime.resume_owned_work_items(limit: 10)
+    summary = Runtime.resume_owned_hx_work_items(limit: 10)
 
     assert summary.resumed_count == 1
 
@@ -10692,7 +10695,7 @@ defmodule HydraX.RuntimeTest do
 
     assert {:ok, initial} = Runtime.run_autonomy_cycle(planner.id)
     assert initial.action == "delegated"
-    assert length(initial.delegated_work_items) == 1
+    assert length(initial.delegated_hx_work_items) == 1
 
     assert {:ok, researcher_result} = Runtime.run_autonomy_cycle(researcher.id)
     assert researcher_result.action == "researched"
@@ -10986,7 +10989,7 @@ defmodule HydraX.RuntimeTest do
 
     assert cleanup_summary.expired_count == 0
 
-    replay_summary = Runtime.resume_owned_work_items(limit: 10)
+    replay_summary = Runtime.resume_owned_hx_work_items(limit: 10)
 
     assert replay_summary.resumed_count == 1
 
@@ -11349,9 +11352,9 @@ defmodule HydraX.RuntimeTest do
     assert parent.status == "blocked"
     assert parent.approval_stage == "patch_ready"
 
-    parent_artifacts = Runtime.work_item_artifacts(parent.id)
-    assert Enum.any?(parent_artifacts, &(&1.type == "proposal"))
-    assert Enum.any?(parent_artifacts, &(&1.type == "code_change_set"))
+    parent_hx_artifacts = Runtime.work_item_hx_artifacts(parent.id)
+    assert Enum.any?(parent_hx_artifacts, &(&1.type == "proposal"))
+    assert Enum.any?(parent_hx_artifacts, &(&1.type == "code_change_set"))
 
     [review_item_id] = parent.result_refs["child_work_item_ids"]
     review_item = Runtime.get_work_item!(review_item_id)
@@ -11372,18 +11375,18 @@ defmodule HydraX.RuntimeTest do
     assert reviewer_summary.action == "review_completed"
 
     review_item = Runtime.get_work_item!(review_item.id)
-    review_artifacts = Runtime.work_item_artifacts(review_item.id)
-    assert Enum.any?(review_artifacts, &(&1.type == "review_report"))
-    assert Enum.any?(review_artifacts, &(&1.type == "decision_ledger"))
+    review_hx_artifacts = Runtime.work_item_hx_artifacts(review_item.id)
+    assert Enum.any?(review_hx_artifacts, &(&1.type == "review_report"))
+    assert Enum.any?(review_hx_artifacts, &(&1.type == "decision_ledger"))
     assert length(review_item.result_refs["promoted_memory_ids"] || []) >= 1
 
-    review_report = Enum.find(review_artifacts, &(&1.type == "review_report"))
+    review_report = Enum.find(review_hx_artifacts, &(&1.type == "review_report"))
 
     assert Enum.any?(review_report.payload["delegated_context"] || [], fn memory ->
              memory["content"] =~ "validated runtime approval guidance"
            end)
 
-    approvals = Runtime.approval_records_for_subject("work_item", parent.id)
+    approvals = Runtime.hx_approval_records_for_subject("work_item", parent.id)
     assert Enum.any?(approvals, &(&1.decision == "approved"))
 
     reviewer_memories =
@@ -11409,8 +11412,8 @@ defmodule HydraX.RuntimeTest do
     assert parent.approval_stage == "validated"
     assert length(parent.result_refs["approval_record_ids"]) >= 1
 
-    parent_artifacts = Runtime.work_item_artifacts(parent.id)
-    synthesis = Enum.find(parent_artifacts, &(&1.type == "decision_ledger"))
+    parent_hx_artifacts = Runtime.work_item_hx_artifacts(parent.id)
+    synthesis = Enum.find(parent_hx_artifacts, &(&1.type == "decision_ledger"))
 
     assert synthesis
 
@@ -11442,7 +11445,7 @@ defmodule HydraX.RuntimeTest do
     assert record.decision == "approved"
     assert record.requested_action == "merge_ready"
 
-    approvals = Runtime.approval_records_for_subject("work_item", work_item.id)
+    approvals = Runtime.hx_approval_records_for_subject("work_item", work_item.id)
     assert Enum.any?(approvals, &(&1.id == record.id))
   end
 
@@ -11474,7 +11477,7 @@ defmodule HydraX.RuntimeTest do
         "rationale" => "Promoted through the parent work item."
       })
 
-    artifact_approvals = Runtime.artifact_approval_records(artifact.id)
+    artifact_approvals = Runtime.artifact_hx_approval_records(artifact.id)
     assert Enum.any?(artifact_approvals, &(&1.requested_action == "merge_ready"))
 
     {rejected_artifact, rejection_record} =
@@ -11486,7 +11489,7 @@ defmodule HydraX.RuntimeTest do
     assert rejected_artifact.review_status == "rejected"
     assert rejection_record.subject_type == "artifact"
 
-    artifact_approvals = Runtime.artifact_approval_records(artifact.id)
+    artifact_approvals = Runtime.artifact_hx_approval_records(artifact.id)
     assert Enum.any?(artifact_approvals, &(&1.decision == "approved"))
     assert Enum.any?(artifact_approvals, &(&1.decision == "rejected"))
   end
@@ -11520,7 +11523,7 @@ defmodule HydraX.RuntimeTest do
     assert extension_item.status == "blocked"
 
     patch_bundle =
-      Runtime.work_item_artifacts(extension_item.id)
+      Runtime.work_item_hx_artifacts(extension_item.id)
       |> Enum.find(&(&1.type == "patch_bundle"))
 
     assert patch_bundle
@@ -11553,7 +11556,7 @@ defmodule HydraX.RuntimeTest do
     assert approved_item.result_refs["extension_enablement_status"] == "approved_not_enabled"
     assert record.requested_action == "enable_extension"
 
-    artifact_approvals = Runtime.artifact_approval_records(patch_bundle.id)
+    artifact_approvals = Runtime.artifact_hx_approval_records(patch_bundle.id)
     assert Enum.any?(artifact_approvals, &(&1.requested_action == "enable_extension"))
   end
 
@@ -11589,7 +11592,7 @@ defmodule HydraX.RuntimeTest do
     assert updated.approval_stage == "validated"
     assert record.decision == "rejected"
 
-    [artifact] = Runtime.work_item_artifacts(work_item.id)
+    [artifact] = Runtime.work_item_hx_artifacts(work_item.id)
     assert artifact.review_status == "rejected"
   end
 

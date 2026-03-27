@@ -2,7 +2,7 @@ defmodule HydraX.Repo.Migrations.CreateToolPolicies do
   use Ecto.Migration
 
   def change do
-    create table(:tool_policies) do
+    create table(:hx_tool_policies) do
       add :scope, :string, null: false
       add :workspace_read_enabled, :boolean, null: false, default: true
       add :http_fetch_enabled, :boolean, null: false, default: true
@@ -13,6 +13,6 @@ defmodule HydraX.Repo.Migrations.CreateToolPolicies do
       timestamps(type: :utc_datetime_usec)
     end
 
-    create unique_index(:tool_policies, [:scope])
+    create unique_index(:hx_tool_policies, [:scope])
   end
 end

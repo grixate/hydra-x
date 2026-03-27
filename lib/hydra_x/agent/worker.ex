@@ -50,6 +50,7 @@ defmodule HydraX.Agent.Worker do
       ) do
     agent = Runtime.get_agent!(conversation.agent_id)
     tool_policy = Runtime.effective_tool_policy(agent.id)
+    extra_tool_modules = HydraX.Product.tool_modules(conversation)
 
     context = %{
       workspace_root: agent.workspace_root,
@@ -57,12 +58,15 @@ defmodule HydraX.Agent.Worker do
       shell_allowlist: tool_policy.shell_allowlist,
       agent_id: conversation.agent_id,
       conversation_id: conversation.id,
-      current_channel: conversation.channel
+      current_channel: conversation.channel,
+      conversation_metadata: conversation.metadata || %{},
+      product_project_id: get_in(conversation.metadata || %{}, ["product_project_id"]),
+      product_persona: get_in(conversation.metadata || %{}, ["product_persona"])
     }
 
     results =
       Enum.map(tool_calls, fn tool_call ->
-        execute_single(tool_call, context, conversation, tool_policy)
+        execute_single(tool_call, context, conversation, tool_policy, extra_tool_modules)
       end)
 
     {:stop_and_reply, :normal, [{:reply, from, results}], data}
@@ -74,9 +78,10 @@ defmodule HydraX.Agent.Worker do
          %{id: id, name: name, arguments: arguments},
          context,
          conversation,
-         _tool_policy
+         _tool_policy,
+         extra_tool_modules
        ) do
-    case Registry.find_tool(name) do
+    case Registry.find_tool(name, extra_tools: extra_tool_modules) do
       nil ->
         %{
           tool_use_id: id,
@@ -152,6 +157,30 @@ defmodule HydraX.Agent.Worker do
 
   defp enrich_params(arguments, "memory_recall", context) do
     Map.put(arguments, :agent_id, context.agent_id)
+  end
+
+  defp enrich_params(arguments, "source_search", context) do
+    arguments
+    |> Map.put(:project_id, context.product_project_id)
+    |> Map.put(:persona, context.product_persona)
+  end
+
+  defp enrich_params(arguments, "insight_create", context) do
+    arguments
+    |> Map.put(:project_id, context.product_project_id)
+    |> Map.put(:persona, context.product_persona)
+  end
+
+  defp enrich_params(arguments, "insight_update", context) do
+    arguments
+    |> Map.put(:project_id, context.product_project_id)
+    |> Map.put(:persona, context.product_persona)
+  end
+
+  defp enrich_params(arguments, "requirement_create", context) do
+    arguments
+    |> Map.put(:project_id, context.product_project_id)
+    |> Map.put(:persona, context.product_persona)
   end
 
   defp enrich_params(arguments, "mcp_inspect", context) do

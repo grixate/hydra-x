@@ -22,6 +22,11 @@ defmodule HydraXWeb.Router do
     plug :accepts, ["json"]
   end
 
+  pipeline :api_authenticated do
+    plug :fetch_session
+    plug HydraXWeb.Plugs.OperatorAPIAuth
+  end
+
   scope "/", HydraXWeb do
     pipe_through :browser
 
@@ -47,12 +52,17 @@ defmodule HydraXWeb.Router do
       live "/setup", SetupLive
       live "/agents", AgentsLive
       live "/conversations", ConversationsLive
+      live "/hx_conversations", ConversationsLive
       live "/memory", MemoryLive
       live "/jobs", JobsLive
       live "/budget", BudgetLive
       live "/safety", SafetyLive
       live "/settings/providers", ProviderSettingsLive
       live "/health", HealthLive
+      live "/simulations", SimulationLive.Index, :index
+      live "/simulations/new", SimulationLive.Configure, :new
+      live "/simulations/:id", SimulationLive.Show, :show
+      live "/simulations/:id/report", SimulationLive.Report, :report
     end
   end
 
@@ -62,6 +72,40 @@ defmodule HydraXWeb.Router do
     post "/telegram/webhook", TelegramWebhookController, :create
     post "/discord/webhook", DiscordWebhookController, :create
     post "/slack/webhook", SlackWebhookController, :create
+  end
+
+  scope "/api/v1", HydraXWeb do
+    pipe_through [:api, :api_authenticated]
+
+    get "/projects", ProjectAPIController, :index
+    post "/projects", ProjectAPIController, :create
+    get "/projects/:id", ProjectAPIController, :show
+    patch "/projects/:id", ProjectAPIController, :update
+    delete "/projects/:id", ProjectAPIController, :delete
+    get "/projects/:project_id/sources", SourceAPIController, :index
+    post "/projects/:project_id/sources", SourceAPIController, :create
+    get "/projects/:project_id/sources/:id", SourceAPIController, :show
+    delete "/projects/:project_id/sources/:id", SourceAPIController, :delete
+    get "/projects/:project_id/insights", InsightAPIController, :index
+    post "/projects/:project_id/insights", InsightAPIController, :create
+    get "/projects/:project_id/insights/:id", InsightAPIController, :show
+    patch "/projects/:project_id/insights/:id", InsightAPIController, :update
+    delete "/projects/:project_id/insights/:id", InsightAPIController, :delete
+    get "/projects/:project_id/requirements", RequirementAPIController, :index
+    post "/projects/:project_id/requirements", RequirementAPIController, :create
+    get "/projects/:project_id/requirements/:id", RequirementAPIController, :show
+    patch "/projects/:project_id/requirements/:id", RequirementAPIController, :update
+    delete "/projects/:project_id/requirements/:id", RequirementAPIController, :delete
+    get "/projects/:project_id/conversations", ProductConversationAPIController, :index
+    post "/projects/:project_id/conversations", ProductConversationAPIController, :create
+    get "/projects/:project_id/conversations/:id", ProductConversationAPIController, :show
+    patch "/projects/:project_id/conversations/:id", ProductConversationAPIController, :update
+
+    post "/projects/:project_id/conversations/:id/messages",
+         ProductConversationAPIController,
+         :create_message
+
+    post "/projects/:project_id/exports", ProjectExportAPIController, :create
   end
 
   # Other scopes may use custom stacks.

@@ -4,8 +4,9 @@ defmodule HydraX.Memory.ResearchDelta do
   def build(before_counts, after_counts) when is_map(before_counts) and is_map(after_counts) do
     %{
       "promoted" => delta(before_counts, after_counts, "durable"),
-      "expired" => -delta(before_counts, after_counts, "active") +
-        -delta(before_counts, after_counts, "durable"),
+      "expired" =>
+        -delta(before_counts, after_counts, "active") +
+          -delta(before_counts, after_counts, "durable"),
       "new_candidates" => delta(before_counts, after_counts, "candidate"),
       "archived" => delta(before_counts, after_counts, "archived"),
       "superseded" => delta(before_counts, after_counts, "superseded")

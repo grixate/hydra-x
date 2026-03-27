@@ -6,7 +6,7 @@ defmodule HydraX.Runtime.AgentProfile do
 
   @statuses ~w(active paused archived)
 
-  schema "agent_profiles" do
+  schema "hx_agent_profiles" do
     field :name, :string
     field :slug, :string
     field :status, :string, default: "active"

@@ -67,7 +67,7 @@ defmodule HydraXWeb.SetupLiveTest do
     assert html =~ "env-backed"
   end
 
-  test "setup page can export install artifacts", %{conn: conn} do
+  test "setup page can export install hx_artifacts", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/setup")
 
     view

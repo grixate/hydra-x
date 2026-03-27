@@ -4,7 +4,7 @@ defmodule HydraX.Budget.Policy do
 
   @actions ~w(reject warn)
 
-  schema "budget_policies" do
+  schema "hx_budget_policies" do
     field :daily_limit, :integer, default: 20_000
     field :conversation_limit, :integer, default: 4_000
     field :soft_warning_at, :float, default: 0.8

@@ -22,41 +22,24 @@ end
 
 # Cluster configuration (disabled by default)
 # Enable with HYDRA_CLUSTER_ENABLED=true for multi-node awareness.
-# Note: SQLite is single-writer; true multi-node requires PostgreSQL.
 if System.get_env("HYDRA_CLUSTER_ENABLED") == "true" do
   config :hydra_x, :cluster_enabled, true
 end
 
 if config_env() == :prod do
-  repo_adapter = Application.get_env(:hydra_x, :repo_adapter, Ecto.Adapters.SQLite3)
+  database_url =
+    System.get_env("DATABASE_URL") ||
+      raise """
+      environment variable DATABASE_URL is missing.
+      For example: ecto://postgres:postgres@db.example.com/hydra_x
+      """
 
-  case repo_adapter do
-    Ecto.Adapters.Postgres ->
-      database_url =
-        System.get_env("DATABASE_URL") ||
-          raise """
-          environment variable DATABASE_URL is missing.
-          For example: ecto://postgres:postgres@db.example.com/hydra_x
-          """
-
-      config :hydra_x, HydraX.Repo,
-        url: database_url,
-        pool_size: String.to_integer(System.get_env("POOL_SIZE") || "10"),
-        ssl: System.get_env("DATABASE_SSL", "false") == "true",
-        socket_options: if(System.get_env("ECTO_IPV6") in ["true", "1"], do: [:inet6], else: [])
-
-    _ ->
-      database_path =
-        System.get_env("DATABASE_PATH") ||
-          raise """
-          environment variable DATABASE_PATH is missing.
-          For example: /etc/hydra_x/hydra_x.db
-          """
-
-      config :hydra_x, HydraX.Repo,
-        database: database_path,
-        pool_size: String.to_integer(System.get_env("POOL_SIZE") || "5")
-  end
+  config :hydra_x, HydraX.Repo,
+    url: database_url,
+    pool_size: String.to_integer(System.get_env("POOL_SIZE") || "10"),
+    ssl: System.get_env("DATABASE_SSL", "false") == "true",
+    socket_options: if(System.get_env("ECTO_IPV6") in ["true", "1"], do: [:inet6], else: []),
+    types: HydraX.PostgresTypes
 
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # A default value is used in config/dev.exs and config/test.exs but you

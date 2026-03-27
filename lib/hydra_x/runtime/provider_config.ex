@@ -4,7 +4,7 @@ defmodule HydraX.Runtime.ProviderConfig do
 
   @kinds ~w(openai_compatible anthropic)
 
-  schema "provider_configs" do
+  schema "hx_provider_configs" do
     field :name, :string
     field :kind, :string
     field :base_url, :string

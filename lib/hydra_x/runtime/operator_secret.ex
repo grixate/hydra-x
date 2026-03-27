@@ -4,7 +4,7 @@ defmodule HydraX.Runtime.OperatorSecret do
 
   alias HydraX.Security.Password
 
-  schema "operator_secrets" do
+  schema "hx_operator_secrets" do
     field :scope, :string, default: "control_plane"
     field :password_hash, :string
     field :password_salt, :string

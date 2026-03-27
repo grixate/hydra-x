@@ -2,7 +2,7 @@ defmodule HydraX.Repo.Migrations.AddSchedulerResilienceControls do
   use Ecto.Migration
 
   def change do
-    alter table(:scheduled_jobs) do
+    alter table(:hx_scheduled_jobs) do
       add :active_hour_start, :integer
       add :active_hour_end, :integer
       add :timeout_seconds, :integer, null: false, default: 120
@@ -18,7 +18,7 @@ defmodule HydraX.Repo.Migrations.AddSchedulerResilienceControls do
       add :last_failure_reason, :text
     end
 
-    create index(:scheduled_jobs, [:circuit_state])
-    create index(:scheduled_jobs, [:paused_until])
+    create index(:hx_scheduled_jobs, [:circuit_state])
+    create index(:hx_scheduled_jobs, [:paused_until])
   end
 end

@@ -2,7 +2,7 @@ defmodule HydraX.Repo.Migrations.CreateMcpServerConfigs do
   use Ecto.Migration
 
   def change do
-    create table(:mcp_server_configs) do
+    create table(:hx_mcp_server_configs) do
       add :name, :string, null: false
       add :transport, :string, null: false
       add :command, :string
@@ -18,6 +18,6 @@ defmodule HydraX.Repo.Migrations.CreateMcpServerConfigs do
       timestamps(type: :utc_datetime_usec)
     end
 
-    create index(:mcp_server_configs, [:enabled])
+    create index(:hx_mcp_server_configs, [:enabled])
   end
 end

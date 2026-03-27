@@ -43,7 +43,7 @@ defmodule HydraX.Runtime.Conversations do
   def get_conversation!(id) do
     Conversation
     |> Repo.get!(id)
-    |> Repo.preload([:agent, turns: from(turn in Turn, order_by: turn.sequence)])
+    |> Repo.preload(conversation_turn_preloads())
   end
 
   def find_conversation(agent_id, channel, external_ref) do
@@ -199,7 +199,7 @@ defmodule HydraX.Runtime.Conversations do
 
     Conversation
     |> where([conversation], conversation.status == "active")
-    |> preload([:agent, turns: ^turns_query])
+    |> preload(^conversation_turn_preloads(turns_query))
     |> order_by([conversation], desc: conversation.updated_at)
     |> limit(^limit)
     |> Repo.all()
@@ -1318,6 +1318,10 @@ defmodule HydraX.Runtime.Conversations do
     else
       payload
     end
+  end
+
+  defp conversation_turn_preloads(turns_query \\ from(turn in Turn, order_by: turn.sequence)) do
+    [:agent, turns: turns_query, hx_turns: turns_query]
   end
 
   defp normalize_turn_content(content) when is_binary(content), do: content

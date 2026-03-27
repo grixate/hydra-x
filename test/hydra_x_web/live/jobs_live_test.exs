@@ -56,7 +56,7 @@ defmodule HydraXWeb.JobsLiveTest do
     assert html =~ "Operator sweep"
 
     [job | _] =
-      Runtime.list_scheduled_jobs(limit: 10)
+      Runtime.list_hx_scheduled_jobs(limit: 10)
       |> Enum.filter(&(&1.name == "Operator sweep"))
 
     view
@@ -152,7 +152,7 @@ defmodule HydraXWeb.JobsLiveTest do
     |> render_submit()
 
     [job | _] =
-      Runtime.list_scheduled_jobs(limit: 10)
+      Runtime.list_hx_scheduled_jobs(limit: 10)
       |> Enum.filter(&(&1.name == "Weekly Planning Review"))
 
     assert job.schedule_mode == "weekly"
@@ -187,7 +187,7 @@ defmodule HydraXWeb.JobsLiveTest do
     |> render_submit()
 
     [job | _] =
-      Runtime.list_scheduled_jobs(limit: 10)
+      Runtime.list_hx_scheduled_jobs(limit: 10)
       |> Enum.filter(&(&1.name == "Natural Schedule Job"))
 
     assert job.schedule_mode == "daily"
@@ -222,7 +222,7 @@ defmodule HydraXWeb.JobsLiveTest do
     |> render_submit()
 
     [job | _] =
-      Runtime.list_scheduled_jobs(limit: 10)
+      Runtime.list_hx_scheduled_jobs(limit: 10)
       |> Enum.filter(&(&1.name == "Ingest queue sweep"))
 
     view
@@ -230,7 +230,7 @@ defmodule HydraXWeb.JobsLiveTest do
     |> render_click()
 
     [run | _] =
-      Runtime.list_job_runs(limit: 5, kind: "ingest", search: "Ingest queue sweep")
+      Runtime.list_hx_job_runs(limit: 5, kind: "ingest", search: "Ingest queue sweep")
 
     assert run.status == "success"
     assert run.output =~ "scheduled.md"
@@ -306,7 +306,7 @@ defmodule HydraXWeb.JobsLiveTest do
     |> render_submit()
 
     [job | _] =
-      Runtime.list_scheduled_jobs(limit: 10)
+      Runtime.list_hx_scheduled_jobs(limit: 10)
       |> Enum.filter(&(&1.name == "Retention Job"))
 
     assert job.run_retention_days == 7

@@ -4,7 +4,7 @@ defmodule HydraX.Runtime.Artifact do
 
   @review_statuses ~w(draft proposed validated approved rejected superseded)
 
-  schema "artifacts" do
+  schema "hx_artifacts" do
     field :type, :string
     field :title, :string
     field :summary, :string

@@ -10,7 +10,7 @@ defmodule HydraX.Embeddings do
   alias HydraX.Config
 
   @default_backend "local_hash_v1"
-  @default_dimensions 64
+  @default_dimensions 768
 
   def embed(input, opts \\ []) do
     text =
@@ -102,6 +102,7 @@ defmodule HydraX.Embeddings do
     url = Keyword.get(opts, :url, Config.embedding_url())
     api_key = Keyword.get(opts, :api_key, Config.embedding_api_key())
     model = model(opts, "openai_compatible")
+    requested_dimensions = dimensions(opts)
 
     cond do
       not is_binary(url) or url == "" ->
@@ -126,7 +127,10 @@ defmodule HydraX.Embeddings do
 
         case request_fn.(url: url, headers: headers, json: body) do
           {:ok, %{status: status, body: %{"data" => [first | _]}}} when status in 200..299 ->
-            vector = first["embedding"] || []
+            vector =
+              first["embedding"]
+              |> Kernel.||([])
+              |> normalize_dimensions(requested_dimensions)
 
             {:ok,
              %{
@@ -219,4 +223,19 @@ defmodule HydraX.Embeddings do
       Enum.map(values, &Float.round(&1 / magnitude, 6))
     end
   end
+
+  defp normalize_dimensions(values, dimensions)
+       when is_list(values) and length(values) == dimensions,
+       do: values
+
+  defp normalize_dimensions(values, dimensions)
+       when is_list(values) and length(values) > dimensions do
+    Enum.take(values, dimensions)
+  end
+
+  defp normalize_dimensions(values, dimensions) when is_list(values) do
+    values ++ List.duplicate(0.0, dimensions - length(values))
+  end
+
+  defp normalize_dimensions(_values, _dimensions), do: []
 end

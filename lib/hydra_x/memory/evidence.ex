@@ -15,8 +15,7 @@ defmodule HydraX.Memory.Evidence do
       "provenance" => provenance || %{},
       "confidence" => confidence,
       "freshness_at" => DateTime.to_iso8601(now),
-      "freshness_ttl_days" =>
-        Keyword.get(opts, :freshness_ttl_days, @default_freshness_ttl_days),
+      "freshness_ttl_days" => Keyword.get(opts, :freshness_ttl_days, @default_freshness_ttl_days),
       "approval_state" => Keyword.get(opts, :approval_state, "provisional")
     }
   end

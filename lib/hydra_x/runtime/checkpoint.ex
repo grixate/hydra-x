@@ -2,7 +2,7 @@ defmodule HydraX.Runtime.Checkpoint do
   use Ecto.Schema
   import Ecto.Changeset
 
-  schema "checkpoints" do
+  schema "hx_checkpoints" do
     field :process_type, :string
     field :state, :map, default: %{}
 

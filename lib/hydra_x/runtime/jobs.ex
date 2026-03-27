@@ -1155,7 +1155,8 @@ defmodule HydraX.Runtime.Jobs do
   end
 
   defp execute_full_research(agent, job, config) do
-    query = config["research_query"] || job.prompt || "Review recent findings and update knowledge."
+    query =
+      config["research_query"] || job.prompt || "Review recent findings and update knowledge."
 
     {:ok, work_item} =
       HydraX.Runtime.save_work_item(%{
@@ -1721,7 +1722,7 @@ defmodule HydraX.Runtime.Jobs do
     where(
       query,
       [run, _job],
-      fragment("json_extract(?, '$.delivery.status')", run.metadata) == ^delivery_status
+      fragment("?->'delivery'->>? = ?", run.metadata, "status", ^delivery_status)
     )
   end
 

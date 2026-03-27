@@ -2,7 +2,7 @@ defmodule HydraX.Runtime.ControlPolicy do
   use Ecto.Schema
   import Ecto.Changeset
 
-  schema "control_policies" do
+  schema "hx_control_policies" do
     field :scope, :string, default: "default"
     field :require_recent_auth_for_sensitive_actions, :boolean, default: true
     field :recent_auth_window_minutes, :integer, default: 15

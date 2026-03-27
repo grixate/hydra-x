@@ -88,7 +88,7 @@ defmodule HydraXWeb.AgentsLiveTest do
         last_seen_at: DateTime.utc_now()
       })
 
-    [research_item | _] = Runtime.list_work_items(agent_id: agent.id, limit: 1)
+    [research_item | _] = Runtime.list_hx_work_items(agent_id: agent.id, limit: 1)
 
     {:ok, _research_item} =
       Runtime.save_work_item(research_item, %{
@@ -1450,7 +1450,7 @@ defmodule HydraXWeb.AgentsLiveTest do
                enabled: true
              })
 
-    assert {:ok, _bindings} = Runtime.refresh_agent_mcp_servers(agent.id)
+    assert {:ok, _bindings} = Runtime.refresh_hx_agent_mcp_servers(agent.id)
     assert {:ok, _results} = Runtime.list_agent_mcp_actions(agent.id)
 
     {:ok, view, _html} = live(conn, ~p"/agents")
@@ -1465,7 +1465,7 @@ defmodule HydraXWeb.AgentsLiveTest do
     assert html =~ "2 actions"
     assert html =~ "enabled"
 
-    [binding] = Runtime.list_agent_mcp_servers(agent.id)
+    [binding] = Runtime.list_hx_agent_mcp_servers(agent.id)
 
     assert get_in(binding.mcp_server_config.metadata || %{}, ["actions"]) == [
              "search_docs",

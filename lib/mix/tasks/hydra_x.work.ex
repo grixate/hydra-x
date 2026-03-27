@@ -98,7 +98,10 @@ defmodule Mix.Tasks.HydraX.Work do
       target_count = length(contract["target_files"] || [])
       patch_type = get_in(contract, ["intended_patch_shape", "type"]) || "unknown"
       checks = length(contract["required_checks"] || [])
-      Mix.shell().info("engineering_contract=targets:#{target_count} patch:#{patch_type} checks:#{checks}")
+
+      Mix.shell().info(
+        "engineering_contract=targets:#{target_count} patch:#{patch_type} checks:#{checks}"
+      )
     end
 
     Enum.each(artifacts, fn artifact ->

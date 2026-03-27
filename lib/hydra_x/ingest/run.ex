@@ -4,7 +4,7 @@ defmodule HydraX.Ingest.Run do
 
   @statuses ~w(imported archived failed skipped)
 
-  schema "ingest_runs" do
+  schema "hx_ingest_runs" do
     field :source_file, :string
     field :source_path, :string
     field :status, :string

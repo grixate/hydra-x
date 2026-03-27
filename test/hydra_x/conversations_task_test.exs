@@ -5,7 +5,7 @@ defmodule HydraX.ConversationsTaskTest do
   alias HydraX.Runtime
 
   test "conversation task retries a failed Telegram delivery" do
-    Mix.Task.reenable("hydra_x.conversations")
+    Mix.Task.reenable("hydra_x.hx_conversations")
 
     previous = Application.get_env(:hydra_x, :telegram_deliver)
 
@@ -66,7 +66,7 @@ defmodule HydraX.ConversationsTaskTest do
   end
 
   test "conversation task retries a failed Slack delivery" do
-    Mix.Task.reenable("hydra_x.conversations")
+    Mix.Task.reenable("hydra_x.hx_conversations")
 
     previous = Application.get_env(:hydra_x, :slack_deliver)
 
@@ -131,14 +131,14 @@ defmodule HydraX.ConversationsTaskTest do
   end
 
   test "conversation task can start and send control-plane messages" do
-    Mix.Task.reenable("hydra_x.conversations")
+    Mix.Task.reenable("hydra_x.hx_conversations")
     agent = create_agent()
 
     output =
       ExUnit.CaptureIO.capture_io(fn ->
         Mix.Tasks.HydraX.Conversations.run([
           "start",
-          "Remember that Codex can drive conversations from the CLI task.",
+          "Remember that Codex can drive hx_conversations from the CLI task.",
           "--agent",
           agent.slug,
           "--title",
@@ -148,10 +148,10 @@ defmodule HydraX.ConversationsTaskTest do
 
     assert output =~ "conversation="
 
-    [conversation | _] = Runtime.list_conversations(agent_id: agent.id, limit: 5)
+    [conversation | _] = Runtime.list_hx_conversations(agent_id: agent.id, limit: 5)
     assert conversation.title == "Task Chat"
 
-    Mix.Task.reenable("hydra_x.conversations")
+    Mix.Task.reenable("hydra_x.hx_conversations")
 
     send_output =
       ExUnit.CaptureIO.capture_io(fn ->
@@ -165,11 +165,11 @@ defmodule HydraX.ConversationsTaskTest do
     assert send_output =~ "conversation=#{conversation.id}"
 
     refreshed = Runtime.get_conversation!(conversation.id)
-    assert length(refreshed.turns) == 4
+    assert length(refreshed.hx_turns) == 4
   end
 
   test "conversation task shows deferred ownership when sending to a remotely owned conversation" do
-    Mix.Task.reenable("hydra_x.conversations")
+    Mix.Task.reenable("hydra_x.hx_conversations")
     previous_adapter = Application.get_env(:hydra_x, :repo_adapter)
     Application.put_env(:hydra_x, :repo_adapter, Ecto.Adapters.Postgres)
 
@@ -207,13 +207,13 @@ defmodule HydraX.ConversationsTaskTest do
     assert output =~ "conversation=#{conversation.id}"
     assert output =~ "Conversation ownership is held by node:remote"
 
-    [turn] = Runtime.list_turns(conversation.id)
+    [turn] = Runtime.list_hx_turns(conversation.id)
     assert turn.content == "Forward this to the remote owner."
     assert turn.metadata["deferred_to_owner"] == "node:remote"
   end
 
   test "conversation task can archive and export transcripts" do
-    Mix.Task.reenable("hydra_x.conversations")
+    Mix.Task.reenable("hydra_x.hx_conversations")
     agent = create_agent()
 
     {:ok, conversation} =
@@ -388,7 +388,7 @@ defmodule HydraX.ConversationsTaskTest do
         ]
       })
 
-    Mix.Task.reenable("hydra_x.conversations")
+    Mix.Task.reenable("hydra_x.hx_conversations")
 
     show_output =
       ExUnit.CaptureIO.capture_io(fn ->
@@ -465,7 +465,7 @@ defmodule HydraX.ConversationsTaskTest do
     assert transcript =~ "tool_use_id: tool-skill-1"
     assert transcript =~ "cached: yes"
 
-    Mix.Task.reenable("hydra_x.conversations")
+    Mix.Task.reenable("hydra_x.hx_conversations")
 
     archive_output =
       ExUnit.CaptureIO.capture_io(fn ->
@@ -477,7 +477,7 @@ defmodule HydraX.ConversationsTaskTest do
   end
 
   test "conversation task can show execution state" do
-    Mix.Task.reenable("hydra_x.conversations")
+    Mix.Task.reenable("hydra_x.hx_conversations")
     agent = create_agent()
 
     {:ok, conversation} =
@@ -646,8 +646,8 @@ defmodule HydraX.ConversationsTaskTest do
     assert output =~ "captured_chunks=2"
   end
 
-  test "conversation task can filter archived conversations by status and search" do
-    Mix.Task.reenable("hydra_x.conversations")
+  test "conversation task can filter archived hx_conversations by status and search" do
+    Mix.Task.reenable("hydra_x.hx_conversations")
     agent = create_agent()
 
     {:ok, active} =
@@ -682,7 +682,7 @@ defmodule HydraX.ConversationsTaskTest do
   end
 
   test "conversation task can review and reset compaction" do
-    Mix.Task.reenable("hydra_x.conversations")
+    Mix.Task.reenable("hydra_x.hx_conversations")
     agent = create_agent()
     Runtime.save_compaction_policy!(agent.id, %{"soft" => 4, "medium" => 8, "hard" => 12})
 
@@ -726,7 +726,7 @@ defmodule HydraX.ConversationsTaskTest do
     assert compact_output =~ "summary_source="
     assert compact_output =~ "supporting_memories="
 
-    Mix.Task.reenable("hydra_x.conversations")
+    Mix.Task.reenable("hydra_x.hx_conversations")
 
     reset_output =
       ExUnit.CaptureIO.capture_io(fn ->
@@ -744,7 +744,7 @@ defmodule HydraX.ConversationsTaskTest do
       Runtime.save_agent(%{
         name: "Conversation Task Agent #{unique}",
         slug: "conversation-task-agent-#{unique}",
-        workspace_root: Path.join(System.tmp_dir!(), "hydra-x-conversations-#{unique}"),
+        workspace_root: Path.join(System.tmp_dir!(), "hydra-x-hx_conversations-#{unique}"),
         description: "conversation task test agent",
         is_default: false
       })

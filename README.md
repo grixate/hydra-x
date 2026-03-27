@@ -10,7 +10,7 @@ Most agent systems optimize for raw capability first and operational discipline 
 
 It gives you:
 
-- **Powerful architecture** based on OTP supervision, persisted runtime state, resumable work items, multi-channel conversations, typed memory, scheduler jobs, and operator-facing control surfaces
+- **Powerful architecture** based on OTP supervision, persisted runtime state, resumable work items, multi-channel hx_conversations, typed memory, scheduler jobs, and operator-facing control surfaces
 - **Security by default** with encrypted secrets, operator auth, tool guardrails, channel and delivery policy, recent-auth checks, budget enforcement, and safety-event auditing
 - **Monitoring and operator visibility** through `/health`, `/safety`, report bundles, scheduler history, runtime telemetry, and CLI inspection tools
 - **Operational simplicity** through a single Phoenix app, SQLite-first local setup, browser-based configuration, and a consistent CLI for day-to-day control
@@ -39,7 +39,7 @@ Core architectural strengths:
 - **Persisted runtime state**
   Conversations, work items, scheduler runs, safety events, memory, delivery attempts, and operator actions are persisted and queryable
 - **Resumable execution**
-  Channel checkpoints, work-item replay, lease-backed ownership, and recovery-aware follow-ups let Hydra-X resume work instead of starting over
+  Channel hx_checkpoints, work-item replay, lease-backed ownership, and recovery-aware follow-ups let Hydra-X resume work instead of starting over
 - **Separation of concerns**
   Providers, gateways, tools, and MCP integrations all sit behind explicit runtime contracts
 - **Unified control plane**
@@ -125,14 +125,14 @@ It is designed so you can start simple and add complexity only when you need it.
 
 Hydra-X already includes a substantial runtime surface:
 
-- multi-channel conversations for CLI, Telegram, Slack, Discord, and Webchat
+- multi-channel hx_conversations for CLI, Telegram, Slack, Discord, and Webchat
 - typed memory with search, ranking, and export
 - ingest pipeline for workspace documents
 - recurring jobs for prompts, ingest, maintenance, and backups
 - provider routing with health and fallback behavior
 - workspace skills and MCP registry/invocation
 - delivery controls for interactive and scheduled channels
-- operator UI for agents, conversations, memory, jobs, safety, providers, and health
+- operator UI for agents, hx_conversations, memory, jobs, safety, providers, and health
 
 ## Quick Start
 
@@ -166,7 +166,7 @@ Browser UI:
 
 - `/setup`
 - `/agents`
-- `/conversations`
+- `/hx_conversations`
 - `/memory`
 - `/jobs`
 - `/safety`
@@ -178,7 +178,7 @@ Key CLI surfaces:
 - `mix hydra_x.chat`
 - `mix hydra_x.agents`
 - `mix hydra_x.jobs`
-- `mix hydra_x.conversations`
+- `mix hydra_x.hx_conversations`
 - `mix hydra_x.memory`
 - `mix hydra_x.safety`
 - `mix hydra_x.report`

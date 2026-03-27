@@ -6,10 +6,13 @@ import Config
 # to provide built-in test partitioning in CI environment.
 # Run `mix help test` for more information.
 config :hydra_x, HydraX.Repo,
-  database: Path.expand("../hydra_x_test.db", __DIR__),
-  busy_timeout: 15_000,
-  journal_mode: :wal,
+  url:
+    System.get_env(
+      "TEST_DATABASE_URL",
+      "ecto://#{System.get_env("PGUSER") || System.get_env("USER") || "postgres"}@localhost/hydra_x_test"
+    ),
   pool_size: 1,
+  types: HydraX.PostgresTypes,
   pool: Ecto.Adapters.SQL.Sandbox
 
 # We don't run a server during test. If one is required,

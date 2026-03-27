@@ -5,7 +5,6 @@ defmodule HydraX.Memory do
 
   import Ecto.Query
 
-  alias Ecto.Adapters.SQL
   alias HydraX.Embeddings
   alias HydraX.Memory.{Edge, Entry, Markdown}
   alias HydraX.Repo
@@ -51,7 +50,6 @@ defmodule HydraX.Memory do
     entries =
       Entry
       |> maybe_filter_agent(agent_id)
-      |> select([entry], %{metadata: entry.metadata, updated_at: entry.updated_at})
       |> Repo.all()
 
     {embedded_count, unembedded_count, stale_count, fallback_count, backend_counts, model_counts,
@@ -60,7 +58,7 @@ defmodule HydraX.Memory do
                                                            {embedded, unembedded, stale, fallback,
                                                             backends, models, last_generated} ->
         metadata = entry.metadata || %{}
-        embedded? = embedded_memory?(metadata)
+        embedded? = embedded_memory?(entry)
         backend = metadata["embedding_backend"]
         model = metadata["embedding_model"]
         fallback_from = metadata["embedding_fallback_from"]
@@ -69,7 +67,7 @@ defmodule HydraX.Memory do
         {
           embedded + if(embedded?, do: 1, else: 0),
           unembedded + if(embedded?, do: 0, else: 1),
-          stale + if(stale_embedding?(metadata, embedding_runtime), do: 1, else: 0),
+          stale + if(stale_embedding?(entry, embedding_runtime), do: 1, else: 0),
           fallback + if(is_binary(fallback_from) and fallback_from != "", do: 1, else: 0),
           increment_count(backends, backend),
           increment_count(models, model),
@@ -625,13 +623,6 @@ defmodule HydraX.Memory do
   defp is_nil_or_empty(""), do: true
   defp is_nil_or_empty(_value), do: false
 
-  defp fts_query(query) do
-    query
-    |> String.trim()
-    |> String.split(~r/\s+/, trim: true)
-    |> Enum.map_join(" OR ", &"\"#{&1}\"")
-  end
-
   defp search_opts(opts) do
     %{
       type: Keyword.get(opts, :type),
@@ -642,50 +633,36 @@ defmodule HydraX.Memory do
   end
 
   defp lexical_search(agent_id, query, limit, search_opts) do
-    try do
-      sql = """
-      SELECT m.*
-      FROM memory_search ms
-      JOIN memory_entries m ON m.id = ms.rowid
-      WHERE ms.content MATCH ?
-        AND (? IS NULL OR m.agent_id = ?)
-        AND (? IS NULL OR m.type = ?)
-        AND (? IS NULL OR m.status = ?)
-        AND (? IS NULL OR m.importance >= ?)
-      ORDER BY rank
-      LIMIT ?
-      """
-
-      {:ok, %{rows: rows, columns: columns}} =
-        SQL.query(Repo, sql, [
-          fts_query(query),
-          agent_id,
-          agent_id,
-          search_opts.type,
-          search_opts.type,
-          search_opts.status,
-          search_opts.status,
-          search_opts.min_importance,
-          search_opts.min_importance,
-          limit
-        ])
-
-      rows
-      |> Enum.map(&Enum.zip(columns, &1))
-      |> Enum.map(&Map.new/1)
-      |> Enum.map(&Repo.load(Entry, &1))
-    rescue
-      _ ->
-        Entry
-        |> maybe_filter_agent(agent_id)
-        |> maybe_filter_type(search_opts.type)
-        |> maybe_filter_status(search_opts.status)
-        |> maybe_filter_min_importance(search_opts.min_importance)
-        |> where([entry], like(entry.content, ^"%#{query}%"))
-        |> order_by([entry], desc: entry.importance, desc: entry.updated_at)
-        |> limit(^limit)
-        |> Repo.all()
-    end
+    Entry
+    |> maybe_filter_agent(agent_id)
+    |> maybe_filter_type(search_opts.type)
+    |> maybe_filter_status(search_opts.status)
+    |> maybe_filter_statuses(search_opts.statuses)
+    |> maybe_filter_min_importance(search_opts.min_importance)
+    |> where(
+      [_entry],
+      fragment("search_vector @@ websearch_to_tsquery('english', ?)", ^query)
+    )
+    |> order_by(
+      [entry],
+      desc: fragment("ts_rank_cd(search_vector, websearch_to_tsquery('english', ?))", ^query),
+      desc: entry.importance,
+      desc: entry.updated_at
+    )
+    |> limit(^limit)
+    |> Repo.all()
+  rescue
+    _ ->
+      Entry
+      |> maybe_filter_agent(agent_id)
+      |> maybe_filter_type(search_opts.type)
+      |> maybe_filter_status(search_opts.status)
+      |> maybe_filter_statuses(search_opts.statuses)
+      |> maybe_filter_min_importance(search_opts.min_importance)
+      |> where([entry], like(entry.content, ^"%#{query}%"))
+      |> order_by([entry], desc: entry.importance, desc: entry.updated_at)
+      |> limit(^limit)
+      |> Repo.all()
   end
 
   defp semantic_search(agent_id, query, limit, search_opts, query_context) do
@@ -693,6 +670,7 @@ defmodule HydraX.Memory do
     |> maybe_filter_agent(agent_id)
     |> maybe_filter_type(search_opts.type)
     |> maybe_filter_status(search_opts.status)
+    |> maybe_filter_statuses(search_opts.statuses)
     |> maybe_filter_min_importance(search_opts.min_importance)
     |> order_by([entry], desc: entry.importance, desc: entry.updated_at)
     |> limit(^max(limit * 4, 80))
@@ -839,11 +817,7 @@ defmodule HydraX.Memory do
 
   defp enrich_memory_attrs(attrs, entry \\ nil) do
     attrs = normalize_attr_map(attrs)
-
-    metadata =
-      enriched_memory_metadata(Map.get(attrs, "metadata") || entry_metadata(entry), attrs, entry)
-
-    Map.put(attrs, "metadata", metadata)
+    enriched_memory_metadata(Map.get(attrs, "metadata") || entry_metadata(entry), attrs, entry)
   end
 
   defp enriched_memory_metadata(metadata, attrs, entry \\ nil) do
@@ -868,18 +842,22 @@ defmodule HydraX.Memory do
 
     {:ok, embedding} = Embeddings.embed([type, content | semantic_terms])
 
-    metadata
-    |> Map.put("semantic_terms", semantic_terms)
-    |> Map.put("semantic_vector", build_semantic_vector(semantic_terms))
-    |> Map.put("embedding_backend", embedding.backend)
-    |> Map.put("embedding_model", embedding.model)
-    |> Map.put("embedding_dimensions", embedding.dimensions)
-    |> Map.put("embedding_vector", embedding.vector)
-    |> Map.put("embedding_generated_at", DateTime.utc_now())
-    |> maybe_put("embedding_fallback_from", Map.get(embedding, :fallback_from))
-    |> maybe_put("embedding_fallback_reason", Map.get(embedding, :fallback_reason))
-    |> Map.put("recall_type", type)
-    |> Map.put("recall_status", status)
+    attrs
+    |> Map.put("embedding", embedding.vector)
+    |> Map.put(
+      "metadata",
+      metadata
+      |> Map.put("semantic_terms", semantic_terms)
+      |> Map.put("semantic_vector", build_semantic_vector(semantic_terms))
+      |> Map.put("embedding_backend", embedding.backend)
+      |> Map.put("embedding_model", embedding.model)
+      |> Map.put("embedding_dimensions", embedding.dimensions)
+      |> Map.put("embedding_generated_at", DateTime.utc_now())
+      |> maybe_put("embedding_fallback_from", Map.get(embedding, :fallback_from))
+      |> maybe_put("embedding_fallback_reason", Map.get(embedding, :fallback_reason))
+      |> Map.put("recall_type", type)
+      |> Map.put("recall_status", status)
+    )
   end
 
   defp normalize_attr_map(attrs) when is_map(attrs) do
@@ -924,28 +902,33 @@ defmodule HydraX.Memory do
   end
 
   defp embedding_vector(entry) do
-    case get_in(entry.metadata || %{}, ["embedding_vector"]) do
-      vector when is_list(vector) and vector != [] -> vector
-      _ -> []
+    case entry.embedding do
+      %Pgvector{} = vector ->
+        Pgvector.to_list(vector)
+
+      vector when is_list(vector) and vector != [] ->
+        vector
+
+      _ ->
+        case get_in(entry.metadata || %{}, ["embedding_vector"]) do
+          vector when is_list(vector) and vector != [] -> vector
+          _ -> []
+        end
     end
   end
 
-  defp embedded_memory?(metadata) when is_map(metadata) do
-    case metadata["embedding_vector"] do
-      vector when is_list(vector) and vector != [] -> true
-      _ -> false
-    end
-  end
+  defp embedded_memory?(%Entry{} = entry), do: embedding_vector(entry) != []
+  defp embedded_memory?(_entry), do: false
 
-  defp embedded_memory?(_metadata), do: false
+  defp stale_embedding?(%Entry{} = entry, runtime_status) do
+    metadata = entry.metadata || %{}
 
-  defp stale_embedding?(metadata, runtime_status) when is_map(metadata) do
-    embedded_memory?(metadata) and
+    embedded_memory?(entry) and
       (metadata["embedding_backend"] != runtime_status.active_backend or
          metadata["embedding_model"] != runtime_status.active_model)
   end
 
-  defp stale_embedding?(_metadata, _runtime_status), do: false
+  defp stale_embedding?(_entry, _runtime_status), do: false
 
   defp provenance_boost(_entry, query) when query in [nil, ""], do: 0.0
 

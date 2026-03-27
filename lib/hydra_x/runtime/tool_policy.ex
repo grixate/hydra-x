@@ -2,7 +2,7 @@ defmodule HydraX.Runtime.ToolPolicy do
   use Ecto.Schema
   import Ecto.Changeset
 
-  schema "tool_policies" do
+  schema "hx_tool_policies" do
     field :scope, :string, default: "default"
     field :workspace_list_enabled, :boolean, default: true
     field :workspace_read_enabled, :boolean, default: true
