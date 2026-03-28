@@ -159,6 +159,110 @@ defmodule HydraXWeb.ProductPayload do
     }
   end
 
+  def decision_json(%HydraX.Product.Decision{} = d) do
+    %{
+      id: d.id,
+      project_id: d.project_id,
+      title: d.title,
+      body: d.body,
+      status: d.status,
+      decided_by: d.decided_by,
+      decided_at: d.decided_at,
+      alternatives_considered: d.alternatives_considered || [],
+      metadata: d.metadata || %{},
+      inserted_at: d.inserted_at,
+      updated_at: d.updated_at
+    }
+  end
+
+  def strategy_json(%HydraX.Product.Strategy{} = s) do
+    %{
+      id: s.id,
+      project_id: s.project_id,
+      title: s.title,
+      body: s.body,
+      status: s.status,
+      metadata: s.metadata || %{},
+      inserted_at: s.inserted_at,
+      updated_at: s.updated_at
+    }
+  end
+
+  def design_node_json(%HydraX.Product.DesignNode{} = d) do
+    %{
+      id: d.id,
+      project_id: d.project_id,
+      title: d.title,
+      body: d.body,
+      node_type: d.node_type,
+      status: d.status,
+      metadata: d.metadata || %{},
+      inserted_at: d.inserted_at,
+      updated_at: d.updated_at
+    }
+  end
+
+  def architecture_node_json(%HydraX.Product.ArchitectureNode{} = a) do
+    %{
+      id: a.id,
+      project_id: a.project_id,
+      title: a.title,
+      body: a.body,
+      node_type: a.node_type,
+      status: a.status,
+      metadata: a.metadata || %{},
+      inserted_at: a.inserted_at,
+      updated_at: a.updated_at
+    }
+  end
+
+  def task_json(%HydraX.Product.Task{} = t) do
+    %{
+      id: t.id,
+      project_id: t.project_id,
+      title: t.title,
+      body: t.body,
+      status: t.status,
+      priority: t.priority,
+      assignee: t.assignee,
+      effort_estimate: t.effort_estimate,
+      metadata: t.metadata || %{},
+      inserted_at: t.inserted_at,
+      updated_at: t.updated_at
+    }
+  end
+
+  def learning_json(%HydraX.Product.Learning{} = l) do
+    %{
+      id: l.id,
+      project_id: l.project_id,
+      title: l.title,
+      body: l.body,
+      learning_type: l.learning_type,
+      status: l.status,
+      metadata: l.metadata || %{},
+      inserted_at: l.inserted_at,
+      updated_at: l.updated_at
+    }
+  end
+
+  def graph_flag_json(%HydraX.Product.GraphFlag{} = f) do
+    %{
+      id: f.id,
+      project_id: f.project_id,
+      node_type: f.node_type,
+      node_id: f.node_id,
+      flag_type: f.flag_type,
+      reason: f.reason,
+      source_agent: f.source_agent,
+      status: f.status,
+      resolved_by: f.resolved_by,
+      resolved_at: f.resolved_at,
+      inserted_at: f.inserted_at,
+      updated_at: f.updated_at
+    }
+  end
+
   def graph_node_json(node) do
     base = %{
       id: node.id,

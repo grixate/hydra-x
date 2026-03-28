@@ -44,6 +44,11 @@ defmodule HydraXWeb.ProjectAPIController do
     end
   end
 
+  def counts(conn, %{"project_id" => project_id}) do
+    counts = Product.project_counts(project_id)
+    json(conn, %{data: counts})
+  end
+
   def delete(conn, %{"id" => id}) do
     project =
       id

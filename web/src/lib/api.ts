@@ -1,10 +1,18 @@
 import type {
+  ArchitectureNode,
+  Decision,
+  DesignNode,
+  GraphFlag,
   Insight,
+  Learning,
   ProductConversation,
+  ProductTask,
+  ProjectCounts,
   ProjectExport,
   Project,
   Requirement,
   Source,
+  Strategy,
 } from "@/types";
 
 const API_PREFIX = import.meta.env.VITE_API_BASE ?? "/api/v1";
@@ -241,6 +249,51 @@ export const api = {
     }>(
       `/projects/${projectId}/graph/trail?node_type=${nodeType}&node_id=${nodeId}${direction ? `&direction=${direction}` : ""}${depth ? `&depth=${depth}` : ""}`,
     ),
+  // Decisions
+  listDecisions: (projectId: number) =>
+    request<Decision[]>(`/projects/${projectId}/decisions`),
+  createDecision: (projectId: number, payload: { title: string; body: string; status?: string; alternatives_considered?: Array<{ title: string; description: string; rejected_reason: string }> }) =>
+    request<Decision>(`/projects/${projectId}/decisions`, { method: "POST", body: JSON.stringify({ decision: payload }) }),
+  updateDecision: (projectId: number, id: number, payload: Partial<Decision>) =>
+    request<Decision>(`/projects/${projectId}/decisions/${id}`, { method: "PATCH", body: JSON.stringify({ decision: payload }) }),
+  deleteDecision: (projectId: number, id: number) =>
+    request<void>(`/projects/${projectId}/decisions/${id}`, { method: "DELETE" }),
+  // Strategies
+  listStrategies: (projectId: number) =>
+    request<Strategy[]>(`/projects/${projectId}/strategies`),
+  createStrategy: (projectId: number, payload: { title: string; body: string; status?: string }) =>
+    request<Strategy>(`/projects/${projectId}/strategies`, { method: "POST", body: JSON.stringify({ strategy: payload }) }),
+  // Architecture nodes
+  listArchitectureNodes: (projectId: number) =>
+    request<ArchitectureNode[]>(`/projects/${projectId}/architecture_nodes`),
+  createArchitectureNode: (projectId: number, payload: { title: string; body: string; node_type: string }) =>
+    request<ArchitectureNode>(`/projects/${projectId}/architecture_nodes`, { method: "POST", body: JSON.stringify({ architecture_node: payload }) }),
+  // Design nodes
+  listDesignNodes: (projectId: number) =>
+    request<DesignNode[]>(`/projects/${projectId}/design_nodes`),
+  createDesignNode: (projectId: number, payload: { title: string; body: string; node_type: string }) =>
+    request<DesignNode>(`/projects/${projectId}/design_nodes`, { method: "POST", body: JSON.stringify({ design_node: payload }) }),
+  // Tasks
+  listTasks: (projectId: number) =>
+    request<ProductTask[]>(`/projects/${projectId}/tasks`),
+  createTask: (projectId: number, payload: { title: string; body: string; priority?: string }) =>
+    request<ProductTask>(`/projects/${projectId}/tasks`, { method: "POST", body: JSON.stringify({ task: payload }) }),
+  // Learnings
+  listLearnings: (projectId: number) =>
+    request<Learning[]>(`/projects/${projectId}/learnings`),
+  createLearning: (projectId: number, payload: { title: string; body: string; learning_type: string }) =>
+    request<Learning>(`/projects/${projectId}/learnings`, { method: "POST", body: JSON.stringify({ learning: payload }) }),
+  // Graph flags
+  listGraphFlags: (projectId: number) =>
+    request<GraphFlag[]>(`/projects/${projectId}/graph/flags`),
+  resolveGraphFlag: (projectId: number, flagId: number) =>
+    request<GraphFlag>(`/projects/${projectId}/graph/flags/${flagId}/resolve`, { method: "POST", body: JSON.stringify({ resolved_by: "operator" }) }),
+  // Graph health
+  getGraphHealth: (projectId: number) =>
+    request<Record<string, unknown>>(`/projects/${projectId}/graph/health`),
+  // Project counts
+  getProjectCounts: (projectId: number) =>
+    request<ProjectCounts>(`/projects/${projectId}/counts`),
 };
 
 export type StreamItem = {

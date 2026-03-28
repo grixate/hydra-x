@@ -81,7 +81,14 @@ defmodule HydraX.Product do
       sources: count_project_records(Source, project_id),
       insights: count_project_records(Insight, project_id),
       requirements: count_project_records(Requirement, project_id),
-      conversations: count_project_records(ProductConversation, project_id)
+      conversations: count_project_records(ProductConversation, project_id),
+      decisions: count_project_records(Decision, project_id),
+      strategies: count_project_records(Strategy, project_id),
+      design_nodes: count_project_records(DesignNode, project_id),
+      architecture_nodes: count_project_records(ArchitectureNode, project_id),
+      tasks: count_project_records(ProductTask, project_id),
+      learnings: count_project_records(Learning, project_id),
+      flags: count_project_records(GraphFlag, project_id)
     }
   end
 

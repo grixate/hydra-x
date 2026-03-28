@@ -123,6 +123,56 @@ defmodule HydraXWeb.Router do
 
     # Graph trail
     get "/projects/:project_id/graph/trail", GraphTrailAPIController, :show
+
+    # Decisions CRUD
+    get "/projects/:project_id/decisions", DecisionAPIController, :index
+    post "/projects/:project_id/decisions", DecisionAPIController, :create
+    get "/projects/:project_id/decisions/:id", DecisionAPIController, :show
+    patch "/projects/:project_id/decisions/:id", DecisionAPIController, :update
+    delete "/projects/:project_id/decisions/:id", DecisionAPIController, :delete
+
+    # Strategies CRUD
+    get "/projects/:project_id/strategies", StrategyAPIController, :index
+    post "/projects/:project_id/strategies", StrategyAPIController, :create
+    get "/projects/:project_id/strategies/:id", StrategyAPIController, :show
+    patch "/projects/:project_id/strategies/:id", StrategyAPIController, :update
+    delete "/projects/:project_id/strategies/:id", StrategyAPIController, :delete
+
+    # Design nodes CRUD
+    get "/projects/:project_id/design_nodes", DesignNodeAPIController, :index
+    post "/projects/:project_id/design_nodes", DesignNodeAPIController, :create
+    get "/projects/:project_id/design_nodes/:id", DesignNodeAPIController, :show
+    patch "/projects/:project_id/design_nodes/:id", DesignNodeAPIController, :update
+    delete "/projects/:project_id/design_nodes/:id", DesignNodeAPIController, :delete
+
+    # Architecture nodes CRUD
+    get "/projects/:project_id/architecture_nodes", ArchitectureNodeAPIController, :index
+    post "/projects/:project_id/architecture_nodes", ArchitectureNodeAPIController, :create
+    get "/projects/:project_id/architecture_nodes/:id", ArchitectureNodeAPIController, :show
+    patch "/projects/:project_id/architecture_nodes/:id", ArchitectureNodeAPIController, :update
+    delete "/projects/:project_id/architecture_nodes/:id", ArchitectureNodeAPIController, :delete
+
+    # Tasks CRUD
+    get "/projects/:project_id/tasks", TaskAPIController, :index
+    post "/projects/:project_id/tasks", TaskAPIController, :create
+    get "/projects/:project_id/tasks/:id", TaskAPIController, :show
+    patch "/projects/:project_id/tasks/:id", TaskAPIController, :update
+    delete "/projects/:project_id/tasks/:id", TaskAPIController, :delete
+
+    # Learnings CRUD
+    get "/projects/:project_id/learnings", LearningAPIController, :index
+    post "/projects/:project_id/learnings", LearningAPIController, :create
+    get "/projects/:project_id/learnings/:id", LearningAPIController, :show
+    patch "/projects/:project_id/learnings/:id", LearningAPIController, :update
+    delete "/projects/:project_id/learnings/:id", LearningAPIController, :delete
+
+    # Graph flags and health
+    get "/projects/:project_id/graph/flags", GraphFlagAPIController, :index
+    post "/projects/:project_id/graph/flags/:id/resolve", GraphFlagAPIController, :resolve
+    get "/projects/:project_id/graph/health", GraphHealthAPIController, :show
+
+    # Project counts (extended)
+    get "/projects/:project_id/counts", ProjectAPIController, :counts
   end
 
   # Other scopes may use custom stacks.

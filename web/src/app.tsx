@@ -499,6 +499,13 @@ export function App() {
       insights: insights.length,
       requirements: requirements.length,
       conversations: conversations.length,
+      decisions: 0,
+      strategies: 0,
+      design_nodes: 0,
+      architecture_nodes: 0,
+      tasks: 0,
+      learnings: 0,
+      flags: 0,
     }),
     [conversations.length, insights.length, requirements.length, sources.length],
   );

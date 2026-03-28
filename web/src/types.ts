@@ -16,6 +16,9 @@ export type Project = {
   metadata: Record<string, unknown>;
   researcher_agent?: AgentSummary | null;
   strategist_agent?: AgentSummary | null;
+  architect_agent?: AgentSummary | null;
+  designer_agent?: AgentSummary | null;
+  memory_agent?: AgentSummary | null;
   inserted_at?: string;
   updated_at?: string;
 };
@@ -143,6 +146,13 @@ export type ProjectCounts = {
   insights: number;
   requirements: number;
   conversations: number;
+  decisions: number;
+  strategies: number;
+  design_nodes: number;
+  architecture_nodes: number;
+  tasks: number;
+  learnings: number;
+  flags: number;
 };
 
 export type SourceProgress = {
@@ -150,6 +160,113 @@ export type SourceProgress = {
   stage?: string;
   chunk_count?: number;
   error?: string;
+};
+
+export type Decision = {
+  id: number;
+  project_id: number;
+  title: string;
+  body: string;
+  status: string;
+  decided_by?: string | null;
+  decided_at?: string | null;
+  alternatives_considered: Array<{
+    title: string;
+    description: string;
+    rejected_reason: string;
+  }>;
+  metadata: Record<string, unknown>;
+  inserted_at?: string;
+  updated_at?: string;
+};
+
+export type Strategy = {
+  id: number;
+  project_id: number;
+  title: string;
+  body: string;
+  status: string;
+  metadata: Record<string, unknown>;
+  inserted_at?: string;
+  updated_at?: string;
+};
+
+export type ArchitectureNode = {
+  id: number;
+  project_id: number;
+  title: string;
+  body: string;
+  node_type: string;
+  status: string;
+  metadata: Record<string, unknown>;
+  inserted_at?: string;
+  updated_at?: string;
+};
+
+export type DesignNode = {
+  id: number;
+  project_id: number;
+  title: string;
+  body: string;
+  node_type: string;
+  status: string;
+  metadata: Record<string, unknown>;
+  inserted_at?: string;
+  updated_at?: string;
+};
+
+export type ProductTask = {
+  id: number;
+  project_id: number;
+  title: string;
+  body: string;
+  status: string;
+  assignee?: string | null;
+  priority: string;
+  effort_estimate?: string | null;
+  metadata: Record<string, unknown>;
+  inserted_at?: string;
+  updated_at?: string;
+};
+
+export type Learning = {
+  id: number;
+  project_id: number;
+  title: string;
+  body: string;
+  learning_type: string;
+  status: string;
+  metadata: Record<string, unknown>;
+  inserted_at?: string;
+  updated_at?: string;
+};
+
+export type GraphFlag = {
+  id: number;
+  project_id: number;
+  node_type: string;
+  node_id: number;
+  flag_type: string;
+  reason?: string | null;
+  source_agent?: string | null;
+  status: string;
+  resolved_by?: string | null;
+  resolved_at?: string | null;
+  inserted_at?: string;
+  updated_at?: string;
+};
+
+export type WatchTarget = {
+  id: number;
+  project_id: number;
+  target_type: string;
+  value: string;
+  check_interval_hours: number;
+  last_checked_at?: string | null;
+  status: string;
+  metadata: Record<string, unknown>;
+  inserted_at?: string;
+  updated_at?: string;
 };
 
 export type ProjectExport = {

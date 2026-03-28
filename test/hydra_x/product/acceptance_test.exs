@@ -88,8 +88,11 @@ defmodule HydraX.Product.AcceptanceTest do
 
     refreshed_conversation = AgentBridge.get_project_conversation!(project, conversation.id)
 
-    assert %{sources: 1, insights: 0, requirements: 0, conversations: 1} ==
-             Product.project_counts(project)
+    counts = Product.project_counts(project)
+    assert counts.sources == 1
+    assert counts.insights == 0
+    assert counts.requirements == 0
+    assert counts.conversations == 1
 
     assert [user_message, assistant_message] = refreshed_conversation.product_messages
     assert user_message.role == "user"
@@ -145,8 +148,11 @@ defmodule HydraX.Product.AcceptanceTest do
     assert insight_evidence.source_chunk.source.id == source.id
     assert insight_evidence.source_chunk.source.title == source.title
 
-    assert %{sources: 1, insights: 1, requirements: 1, conversations: 1} ==
-             Product.project_counts(project)
+    final_counts = Product.project_counts(project)
+    assert final_counts.sources == 1
+    assert final_counts.insights == 1
+    assert final_counts.requirements == 1
+    assert final_counts.conversations == 1
   end
 
   defp citation_value(citation, key) when is_map(citation) and is_binary(key) do

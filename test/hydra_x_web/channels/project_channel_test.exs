@@ -12,7 +12,10 @@ defmodule HydraXWeb.ProjectChannelTest do
 
     assert socket.assigns.project_id == project.id
     assert reply.project.id == project.id
-    assert reply.counts == %{sources: 0, insights: 0, requirements: 0, conversations: 0}
+    assert reply.counts.sources == 0
+    assert reply.counts.insights == 0
+    assert reply.counts.requirements == 0
+    assert reply.counts.conversations == 0
   end
 
   test "project channel relays source, insight, requirement, and conversation events", %{
@@ -24,7 +27,10 @@ defmodule HydraXWeb.ProjectChannelTest do
       subscribe_and_join(socket, HydraXWeb.ProjectChannel, "project:#{project.id}")
 
     assert reply.project.id == project.id
-    assert reply.counts == %{sources: 0, insights: 0, requirements: 0, conversations: 0}
+    assert reply.counts.sources == 0
+    assert reply.counts.insights == 0
+    assert reply.counts.requirements == 0
+    assert reply.counts.conversations == 0
 
     {:ok, source} =
       Product.create_source(project, %{
