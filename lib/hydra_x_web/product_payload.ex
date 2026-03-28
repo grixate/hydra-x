@@ -16,6 +16,9 @@ defmodule HydraXWeb.ProductPayload do
       metadata: project.metadata || %{},
       researcher_agent: agent_json(project.researcher_agent),
       strategist_agent: agent_json(project.strategist_agent),
+      architect_agent: agent_json(project.architect_agent),
+      designer_agent: agent_json(project.designer_agent),
+      memory_agent: agent_json(project.memory_agent),
       inserted_at: project.inserted_at,
       updated_at: project.updated_at
     }
@@ -138,6 +141,56 @@ defmodule HydraXWeb.ProductPayload do
         end),
       inserted_at: requirement.inserted_at,
       updated_at: requirement.updated_at
+    }
+  end
+
+  def watch_target_json(%HydraX.Product.WatchTarget{} = target) do
+    %{
+      id: target.id,
+      project_id: target.project_id,
+      target_type: target.target_type,
+      value: target.value,
+      check_interval_hours: target.check_interval_hours,
+      last_checked_at: target.last_checked_at,
+      status: target.status,
+      metadata: target.metadata || %{},
+      inserted_at: target.inserted_at,
+      updated_at: target.updated_at
+    }
+  end
+
+  def graph_node_json(node) do
+    base = %{
+      id: node.id,
+      project_id: node.project_id,
+      title: node.title,
+      body: node.body,
+      status: node.status,
+      metadata: node.metadata || %{},
+      inserted_at: node.inserted_at,
+      updated_at: node.updated_at
+    }
+
+    cond do
+      Map.has_key?(node, :node_type) -> Map.put(base, :node_type, node.node_type)
+      Map.has_key?(node, :priority) -> Map.merge(base, %{priority: node.priority, assignee: node.assignee, effort_estimate: node.effort_estimate})
+      Map.has_key?(node, :decided_by) -> Map.merge(base, %{decided_by: node.decided_by, decided_at: node.decided_at, alternatives_considered: node.alternatives_considered})
+      Map.has_key?(node, :learning_type) -> Map.put(base, :learning_type, node.learning_type)
+      true -> base
+    end
+  end
+
+  def stream_item_json(item) do
+    %{
+      id: item.id,
+      category: item.category,
+      title: item.title,
+      summary: item.summary,
+      node_type: item.node_type,
+      node_id: item.node_id,
+      urgency: item.urgency,
+      timestamp: item.timestamp,
+      metadata: item.metadata || %{}
     }
   end
 

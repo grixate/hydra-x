@@ -220,4 +220,63 @@ export const api = {
     request<ProjectExport>(`/projects/${projectId}/exports`, {
       method: "POST",
     }),
+  getStream: (projectId: number, role?: string) =>
+    request<{
+      right_now: StreamItem[];
+      recently: StreamItem[];
+      emerging: StreamItem[];
+    }>(`/projects/${projectId}/stream${role ? `?role=${role}` : ""}`),
+  getTrail: (
+    projectId: number,
+    nodeType: string,
+    nodeId: number,
+    direction?: string,
+    depth?: number,
+  ) =>
+    request<{
+      center: TrailNode;
+      upstream: TrailChainNode[];
+      downstream: TrailChainNode[];
+      flags: TrailFlag[];
+    }>(
+      `/projects/${projectId}/graph/trail?node_type=${nodeType}&node_id=${nodeId}${direction ? `&direction=${direction}` : ""}${depth ? `&depth=${depth}` : ""}`,
+    ),
+};
+
+export type StreamItem = {
+  id: string;
+  category: string;
+  title: string;
+  summary: string;
+  node_type: string;
+  node_id: number;
+  urgency: "action" | "info" | "emerging";
+  timestamp: string;
+  metadata: Record<string, unknown>;
+};
+
+export type TrailNode = {
+  node_type: string;
+  node_id: number;
+  title: string;
+  body?: string;
+  status: string;
+  updated_at?: string;
+};
+
+export type TrailChainNode = {
+  node_type: string;
+  node_id: number;
+  edge_kind: string;
+  title: string;
+  status: string;
+  summary?: string;
+};
+
+export type TrailFlag = {
+  id: number;
+  flag_type: string;
+  reason: string;
+  status: string;
+  source_agent: string;
 };

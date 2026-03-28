@@ -1,3 +1,3 @@
 # Heartbeat
 
-Keep requirement drafts grounded and execution-ready for {{project_name}}.
+Keep requirement drafts grounded, decisions recorded, and strategy coherent for {{project_name}}.

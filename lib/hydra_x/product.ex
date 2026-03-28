@@ -9,9 +9,15 @@ defmodule HydraX.Product do
   alias HydraX.Embeddings
   alias HydraX.Ingest.Parser
   alias HydraX.Memory
+  alias HydraX.Product.ArchitectureNode
   alias HydraX.Product.Citations
+  alias HydraX.Product.Decision
+  alias HydraX.Product.DesignNode
+  alias HydraX.Product.GraphEdge
+  alias HydraX.Product.GraphFlag
   alias HydraX.Product.Insight
   alias HydraX.Product.InsightEvidence
+  alias HydraX.Product.Learning
   alias HydraX.Product.Project
   alias HydraX.Product.ProductConversation
   alias HydraX.Product.ProductMessage
@@ -20,6 +26,8 @@ defmodule HydraX.Product do
   alias HydraX.Product.RequirementInsight
   alias HydraX.Product.Source
   alias HydraX.Product.SourceChunk
+  alias HydraX.Product.Strategy
+  alias HydraX.Product.Task, as: ProductTask
   alias HydraX.Product.WorkspaceScaffold
   alias HydraX.Repo
   alias HydraX.Runtime
@@ -33,6 +41,20 @@ defmodule HydraX.Product do
   @insight_create_tool HydraX.Product.Tools.InsightCreate
   @insight_update_tool HydraX.Product.Tools.InsightUpdate
   @requirement_create_tool HydraX.Product.Tools.RequirementCreate
+  @architecture_create_tool HydraX.Product.Tools.ArchitectureCreate
+  @architecture_update_tool HydraX.Product.Tools.ArchitectureUpdate
+  @feasibility_assess_tool HydraX.Product.Tools.FeasibilityAssess
+  @dependency_check_tool HydraX.Product.Tools.DependencyCheck
+  @design_create_tool HydraX.Product.Tools.DesignCreate
+  @design_update_tool HydraX.Product.Tools.DesignUpdate
+  @pattern_check_tool HydraX.Product.Tools.PatternCheck
+  @graph_query_tool HydraX.Product.Tools.GraphQuery
+  @trail_trace_tool HydraX.Product.Tools.TrailTrace
+  @history_search_tool HydraX.Product.Tools.HistorySearch
+  @decision_create_tool HydraX.Product.Tools.DecisionCreate
+  @strategy_create_tool HydraX.Product.Tools.StrategyCreate
+
+  @agent_preloads [:researcher_agent, :strategist_agent, :architect_agent, :designer_agent, :memory_agent]
 
   def list_projects(opts \\ []) do
     status = Keyword.get(opts, :status)
@@ -41,14 +63,14 @@ defmodule HydraX.Product do
     Project
     |> maybe_filter_project_status(status)
     |> maybe_filter_project_search(search)
-    |> preload([:researcher_agent, :strategist_agent])
+    |> preload(^@agent_preloads)
     |> order_by([project], asc: project.name)
     |> Repo.all()
   end
 
   def get_project!(id) do
     Project
-    |> preload([:researcher_agent, :strategist_agent])
+    |> preload(^@agent_preloads)
     |> Repo.get!(id)
   end
 
@@ -73,18 +95,27 @@ defmodule HydraX.Product do
     Repo.transaction(fn ->
       researcher = provision_agent!(attrs, "researcher")
       strategist = provision_agent!(attrs, "strategist")
+      architect = provision_agent!(attrs, "architect")
+      designer = provision_agent!(attrs, "designer")
+      memory_agent = provision_agent!(attrs, "memory_agent")
 
       project_attrs =
         attrs
         |> Map.put("researcher_agent_id", researcher.id)
         |> Map.put("strategist_agent_id", strategist.id)
+        |> Map.put("architect_agent_id", architect.id)
+        |> Map.put("designer_agent_id", designer.id)
+        |> Map.put("memory_agent_id", memory_agent.id)
 
       %Project{}
       |> Project.changeset(project_attrs)
       |> Repo.insert()
       |> case do
-        {:ok, project} -> Repo.preload(project, [:researcher_agent, :strategist_agent])
-        {:error, changeset} -> Repo.rollback(changeset)
+        {:ok, project} ->
+          Repo.preload(project, @agent_preloads)
+
+        {:error, changeset} ->
+          Repo.rollback(changeset)
       end
     end)
     |> case do
@@ -108,7 +139,7 @@ defmodule HydraX.Product do
     |> Repo.update()
     |> case do
       {:ok, updated} ->
-        updated = Repo.preload(updated, [:researcher_agent, :strategist_agent])
+        updated = Repo.preload(updated, @agent_preloads)
         ProductPubSub.broadcast_project_event(updated.id, "project.updated", updated)
         {:ok, updated}
 
@@ -118,7 +149,7 @@ defmodule HydraX.Product do
   end
 
   def delete_project(%Project{} = project) do
-    project = Repo.preload(project, [:researcher_agent, :strategist_agent])
+    project = Repo.preload(project, @agent_preloads)
 
     case Repo.delete(project) do
       {:ok, deleted} ->
@@ -346,6 +377,7 @@ defmodule HydraX.Product do
     insight
     |> Repo.delete()
     |> maybe_broadcast_project_record("insight.deleted")
+    |> maybe_notify_propagation("insight", :deleted)
   end
 
   def update_insight(%Insight{} = insight, attrs) when is_map(attrs) do
@@ -396,6 +428,7 @@ defmodule HydraX.Product do
           end)
           |> unwrap_transaction()
           |> maybe_broadcast_project_record("insight.updated")
+          |> maybe_notify_propagation("insight", :updated)
 
         {:error, reason} ->
           {:error,
@@ -532,6 +565,7 @@ defmodule HydraX.Product do
           end)
           |> unwrap_transaction()
           |> maybe_broadcast_project_record("requirement.updated")
+          |> maybe_notify_propagation("requirement", :updated)
         end
 
       {:error, reason} ->
@@ -544,52 +578,549 @@ defmodule HydraX.Product do
     requirement
     |> Repo.delete()
     |> maybe_broadcast_project_record("requirement.deleted")
+    |> maybe_notify_propagation("requirement", :deleted)
+  end
+
+  # -------------------------------------------------------------------
+  # Decisions
+  # -------------------------------------------------------------------
+
+  def list_decisions(project_or_id, opts \\ []) do
+    project_id = project_id(project_or_id)
+    status = Keyword.get(opts, :status)
+    search = Keyword.get(opts, :search)
+
+    Decision
+    |> where([d], d.project_id == ^project_id)
+    |> maybe_filter_product_record_status(status)
+    |> maybe_filter_title_body_search(search)
+    |> order_by([d], desc: d.updated_at)
+    |> Repo.all()
+  end
+
+  def get_decision!(id), do: Repo.get!(Decision, id)
+
+  def get_project_decision!(project_or_id, id) do
+    project_id = project_id(project_or_id)
+
+    Decision
+    |> where([d], d.project_id == ^project_id and d.id == ^parse_integer(id))
+    |> Repo.one!()
+  end
+
+  def create_decision(project_or_id, attrs) when is_map(attrs) do
+    project_id = project_id(project_or_id)
+    attrs = normalize_product_record_attrs(attrs)
+
+    %Decision{}
+    |> Decision.changeset(Map.put(attrs, "project_id", project_id))
+    |> Repo.insert()
+    |> maybe_broadcast_project_record("decision.created")
+  end
+
+  def update_decision(%Decision{} = decision, attrs) when is_map(attrs) do
+    attrs = normalize_product_record_attrs(attrs)
+
+    decision
+    |> Decision.changeset(attrs)
+    |> Repo.update()
+    |> maybe_broadcast_project_record("decision.updated")
+    |> maybe_notify_propagation("decision", :updated)
+  end
+
+  def delete_decision(%Decision{} = decision) do
+    decision
+    |> Repo.delete()
+    |> maybe_broadcast_project_record("decision.deleted")
+    |> maybe_notify_propagation("decision", :deleted)
+  end
+
+  # -------------------------------------------------------------------
+  # Strategies
+  # -------------------------------------------------------------------
+
+  def list_strategies(project_or_id, opts \\ []) do
+    project_id = project_id(project_or_id)
+    status = Keyword.get(opts, :status)
+    search = Keyword.get(opts, :search)
+
+    Strategy
+    |> where([s], s.project_id == ^project_id)
+    |> maybe_filter_product_record_status(status)
+    |> maybe_filter_title_body_search(search)
+    |> order_by([s], desc: s.updated_at)
+    |> Repo.all()
+  end
+
+  def get_strategy!(id), do: Repo.get!(Strategy, id)
+
+  def get_project_strategy!(project_or_id, id) do
+    project_id = project_id(project_or_id)
+
+    Strategy
+    |> where([s], s.project_id == ^project_id and s.id == ^parse_integer(id))
+    |> Repo.one!()
+  end
+
+  def create_strategy(project_or_id, attrs) when is_map(attrs) do
+    project_id = project_id(project_or_id)
+    attrs = normalize_product_record_attrs(attrs)
+
+    %Strategy{}
+    |> Strategy.changeset(Map.put(attrs, "project_id", project_id))
+    |> Repo.insert()
+    |> maybe_broadcast_project_record("strategy.created")
+  end
+
+  def update_strategy(%Strategy{} = strategy, attrs) when is_map(attrs) do
+    attrs = normalize_product_record_attrs(attrs)
+
+    strategy
+    |> Strategy.changeset(attrs)
+    |> Repo.update()
+    |> maybe_broadcast_project_record("strategy.updated")
+    |> maybe_notify_propagation("strategy", :updated)
+  end
+
+  def delete_strategy(%Strategy{} = strategy) do
+    strategy
+    |> Repo.delete()
+    |> maybe_broadcast_project_record("strategy.deleted")
+    |> maybe_notify_propagation("strategy", :deleted)
+  end
+
+  # -------------------------------------------------------------------
+  # Design Nodes
+  # -------------------------------------------------------------------
+
+  def list_design_nodes(project_or_id, opts \\ []) do
+    project_id = project_id(project_or_id)
+    status = Keyword.get(opts, :status)
+    node_type = Keyword.get(opts, :node_type)
+    search = Keyword.get(opts, :search)
+
+    DesignNode
+    |> where([d], d.project_id == ^project_id)
+    |> maybe_filter_product_record_status(status)
+    |> maybe_filter_node_type(node_type)
+    |> maybe_filter_title_body_search(search)
+    |> order_by([d], desc: d.updated_at)
+    |> Repo.all()
+  end
+
+  def get_design_node!(id), do: Repo.get!(DesignNode, id)
+
+  def get_project_design_node!(project_or_id, id) do
+    project_id = project_id(project_or_id)
+
+    DesignNode
+    |> where([d], d.project_id == ^project_id and d.id == ^parse_integer(id))
+    |> Repo.one!()
+  end
+
+  def create_design_node(project_or_id, attrs) when is_map(attrs) do
+    project_id = project_id(project_or_id)
+    attrs = normalize_product_record_attrs(attrs)
+
+    %DesignNode{}
+    |> DesignNode.changeset(Map.put(attrs, "project_id", project_id))
+    |> Repo.insert()
+    |> maybe_broadcast_project_record("design_node.created")
+  end
+
+  def update_design_node(%DesignNode{} = node, attrs) when is_map(attrs) do
+    attrs = normalize_product_record_attrs(attrs)
+
+    node
+    |> DesignNode.changeset(attrs)
+    |> Repo.update()
+    |> maybe_broadcast_project_record("design_node.updated")
+    |> maybe_notify_propagation("design_node", :updated)
+  end
+
+  def delete_design_node(%DesignNode{} = node) do
+    node
+    |> Repo.delete()
+    |> maybe_broadcast_project_record("design_node.deleted")
+    |> maybe_notify_propagation("design_node", :deleted)
+  end
+
+  # -------------------------------------------------------------------
+  # Architecture Nodes
+  # -------------------------------------------------------------------
+
+  def list_architecture_nodes(project_or_id, opts \\ []) do
+    project_id = project_id(project_or_id)
+    status = Keyword.get(opts, :status)
+    node_type = Keyword.get(opts, :node_type)
+    search = Keyword.get(opts, :search)
+
+    ArchitectureNode
+    |> where([a], a.project_id == ^project_id)
+    |> maybe_filter_product_record_status(status)
+    |> maybe_filter_node_type(node_type)
+    |> maybe_filter_title_body_search(search)
+    |> order_by([a], a.updated_at)
+    |> Repo.all()
+  end
+
+  def get_architecture_node!(id), do: Repo.get!(ArchitectureNode, id)
+
+  def get_project_architecture_node!(project_or_id, id) do
+    project_id = project_id(project_or_id)
+
+    ArchitectureNode
+    |> where([a], a.project_id == ^project_id and a.id == ^parse_integer(id))
+    |> Repo.one!()
+  end
+
+  def create_architecture_node(project_or_id, attrs) when is_map(attrs) do
+    project_id = project_id(project_or_id)
+    attrs = normalize_product_record_attrs(attrs)
+
+    %ArchitectureNode{}
+    |> ArchitectureNode.changeset(Map.put(attrs, "project_id", project_id))
+    |> Repo.insert()
+    |> maybe_broadcast_project_record("architecture_node.created")
+  end
+
+  def update_architecture_node(%ArchitectureNode{} = node, attrs) when is_map(attrs) do
+    attrs = normalize_product_record_attrs(attrs)
+
+    node
+    |> ArchitectureNode.changeset(attrs)
+    |> Repo.update()
+    |> maybe_broadcast_project_record("architecture_node.updated")
+    |> maybe_notify_propagation("architecture_node", :updated)
+  end
+
+  def delete_architecture_node(%ArchitectureNode{} = node) do
+    node
+    |> Repo.delete()
+    |> maybe_broadcast_project_record("architecture_node.deleted")
+    |> maybe_notify_propagation("architecture_node", :deleted)
+  end
+
+  # -------------------------------------------------------------------
+  # Tasks
+  # -------------------------------------------------------------------
+
+  def list_tasks(project_or_id, opts \\ []) do
+    project_id = project_id(project_or_id)
+    status = Keyword.get(opts, :status)
+    priority = Keyword.get(opts, :priority)
+    search = Keyword.get(opts, :search)
+
+    ProductTask
+    |> where([t], t.project_id == ^project_id)
+    |> maybe_filter_product_record_status(status)
+    |> maybe_filter_priority(priority)
+    |> maybe_filter_title_body_search(search)
+    |> order_by([t], desc: t.updated_at)
+    |> Repo.all()
+  end
+
+  def get_task!(id), do: Repo.get!(ProductTask, id)
+
+  def get_project_task!(project_or_id, id) do
+    project_id = project_id(project_or_id)
+
+    ProductTask
+    |> where([t], t.project_id == ^project_id and t.id == ^parse_integer(id))
+    |> Repo.one!()
+  end
+
+  def create_task(project_or_id, attrs) when is_map(attrs) do
+    project_id = project_id(project_or_id)
+    attrs = normalize_product_record_attrs(attrs)
+
+    %ProductTask{}
+    |> ProductTask.changeset(Map.put(attrs, "project_id", project_id))
+    |> Repo.insert()
+    |> maybe_broadcast_project_record("task.created")
+  end
+
+  def update_task(%ProductTask{} = task, attrs) when is_map(attrs) do
+    attrs = normalize_product_record_attrs(attrs)
+
+    task
+    |> ProductTask.changeset(attrs)
+    |> Repo.update()
+    |> maybe_broadcast_project_record("task.updated")
+    |> maybe_notify_propagation("task", :updated)
+  end
+
+  def delete_task(%ProductTask{} = task) do
+    task
+    |> Repo.delete()
+    |> maybe_broadcast_project_record("task.deleted")
+    |> maybe_notify_propagation("task", :deleted)
+  end
+
+  # -------------------------------------------------------------------
+  # Learnings
+  # -------------------------------------------------------------------
+
+  def list_learnings(project_or_id, opts \\ []) do
+    project_id = project_id(project_or_id)
+    status = Keyword.get(opts, :status)
+    learning_type = Keyword.get(opts, :learning_type)
+    search = Keyword.get(opts, :search)
+
+    Learning
+    |> where([l], l.project_id == ^project_id)
+    |> maybe_filter_product_record_status(status)
+    |> maybe_filter_learning_type(learning_type)
+    |> maybe_filter_title_body_search(search)
+    |> order_by([l], desc: l.updated_at)
+    |> Repo.all()
+  end
+
+  def get_learning!(id), do: Repo.get!(Learning, id)
+
+  def get_project_learning!(project_or_id, id) do
+    project_id = project_id(project_or_id)
+
+    Learning
+    |> where([l], l.project_id == ^project_id and l.id == ^parse_integer(id))
+    |> Repo.one!()
+  end
+
+  def create_learning(project_or_id, attrs) when is_map(attrs) do
+    project_id = project_id(project_or_id)
+    attrs = normalize_product_record_attrs(attrs)
+
+    %Learning{}
+    |> Learning.changeset(Map.put(attrs, "project_id", project_id))
+    |> Repo.insert()
+    |> maybe_broadcast_project_record("learning.created")
+  end
+
+  def update_learning(%Learning{} = learning, attrs) when is_map(attrs) do
+    attrs = normalize_product_record_attrs(attrs)
+
+    learning
+    |> Learning.changeset(attrs)
+    |> Repo.update()
+    |> maybe_broadcast_project_record("learning.updated")
+    |> maybe_notify_propagation("learning", :updated)
+  end
+
+  def delete_learning(%Learning{} = learning) do
+    learning
+    |> Repo.delete()
+    |> maybe_broadcast_project_record("learning.deleted")
+    |> maybe_notify_propagation("learning", :deleted)
+  end
+
+  # -------------------------------------------------------------------
+  # Graph Edges
+  # -------------------------------------------------------------------
+
+  def list_graph_edges(project_or_id, opts \\ []) do
+    project_id = project_id(project_or_id)
+    kind = Keyword.get(opts, :kind)
+    node_type = Keyword.get(opts, :node_type)
+
+    GraphEdge
+    |> where([e], e.project_id == ^project_id)
+    |> maybe_filter_edge_kind(kind)
+    |> maybe_filter_edge_node_type(node_type)
+    |> order_by([e], desc: e.inserted_at)
+    |> Repo.all()
+  end
+
+  def get_graph_edge!(id), do: Repo.get!(GraphEdge, id)
+
+  def create_graph_edge(attrs) when is_map(attrs) do
+    attrs = HydraX.Runtime.Helpers.normalize_string_keys(attrs)
+
+    %GraphEdge{}
+    |> GraphEdge.changeset(attrs)
+    |> Repo.insert()
+  end
+
+  def delete_graph_edge(%GraphEdge{} = edge) do
+    Repo.delete(edge)
+  end
+
+  # -------------------------------------------------------------------
+  # Graph Flags
+  # -------------------------------------------------------------------
+
+  def list_graph_flags(project_or_id, opts \\ []) do
+    project_id = project_id(project_or_id)
+    status = Keyword.get(opts, :status)
+    flag_type = Keyword.get(opts, :flag_type)
+    node_type = Keyword.get(opts, :node_type)
+
+    GraphFlag
+    |> where([f], f.project_id == ^project_id)
+    |> maybe_filter_flag_status(status)
+    |> maybe_filter_flag_type(flag_type)
+    |> maybe_filter_flag_node_type(node_type)
+    |> order_by([f], desc: f.inserted_at)
+    |> Repo.all()
+  end
+
+  def get_graph_flag!(id), do: Repo.get!(GraphFlag, id)
+
+  def create_graph_flag(attrs) when is_map(attrs) do
+    attrs = HydraX.Runtime.Helpers.normalize_string_keys(attrs)
+
+    %GraphFlag{}
+    |> GraphFlag.changeset(attrs)
+    |> Repo.insert()
+  end
+
+  def resolve_graph_flag(%GraphFlag{} = flag, resolved_by) do
+    flag
+    |> GraphFlag.changeset(%{
+      "status" => "resolved",
+      "resolved_by" => resolved_by,
+      "resolved_at" => DateTime.utc_now()
+    })
+    |> Repo.update()
   end
 
   def prompt_context(conversation_or_metadata) do
     metadata = product_metadata(conversation_or_metadata)
+    persona = metadata["product_persona"]
 
     with project_id when is_integer(project_id) <- parse_integer(metadata["product_project_id"]),
          %Project{} = project <- Repo.get(Project, project_id) do
-      source_titles =
-        project
-        |> list_sources()
-        |> Enum.take(5)
-        |> Enum.map(&("- " <> &1.title))
+      base = base_prompt_context(project, persona)
+      persona_ctx = persona_prompt_context(project.id, persona)
 
-      source_summary =
-        case source_titles do
-          [] -> "- none yet"
-          values -> Enum.join(values, "\n")
-        end
-
-      """
-      Project: #{project.name}
-      Persona: #{metadata["product_persona"] || "product"}
-      Grounding rules:
-      - Use `source_search` before making factual claims about product research, users, requirements, or source material.
-      - Cite grounded claims inline with `[[cite:chunk_id]]` markers immediately after the supported sentence.
-      - Use `insight_create` or `insight_update` to turn grounded evidence into reusable product insights.
-      - Use `requirement_create` only when the requirement is supported by linked insights; ungrounded requirements must stay explicitly flagged.
-      - If the sources do not support a claim, say that the answer is currently ungrounded.
-      Available sources:
-      #{source_summary}
-      """
-      |> String.trim()
+      (base <> "\n\n" <> persona_ctx) |> String.trim()
     else
       _ -> ""
     end
   end
 
+  defp base_prompt_context(project, persona) do
+    source_titles =
+      project
+      |> list_sources()
+      |> Enum.take(5)
+      |> Enum.map(&("- " <> &1.title))
+
+    source_summary =
+      case source_titles do
+        [] -> "- none yet"
+        values -> Enum.join(values, "\n")
+      end
+
+    """
+    Project: #{project.name}
+    Persona: #{persona || "product"}
+    Grounding rules:
+    - Use `source_search` before making factual claims about product research, users, requirements, or source material.
+    - Cite grounded claims inline with `[[cite:chunk_id]]` markers immediately after the supported sentence.
+    - If the sources do not support a claim, say that the answer is currently ungrounded.
+    Available sources:
+    #{source_summary}
+    """
+  end
+
+  defp persona_prompt_context(project_id, "strategist") do
+    """
+    Active insights: #{count_active_nodes(project_id, Insight)}
+    Active decisions: #{count_active_nodes(project_id, Decision)}
+    When creating requirements, always link to supporting insights.
+    When making decisions, record them with decision_create including alternatives considered.
+    """
+  end
+
+  defp persona_prompt_context(project_id, "architect") do
+    """
+    Active requirements: #{count_active_nodes(project_id, Requirement)}
+    Architecture nodes: #{count_active_nodes(project_id, ArchitectureNode)}
+    Always link architecture decisions to the requirements they serve.
+    """
+  end
+
+  defp persona_prompt_context(project_id, "designer") do
+    """
+    Active requirements: #{count_active_nodes(project_id, Requirement)}
+    Design nodes: #{count_active_nodes(project_id, DesignNode)}
+    Check pattern_check before creating new interaction patterns.
+    """
+  end
+
+  defp persona_prompt_context(project_id, "memory_agent") do
+    """
+    You have read-only access to the product graph. You NEVER create or modify nodes.
+    Graph summary:
+    - Insights: #{count_active_nodes(project_id, Insight)}
+    - Decisions: #{count_active_nodes(project_id, Decision)}
+    - Strategies: #{count_active_nodes(project_id, Strategy)}
+    - Requirements: #{count_active_nodes(project_id, Requirement)}
+    - Architecture nodes: #{count_active_nodes(project_id, ArchitectureNode)}
+    - Design nodes: #{count_active_nodes(project_id, DesignNode)}
+    Use graph_query and trail_trace to find information. Cite specific nodes in your answers.
+    """
+  end
+
+  defp persona_prompt_context(_project_id, _persona), do: ""
+
+  defp count_active_nodes(project_id, schema) do
+    schema
+    |> where([r], r.project_id == ^project_id and r.status in ["active", "accepted", "draft"])
+    |> Repo.aggregate(:count, :id)
+  end
+
   def tool_modules(conversation_or_metadata) do
     metadata = product_metadata(conversation_or_metadata)
+    persona = metadata["product_persona"]
 
     if parse_integer(metadata["product_project_id"]) do
-      [@source_search_tool, @insight_create_tool, @insight_update_tool, @requirement_create_tool]
+      tools_for_persona(persona)
     else
       []
     end
   end
+
+  defp tools_for_persona("researcher") do
+    [@source_search_tool, @insight_create_tool, @insight_update_tool]
+  end
+
+  defp tools_for_persona("strategist") do
+    [
+      @source_search_tool,
+      @insight_create_tool,
+      @insight_update_tool,
+      @requirement_create_tool,
+      @decision_create_tool,
+      @strategy_create_tool
+    ]
+  end
+
+  defp tools_for_persona("architect") do
+    [
+      @source_search_tool,
+      @architecture_create_tool,
+      @architecture_update_tool,
+      @feasibility_assess_tool,
+      @requirement_create_tool
+    ]
+  end
+
+  defp tools_for_persona("designer") do
+    [
+      @source_search_tool,
+      @design_create_tool,
+      @design_update_tool,
+      @pattern_check_tool,
+      @insight_create_tool
+    ]
+  end
+
+  defp tools_for_persona("memory_agent") do
+    [@source_search_tool, @graph_query_tool, @trail_trace_tool]
+  end
+
+  defp tools_for_persona(_), do: []
 
   def parse_citations(project_or_id, content) when is_binary(content) do
     project_id = project_id(project_or_id)
@@ -679,7 +1210,7 @@ defmodule HydraX.Product do
   defp provision_agent!(project_attrs, persona) do
     project_slug = project_attrs["slug"]
     project_name = project_attrs["name"]
-    agent_slug = "project-#{project_slug}-#{persona}"
+    agent_slug = "project-#{project_slug}-#{String.replace(persona, "_", "-")}"
     workspace_root = Path.join([Config.workspace_root(), "projects", project_slug, persona])
 
     WorkspaceScaffold.scaffold!(workspace_root, persona, project_name, project_slug)
@@ -1092,6 +1623,71 @@ defmodule HydraX.Product do
     where(query, [insight], ilike(insight.title, ^term) or ilike(insight.body, ^term))
   end
 
+  defp maybe_filter_title_body_search(query, nil), do: query
+  defp maybe_filter_title_body_search(query, ""), do: query
+
+  defp maybe_filter_title_body_search(query, search) do
+    term = "%#{String.trim(to_string(search))}%"
+    where(query, [r], ilike(r.title, ^term) or ilike(r.body, ^term))
+  end
+
+  defp maybe_filter_node_type(query, nil), do: query
+  defp maybe_filter_node_type(query, ""), do: query
+
+  defp maybe_filter_node_type(query, node_type) do
+    where(query, [r], r.node_type == ^to_string(node_type))
+  end
+
+  defp maybe_filter_priority(query, nil), do: query
+  defp maybe_filter_priority(query, ""), do: query
+
+  defp maybe_filter_priority(query, priority) do
+    where(query, [r], r.priority == ^to_string(priority))
+  end
+
+  defp maybe_filter_learning_type(query, nil), do: query
+  defp maybe_filter_learning_type(query, ""), do: query
+
+  defp maybe_filter_learning_type(query, learning_type) do
+    where(query, [r], r.learning_type == ^to_string(learning_type))
+  end
+
+  defp maybe_filter_edge_kind(query, nil), do: query
+  defp maybe_filter_edge_kind(query, ""), do: query
+
+  defp maybe_filter_edge_kind(query, kind) do
+    where(query, [e], e.kind == ^to_string(kind))
+  end
+
+  defp maybe_filter_edge_node_type(query, nil), do: query
+  defp maybe_filter_edge_node_type(query, ""), do: query
+
+  defp maybe_filter_edge_node_type(query, node_type) do
+    type = to_string(node_type)
+    where(query, [e], e.from_node_type == ^type or e.to_node_type == ^type)
+  end
+
+  defp maybe_filter_flag_status(query, nil), do: query
+  defp maybe_filter_flag_status(query, ""), do: query
+
+  defp maybe_filter_flag_status(query, status) do
+    where(query, [f], f.status == ^to_string(status))
+  end
+
+  defp maybe_filter_flag_type(query, nil), do: query
+  defp maybe_filter_flag_type(query, ""), do: query
+
+  defp maybe_filter_flag_type(query, flag_type) do
+    where(query, [f], f.flag_type == ^to_string(flag_type))
+  end
+
+  defp maybe_filter_flag_node_type(query, nil), do: query
+  defp maybe_filter_flag_node_type(query, ""), do: query
+
+  defp maybe_filter_flag_node_type(query, node_type) do
+    where(query, [f], f.node_type == ^to_string(node_type))
+  end
+
   defp maybe_filter_requirement_grounded(query, nil), do: query
   defp maybe_filter_requirement_grounded(query, ""), do: query
 
@@ -1465,6 +2061,21 @@ defmodule HydraX.Product do
   end
 
   defp maybe_broadcast_project_record(result, _event), do: result
+
+  defp maybe_notify_propagation({:ok, record} = result, node_type, change_type) do
+    if Map.has_key?(record, :project_id) do
+      HydraX.Product.Propagation.notify_change(
+        record.project_id,
+        node_type,
+        record.id,
+        change_type
+      )
+    end
+
+    result
+  end
+
+  defp maybe_notify_propagation(result, _node_type, _change_type), do: result
 
   defp unwrap_transaction({:ok, value}), do: {:ok, value}
   defp unwrap_transaction({:error, %Ecto.Changeset{} = changeset}), do: {:error, changeset}
@@ -1855,6 +2466,9 @@ defmodule HydraX.Product do
 
   defp persona_role("researcher"), do: "researcher"
   defp persona_role("strategist"), do: "planner"
+  defp persona_role("architect"), do: "builder"
+  defp persona_role("designer"), do: "designer"
+  defp persona_role("memory_agent"), do: "operator"
 
   defp count_project_records(schema, project_id) do
     schema
@@ -1863,7 +2477,7 @@ defmodule HydraX.Product do
   end
 
   defp load_project(%Project{} = project),
-    do: Repo.preload(project, [:researcher_agent, :strategist_agent])
+    do: Repo.preload(project, @agent_preloads)
 
   defp load_project(id) when is_integer(id), do: get_project!(id)
   defp load_project(id) when is_binary(id), do: id |> String.to_integer() |> get_project!()

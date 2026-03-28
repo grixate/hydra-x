@@ -242,6 +242,15 @@ defmodule HydraX.Product.AgentBridge do
   defp agent_for_persona!(project, "strategist"),
     do: project.strategist_agent || Runtime.get_agent!(project.strategist_agent_id)
 
+  defp agent_for_persona!(project, "architect"),
+    do: project.architect_agent || Runtime.get_agent!(project.architect_agent_id)
+
+  defp agent_for_persona!(project, "designer"),
+    do: project.designer_agent || Runtime.get_agent!(project.designer_agent_id)
+
+  defp agent_for_persona!(project, "memory_agent"),
+    do: project.memory_agent || Runtime.get_agent!(project.memory_agent_id)
+
   defp normalize_attrs(attrs) do
     attrs = HydraX.Runtime.Helpers.normalize_string_keys(attrs)
 
@@ -252,6 +261,9 @@ defmodule HydraX.Product.AgentBridge do
 
   defp normalize_persona(persona) when persona in ["researcher", :researcher], do: "researcher"
   defp normalize_persona(persona) when persona in ["strategist", :strategist], do: "strategist"
+  defp normalize_persona(persona) when persona in ["architect", :architect], do: "architect"
+  defp normalize_persona(persona) when persona in ["designer", :designer], do: "designer"
+  defp normalize_persona(persona) when persona in ["memory_agent", :memory_agent], do: "memory_agent"
 
   defp default_title(project, persona) do
     "#{project.name} #{String.capitalize(persona)} conversation"

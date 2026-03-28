@@ -13,11 +13,14 @@ defmodule HydraX.ProductTest do
     assert project.slug == "operator-research-core"
     assert project.researcher_agent.role == "researcher"
     assert project.strategist_agent.role == "planner"
+    assert project.architect_agent.role == "builder"
+    assert project.designer_agent.role == "designer"
+    assert project.memory_agent.role == "operator"
 
     assert File.read!(Path.join(project.researcher_agent.workspace_root, "IDENTITY.md")) =~
-             "researcher agent for Operator Research Core"
+             "researcher for Operator Research Core"
 
     assert File.read!(Path.join(project.strategist_agent.workspace_root, "IDENTITY.md")) =~
-             "strategist agent for Operator Research Core"
+             "strategist for Operator Research Core"
   end
 end

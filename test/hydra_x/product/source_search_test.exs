@@ -56,7 +56,8 @@ defmodule HydraX.Product.SourceSearchTest do
     assert "source_search" in tool_names
     assert "insight_create" in tool_names
     assert "insight_update" in tool_names
-    assert "requirement_create" in tool_names
+    # researcher does not have requirement_create per agent spec
+    refute "requirement_create" in tool_names
   end
 
   test "parse_citations rewrites cite markers and returns structured citation payloads" do

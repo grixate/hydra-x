@@ -106,6 +106,23 @@ defmodule HydraXWeb.Router do
          :create_message
 
     post "/projects/:project_id/exports", ProjectExportAPIController, :create
+
+    # Watch targets (Continuous Research)
+    get "/projects/:project_id/watch_targets", WatchTargetAPIController, :index
+    post "/projects/:project_id/watch_targets", WatchTargetAPIController, :create
+    delete "/projects/:project_id/watch_targets/:id", WatchTargetAPIController, :delete
+
+    # Product simulations
+    get "/projects/:project_id/simulations", SimulationAPIController, :index
+    post "/projects/:project_id/simulations", SimulationAPIController, :create
+    get "/projects/:project_id/simulations/:id", SimulationAPIController, :show
+    post "/projects/:project_id/simulations/:id/import", SimulationAPIController, :import_results
+
+    # Stream
+    get "/projects/:project_id/stream", StreamAPIController, :index
+
+    # Graph trail
+    get "/projects/:project_id/graph/trail", GraphTrailAPIController, :show
   end
 
   # Other scopes may use custom stacks.
