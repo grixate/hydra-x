@@ -40,16 +40,19 @@ defmodule HydraXWeb.RoutineAPIController do
     end
   end
 
-  def runs(conn, %{"project_id" => _project_id, "id" => id}) do
+  def runs(conn, %{"project_id" => project_id, "id" => id}) do
+    routine = Product.get_project_routine!(project_id, id)
+    limit = parse_limit(conn.params["limit"])
+
     runs =
-      Product.list_routine_runs(id, limit: conn.params["limit"] || 20)
+      Product.list_routine_runs(routine.id, limit: limit)
       |> Enum.map(&ProductPayload.routine_run_json/1)
 
     json(conn, %{data: runs})
   end
 
-  def run(conn, %{"project_id" => _project_id, "id" => id}) do
-    routine = Product.get_routine!(id)
+  def run(conn, %{"project_id" => project_id, "id" => id}) do
+    routine = Product.get_project_routine!(project_id, id)
 
     case Product.create_routine_run(%{
       "routine_id" => routine.id,
@@ -62,4 +65,14 @@ defmodule HydraXWeb.RoutineAPIController do
         conn |> put_status(:unprocessable_entity) |> json(%{error: inspect(changeset.errors)})
     end
   end
+
+  defp parse_limit(nil), do: 20
+  defp parse_limit(value) when is_integer(value), do: value
+  defp parse_limit(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {int, ""} -> min(int, 100)
+      _ -> 20
+    end
+  end
+  defp parse_limit(_), do: 20
 end

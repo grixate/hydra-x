@@ -5,6 +5,7 @@ defmodule HydraX.Product.Project do
   alias HydraX.Runtime.AgentProfile
 
   @statuses ~w(active archived)
+  @trust_levels ~w(cautious standard autonomous)
 
   schema "projects" do
     field :name, :string
@@ -46,6 +47,7 @@ defmodule HydraX.Product.Project do
     |> validate_required([:name, :slug, :status, :researcher_agent_id, :strategist_agent_id])
     |> validate_format(:slug, ~r/^[a-z0-9\-]+$/)
     |> validate_inclusion(:status, @statuses)
+    |> validate_inclusion(:trust_level, @trust_levels)
     |> unique_constraint(:slug)
     |> foreign_key_constraint(:researcher_agent_id)
     |> foreign_key_constraint(:strategist_agent_id)

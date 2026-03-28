@@ -10,12 +10,21 @@ export function GraphHealthPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const [health, setHealth] = useState<Record<string, unknown> | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!projectId) return;
     setLoading(true);
-    api.getGraphHealth(Number(projectId)).then(setHealth).finally(() => setLoading(false));
+    setError(null);
+    api.getGraphHealth(Number(projectId))
+      .then(setHealth)
+      .catch((err) => setError(err.message ?? "Failed to load"))
+      .finally(() => setLoading(false));
   }, [projectId]);
+
+  if (error) {
+    return <div className="p-6"><Card><CardContent className="py-8 text-center text-sm text-[var(--ink-soft)]">{error}</CardContent></Card></div>;
+  }
 
   if (loading || !health) {
     return (
@@ -75,7 +84,7 @@ export function GraphHealthPage() {
                 />
               </div>
               <span className="text-xs font-medium w-8 text-right">{data.count}</span>
-              <span className="text-[10px] text-[var(--ink-soft)] w-20">avg {data.avg_outgoing} edges</span>
+              <span className="text-[10px] text-[var(--ink-soft)] w-20">avg {data.avg_outgoing ?? 0} edges</span>
             </div>
           ))}
         </CardContent>

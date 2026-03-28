@@ -15,12 +15,21 @@ export function LearningsPage() {
   const [learnings, setLearnings] = useState<Learning[]>([]);
   const [selected, setSelected] = useState<Learning | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!projectId) return;
     setLoading(true);
-    api.listLearnings(Number(projectId)).then(setLearnings).finally(() => setLoading(false));
+    setError(null);
+    api.listLearnings(Number(projectId))
+      .then(setLearnings)
+      .catch((err) => setError(err.message ?? "Failed to load"))
+      .finally(() => setLoading(false));
   }, [projectId]);
+
+  if (error) {
+    return <div className="p-6"><Card><CardContent className="py-8 text-center text-sm text-[var(--ink-soft)]">{error}</CardContent></Card></div>;
+  }
 
   if (loading) {
     return <div className="space-y-4 p-6"><Skeleton className="h-8 w-48" /><Skeleton className="h-24 w-full" /></div>;

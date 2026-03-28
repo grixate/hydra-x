@@ -23,11 +23,16 @@ export function ArchitecturePage() {
   const [nodes, setNodes] = useState<ArchitectureNode[]>([]);
   const [selected, setSelected] = useState<ArchitectureNode | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!projectId) return;
     setLoading(true);
-    api.listArchitectureNodes(Number(projectId)).then(setNodes).finally(() => setLoading(false));
+    setError(null);
+    api.listArchitectureNodes(Number(projectId))
+      .then(setNodes)
+      .catch((err) => setError(err.message ?? "Failed to load"))
+      .finally(() => setLoading(false));
   }, [projectId]);
 
   const grouped = useMemo(() => {
@@ -36,6 +41,10 @@ export function ArchitecturePage() {
     for (const n of nodes) (map[n.node_type] ??= []).push(n);
     return map;
   }, [nodes]);
+
+  if (error) {
+    return <div className="p-6"><Card><CardContent className="py-8 text-center text-sm text-[var(--ink-soft)]">{error}</CardContent></Card></div>;
+  }
 
   if (loading) {
     return <div className="space-y-4 p-6"><Skeleton className="h-8 w-48" /><Skeleton className="h-24 w-full" /></div>;
@@ -61,6 +70,14 @@ export function ArchitecturePage() {
                 </div>
               );
             })}
+            {Object.entries(grouped)
+              .filter(([key, items]) => !typeGroups.some((g) => g.key === key) && items.length > 0)
+              .map(([key, items]) => (
+                <div key={key}>
+                  <p className="px-1 pb-1 text-[10px] font-bold uppercase tracking-[0.3em] text-[var(--ink-soft)]">{key.replace(/_/g, " ")}</p>
+                  <NodeList items={items} nodeType="architecture_node" selectedId={selected?.id} onSelect={setSelected} />
+                </div>
+              ))}
           </div>
           {selected ? (
             <Card>

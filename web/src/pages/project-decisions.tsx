@@ -16,12 +16,21 @@ export function DecisionsPage() {
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [selected, setSelected] = useState<Decision | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!projectId) return;
     setLoading(true);
-    api.listDecisions(Number(projectId)).then(setDecisions).finally(() => setLoading(false));
+    setError(null);
+    api.listDecisions(Number(projectId))
+      .then(setDecisions)
+      .catch((err) => setError(err.message ?? "Failed to load decisions"))
+      .finally(() => setLoading(false));
   }, [projectId]);
+
+  if (error) {
+    return <div className="p-6"><Card><CardContent className="py-8 text-center text-sm text-[var(--ink-soft)]">{error}</CardContent></Card></div>;
+  }
 
   if (loading) {
     return (

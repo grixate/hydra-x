@@ -6,7 +6,10 @@ defmodule HydraXWeb.TaskFeedbackAPIController do
 
   action_fallback HydraXWeb.ProjectAPIFallbackController
 
-  def index(conn, %{"project_id" => _project_id, "task_id" => task_id}) do
+  def index(conn, %{"project_id" => project_id, "task_id" => task_id}) do
+    # Verify task belongs to project
+    _task = Product.get_project_task!(project_id, task_id)
+
     feedback =
       Product.list_task_feedback(task_id)
       |> Enum.map(&ProductPayload.task_feedback_json/1)
@@ -14,7 +17,10 @@ defmodule HydraXWeb.TaskFeedbackAPIController do
     json(conn, %{data: feedback})
   end
 
-  def create(conn, %{"project_id" => _project_id, "task_id" => task_id, "feedback" => params}) do
+  def create(conn, %{"project_id" => project_id, "task_id" => task_id, "feedback" => params}) do
+    # Verify task belongs to project
+    _task = Product.get_project_task!(project_id, task_id)
+
     case Product.create_task_feedback(task_id, params) do
       {:ok, feedback} ->
         conn |> put_status(:created) |> json(%{data: ProductPayload.task_feedback_json(feedback)})

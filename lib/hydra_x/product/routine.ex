@@ -3,6 +3,7 @@ defmodule HydraX.Product.Routine do
   import Ecto.Changeset
 
   @statuses ~w(active paused archived)
+  @personas ~w(researcher strategist architect designer memory_agent)
   @schedule_types ~w(cron event)
   @output_targets ~w(graph_node stream_item)
 
@@ -37,6 +38,7 @@ defmodule HydraX.Product.Routine do
     ])
     |> validate_required([:project_id, :title, :prompt_template, :assigned_persona, :schedule_type, :status])
     |> validate_inclusion(:status, @statuses)
+    |> validate_inclusion(:assigned_persona, @personas)
     |> validate_inclusion(:schedule_type, @schedule_types)
     |> validate_inclusion(:output_target, @output_targets)
     |> foreign_key_constraint(:project_id)

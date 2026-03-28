@@ -21,17 +21,30 @@ export function TasksPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const [tasks, setTasks] = useState<ProductTask[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!projectId) return;
     setLoading(true);
-    api.listTasks(Number(projectId)).then(setTasks).finally(() => setLoading(false));
+    setError(null);
+    api.listTasks(Number(projectId))
+      .then(setTasks)
+      .catch((err) => setError(err.message ?? "Failed to load tasks"))
+      .finally(() => setLoading(false));
   }, [projectId]);
 
+  const columnKeys = new Set(columns.map((c) => c.key));
   const grouped = useMemo(() => {
     const map: Record<string, ProductTask[]> = {};
     for (const col of columns) map[col.key] = [];
-    for (const t of tasks) (map[t.status] ??= []).push(t);
+    map["_other"] = [];
+    for (const t of tasks) {
+      if (columnKeys.has(t.status)) {
+        map[t.status].push(t);
+      } else {
+        map["_other"].push(t);
+      }
+    }
     return map;
   }, [tasks]);
 
@@ -42,6 +55,15 @@ export function TasksPage() {
         <div className="flex gap-4">
           {columns.map((c) => <Skeleton key={c.key} className="h-64 w-48" />)}
         </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="p-6">
+        <h1 className="font-display text-xl font-semibold mb-6">Tasks</h1>
+        <Card><CardContent className="py-8 text-center text-sm text-[var(--ink-soft)]">{error}</CardContent></Card>
       </div>
     );
   }
@@ -70,6 +92,9 @@ export function TasksPage() {
             tasks={grouped[col.key] ?? []}
           />
         ))}
+        {(grouped["_other"]?.length ?? 0) > 0 && (
+          <TaskColumn label="Other" tasks={grouped["_other"]} />
+        )}
       </div>
     </div>
   );
@@ -101,7 +126,7 @@ function TaskCard({ task }: { task: ProductTask }) {
       <CardContent className="p-3">
         <div className="flex items-start justify-between gap-2">
           <p className="text-sm font-medium leading-tight">{task.title}</p>
-          <PriorityBadge priority={task.priority} />
+          {task.priority && <PriorityBadge priority={task.priority} />}
         </div>
         {task.assignee && (
           <p className="mt-1 text-[10px] text-[var(--ink-soft)]">{task.assignee}</p>
