@@ -1,5 +1,8 @@
+import { useState, useEffect } from "react";
 import { NavLink, useParams } from "react-router-dom";
 import { cn } from "@/lib/utils";
+import { api } from "@/lib/api";
+import type { ProjectCounts } from "@/types";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
@@ -7,7 +10,7 @@ import { Separator } from "@/components/ui/separator";
 type SidebarItem = {
   path: string;
   label: string;
-  countKey?: string;
+  countKey?: keyof ProjectCounts;
   end?: boolean;
 };
 
@@ -60,7 +63,15 @@ const sidebarGroups: Array<{ label: string | null; items: SidebarItem[] }> = [
 
 export function WorkspaceSidebar() {
   const { projectId } = useParams<{ projectId: string }>();
-  const basePath = `/product/${projectId ?? ""}`;
+  const basePath = projectId ? `/product/${projectId}` : "/product";
+  const [counts, setCounts] = useState<Partial<ProjectCounts>>({});
+
+  useEffect(() => {
+    if (!projectId) return;
+    const pid = Number(projectId);
+    if (isNaN(pid)) return;
+    api.getProjectCounts(pid).then(setCounts).catch(() => {});
+  }, [projectId]);
 
   return (
     <aside className="flex w-[240px] shrink-0 flex-col border-r border-[var(--line)] bg-[var(--paper)]">
@@ -80,28 +91,31 @@ export function WorkspaceSidebar() {
                 </p>
               )}
               <div className="space-y-0.5">
-                {group.items.map((item) => (
-                  <NavLink
-                    key={item.path}
-                    to={`${basePath}/${item.path}`}
-                    end={item.end}
-                    className={({ isActive }) =>
-                      cn(
-                        "flex items-center justify-between rounded-lg px-3 py-1.5 text-sm transition-colors",
-                        isActive
-                          ? "bg-[var(--accent)] font-medium text-[var(--ink)]"
-                          : "text-[var(--ink-soft)] hover:bg-[var(--ink)]/5 hover:text-[var(--ink)]",
-                      )
-                    }
-                  >
-                    <span>{item.label}</span>
-                    {item.countKey && (
-                      <Badge variant="secondary" className="text-[9px]">
-                        0
-                      </Badge>
-                    )}
-                  </NavLink>
-                ))}
+                {group.items.map((item) => {
+                  const count = item.countKey ? counts[item.countKey] : undefined;
+                  return (
+                    <NavLink
+                      key={item.path}
+                      to={`${basePath}/${item.path}`}
+                      end={item.end}
+                      className={({ isActive }) =>
+                        cn(
+                          "flex items-center justify-between rounded-lg px-3 py-1.5 text-sm transition-colors",
+                          isActive
+                            ? "bg-[var(--accent)] font-medium text-[var(--ink)]"
+                            : "text-[var(--ink-soft)] hover:bg-[var(--ink)]/5 hover:text-[var(--ink)]",
+                        )
+                      }
+                    >
+                      <span>{item.label}</span>
+                      {item.countKey && count != null && count > 0 && (
+                        <Badge variant="secondary" className="text-[9px]">
+                          {count}
+                        </Badge>
+                      )}
+                    </NavLink>
+                  );
+                })}
               </div>
             </div>
           ))}

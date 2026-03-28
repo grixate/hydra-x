@@ -53,6 +53,7 @@ defmodule HydraX.Product.Propagation do
   def handle_info(:process_batch, state) do
     {batch, remaining} =
       state.queue
+      |> Enum.reverse()
       |> Enum.uniq_by(fn e -> {e.project_id, e.node_type, e.node_id} end)
       |> Enum.split(@max_per_tick)
 

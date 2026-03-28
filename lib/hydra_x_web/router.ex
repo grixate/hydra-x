@@ -33,6 +33,9 @@ defmodule HydraXWeb.Router do
     get "/login", SessionController, :new
     post "/login", SessionController, :create
     delete "/logout", SessionController, :delete
+
+    get "/product", PageController, :product
+    get "/product/*path", PageController, :product
   end
 
   scope "/", HydraXWeb do

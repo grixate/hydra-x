@@ -41,8 +41,21 @@ defmodule HydraX.Product.Tools.FeasibilityAssess do
   def execute(params, _context) do
     with {:ok, project_id} <- extract_project_id(params) do
       requirement_id = params[:requirement_id] || params["requirement_id"]
-      requirement = Repo.get!(Requirement, requirement_id)
 
+      case Repo.get(Requirement, requirement_id) do
+        nil ->
+          {:error, "requirement #{requirement_id} not found"}
+
+        %{project_id: req_project_id} when req_project_id != project_id ->
+          {:error, "requirement #{requirement_id} does not belong to this project"}
+
+        requirement ->
+          execute_assessment(project_id, requirement, requirement_id)
+      end
+    end
+  end
+
+  defp execute_assessment(project_id, requirement, requirement_id) do
       # Load linked insights
       linked_insights =
         RequirementInsight
@@ -94,7 +107,6 @@ defmodule HydraX.Product.Tools.FeasibilityAssess do
              end)
          }
        }}
-    end
   end
 
   @impl true

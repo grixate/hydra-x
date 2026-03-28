@@ -980,7 +980,7 @@ defmodule HydraX.Product do
     |> Repo.insert()
   end
 
-  def resolve_graph_flag(%GraphFlag{} = flag, resolved_by) do
+  def resolve_graph_flag(%GraphFlag{status: "open"} = flag, resolved_by) do
     flag
     |> GraphFlag.changeset(%{
       "status" => "resolved",
@@ -989,6 +989,8 @@ defmodule HydraX.Product do
     })
     |> Repo.update()
   end
+
+  def resolve_graph_flag(%GraphFlag{}, _resolved_by), do: {:error, :already_resolved}
 
   def prompt_context(conversation_or_metadata) do
     metadata = product_metadata(conversation_or_metadata)

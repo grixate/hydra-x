@@ -36,6 +36,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(`Request failed (${response.status})`);
   }
 
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
   const payload = (await response.json()) as Envelope<T>;
   return payload.data;
 }

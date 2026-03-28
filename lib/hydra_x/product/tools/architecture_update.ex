@@ -37,8 +37,17 @@ defmodule HydraX.Product.Tools.ArchitectureUpdate do
   @impl true
   def execute(params, _context) do
     id = params[:id] || params["id"]
-    node = Product.get_architecture_node!(id)
 
+    case HydraX.Repo.get(HydraX.Product.ArchitectureNode, id) do
+      nil ->
+        {:error, "architecture node #{id} not found"}
+
+      node ->
+        do_update(node, params)
+    end
+  end
+
+  defp do_update(node, params) do
     case Product.update_architecture_node(node, params) do
       {:ok, updated} ->
         {:ok, %{architecture_node: %{id: updated.id, title: updated.title, status: updated.status}}}

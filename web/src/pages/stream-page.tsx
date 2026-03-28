@@ -1,9 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { api, type StreamItem } from "@/lib/api";
 import { StreamView } from "@/components/stream/stream-view";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Card, CardContent } from "@/components/ui/card";
 
 export function StreamPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -14,17 +15,46 @@ export function StreamPage() {
     emerging: StreamItem[];
   } | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const mountedRef = useRef(true);
 
   const fetchStream = () => {
-    if (!projectId) return;
+    const pid = Number(projectId);
+    if (!projectId || isNaN(pid)) return;
     setLoading(true);
+    setError(null);
     api
-      .getStream(Number(projectId))
-      .then(setStream)
-      .finally(() => setLoading(false));
+      .getStream(pid)
+      .then((data) => {
+        if (mountedRef.current) setStream(data);
+      })
+      .catch((err) => {
+        if (mountedRef.current) setError(err.message ?? "Failed to load stream");
+      })
+      .finally(() => {
+        if (mountedRef.current) setLoading(false);
+      });
   };
 
-  useEffect(fetchStream, [projectId]);
+  useEffect(() => {
+    mountedRef.current = true;
+    fetchStream();
+    return () => {
+      mountedRef.current = false;
+    };
+  }, [projectId]);
+
+  if (error) {
+    return (
+      <div className="p-6">
+        <Card>
+          <CardContent className="py-8 text-center text-sm text-[var(--ink-soft)]">
+            {error}
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   if (loading || !stream) {
     return (

@@ -37,8 +37,17 @@ defmodule HydraX.Product.Tools.DesignUpdate do
   @impl true
   def execute(params, _context) do
     id = params[:id] || params["id"]
-    node = Product.get_design_node!(id)
 
+    case HydraX.Repo.get(HydraX.Product.DesignNode, id) do
+      nil ->
+        {:error, "design node #{id} not found"}
+
+      node ->
+        do_update(node, params)
+    end
+  end
+
+  defp do_update(node, params) do
     case Product.update_design_node(node, params) do
       {:ok, updated} ->
         {:ok, %{design_node: %{id: updated.id, title: updated.title, status: updated.status}}}

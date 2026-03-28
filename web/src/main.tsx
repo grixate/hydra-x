@@ -9,6 +9,7 @@ import { ChatPage } from "@/pages/chat-page";
 import { InsightsPage } from "@/pages/insights-page";
 import { RequirementsPage } from "@/pages/requirements-page";
 import { StubPage } from "@/pages/stub-page";
+import { ProjectSelectPage } from "@/pages/project-select-page";
 import "@/index.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
@@ -45,7 +46,8 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
             element={<TrailPage />}
           />
         </Route>
-        <Route path="*" element={<Navigate to="/product/1" replace />} />
+        <Route path="/product" element={<ProjectSelectPage />} />
+        <Route path="*" element={<Navigate to="/product" replace />} />
       </Routes>
     </BrowserRouter>
   </React.StrictMode>,
