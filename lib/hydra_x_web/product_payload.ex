@@ -246,6 +246,90 @@ defmodule HydraXWeb.ProductPayload do
     }
   end
 
+  def constraint_json(%HydraX.Product.Constraint{} = c) do
+    %{
+      id: c.id,
+      project_id: c.project_id,
+      title: c.title,
+      body: c.body,
+      scope: c.scope,
+      enforcement: c.enforcement,
+      status: c.status,
+      metadata: c.metadata || %{},
+      inserted_at: c.inserted_at,
+      updated_at: c.updated_at
+    }
+  end
+
+  def routine_json(%HydraX.Product.Routine{} = r) do
+    %{
+      id: r.id,
+      project_id: r.project_id,
+      title: r.title,
+      description: r.description,
+      prompt_template: r.prompt_template,
+      assigned_persona: r.assigned_persona,
+      schedule_type: r.schedule_type,
+      cron_expression: r.cron_expression,
+      event_trigger: r.event_trigger,
+      timezone: r.timezone,
+      output_target: r.output_target,
+      status: r.status,
+      last_run_at: r.last_run_at,
+      last_run_status: r.last_run_status,
+      last_run_tokens: r.last_run_tokens,
+      metadata: r.metadata || %{},
+      inserted_at: r.inserted_at,
+      updated_at: r.updated_at
+    }
+  end
+
+  def routine_run_json(%HydraX.Product.RoutineRun{} = r) do
+    %{
+      id: r.id,
+      routine_id: r.routine_id,
+      started_at: r.started_at,
+      completed_at: r.completed_at,
+      status: r.status,
+      prompt_resolved: r.prompt_resolved,
+      output: r.output,
+      token_count: r.token_count,
+      cost_cents: r.cost_cents,
+      metadata: r.metadata || %{},
+      inserted_at: r.inserted_at
+    }
+  end
+
+  def knowledge_entry_json(%HydraX.Product.KnowledgeEntry{} = k) do
+    %{
+      id: k.id,
+      project_id: k.project_id,
+      title: k.title,
+      content: k.content,
+      entry_type: k.entry_type,
+      assigned_personas: k.assigned_personas,
+      source_type: k.source_type,
+      source_url: k.source_url,
+      status: k.status,
+      metadata: k.metadata || %{},
+      inserted_at: k.inserted_at,
+      updated_at: k.updated_at
+    }
+  end
+
+  def task_feedback_json(%HydraX.Product.TaskFeedback{} = f) do
+    %{
+      id: f.id,
+      task_id: f.task_id,
+      rating: f.rating,
+      comment: f.comment,
+      feedback_tags: f.feedback_tags,
+      created_by: f.created_by,
+      metadata: f.metadata || %{},
+      inserted_at: f.inserted_at
+    }
+  end
+
   def graph_flag_json(%HydraX.Product.GraphFlag{} = f) do
     %{
       id: f.id,

@@ -269,6 +269,80 @@ export type WatchTarget = {
   updated_at?: string;
 };
 
+export type Constraint = {
+  id: number;
+  project_id: number;
+  title: string;
+  body: string;
+  scope: string;
+  enforcement: string;
+  status: string;
+  metadata: Record<string, unknown>;
+  inserted_at?: string;
+  updated_at?: string;
+};
+
+export type Routine = {
+  id: number;
+  project_id: number;
+  title: string;
+  description?: string | null;
+  prompt_template: string;
+  assigned_persona: string;
+  schedule_type: string;
+  cron_expression?: string | null;
+  event_trigger?: string | null;
+  timezone: string;
+  output_target: string;
+  status: string;
+  last_run_at?: string | null;
+  last_run_status?: string | null;
+  last_run_tokens?: number | null;
+  metadata: Record<string, unknown>;
+  inserted_at?: string;
+  updated_at?: string;
+};
+
+export type RoutineRun = {
+  id: number;
+  routine_id: number;
+  started_at: string;
+  completed_at?: string | null;
+  status: string;
+  prompt_resolved?: string | null;
+  output?: string | null;
+  token_count?: number | null;
+  cost_cents?: number | null;
+  metadata: Record<string, unknown>;
+  inserted_at?: string;
+};
+
+export type KnowledgeEntry = {
+  id: number;
+  project_id: number;
+  title: string;
+  content: string;
+  entry_type: string;
+  assigned_personas: string[];
+  source_type: string;
+  source_url?: string | null;
+  status: string;
+  metadata: Record<string, unknown>;
+  inserted_at?: string;
+  updated_at?: string;
+};
+
+export type TaskFeedback = {
+  id: number;
+  task_id: number;
+  rating: "good" | "needs_improvement" | "poor";
+  comment?: string | null;
+  feedback_tags: string[];
+  created_by: string;
+  metadata: Record<string, unknown>;
+  inserted_at?: string;
+};
+
 export type ProjectExport = {
   project_id: number;
   markdown_path: string;

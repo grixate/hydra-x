@@ -8,7 +8,14 @@ import { SourcesPage } from "@/pages/sources-page";
 import { ChatPage } from "@/pages/chat-page";
 import { InsightsPage } from "@/pages/insights-page";
 import { RequirementsPage } from "@/pages/requirements-page";
-import { StubPage } from "@/pages/stub-page";
+import { DecisionsPage } from "@/pages/project-decisions";
+import { StrategiesPage } from "@/pages/project-strategies";
+import { ArchitecturePage } from "@/pages/project-architecture";
+import { DesignPage } from "@/pages/project-design";
+import { TasksPage } from "@/pages/project-tasks";
+import { LearningsPage } from "@/pages/project-learnings";
+import { GraphHealthPage } from "@/pages/project-graph-health";
+import { SettingsPage } from "@/pages/project-settings";
 import { ProjectSelectPage } from "@/pages/project-select-page";
 import "@/index.css";
 
@@ -24,27 +31,15 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           <Route path="chat/:conversationId" element={<ChatPage />} />
           <Route path="insights" element={<InsightsPage />} />
           <Route path="requirements" element={<RequirementsPage />} />
-          <Route path="decisions" element={<StubPage title="Decisions" />} />
-          <Route
-            path="strategies"
-            element={<StubPage title="Strategies" />}
-          />
-          <Route
-            path="architecture"
-            element={<StubPage title="Architecture" />}
-          />
-          <Route path="design" element={<StubPage title="Design" />} />
-          <Route path="tasks" element={<StubPage title="Tasks" />} />
-          <Route path="learnings" element={<StubPage title="Learnings" />} />
-          <Route
-            path="graph-health"
-            element={<StubPage title="Graph Health" />}
-          />
-          <Route path="settings" element={<StubPage title="Settings" />} />
-          <Route
-            path="trail/:nodeType/:nodeId"
-            element={<TrailPage />}
-          />
+          <Route path="decisions" element={<DecisionsPage />} />
+          <Route path="strategies" element={<StrategiesPage />} />
+          <Route path="architecture" element={<ArchitecturePage />} />
+          <Route path="design" element={<DesignPage />} />
+          <Route path="tasks" element={<TasksPage />} />
+          <Route path="learnings" element={<LearningsPage />} />
+          <Route path="graph-health" element={<GraphHealthPage />} />
+          <Route path="settings" element={<SettingsPage />} />
+          <Route path="trail/:nodeType/:nodeId" element={<TrailPage />} />
         </Route>
         <Route path="/product" element={<ProjectSelectPage />} />
         <Route path="*" element={<Navigate to="/product" replace />} />

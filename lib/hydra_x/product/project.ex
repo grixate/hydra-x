@@ -11,6 +11,7 @@ defmodule HydraX.Product.Project do
     field :slug, :string
     field :description, :string
     field :status, :string, default: "active"
+    field :trust_level, :string, default: "standard"
     field :metadata, :map, default: %{}
 
     belongs_to :researcher_agent, AgentProfile
@@ -34,6 +35,7 @@ defmodule HydraX.Product.Project do
       :slug,
       :description,
       :status,
+      :trust_level,
       :metadata,
       :researcher_agent_id,
       :strategist_agent_id,

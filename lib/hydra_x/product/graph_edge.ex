@@ -2,8 +2,8 @@ defmodule HydraX.Product.GraphEdge do
   use Ecto.Schema
   import Ecto.Changeset
 
-  @node_types ~w(signal source insight decision strategy requirement design_node architecture_node task learning simulation)
-  @kinds ~w(lineage dependency supports contradicts supersedes blocks enables)
+  @node_types ~w(signal source insight decision strategy requirement design_node architecture_node task learning simulation constraint routine knowledge_entry)
+  @kinds ~w(lineage dependency supports contradicts supersedes blocks enables constrains)
 
   schema "product_graph_edges" do
     field :from_node_type, :string

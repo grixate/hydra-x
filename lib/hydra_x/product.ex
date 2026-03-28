@@ -11,12 +11,14 @@ defmodule HydraX.Product do
   alias HydraX.Memory
   alias HydraX.Product.ArchitectureNode
   alias HydraX.Product.Citations
+  alias HydraX.Product.Constraint
   alias HydraX.Product.Decision
   alias HydraX.Product.DesignNode
   alias HydraX.Product.GraphEdge
   alias HydraX.Product.GraphFlag
   alias HydraX.Product.Insight
   alias HydraX.Product.InsightEvidence
+  alias HydraX.Product.KnowledgeEntry
   alias HydraX.Product.Learning
   alias HydraX.Product.Project
   alias HydraX.Product.ProductConversation
@@ -24,10 +26,13 @@ defmodule HydraX.Product do
   alias HydraX.Product.PubSub, as: ProductPubSub
   alias HydraX.Product.Requirement
   alias HydraX.Product.RequirementInsight
+  alias HydraX.Product.Routine
+  alias HydraX.Product.RoutineRun
   alias HydraX.Product.Source
   alias HydraX.Product.SourceChunk
   alias HydraX.Product.Strategy
   alias HydraX.Product.Task, as: ProductTask
+  alias HydraX.Product.TaskFeedback
   alias HydraX.Product.WorkspaceScaffold
   alias HydraX.Repo
   alias HydraX.Runtime
@@ -992,6 +997,181 @@ defmodule HydraX.Product do
 
   def resolve_graph_flag(%GraphFlag{}, _resolved_by), do: {:error, :already_resolved}
 
+  # -------------------------------------------------------------------
+  # Constraints
+  # -------------------------------------------------------------------
+
+  def list_constraints(project_or_id, opts \\ []) do
+    project_id = project_id(project_or_id)
+    status = Keyword.get(opts, :status)
+
+    Constraint
+    |> where([c], c.project_id == ^project_id)
+    |> maybe_filter_product_record_status(status)
+    |> order_by([c], desc: c.updated_at)
+    |> Repo.all()
+  end
+
+  def get_constraint!(id), do: Repo.get!(Constraint, id)
+
+  def get_project_constraint!(project_or_id, id) do
+    project_id = project_id(project_or_id)
+    Constraint |> where([c], c.project_id == ^project_id and c.id == ^parse_integer(id)) |> Repo.one!()
+  end
+
+  def create_constraint(project_or_id, attrs) when is_map(attrs) do
+    project_id = project_id(project_or_id)
+    attrs = normalize_product_record_attrs(attrs)
+
+    %Constraint{}
+    |> Constraint.changeset(Map.put(attrs, "project_id", project_id))
+    |> Repo.insert()
+    |> maybe_broadcast_project_record("constraint.created")
+  end
+
+  def update_constraint(%Constraint{} = constraint, attrs) when is_map(attrs) do
+    attrs = normalize_product_record_attrs(attrs)
+
+    constraint
+    |> Constraint.changeset(attrs)
+    |> Repo.update()
+    |> maybe_broadcast_project_record("constraint.updated")
+  end
+
+  def delete_constraint(%Constraint{} = constraint) do
+    constraint |> Repo.delete() |> maybe_broadcast_project_record("constraint.deleted")
+  end
+
+  # -------------------------------------------------------------------
+  # Routines
+  # -------------------------------------------------------------------
+
+  def list_routines(project_or_id, opts \\ []) do
+    project_id = project_id(project_or_id)
+    status = Keyword.get(opts, :status)
+
+    Routine
+    |> where([r], r.project_id == ^project_id)
+    |> maybe_filter_product_record_status(status)
+    |> order_by([r], desc: r.updated_at)
+    |> Repo.all()
+  end
+
+  def get_routine!(id), do: Repo.get!(Routine, id)
+
+  def get_project_routine!(project_or_id, id) do
+    project_id = project_id(project_or_id)
+    Routine |> where([r], r.project_id == ^project_id and r.id == ^parse_integer(id)) |> Repo.one!()
+  end
+
+  def create_routine(project_or_id, attrs) when is_map(attrs) do
+    project_id = project_id(project_or_id)
+    attrs = normalize_product_record_attrs(attrs)
+
+    %Routine{}
+    |> Routine.changeset(Map.put(attrs, "project_id", project_id))
+    |> Repo.insert()
+  end
+
+  def update_routine(%Routine{} = routine, attrs) when is_map(attrs) do
+    attrs = normalize_product_record_attrs(attrs)
+    routine |> Routine.changeset(attrs) |> Repo.update()
+  end
+
+  def delete_routine(%Routine{} = routine), do: Repo.delete(routine)
+
+  def list_routine_runs(routine_or_id, opts \\ []) do
+    routine_id = case routine_or_id do
+      %Routine{id: id} -> id
+      id -> parse_integer(id)
+    end
+    limit = Keyword.get(opts, :limit, 20)
+
+    RoutineRun
+    |> where([r], r.routine_id == ^routine_id)
+    |> order_by([r], desc: r.started_at)
+    |> limit(^limit)
+    |> Repo.all()
+  end
+
+  def create_routine_run(attrs) when is_map(attrs) do
+    attrs = HydraX.Runtime.Helpers.normalize_string_keys(attrs)
+    %RoutineRun{} |> RoutineRun.changeset(attrs) |> Repo.insert()
+  end
+
+  # -------------------------------------------------------------------
+  # Knowledge Entries
+  # -------------------------------------------------------------------
+
+  def list_knowledge_entries(project_or_id, opts \\ []) do
+    project_id = project_id(project_or_id)
+    status = Keyword.get(opts, :status)
+    persona = Keyword.get(opts, :persona)
+
+    query =
+      KnowledgeEntry
+      |> where([k], k.project_id == ^project_id)
+      |> maybe_filter_product_record_status(status)
+
+    query =
+      if persona,
+        do: where(query, [k], ^to_string(persona) in k.assigned_personas),
+        else: query
+
+    query |> order_by([k], desc: k.updated_at) |> Repo.all()
+  end
+
+  def get_knowledge_entry!(id), do: Repo.get!(KnowledgeEntry, id)
+
+  def get_project_knowledge_entry!(project_or_id, id) do
+    project_id = project_id(project_or_id)
+    KnowledgeEntry |> where([k], k.project_id == ^project_id and k.id == ^parse_integer(id)) |> Repo.one!()
+  end
+
+  def create_knowledge_entry(project_or_id, attrs) when is_map(attrs) do
+    project_id = project_id(project_or_id)
+    attrs = normalize_product_record_attrs(attrs)
+
+    %KnowledgeEntry{}
+    |> KnowledgeEntry.changeset(Map.put(attrs, "project_id", project_id))
+    |> Repo.insert()
+  end
+
+  def update_knowledge_entry(%KnowledgeEntry{} = entry, attrs) when is_map(attrs) do
+    attrs = normalize_product_record_attrs(attrs)
+    entry |> KnowledgeEntry.changeset(attrs) |> Repo.update()
+  end
+
+  def delete_knowledge_entry(%KnowledgeEntry{} = entry), do: Repo.delete(entry)
+
+  # -------------------------------------------------------------------
+  # Task Feedback
+  # -------------------------------------------------------------------
+
+  def list_task_feedback(task_or_id) do
+    task_id = case task_or_id do
+      %{id: id} -> id
+      id -> parse_integer(id)
+    end
+
+    TaskFeedback
+    |> where([f], f.task_id == ^task_id)
+    |> order_by([f], desc: f.inserted_at)
+    |> Repo.all()
+  end
+
+  def create_task_feedback(task_or_id, attrs) when is_map(attrs) do
+    task_id = case task_or_id do
+      %{id: id} -> id
+      id -> parse_integer(id)
+    end
+    attrs = HydraX.Runtime.Helpers.normalize_string_keys(attrs)
+
+    %TaskFeedback{}
+    |> TaskFeedback.changeset(Map.put(attrs, "task_id", task_id))
+    |> Repo.insert()
+  end
+
   def prompt_context(conversation_or_metadata) do
     metadata = product_metadata(conversation_or_metadata)
     persona = metadata["product_persona"]
@@ -1020,6 +1200,40 @@ defmodule HydraX.Product do
         values -> Enum.join(values, "\n")
       end
 
+    constraints = list_constraints(project.id, status: "active")
+
+    constraint_section =
+      case constraints do
+        [] ->
+          ""
+
+        items ->
+          lines =
+            Enum.map(items, fn c ->
+              "- [#{c.enforcement}] #{c.title}"
+            end)
+
+          "\n## Project constraints (non-negotiable)\n" <> Enum.join(lines, "\n")
+      end
+
+    knowledge = list_knowledge_entries(project.id, persona: persona)
+
+    knowledge_section =
+      case knowledge do
+        [] ->
+          ""
+
+        entries ->
+          entries
+          |> Enum.take(3)
+          |> Enum.map(fn k ->
+            content_preview = String.slice(k.content || "", 0, 500)
+            "\n### #{k.title}\n#{content_preview}"
+          end)
+          |> Enum.join("\n")
+          |> then(&("\n## Knowledge\n" <> &1))
+      end
+
     """
     Project: #{project.name}
     Persona: #{persona || "product"}
@@ -1029,6 +1243,8 @@ defmodule HydraX.Product do
     - If the sources do not support a claim, say that the answer is currently ungrounded.
     Available sources:
     #{source_summary}
+    #{constraint_section}
+    #{knowledge_section}
     """
   end
 

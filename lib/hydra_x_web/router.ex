@@ -176,6 +176,33 @@ defmodule HydraXWeb.Router do
 
     # Project counts (extended)
     get "/projects/:project_id/counts", ProjectAPIController, :counts
+
+    # Constraints
+    get "/projects/:project_id/constraints", ConstraintAPIController, :index
+    post "/projects/:project_id/constraints", ConstraintAPIController, :create
+    get "/projects/:project_id/constraints/:id", ConstraintAPIController, :show
+    patch "/projects/:project_id/constraints/:id", ConstraintAPIController, :update
+    delete "/projects/:project_id/constraints/:id", ConstraintAPIController, :delete
+
+    # Routines
+    get "/projects/:project_id/routines", RoutineAPIController, :index
+    post "/projects/:project_id/routines", RoutineAPIController, :create
+    get "/projects/:project_id/routines/:id", RoutineAPIController, :show
+    patch "/projects/:project_id/routines/:id", RoutineAPIController, :update
+    delete "/projects/:project_id/routines/:id", RoutineAPIController, :delete
+    post "/projects/:project_id/routines/:id/run", RoutineAPIController, :run
+    get "/projects/:project_id/routines/:id/runs", RoutineAPIController, :runs
+
+    # Knowledge entries
+    get "/projects/:project_id/knowledge", KnowledgeEntryAPIController, :index
+    post "/projects/:project_id/knowledge", KnowledgeEntryAPIController, :create
+    get "/projects/:project_id/knowledge/:id", KnowledgeEntryAPIController, :show
+    patch "/projects/:project_id/knowledge/:id", KnowledgeEntryAPIController, :update
+    delete "/projects/:project_id/knowledge/:id", KnowledgeEntryAPIController, :delete
+
+    # Task feedback
+    get "/projects/:project_id/tasks/:task_id/feedback", TaskFeedbackAPIController, :index
+    post "/projects/:project_id/tasks/:task_id/feedback", TaskFeedbackAPIController, :create
   end
 
   # Other scopes may use custom stacks.

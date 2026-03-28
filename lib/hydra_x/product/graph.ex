@@ -8,13 +8,16 @@ defmodule HydraX.Product.Graph do
   import Ecto.Query
 
   alias HydraX.Product.ArchitectureNode
+  alias HydraX.Product.Constraint
   alias HydraX.Product.Decision
   alias HydraX.Product.DesignNode
   alias HydraX.Product.GraphEdge
   alias HydraX.Product.GraphFlag
   alias HydraX.Product.Insight
+  alias HydraX.Product.KnowledgeEntry
   alias HydraX.Product.Learning
   alias HydraX.Product.Requirement
+  alias HydraX.Product.Routine
   alias HydraX.Product.Source
   alias HydraX.Product.Strategy
   alias HydraX.Product.Task, as: ProductTask
@@ -30,7 +33,10 @@ defmodule HydraX.Product.Graph do
     "design_node" => DesignNode,
     "architecture_node" => ArchitectureNode,
     "task" => ProductTask,
-    "learning" => Learning
+    "learning" => Learning,
+    "constraint" => Constraint,
+    "routine" => Routine,
+    "knowledge_entry" => KnowledgeEntry
   }
 
   @traversable_node_types Map.keys(@node_type_to_schema)
