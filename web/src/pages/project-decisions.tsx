@@ -20,6 +20,7 @@ export function DecisionsPage() {
 
   useEffect(() => {
     if (!projectId) return;
+    setSelected(null);
     setLoading(true);
     setError(null);
     api.listDecisions(Number(projectId))

@@ -26,6 +26,7 @@ export function DesignPage() {
 
   useEffect(() => {
     if (!projectId) return;
+    setSelected(null);
     setLoading(true);
     setError(null);
     api.listDesignNodes(Number(projectId))

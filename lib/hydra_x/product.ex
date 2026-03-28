@@ -93,7 +93,10 @@ defmodule HydraX.Product do
       architecture_nodes: count_project_records(ArchitectureNode, project_id),
       tasks: count_project_records(ProductTask, project_id),
       learnings: count_project_records(Learning, project_id),
-      flags: count_project_records(GraphFlag, project_id)
+      flags:
+        GraphFlag
+        |> where([f], f.project_id == ^project_id and f.status == "open")
+        |> Repo.aggregate(:count, :id)
     }
   end
 
@@ -1114,9 +1117,17 @@ defmodule HydraX.Product do
       |> maybe_filter_product_record_status(status)
 
     query =
-      if persona,
-        do: where(query, [k], ^to_string(persona) in k.assigned_personas),
-        else: query
+      if persona do
+        p = to_string(persona)
+
+        where(query, [k],
+          ^p in k.assigned_personas or
+          fragment("? = ANY(?)", "all", k.assigned_personas) or
+          k.assigned_personas == ^[]
+        )
+      else
+        query
+      end
 
     query |> order_by([k], desc: k.updated_at) |> Repo.all()
   end

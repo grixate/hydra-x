@@ -19,6 +19,7 @@ export function LearningsPage() {
 
   useEffect(() => {
     if (!projectId) return;
+    setSelected(null);
     setLoading(true);
     setError(null);
     api.listLearnings(Number(projectId))

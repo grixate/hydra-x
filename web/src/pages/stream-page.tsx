@@ -18,11 +18,14 @@ export function StreamPage() {
   const [error, setError] = useState<string | null>(null);
   const mountedRef = useRef(true);
 
-  const fetchStream = () => {
+  useEffect(() => {
     const pid = Number(projectId);
     if (!projectId || isNaN(pid)) return;
+
+    mountedRef.current = true;
     setLoading(true);
     setError(null);
+
     api
       .getStream(pid)
       .then((data) => {
@@ -34,15 +37,21 @@ export function StreamPage() {
       .finally(() => {
         if (mountedRef.current) setLoading(false);
       });
-  };
 
-  useEffect(() => {
-    mountedRef.current = true;
-    fetchStream();
     return () => {
       mountedRef.current = false;
     };
   }, [projectId]);
+
+  const refreshStream = () => {
+    const pid = Number(projectId);
+    if (!projectId || isNaN(pid)) return;
+    setError(null);
+    api
+      .getStream(pid)
+      .then(setStream)
+      .catch((err) => setError(err.message ?? "Failed to refresh"));
+  };
 
   if (error) {
     return (
@@ -71,7 +80,7 @@ export function StreamPage() {
     <div className="space-y-6 p-6">
       <div className="flex items-center justify-between">
         <h1 className="font-display text-xl font-semibold">Stream</h1>
-        <Button variant="ghost" size="sm" onClick={fetchStream}>
+        <Button variant="ghost" size="sm" onClick={refreshStream}>
           Refresh
         </Button>
       </div>

@@ -103,14 +103,17 @@ defmodule HydraX.Repo.Migrations.CreatePhase2Schemas do
     # (No migration needed — these are Ecto-level validations, not DB constraints)
 
     # Add search vectors for constraints and knowledge_entries
-    execute("""
-    ALTER TABLE constraints
-    ADD COLUMN search_vector tsvector
-    GENERATED ALWAYS AS (
-      setweight(to_tsvector('english', coalesce(title, '')), 'A') ||
-      setweight(to_tsvector('english', coalesce(body, '')), 'B')
-    ) STORED
-    """)
+    execute(
+      """
+      ALTER TABLE constraints
+      ADD COLUMN search_vector tsvector
+      GENERATED ALWAYS AS (
+        setweight(to_tsvector('english', coalesce(title, '')), 'A') ||
+        setweight(to_tsvector('english', coalesce(body, '')), 'B')
+      ) STORED
+      """,
+      "ALTER TABLE constraints DROP COLUMN IF EXISTS search_vector"
+    )
 
     create index(:constraints, [:search_vector], using: :gin)
   end

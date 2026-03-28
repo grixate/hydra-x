@@ -14,12 +14,22 @@ export function StrategiesPage() {
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [selected, setSelected] = useState<Strategy | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!projectId) return;
+    setSelected(null);
     setLoading(true);
-    api.listStrategies(Number(projectId)).then(setStrategies).finally(() => setLoading(false));
+    setError(null);
+    api.listStrategies(Number(projectId))
+      .then(setStrategies)
+      .catch((err) => setError(err.message ?? "Failed to load strategies"))
+      .finally(() => setLoading(false));
   }, [projectId]);
+
+  if (error) {
+    return <div className="p-6"><Card><CardContent className="py-8 text-center text-sm text-[var(--ink-soft)]">{error}</CardContent></Card></div>;
+  }
 
   if (loading) {
     return <div className="space-y-4 p-6"><Skeleton className="h-8 w-48" /><Skeleton className="h-24 w-full" /></div>;

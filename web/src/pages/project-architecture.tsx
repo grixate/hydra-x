@@ -27,6 +27,7 @@ export function ArchitecturePage() {
 
   useEffect(() => {
     if (!projectId) return;
+    setSelected(null);
     setLoading(true);
     setError(null);
     api.listArchitectureNodes(Number(projectId))
