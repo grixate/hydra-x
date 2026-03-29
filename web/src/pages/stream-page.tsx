@@ -91,6 +91,9 @@ export function StreamPage() {
         onNavigateToNode={(nodeType, nodeId) =>
           navigate(`/projects/${projectId}/trail/${nodeType}/${nodeId}`)
         }
+        onNavigateGraph={(_nodeType, _nodeId, _filterType) =>
+          navigate(`/projects/${projectId}/graph`)
+        }
         onAction={(action, item) => {
           console.log("Stream action:", action, item.id);
         }}

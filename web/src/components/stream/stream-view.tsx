@@ -8,6 +8,7 @@ interface StreamViewProps {
   recently: StreamItemType[];
   emerging: StreamItemType[];
   onNavigateToNode?: (nodeType: string, nodeId: number) => void;
+  onNavigateGraph?: (nodeType: string, nodeId: number, filterType: string) => void;
   onAction?: (action: string, item: StreamItemType) => void;
 }
 
@@ -16,6 +17,7 @@ export function StreamView({
   recently,
   emerging,
   onNavigateToNode,
+  onNavigateGraph,
   onAction,
 }: StreamViewProps) {
   const isEmpty =
@@ -43,6 +45,7 @@ export function StreamView({
               key={item.id}
               item={item}
               onNavigate={onNavigateToNode}
+              onNavigateGraph={onNavigateGraph}
               onAction={onAction}
             />
           ))}
@@ -56,6 +59,7 @@ export function StreamView({
               key={item.id}
               item={item}
               onNavigate={onNavigateToNode}
+              onNavigateGraph={onNavigateGraph}
               onAction={onAction}
             />
           ))}
@@ -69,6 +73,7 @@ export function StreamView({
               key={item.id}
               item={item}
               onNavigate={onNavigateToNode}
+              onNavigateGraph={onNavigateGraph}
               onAction={onAction}
             />
           ))}

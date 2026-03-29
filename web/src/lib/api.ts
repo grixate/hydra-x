@@ -314,6 +314,7 @@ export type StreamItem = {
   node_id: number;
   urgency: "action" | "info" | "emerging";
   timestamp: string;
+  connections: Record<string, number>;
   metadata: Record<string, unknown>;
 };
 
