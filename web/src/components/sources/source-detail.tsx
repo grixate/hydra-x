@@ -30,8 +30,8 @@ export function SourceDetail({
     return (
       <Card>
         <CardContent className="p-8">
-          <p className="font-display text-3xl text-[var(--ink)]">Select a source</p>
-          <p className="mt-3 text-sm text-[var(--ink-soft)]">
+          <p className="text-3xl text-foreground">Select a source</p>
+          <p className="mt-3 text-sm text-muted-foreground">
             Choose a source to inspect chunked evidence, processing state, and everything downstream that depends on it.
           </p>
         </CardContent>
@@ -82,19 +82,19 @@ export function SourceDetail({
                 {source.processing_status}
               </Badge>
             </div>
-            <span className="text-xs text-[var(--ink-soft)]">
+            <span className="text-xs text-muted-foreground">
               {source.source_chunk_count} chunks · {formatDate(source.updated_at)}
             </span>
           </div>
-          <CardTitle className="font-display text-4xl">{source.title}</CardTitle>
+          <CardTitle className="text-4xl">{source.title}</CardTitle>
           <CardDescription>
             Trace this source into linked insights and requirements, or inspect the exact indexed chunks below.
           </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="grid gap-4 lg:grid-cols-2">
-            <div className="rounded-[1.4rem] border border-[var(--line)] bg-[var(--paper-strong)] p-4">
-              <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-[var(--ink-soft)]">
+            <div className="rounded-[1.4rem] border border-border bg-[var(--paper-strong)] p-4">
+              <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-muted-foreground">
                 Related insights
               </p>
               <div className="mt-3 space-y-3">
@@ -107,24 +107,24 @@ export function SourceDetail({
                       className="flex w-full items-start justify-between gap-3 rounded-xl bg-white/70 px-4 py-3 text-left transition hover:bg-white"
                     >
                       <div>
-                        <p className="font-medium text-[var(--ink)]">{insight.title}</p>
-                        <p className="mt-1 text-sm text-[var(--ink-soft)]">
+                        <p className="font-medium text-foreground">{insight.title}</p>
+                        <p className="mt-1 text-sm text-muted-foreground">
                           {insight.evidence.length} evidence links
                         </p>
                       </div>
-                      <Link2 className="mt-1 h-4 w-4 shrink-0 text-[var(--ink-soft)]" />
+                      <Link2 className="mt-1 h-4 w-4 shrink-0 text-muted-foreground" />
                     </button>
                   ))
                 ) : (
-                  <p className="text-sm text-[var(--ink-soft)]">
+                  <p className="text-sm text-muted-foreground">
                     No insight has cited this source yet.
                   </p>
                 )}
               </div>
             </div>
 
-            <div className="rounded-[1.4rem] border border-[var(--line)] bg-[var(--paper-strong)] p-4">
-              <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-[var(--ink-soft)]">
+            <div className="rounded-[1.4rem] border border-border bg-[var(--paper-strong)] p-4">
+              <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-muted-foreground">
                 Related requirements
               </p>
               <div className="mt-3 space-y-3">
@@ -137,16 +137,16 @@ export function SourceDetail({
                       className="flex w-full items-start justify-between gap-3 rounded-xl bg-white/70 px-4 py-3 text-left transition hover:bg-white"
                     >
                       <div>
-                        <p className="font-medium text-[var(--ink)]">{requirement.title}</p>
-                        <p className="mt-1 text-sm text-[var(--ink-soft)]">
+                        <p className="font-medium text-foreground">{requirement.title}</p>
+                        <p className="mt-1 text-sm text-muted-foreground">
                           {requirement.grounded ? "Grounded requirement" : "Needs review"}
                         </p>
                       </div>
-                      <Link2 className="mt-1 h-4 w-4 shrink-0 text-[var(--ink-soft)]" />
+                      <Link2 className="mt-1 h-4 w-4 shrink-0 text-muted-foreground" />
                     </button>
                   ))
                 ) : (
-                  <p className="text-sm text-[var(--ink-soft)]">
+                  <p className="text-sm text-muted-foreground">
                     No requirement currently depends on this source.
                   </p>
                 )}
@@ -156,12 +156,12 @@ export function SourceDetail({
 
           <Separator className="my-6" />
 
-          <div className="rounded-[1.4rem] border border-[var(--line)] bg-white/60 p-4">
-            <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-[var(--ink-soft)]">
+          <div className="rounded-[1.4rem] border border-border bg-white/60 p-4">
+            <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-muted-foreground">
               Raw source
             </p>
             <ScrollArea className="mt-4 h-[14rem] pr-4">
-              <p className="whitespace-pre-wrap text-sm leading-8 text-[var(--ink-soft)]">
+              <p className="whitespace-pre-wrap text-sm leading-8 text-muted-foreground">
                 {source.content}
               </p>
             </ScrollArea>
@@ -183,18 +183,18 @@ export function SourceDetail({
                 <AccordionItem
                   key={chunk.id}
                   value={String(chunk.id)}
-                  className="rounded-[1.4rem] border border-[var(--line)] bg-[var(--paper-strong)] px-4"
+                  className="rounded-[1.4rem] border border-border bg-[var(--paper-strong)] px-4"
                 >
                   <AccordionTrigger className="hover:no-underline">
                     <div className="flex flex-col items-start text-left">
-                      <span className="font-medium text-[var(--ink)]">Chunk {chunk.ordinal + 1}</span>
-                      <span className="text-xs text-[var(--ink-soft)]">
+                      <span className="font-medium text-foreground">Chunk {chunk.ordinal + 1}</span>
+                      <span className="text-xs text-muted-foreground">
                         {chunk.token_count} tokens
                       </span>
                     </div>
                   </AccordionTrigger>
                   <AccordionContent className="pb-4">
-                    <p className="whitespace-pre-wrap text-sm leading-7 text-[var(--ink-soft)]">
+                    <p className="whitespace-pre-wrap text-sm leading-7 text-muted-foreground">
                       {chunk.content}
                     </p>
                     <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -213,8 +213,8 @@ export function SourceDetail({
               ))}
             </Accordion>
           ) : (
-            <div className="rounded-[1.4rem] border border-dashed border-[var(--line)] bg-[var(--paper-strong)] p-6">
-              <p className="inline-flex items-center gap-2 text-sm text-[var(--ink-soft)]">
+            <div className="rounded-[1.4rem] border border-dashed border-border bg-[var(--paper-strong)] p-6">
+              <p className="inline-flex items-center gap-2 text-sm text-muted-foreground">
                 <Compass className="h-4 w-4" />
                 Chunks will appear here when processing completes.
               </p>

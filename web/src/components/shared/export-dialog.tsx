@@ -79,7 +79,7 @@ export function ExportDialog({
                     <CardTitle className="text-base">{path.label}</CardTitle>
                   </CardHeader>
                   <CardContent className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <code className="overflow-x-auto rounded-2xl bg-[var(--paper-strong)] px-4 py-3 text-xs text-[var(--ink-soft)]">
+                    <code className="overflow-x-auto rounded-2xl bg-[var(--paper-strong)] px-4 py-3 text-xs text-muted-foreground">
                       {path.value}
                     </code>
                     <Button
@@ -104,7 +104,7 @@ export function ExportDialog({
             </div>
           ) : (
             <Card>
-              <CardContent className="p-6 text-sm leading-7 text-[var(--ink-soft)]">
+              <CardContent className="p-6 text-sm leading-7 text-muted-foreground">
                 Run the export once to materialize the markdown narrative, JSON snapshot, and transcript bundle paths for this project.
               </CardContent>
             </Card>

@@ -282,6 +282,8 @@ export const api = {
     request<ProductTask[]>(`/projects/${projectId}/tasks`),
   createTask: (projectId: number, payload: { title: string; body: string; priority?: string }) =>
     request<ProductTask>(`/projects/${projectId}/tasks`, { method: "POST", body: JSON.stringify({ task: payload }) }),
+  updateTask: (projectId: number, id: number, payload: Partial<ProductTask>) =>
+    request<ProductTask>(`/projects/${projectId}/tasks/${id}`, { method: "PATCH", body: JSON.stringify({ task: payload }) }),
   // Learnings
   listLearnings: (projectId: number) =>
     request<Learning[]>(`/projects/${projectId}/learnings`),
@@ -292,6 +294,9 @@ export const api = {
     request<GraphFlag[]>(`/projects/${projectId}/graph/flags`),
   resolveGraphFlag: (projectId: number, flagId: number) =>
     request<GraphFlag>(`/projects/${projectId}/graph/flags/${flagId}/resolve`, { method: "POST", body: JSON.stringify({ resolved_by: "operator" }) }),
+  // Graph nodes (for visualization)
+  getGraphNodes: (projectId: number) =>
+    request<{ nodes: Array<{ id: string; db_id: number; node_type: string; title: string; status: string; body_excerpt: string }>; edges: Array<{ id: string; source: string; target: string; kind: string; weight: number }> }>(`/projects/${projectId}/graph/nodes`),
   // Graph health
   getGraphHealth: (projectId: number) =>
     request<Record<string, unknown>>(`/projects/${projectId}/graph/health`),

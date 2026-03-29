@@ -18,7 +18,7 @@ export function CitationFootnotes({
       {citations.map((citation, index) => (
         <div key={`${citation.source_chunk_id ?? index}-${index}`} className="space-y-2 text-sm">
           <EvidenceLink label={`[${index + 1}] ${citation.source_chunk?.source_title ?? "Source"}`} onClick={() => onReveal?.(citation)} />
-          <p className="text-[var(--ink-soft)]">
+          <p className="text-muted-foreground">
             {citation.quote ?? citation.source_chunk?.content ?? citation.content}
           </p>
         </div>

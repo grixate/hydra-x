@@ -15,7 +15,7 @@ export function EvidenceChain({
   return (
     <Card>
       <CardHeader className="pb-4">
-        <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-[var(--ink-soft)]">
+        <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-muted-foreground">
           Traceability chain
         </p>
         <CardTitle>Source → insight → requirement</CardTitle>
@@ -28,12 +28,12 @@ export function EvidenceChain({
               onClick={() => onSelectInsight?.(insight.id)}
               className="text-left"
             >
-              <p className="font-semibold text-[var(--ink)]">{insight.title}</p>
+              <p className="font-semibold text-foreground">{insight.title}</p>
             </button>
-            <p className="mt-2 text-sm text-[var(--ink-soft)]">{insight.body}</p>
-            <div className="mt-4 space-y-3 border-l border-[var(--line)] pl-4">
+            <p className="mt-2 text-sm text-muted-foreground">{insight.body}</p>
+            <div className="mt-4 space-y-3 border-l border-border pl-4">
               {insight.evidence.map((evidence, index) => (
-                <div key={`${evidence.source_chunk_id}-${index}`} className="text-sm text-[var(--ink-soft)]">
+                <div key={`${evidence.source_chunk_id}-${index}`} className="text-sm text-muted-foreground">
                   <EvidenceLink
                     label={evidence.source_chunk?.source_title ?? "Source chunk"}
                     onClick={

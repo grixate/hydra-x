@@ -9,7 +9,7 @@ export function Surface({
   return (
     <section
       className={cn(
-        "rounded-[2rem] border border-[var(--line)] bg-white/75 shadow-[0_24px_80px_rgba(30,25,22,0.08)] backdrop-blur-md",
+        "rounded-[2rem] border border-border bg-white/75 shadow-[0_24px_80px_rgba(30,25,22,0.08)] backdrop-blur-md",
         className,
       )}
     >

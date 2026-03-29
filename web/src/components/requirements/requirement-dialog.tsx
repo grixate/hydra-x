@@ -139,7 +139,7 @@ export function RequirementDialog({
               <Label>Linked insights</Label>
               <Badge variant="accent">{selectedInsightIds.length} selected</Badge>
             </div>
-            <ScrollArea className="h-[18rem] rounded-[1.4rem] border border-[var(--line)] bg-white/60 p-4">
+            <ScrollArea className="h-[18rem] rounded-[1.4rem] border border-border bg-white/60 p-4">
               <div className="space-y-3">
                 {insights.map((insight) => {
                   const checked = selectedInsightIds.includes(insight.id);
@@ -147,7 +147,7 @@ export function RequirementDialog({
                   return (
                     <label
                       key={insight.id}
-                      className="flex items-start gap-3 rounded-[1.1rem] border border-[var(--line)] bg-[var(--paper-strong)] p-3"
+                      className="flex items-start gap-3 rounded-[1.1rem] border border-border bg-[var(--paper-strong)] p-3"
                     >
                       <Checkbox
                         checked={checked}
@@ -155,12 +155,12 @@ export function RequirementDialog({
                       />
                       <div className="space-y-1">
                         <div className="flex items-center gap-2">
-                          <p className="text-sm font-semibold text-[var(--ink)]">{insight.title}</p>
+                          <p className="text-sm font-semibold text-foreground">{insight.title}</p>
                           <Badge variant={insight.status === "accepted" ? "success" : "neutral"}>
                             {insight.status}
                           </Badge>
                         </div>
-                        <p className="line-clamp-3 text-sm text-[var(--ink-soft)]">{insight.body}</p>
+                        <p className="line-clamp-3 text-sm text-muted-foreground">{insight.body}</p>
                       </div>
                     </label>
                   );

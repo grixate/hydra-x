@@ -37,8 +37,8 @@ export function NodeList<T extends NodeItem>({
     return (
       <Card>
         <CardContent className="flex flex-col items-center justify-center py-12 text-center">
-          <NodeTypeIcon nodeType={nodeType} className="mb-3 h-8 w-8 text-[var(--ink-soft)]" />
-          <p className="text-sm text-[var(--ink-soft)]">
+          <NodeTypeIcon nodeType={nodeType} className="mb-3 h-8 w-8 text-muted-foreground" />
+          <p className="text-sm text-muted-foreground">
             {emptyMessage ?? `No ${nodeTypeLabel(nodeType).toLowerCase()}s yet.`}
           </p>
         </CardContent>
@@ -62,8 +62,8 @@ export function NodeList<T extends NodeItem>({
               className={cn(
                 "w-full rounded-[1.3rem] border p-4 text-left transition-colors",
                 selectedId === item.id
-                  ? "border-[var(--ink)] bg-[var(--ink)] text-[var(--paper)]"
-                  : "border-[var(--line)] bg-[rgba(255,252,247,0.88)] hover:border-[var(--accent)]",
+                  ? "border-foreground bg-foreground text-background"
+                  : "border-border bg-[rgba(255,252,247,0.88)] hover:border-primary",
               )}
             >
               <div className="flex items-start justify-between gap-2">

@@ -13,7 +13,7 @@ export function ProcessingProgress({ progress }: { progress?: SourceProgress | n
     <Card>
       <CardContent className="p-4">
       <div className="flex items-start gap-3">
-        <div className="mt-1 rounded-full bg-[var(--accent-faint)] p-2 text-[var(--ink)]">
+        <div className="mt-1 rounded-full bg-[var(--accent-faint)] p-2 text-foreground">
           {progress.status === "failed" ? (
             <AlertTriangle className="h-4 w-4" />
           ) : progress.status === "completed" ? (
@@ -27,12 +27,12 @@ export function ProcessingProgress({ progress }: { progress?: SourceProgress | n
             <Badge variant={progress.status === "failed" ? "danger" : "accent"}>
               {progress.status}
             </Badge>
-            {progress.stage ? <span className="text-xs text-[var(--ink-soft)]">{progress.stage}</span> : null}
+            {progress.stage ? <span className="text-xs text-muted-foreground">{progress.stage}</span> : null}
             {progress.chunk_count ? (
-              <span className="text-xs text-[var(--ink-soft)]">{progress.chunk_count} chunks</span>
+              <span className="text-xs text-muted-foreground">{progress.chunk_count} chunks</span>
             ) : null}
           </div>
-          <p className="text-sm text-[var(--ink-soft)]">
+          <p className="text-sm text-muted-foreground">
             {progress.error ??
               (progress.status === "completed"
                 ? "Source indexing finished and the research corpus is ready for retrieval."

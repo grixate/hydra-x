@@ -683,20 +683,20 @@ export function App() {
             <CardContent className="px-6 py-5">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
               <div>
-                <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-[var(--ink-soft)]">
+                <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-muted-foreground">
                   Product layer workspace
                 </p>
-                <h1 className="mt-2 font-display text-5xl text-[var(--ink)]">
+                <h1 className="mt-2 text-5xl text-foreground">
                   {activeProject?.name ?? "Hydra Product"}
                 </h1>
-                <p className="mt-3 max-w-2xl text-sm leading-7 text-[var(--ink-soft)]">
+                <p className="mt-3 max-w-2xl text-sm leading-7 text-muted-foreground">
                   A research notebook front-end for grounded chat, evidence-backed insights, and traceable requirements.
                 </p>
               </div>
 
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
                 <label className="relative block min-w-[18rem]">
-                  <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--ink-soft)]" />
+                  <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                   <Input
                     className="pl-10"
                     value={search}
@@ -816,8 +816,8 @@ export function App() {
                 <div className="grid gap-6 2xl:grid-cols-[minmax(0,1.1fr)_minmax(24rem,0.9fr)]">
                   <div className="space-y-6">
                     <Card className="overflow-hidden">
-                      <CardHeader className="border-b border-[var(--line)] bg-[linear-gradient(135deg,rgba(245,207,124,0.2),rgba(158,98,61,0.04))]">
-                        <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-[var(--ink-soft)]">
+                      <CardHeader className="border-b border-border bg-[linear-gradient(135deg,rgba(245,207,124,0.2),rgba(158,98,61,0.04))]">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-muted-foreground">
                           Ingestion desk
                         </p>
                         <CardTitle>Bring evidence into the corpus</CardTitle>
@@ -827,10 +827,10 @@ export function App() {
                       </CardHeader>
                       <CardContent className="flex flex-col gap-4 pt-6 sm:flex-row sm:items-center sm:justify-between">
                         <div>
-                          <p className="text-sm font-medium text-[var(--ink)]">
+                          <p className="text-sm font-medium text-foreground">
                             {counts.sources} tracked sources across the active product workspace.
                           </p>
-                          <p className="mt-2 text-sm text-[var(--ink-soft)]">
+                          <p className="mt-2 text-sm text-muted-foreground">
                             New material is chunked, embedded, and made available to chat, insights, and requirements.
                           </p>
                         </div>

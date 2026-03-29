@@ -20,7 +20,7 @@ export function SourceList({
       <CardHeader className="pb-4">
         <div className="flex items-end justify-between">
           <div>
-            <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-[var(--ink-soft)]">
+            <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-muted-foreground">
               Corpus
             </p>
             <CardTitle className="mt-2">Indexed sources</CardTitle>
@@ -40,8 +40,8 @@ export function SourceList({
                 className={cn(
                   "flex w-full items-start gap-4 rounded-[1.5rem] border p-4 text-left transition",
                   selectedSourceId === source.id
-                    ? "border-[var(--ink)] bg-[var(--ink)] text-[var(--paper)]"
-                    : "border-[var(--line)] bg-white/55 text-[var(--ink)] hover:border-[var(--accent)] hover:bg-white",
+                    ? "border-foreground bg-foreground text-background"
+                    : "border-border bg-white/55 text-foreground hover:border-primary hover:bg-white",
                 )}
               >
                 <div
@@ -60,7 +60,7 @@ export function SourceList({
                   <div
                     className={cn(
                       "mt-2 flex flex-wrap items-center gap-2 text-xs",
-                      selectedSourceId === source.id ? "text-white/70" : "text-[var(--ink-soft)]",
+                      selectedSourceId === source.id ? "text-white/70" : "text-muted-foreground",
                     )}
                   >
                     <Badge
@@ -75,7 +75,7 @@ export function SourceList({
                   <p
                     className={cn(
                       "mt-3 line-clamp-2 text-sm",
-                      selectedSourceId === source.id ? "text-white/85" : "text-[var(--ink-soft)]",
+                      selectedSourceId === source.id ? "text-white/85" : "text-muted-foreground",
                     )}
                   >
                     {source.content}

@@ -57,7 +57,7 @@ export function StreamPage() {
     return (
       <div className="p-6">
         <Card>
-          <CardContent className="py-8 text-center text-sm text-[var(--ink-soft)]">
+          <CardContent className="py-8 text-center text-sm text-muted-foreground">
             {error}
           </CardContent>
         </Card>
@@ -79,7 +79,7 @@ export function StreamPage() {
   return (
     <div className="space-y-6 p-6">
       <div className="flex items-center justify-between">
-        <h1 className="font-display text-xl font-semibold">Stream</h1>
+        <h1 className="text-xl font-semibold">Stream</h1>
         <Button variant="ghost" size="sm" onClick={refreshStream}>
           Refresh
         </Button>
@@ -89,7 +89,7 @@ export function StreamPage() {
         recently={stream.recently}
         emerging={stream.emerging}
         onNavigateToNode={(nodeType, nodeId) =>
-          navigate(`/product/${projectId}/trail/${nodeType}/${nodeId}`)
+          navigate(`/projects/${projectId}/trail/${nodeType}/${nodeId}`)
         }
       />
     </div>

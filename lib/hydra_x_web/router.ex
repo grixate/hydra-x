@@ -36,6 +36,8 @@ defmodule HydraXWeb.Router do
 
     get "/product", PageController, :product
     get "/product/*path", PageController, :product
+    get "/projects", PageController, :product
+    get "/projects/*path", PageController, :product
   end
 
   scope "/", HydraXWeb do
@@ -124,7 +126,8 @@ defmodule HydraXWeb.Router do
     # Stream
     get "/projects/:project_id/stream", StreamAPIController, :index
 
-    # Graph trail
+    # Graph visualization
+    get "/projects/:project_id/graph/nodes", GraphNodesAPIController, :index
     get "/projects/:project_id/graph/trail", GraphTrailAPIController, :show
 
     # Decisions CRUD

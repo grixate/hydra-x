@@ -19,13 +19,13 @@ export function MessageBubble({
         className={cn(
           "max-w-3xl rounded-[1.7rem] px-5 py-4 shadow-[0_16px_40px_rgba(26,20,16,0.08)]",
           assistant
-            ? "bg-white text-[var(--ink)]"
-            : "bg-[var(--ink)] text-[var(--paper)]",
+            ? "bg-white text-foreground"
+            : "bg-foreground text-background",
         )}
       >
         <div className="mb-3 flex items-center justify-between gap-6 text-[10px] font-bold uppercase tracking-[0.24em]">
           <span>{assistant ? "Hydra agent" : "Operator"}</span>
-          <span className={assistant ? "text-[var(--ink-soft)]" : "text-white/60"}>
+          <span className={assistant ? "text-muted-foreground" : "text-white/60"}>
             {formatDate(message.inserted_at)}
           </span>
         </div>

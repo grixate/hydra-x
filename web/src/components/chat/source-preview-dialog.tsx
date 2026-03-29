@@ -44,7 +44,7 @@ export function SourcePreviewDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-5">
-          <div className="mt-6 rounded-[1.5rem] bg-white/65 p-5 text-sm leading-8 text-[var(--ink-soft)]">
+          <div className="mt-6 rounded-[1.5rem] bg-white/65 p-5 text-sm leading-8 text-muted-foreground">
             {citation?.quote ?? citation?.source_chunk?.content ?? citation?.content}
           </div>
 

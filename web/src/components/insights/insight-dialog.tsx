@@ -152,7 +152,7 @@ export function InsightDialog({
               <Label>Evidence chunks</Label>
               <Badge variant="accent">{selectedChunkIds.length} selected</Badge>
             </div>
-            <ScrollArea className="h-[18rem] rounded-[1.4rem] border border-[var(--line)] bg-white/60 p-4">
+            <ScrollArea className="h-[18rem] rounded-[1.4rem] border border-border bg-white/60 p-4">
               <div className="space-y-3">
                 {chunkOptions.map((chunk) => {
                   const checked = selectedChunkIds.includes(chunk.id);
@@ -160,20 +160,20 @@ export function InsightDialog({
                   return (
                     <label
                       key={chunk.id}
-                      className="flex items-start gap-3 rounded-[1.1rem] border border-[var(--line)] bg-[var(--paper-strong)] p-3"
+                      className="flex items-start gap-3 rounded-[1.1rem] border border-border bg-[var(--paper-strong)] p-3"
                     >
                       <Checkbox
                         checked={checked}
                         onCheckedChange={(next) => toggleChunk(chunk.id, next === true)}
                       />
                       <div className="space-y-1">
-                        <p className="text-sm font-semibold text-[var(--ink)]">
+                        <p className="text-sm font-semibold text-foreground">
                           {chunk.label}
-                          <span className="ml-2 text-xs font-normal text-[var(--ink-soft)]">
+                          <span className="ml-2 text-xs font-normal text-muted-foreground">
                             chunk {chunk.ordinal + 1}
                           </span>
                         </p>
-                        <p className="line-clamp-3 text-sm text-[var(--ink-soft)]">{chunk.content}</p>
+                        <p className="line-clamp-3 text-sm text-muted-foreground">{chunk.content}</p>
                       </div>
                     </label>
                   );

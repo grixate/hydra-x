@@ -24,7 +24,7 @@ export function InsightList({
       <CardHeader className="pb-4">
         <div className="flex items-end justify-between">
           <div>
-            <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-[var(--ink-soft)]">
+            <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-muted-foreground">
               Research synthesis
             </p>
             <CardTitle className="mt-2">Insights</CardTitle>
@@ -39,7 +39,7 @@ export function InsightList({
             {groups.map((group) => (
               <div key={group.label} className="space-y-3">
                 <div className="flex items-center justify-between">
-                  <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-[var(--ink-soft)]">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-muted-foreground">
                     {group.label}
                   </p>
                   <Badge variant="neutral">{group.items.length}</Badge>
@@ -52,8 +52,8 @@ export function InsightList({
                     className={cn(
                       "w-full rounded-[1.4rem] border p-4 text-left transition",
                       selectedInsightId === insight.id
-                        ? "border-[var(--ink)] bg-[var(--ink)] text-[var(--paper)]"
-                        : "border-[var(--line)] bg-white/60 hover:border-[var(--accent)] hover:bg-white",
+                        ? "border-foreground bg-foreground text-background"
+                        : "border-border bg-white/60 hover:border-primary hover:bg-white",
                     )}
                   >
                     <div className="flex items-center justify-between gap-3">
@@ -67,7 +67,7 @@ export function InsightList({
                         "mt-3 line-clamp-3 text-sm",
                         selectedInsightId === insight.id
                           ? "text-white/75"
-                          : "text-[var(--ink-soft)]",
+                          : "text-muted-foreground",
                       )}
                     >
                       {insight.body}
@@ -77,7 +77,7 @@ export function InsightList({
                         "mt-3 text-xs",
                         selectedInsightId === insight.id
                           ? "text-white/60"
-                          : "text-[var(--ink-soft)]",
+                          : "text-muted-foreground",
                       )}
                     >
                       {insight.evidence.length} evidence links · {relativeLabel(insight.updated_at)}

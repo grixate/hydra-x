@@ -70,7 +70,7 @@ export function ChatPanel({
           <CardHeader className="pb-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-[var(--ink-soft)]">
+                <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-muted-foreground">
                   Conversations
                 </p>
                 <CardTitle className="mt-2">Grounded chat</CardTitle>
@@ -100,8 +100,8 @@ export function ChatPanel({
                     className={cn(
                       "w-full rounded-[1.4rem] border p-4 text-left transition",
                       selectedConversationId === conversation.id
-                        ? "border-[var(--ink)] bg-[var(--ink)] text-[var(--paper)]"
-                        : "border-[var(--line)] bg-white/60 hover:border-[var(--accent)] hover:bg-white",
+                        ? "border-foreground bg-foreground text-background"
+                        : "border-border bg-white/60 hover:border-primary hover:bg-white",
                     )}
                   >
                     <div className="flex items-center justify-between gap-3">
@@ -119,7 +119,7 @@ export function ChatPanel({
                         "mt-2 line-clamp-2 text-sm",
                         selectedConversationId === conversation.id
                           ? "text-white/70"
-                          : "text-[var(--ink-soft)]",
+                          : "text-muted-foreground",
                       )}
                     >
                       {conversation.latest_message?.content ?? "No turns yet."}
@@ -129,7 +129,7 @@ export function ChatPanel({
                         "mt-3 text-xs",
                         selectedConversationId === conversation.id
                           ? "text-white/60"
-                          : "text-[var(--ink-soft)]",
+                          : "text-muted-foreground",
                       )}
                     >
                       {conversation.message_count} turns · {relativeLabel(conversation.updated_at)}
@@ -142,10 +142,10 @@ export function ChatPanel({
         </Card>
 
         <Card className="flex min-h-[44rem] flex-col overflow-hidden">
-          <CardHeader className="border-b border-[var(--line)] pb-5">
+          <CardHeader className="border-b border-border pb-5">
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div>
-                <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-[var(--ink-soft)]">
+                <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-muted-foreground">
                   Active thread
                 </p>
                 <CardTitle className="mt-2 text-3xl">
@@ -179,11 +179,11 @@ export function ChatPanel({
                     />
                   ))
                 ) : (
-                  <div className="rounded-[1.8rem] border border-dashed border-[var(--line)] bg-[var(--paper-strong)] p-8 text-center">
-                    <p className="font-display text-3xl text-[var(--ink)]">
+                  <div className="rounded-[1.8rem] border border-dashed border-border bg-[var(--paper-strong)] p-8 text-center">
+                    <p className="text-3xl text-foreground">
                       Open a line of inquiry
                     </p>
-                    <p className="mt-3 text-sm text-[var(--ink-soft)]">
+                    <p className="mt-3 text-sm text-muted-foreground">
                       Ask the researcher for grounded synthesis or the strategist for traceable requirement framing.
                     </p>
                   </div>
@@ -202,7 +202,7 @@ export function ChatPanel({
                 placeholder="Ask for a synthesis, request new requirements, or interrogate the evidence graph."
               />
               <div className="mt-4 flex items-center justify-between gap-4">
-                <p className="text-sm text-[var(--ink-soft)]">
+                <p className="text-sm text-muted-foreground">
                   Product-mode conversations automatically route through the grounded tool path.
                 </p>
                 <Button disabled={!activeConversation || submitting || !draft.trim()}>

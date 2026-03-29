@@ -23,7 +23,7 @@ export function RequirementList({
       <CardHeader className="pb-4">
         <div className="flex items-end justify-between">
           <div>
-            <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-[var(--ink-soft)]">
+            <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-muted-foreground">
               Strategy map
             </p>
             <CardTitle className="mt-2">Requirements</CardTitle>
@@ -38,7 +38,7 @@ export function RequirementList({
             {groups.map((group) => (
               <div key={group.label} className="space-y-3">
                 <div className="flex items-center justify-between">
-                  <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-[var(--ink-soft)]">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-muted-foreground">
                     {group.label}
                   </p>
                   <Badge variant="neutral">{group.items.length}</Badge>
@@ -51,8 +51,8 @@ export function RequirementList({
                     className={cn(
                       "w-full rounded-[1.4rem] border p-4 text-left transition",
                       selectedRequirementId === requirement.id
-                        ? "border-[var(--ink)] bg-[var(--ink)] text-[var(--paper)]"
-                        : "border-[var(--line)] bg-white/60 hover:border-[var(--accent)] hover:bg-white",
+                        ? "border-foreground bg-foreground text-background"
+                        : "border-border bg-white/60 hover:border-primary hover:bg-white",
                     )}
                   >
                     <div className="flex items-center justify-between gap-3">
@@ -66,7 +66,7 @@ export function RequirementList({
                         "mt-3 line-clamp-3 text-sm",
                         selectedRequirementId === requirement.id
                           ? "text-white/75"
-                          : "text-[var(--ink-soft)]",
+                          : "text-muted-foreground",
                       )}
                     >
                       {requirement.body}
@@ -76,7 +76,7 @@ export function RequirementList({
                         "mt-3 text-xs",
                         selectedRequirementId === requirement.id
                           ? "text-white/60"
-                          : "text-[var(--ink-soft)]",
+                          : "text-muted-foreground",
                       )}
                     >
                       {requirement.insights.length} linked insights ·{" "}

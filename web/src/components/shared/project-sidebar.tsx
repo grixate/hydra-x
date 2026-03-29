@@ -41,11 +41,11 @@ export function ProjectSidebar({
     <Card className="flex h-full flex-col overflow-hidden bg-[rgba(250,244,235,0.9)]">
       <CardHeader className="pb-4">
         <div className="flex items-center gap-3">
-          <div className="flex h-12 w-12 items-center justify-center rounded-[1.3rem] bg-[var(--ink)] text-[var(--paper)]">
+          <div className="flex h-12 w-12 items-center justify-center rounded-[1.3rem] bg-foreground text-background">
             <Bot className="h-6 w-6" />
           </div>
           <div>
-            <p className="text-[10px] font-bold uppercase tracking-[0.35em] text-[var(--ink-soft)]">
+            <p className="text-[10px] font-bold uppercase tracking-[0.35em] text-muted-foreground">
               Hydra Product
             </p>
             <CardTitle className="mt-1 text-2xl">Research Ledger</CardTitle>
@@ -65,7 +65,7 @@ export function ProjectSidebar({
         </div>
 
         <div>
-          <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-[var(--ink-soft)]">
+          <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-muted-foreground">
             Projects
           </p>
           <ScrollArea className="mt-3 h-[15rem] pr-2">
@@ -78,8 +78,8 @@ export function ProjectSidebar({
                   className={cn(
                     "w-full rounded-[1.4rem] border px-4 py-3 text-left transition",
                     selectedProjectId === project.id
-                      ? "border-[var(--ink)] bg-[var(--ink)] text-[var(--paper)]"
-                      : "border-transparent bg-white/60 text-[var(--ink)] hover:border-[var(--line)] hover:bg-white",
+                      ? "border-foreground bg-foreground text-background"
+                      : "border-transparent bg-white/60 text-foreground hover:border-border hover:bg-white",
                   )}
                 >
                   <div className="flex items-start justify-between gap-3">
@@ -90,7 +90,7 @@ export function ProjectSidebar({
                           "mt-1 text-xs",
                           selectedProjectId === project.id
                             ? "text-[rgba(250,244,235,0.75)]"
-                            : "text-[var(--ink-soft)]",
+                            : "text-muted-foreground",
                         )}
                       >
                         {project.slug}
@@ -109,7 +109,7 @@ export function ProjectSidebar({
         <Separator />
 
         <div className="space-y-2">
-          <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-[var(--ink-soft)]">
+          <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-muted-foreground">
             Workspace
           </p>
           {sections.map((section) => {
@@ -123,8 +123,8 @@ export function ProjectSidebar({
                 className={cn(
                   "flex w-full items-center justify-between rounded-[1.3rem] px-4 py-3 text-left transition",
                   activeSection === section.id
-                    ? "bg-[var(--accent)] text-[var(--ink)]"
-                    : "text-[var(--ink-soft)] hover:bg-white/70 hover:text-[var(--ink)]",
+                    ? "bg-primary text-foreground"
+                    : "text-muted-foreground hover:bg-white/70 hover:text-foreground",
                 )}
               >
                 <span className="inline-flex items-center gap-3">
@@ -143,12 +143,12 @@ export function ProjectSidebar({
           })}
         </div>
 
-        <div className="mt-auto rounded-[1.5rem] border border-[var(--line)] bg-[rgba(255,255,255,0.72)] p-4">
-          <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-[var(--ink-soft)]">
+        <div className="mt-auto rounded-[1.5rem] border border-border bg-[rgba(255,255,255,0.72)] p-4">
+          <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-muted-foreground">
             Session
           </p>
-          <p className="mt-2 font-display text-xl text-[var(--ink)]">Operator-authenticated</p>
-          <p className="mt-2 text-sm text-[var(--ink-soft)]">
+          <p className="mt-2 text-xl text-foreground">Operator-authenticated</p>
+          <p className="mt-2 text-sm text-muted-foreground">
             The frontend reuses the Phoenix operator session for both REST and Channels.
           </p>
           <Button asChild variant="secondary" className="mt-4 w-full justify-center">

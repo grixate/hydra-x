@@ -21,8 +21,8 @@ export function RequirementDetail({
     return (
       <Card>
         <CardContent className="p-8">
-          <p className="font-display text-3xl text-[var(--ink)]">Select a requirement</p>
-          <p className="mt-3 text-sm text-[var(--ink-soft)]">
+          <p className="text-3xl text-foreground">Select a requirement</p>
+          <p className="mt-3 text-sm text-muted-foreground">
             Requirement decisions should read like the final layer of a traceability graph, not loose product opinion.
           </p>
         </CardContent>
@@ -47,8 +47,8 @@ export function RequirementDetail({
               </Button>
             ) : null}
           </div>
-          <h2 className="mt-4 font-display text-4xl text-[var(--ink)]">{requirement.title}</h2>
-          <p className="mt-5 text-base leading-8 text-[var(--ink-soft)]">{requirement.body}</p>
+          <h2 className="mt-4 text-4xl text-foreground">{requirement.title}</h2>
+          <p className="mt-5 text-base leading-8 text-muted-foreground">{requirement.body}</p>
           {!requirement.grounded ? <div className="mt-6"><UngroundedWarning /></div> : null}
         </CardContent>
       </Card>

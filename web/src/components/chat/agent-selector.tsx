@@ -36,7 +36,7 @@ export function AgentSelector({
           ))}
         </SelectContent>
       </Select>
-      <p className="text-sm text-[var(--ink-soft)]">{current.description}</p>
+      <p className="text-sm text-muted-foreground">{current.description}</p>
     </div>
   );
 }

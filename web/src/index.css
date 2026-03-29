@@ -1,43 +1,40 @@
-@import "@fontsource/fraunces/700.css";
-@import "@fontsource/fraunces/600.css";
-@import "@fontsource/manrope/500.css";
-@import "@fontsource/manrope/700.css";
 @import "tailwindcss";
 
 :root {
-  --radius: 1rem;
-  --paper: #f6efe3;
-  --paper-strong: #efe4d4;
-  --ink: #211b16;
-  --ink-soft: #6d5d4e;
-  --line: rgba(56, 43, 31, 0.12);
-  --accent: #f5cf7c;
-  --accent-strong: #f0bc3d;
-  --accent-faint: rgba(245, 207, 124, 0.28);
-  --background: #f6efe3;
-  --foreground: #211b16;
-  --card: rgba(255, 252, 247, 0.88);
-  --card-foreground: #211b16;
-  --popover: rgba(255, 252, 247, 0.96);
-  --popover-foreground: #211b16;
-  --primary: #211b16;
-  --primary-foreground: #f6efe3;
-  --secondary: #efe4d4;
-  --secondary-foreground: #211b16;
-  --muted: #efe4d4;
-  --muted-foreground: #6d5d4e;
-  --accent-foreground: #211b16;
-  --destructive: #b93824;
-  --border: rgba(56, 43, 31, 0.12);
-  --input: rgba(56, 43, 31, 0.12);
-  --ring: rgba(240, 188, 61, 0.45);
+  --radius: 0.625rem;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.965 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.965 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.965 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --sidebar-background: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.965 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
 }
 
 @theme inline {
-  --radius-sm: calc(var(--radius) - 6px);
+  --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 6px);
+  --radius-xl: calc(var(--radius) + 4px);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -56,6 +53,14 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-sidebar-background: var(--sidebar-background);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
 }
 
 html,
@@ -66,25 +71,11 @@ body,
 
 body {
   margin: 0;
-  font-family: "Manrope", sans-serif;
-  color: var(--ink);
-  background:
-    radial-gradient(circle at top left, rgba(245, 207, 124, 0.24), transparent 24rem),
-    radial-gradient(circle at bottom right, rgba(114, 76, 49, 0.12), transparent 28rem),
-    linear-gradient(180deg, #fbf7f0 0%, #f2eadf 100%);
-  background-attachment: fixed;
-}
-
-body::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  background-image:
-    linear-gradient(rgba(77, 54, 37, 0.028) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(77, 54, 37, 0.028) 1px, transparent 1px);
-  background-size: 100% 36px, 36px 100%;
-  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.55), transparent 82%);
+  font-family:
+    ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  color: var(--foreground);
+  background: var(--background);
 }
 
 * {
@@ -94,22 +85,4 @@ body::before {
 
 a {
   color: inherit;
-}
-
-.font-display {
-  font-family: "Fraunces", serif;
-  letter-spacing: -0.03em;
-}
-
-.app-shell {
-  position: relative;
-}
-
-.app-shell::after {
-  content: "";
-  position: absolute;
-  inset: 1.5rem;
-  border: 1px solid rgba(46, 33, 23, 0.05);
-  border-radius: 2rem;
-  pointer-events: none;
 }

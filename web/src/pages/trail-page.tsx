@@ -59,7 +59,7 @@ export function TrailPage() {
     return (
       <div className="p-6">
         <Card>
-          <CardContent className="py-8 text-center text-sm text-[var(--ink-soft)]">
+          <CardContent className="py-8 text-center text-sm text-muted-foreground">
             {error}
           </CardContent>
         </Card>
@@ -80,14 +80,14 @@ export function TrailPage() {
 
   return (
     <div className="space-y-6 p-6">
-      <h1 className="font-display text-xl font-semibold">Trail</h1>
+      <h1 className="text-xl font-semibold">Trail</h1>
       <TrailView
         center={center}
         upstream={upstream}
         downstream={downstream}
         flags={flags}
         onNodeClick={(type, id) =>
-          navigate(`/product/${projectId}/trail/${type}/${id}`)
+          navigate(`/projects/${projectId}/trail/${type}/${id}`)
         }
       />
     </div>

@@ -80,7 +80,7 @@ export function ConversationGroundingRail({
   return (
     <Card className="flex min-h-[44rem] flex-col">
       <CardHeader className="pb-4">
-        <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-[var(--ink-soft)]">
+        <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-muted-foreground">
           Grounding rail
         </p>
         <CardTitle>Evidence in this thread</CardTitle>
@@ -92,12 +92,12 @@ export function ConversationGroundingRail({
             <div className="space-y-6">
               <section className="space-y-3">
                 <div className="flex items-center justify-between">
-                  <p className="text-sm font-semibold text-[var(--ink)]">Cited sources</p>
+                  <p className="text-sm font-semibold text-foreground">Cited sources</p>
                   <Badge variant="neutral">{citedSources.length}</Badge>
                 </div>
                 {citedSources.length > 0 ? (
                   citedSources.map((source) => (
-                    <div key={source.sourceId} className="rounded-[1.2rem] border border-[var(--line)] bg-[var(--paper-strong)] p-4">
+                    <div key={source.sourceId} className="rounded-[1.2rem] border border-border bg-[var(--paper-strong)] p-4">
                       <EvidenceLink label={source.sourceTitle} onClick={() => onSelectSource(source.sourceId)} />
                       <div className="mt-3 flex flex-wrap gap-2">
                         <Badge variant="accent">{source.citationCount} citations</Badge>
@@ -115,7 +115,7 @@ export function ConversationGroundingRail({
 
               <section className="space-y-3">
                 <div className="flex items-center justify-between">
-                  <p className="text-sm font-semibold text-[var(--ink)]">Linked insights</p>
+                  <p className="text-sm font-semibold text-foreground">Linked insights</p>
                   <Badge variant="neutral">{linkedInsights.length}</Badge>
                 </div>
                 {linkedInsights.length > 0 ? (
@@ -124,15 +124,15 @@ export function ConversationGroundingRail({
                       key={insight.id}
                       type="button"
                       onClick={() => onSelectInsight(insight.id)}
-                      className="w-full rounded-[1.2rem] border border-[var(--line)] bg-white/70 p-4 text-left transition hover:bg-white"
+                      className="w-full rounded-[1.2rem] border border-border bg-white/70 p-4 text-left transition hover:bg-white"
                     >
                       <div className="flex items-center justify-between gap-3">
-                        <p className="font-medium text-[var(--ink)]">{insight.title}</p>
+                        <p className="font-medium text-foreground">{insight.title}</p>
                         <Badge variant={insight.status === "accepted" ? "success" : "neutral"}>
                           {insight.status}
                         </Badge>
                       </div>
-                      <p className="mt-2 line-clamp-2 text-sm text-[var(--ink-soft)]">{insight.body}</p>
+                      <p className="mt-2 line-clamp-2 text-sm text-muted-foreground">{insight.body}</p>
                     </button>
                   ))
                 ) : (
@@ -145,7 +145,7 @@ export function ConversationGroundingRail({
 
               <section className="space-y-3">
                 <div className="flex items-center justify-between">
-                  <p className="text-sm font-semibold text-[var(--ink)]">Downstream requirements</p>
+                  <p className="text-sm font-semibold text-foreground">Downstream requirements</p>
                   <Badge variant="neutral">{linkedRequirements.length}</Badge>
                 </div>
                 {linkedRequirements.length > 0 ? (
@@ -154,15 +154,15 @@ export function ConversationGroundingRail({
                       key={requirement.id}
                       type="button"
                       onClick={() => onSelectRequirement(requirement.id)}
-                      className="w-full rounded-[1.2rem] border border-[var(--line)] bg-white/70 p-4 text-left transition hover:bg-white"
+                      className="w-full rounded-[1.2rem] border border-border bg-white/70 p-4 text-left transition hover:bg-white"
                     >
                       <div className="flex items-center justify-between gap-3">
-                        <p className="font-medium text-[var(--ink)]">{requirement.title}</p>
+                        <p className="font-medium text-foreground">{requirement.title}</p>
                         <Badge variant={requirement.grounded ? "success" : "warning"}>
                           {requirement.grounded ? "grounded" : "review"}
                         </Badge>
                       </div>
-                      <p className="mt-2 line-clamp-2 text-sm text-[var(--ink-soft)]">{requirement.body}</p>
+                      <p className="mt-2 line-clamp-2 text-sm text-muted-foreground">{requirement.body}</p>
                     </button>
                   ))
                 ) : (
@@ -193,7 +193,7 @@ function EmptyRail({
   text: string;
 }) {
   return (
-    <div className="rounded-[1.2rem] border border-dashed border-[var(--line)] bg-[var(--paper-strong)] p-4 text-sm text-[var(--ink-soft)]">
+    <div className="rounded-[1.2rem] border border-dashed border-border bg-[var(--paper-strong)] p-4 text-sm text-muted-foreground">
       <p className="inline-flex items-center gap-2">
         {icon}
         {text}

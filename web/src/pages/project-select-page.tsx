@@ -13,7 +13,7 @@ export function ProjectSelectPage() {
       .listProjects()
       .then((projects) => {
         if (projects.length > 0) {
-          navigate(`/product/${projects[0].id}`, { replace: true });
+          navigate(`/projects/${projects[0].id}`, { replace: true });
         } else {
           setError("No projects yet. Create one to get started.");
         }
@@ -23,9 +23,9 @@ export function ProjectSelectPage() {
 
   if (error) {
     return (
-      <div className="flex h-screen items-center justify-center bg-[var(--paper)]">
+      <div className="flex h-screen items-center justify-center bg-background">
         <Card className="max-w-sm">
-          <CardContent className="py-8 text-center text-sm text-[var(--ink-soft)]">
+          <CardContent className="py-8 text-center text-sm text-muted-foreground">
             {error}
           </CardContent>
         </Card>
@@ -34,7 +34,7 @@ export function ProjectSelectPage() {
   }
 
   return (
-    <div className="flex h-screen items-center justify-center bg-[var(--paper)]">
+    <div className="flex h-screen items-center justify-center bg-background">
       <Skeleton className="h-8 w-48" />
     </div>
   );

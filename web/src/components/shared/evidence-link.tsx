@@ -16,7 +16,7 @@ export function EvidenceLink({
       className="inline-flex items-center gap-2 text-left"
     >
       <Badge variant="accent">{label}</Badge>
-      <span className="inline-flex items-center gap-1 text-xs text-[var(--ink-soft)]">
+      <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
         <Link2 className="h-3.5 w-3.5" />
         evidence
       </span>

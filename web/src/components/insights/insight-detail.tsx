@@ -20,8 +20,8 @@ export function InsightDetail({
     return (
       <Card>
         <CardContent className="p-8">
-          <p className="font-display text-3xl text-[var(--ink)]">Select an insight</p>
-          <p className="mt-3 text-sm text-[var(--ink-soft)]">
+          <p className="text-3xl text-foreground">Select an insight</p>
+          <p className="mt-3 text-sm text-muted-foreground">
             Insights stay attached to their evidence chain so downstream strategy never floats free of the corpus.
           </p>
         </CardContent>
@@ -47,11 +47,11 @@ export function InsightDetail({
               </Button>
             ) : null}
           </div>
-          <h2 className="mt-4 font-display text-4xl text-[var(--ink)]">{insight.title}</h2>
-          <p className="mt-5 text-base leading-8 text-[var(--ink-soft)]">{insight.body}</p>
+          <h2 className="mt-4 text-4xl text-foreground">{insight.title}</h2>
+          <p className="mt-5 text-base leading-8 text-muted-foreground">{insight.body}</p>
           {insight.linked_requirements.length > 0 ? (
             <div className="mt-6">
-              <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-[var(--ink-soft)]">
+              <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-muted-foreground">
                 Downstream requirements
               </p>
               <div className="mt-3 flex flex-wrap gap-2">

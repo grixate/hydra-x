@@ -44,12 +44,12 @@ export function ProjectOverview({
   return (
     <div className="space-y-6">
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(23rem,0.8fr)]">
-        <Card className="overflow-hidden bg-[linear-gradient(135deg,rgba(33,27,22,0.96),rgba(79,57,39,0.92))] text-[var(--paper)]">
+        <Card className="overflow-hidden bg-[linear-gradient(135deg,rgba(33,27,22,0.96),rgba(79,57,39,0.92))] text-background">
           <CardContent className="p-8">
             <p className="text-[10px] font-bold uppercase tracking-[0.35em] text-white/60">
               Project command surface
             </p>
-            <h2 className="mt-4 max-w-2xl font-display text-5xl leading-tight">
+            <h2 className="mt-4 max-w-2xl text-5xl leading-tight">
               {project?.name ?? "Hydra Product"}
             </h2>
             <p className="mt-4 max-w-2xl text-sm leading-7 text-white/72">
@@ -71,7 +71,7 @@ export function ProjectOverview({
 
         <Card>
           <CardHeader className="pb-4">
-            <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-[var(--ink-soft)]">
+            <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-muted-foreground">
               Coverage snapshot
             </p>
             <CardTitle>Readiness pulse</CardTitle>
@@ -134,7 +134,7 @@ export function ProjectOverview({
       <div className="grid gap-6 xl:grid-cols-3">
         <Card>
           <CardHeader className="pb-4">
-            <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-[var(--ink-soft)]">
+            <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-muted-foreground">
               Quick routes
             </p>
             <CardTitle>Move through the graph</CardTitle>
@@ -214,13 +214,13 @@ function MetricRow({
   detail: string;
 }) {
   return (
-    <div className="rounded-[1.4rem] border border-[var(--line)] bg-[var(--paper-strong)] px-4 py-3">
+    <div className="rounded-[1.4rem] border border-border bg-[var(--paper-strong)] px-4 py-3">
       <div className="flex items-center justify-between gap-4">
         <div>
-          <p className="text-sm font-semibold text-[var(--ink)]">{label}</p>
-          <p className="text-xs text-[var(--ink-soft)]">{detail}</p>
+          <p className="text-sm font-semibold text-foreground">{label}</p>
+          <p className="text-xs text-muted-foreground">{detail}</p>
         </div>
-        <p className="font-display text-2xl text-[var(--ink)]">{value}</p>
+        <p className="text-2xl text-foreground">{value}</p>
       </div>
     </div>
   );
@@ -242,11 +242,11 @@ function StatCard({
       <CardContent className="p-6">
         <div className="flex items-center justify-between gap-4">
           <div>
-            <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-[var(--ink-soft)]">
+            <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-muted-foreground">
               {title}
             </p>
-            <p className="mt-3 font-display text-4xl text-[var(--ink)]">{value}</p>
-            <p className="mt-2 text-sm text-[var(--ink-soft)]">{detail}</p>
+            <p className="mt-3 text-4xl text-foreground">{value}</p>
+            <p className="mt-2 text-sm text-muted-foreground">{detail}</p>
           </div>
           <Badge variant={accent}>{detail}</Badge>
         </div>
@@ -268,13 +268,13 @@ function ActionRow({
     <button
       type="button"
       onClick={onClick}
-      className="flex w-full items-center justify-between gap-4 rounded-[1.4rem] border border-[var(--line)] bg-white/70 px-4 py-4 text-left transition hover:border-[var(--accent-strong)] hover:bg-white"
+      className="flex w-full items-center justify-between gap-4 rounded-[1.4rem] border border-border bg-white/70 px-4 py-4 text-left transition hover:border-[var(--accent-strong)] hover:bg-white"
     >
       <div>
-        <p className="font-semibold text-[var(--ink)]">{title}</p>
-        <p className="mt-1 text-sm text-[var(--ink-soft)]">{detail}</p>
+        <p className="font-semibold text-foreground">{title}</p>
+        <p className="mt-1 text-sm text-muted-foreground">{detail}</p>
       </div>
-      <ArrowRight className="h-4 w-4 text-[var(--ink-soft)]" />
+      <ArrowRight className="h-4 w-4 text-muted-foreground" />
     </button>
   );
 }
@@ -299,14 +299,14 @@ function ActivityCard({
   return (
     <Card>
       <CardHeader className="pb-4">
-        <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-[var(--ink-soft)]">
+        <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-muted-foreground">
           {eyebrow}
         </p>
         <CardTitle>{title}</CardTitle>
       </CardHeader>
       <CardContent>
         {items.length === 0 ? (
-          <div className="rounded-[1.4rem] border border-dashed border-[var(--line)] bg-[var(--paper-strong)] p-5 text-sm text-[var(--ink-soft)]">
+          <div className="rounded-[1.4rem] border border-dashed border-border bg-[var(--paper-strong)] p-5 text-sm text-muted-foreground">
             {empty}
           </div>
         ) : (
@@ -316,9 +316,9 @@ function ActivityCard({
                 {index > 0 ? <Separator className="mb-3" /> : null}
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <p className="font-semibold text-[var(--ink)]">{item.label}</p>
-                    <p className="mt-1 text-sm text-[var(--ink-soft)]">{item.meta}</p>
-                    <p className="mt-2 text-xs text-[var(--ink-soft)]">
+                    <p className="font-semibold text-foreground">{item.label}</p>
+                    <p className="mt-1 text-sm text-muted-foreground">{item.meta}</p>
+                    <p className="mt-2 text-xs text-muted-foreground">
                       {item.updated_at ? formatDate(item.updated_at) : "Pending"}
                     </p>
                   </div>

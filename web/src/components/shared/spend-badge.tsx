@@ -14,7 +14,7 @@ export function SpendBadge({ costCents, tokens, className }: SpendBadgeProps) {
   return (
     <span
       className={cn(
-        "inline-flex items-center text-[10px] text-[var(--ink-soft)]",
+        "inline-flex items-center text-[10px] text-muted-foreground",
         className,
       )}
       title={tokens ? `${tokens.toLocaleString()} tokens` : undefined}

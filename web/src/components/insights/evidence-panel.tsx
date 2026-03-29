@@ -13,7 +13,7 @@ export function EvidencePanel({
   return (
     <Card>
       <CardHeader className="pb-4">
-        <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-[var(--ink-soft)]">
+        <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-muted-foreground">
           Evidence panel
         </p>
         <CardTitle>Notebook references</CardTitle>
@@ -29,7 +29,7 @@ export function EvidencePanel({
                   : undefined
               }
             />
-            <p className="mt-3 text-sm leading-7 text-[var(--ink-soft)]">{item.quote}</p>
+            <p className="mt-3 text-sm leading-7 text-muted-foreground">{item.quote}</p>
           </div>
         ))}
       </CardContent>

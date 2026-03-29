@@ -45,12 +45,12 @@ export function UploadZone({
 
   return (
     <Card className="overflow-hidden">
-      <CardHeader className="border-b border-[var(--line)] bg-[linear-gradient(135deg,rgba(245,207,124,0.2),rgba(158,98,61,0.04))]">
-        <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-[var(--ink-soft)]">
+      <CardHeader className="border-b border-border bg-[linear-gradient(135deg,rgba(245,207,124,0.2),rgba(158,98,61,0.04))]">
+        <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-muted-foreground">
           Ingestion Desk
         </p>
         <div className="mt-3 flex items-center gap-3">
-          <NotebookPen className="h-5 w-5 text-[var(--ink)]" />
+          <NotebookPen className="h-5 w-5 text-foreground" />
           <CardTitle>Add evidence to the project corpus</CardTitle>
         </div>
         <CardDescription>
@@ -73,8 +73,8 @@ export function UploadZone({
           disabled={Boolean(file)}
         />
 
-        <label className="flex cursor-pointer items-center justify-between rounded-[1.5rem] border border-dashed border-[var(--line)] bg-[var(--paper-strong)] px-4 py-4 transition hover:border-[var(--accent)] hover:bg-white">
-          <span className="inline-flex items-center gap-3 text-sm text-[var(--ink)]">
+        <label className="flex cursor-pointer items-center justify-between rounded-[1.5rem] border border-dashed border-border bg-[var(--paper-strong)] px-4 py-4 transition hover:border-primary hover:bg-white">
+          <span className="inline-flex items-center gap-3 text-sm text-foreground">
             <FileUp className="h-4 w-4" />
             {file ? file.name : "Attach a markdown, text, json, or pdf file"}
           </span>
@@ -83,13 +83,13 @@ export function UploadZone({
             type="file"
             onChange={(event) => setFile(event.target.files?.[0] ?? null)}
           />
-          <span className="text-xs uppercase tracking-[0.24em] text-[var(--ink-soft)]">
+          <span className="text-xs uppercase tracking-[0.24em] text-muted-foreground">
             Optional
           </span>
         </label>
 
         <div className="flex items-center justify-between gap-4">
-          <p className="max-w-xl text-sm text-[var(--ink-soft)]">
+          <p className="max-w-xl text-sm text-muted-foreground">
             Every source is chunked, embedded, and streamed into the evidence graph so chat, insights, and requirements all stay grounded.
           </p>
           <Button disabled={submitting || (!file && !content.trim())}>
