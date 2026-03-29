@@ -8,6 +8,7 @@ interface StreamViewProps {
   recently: StreamItemType[];
   emerging: StreamItemType[];
   onNavigateToNode?: (nodeType: string, nodeId: number) => void;
+  onAction?: (action: string, item: StreamItemType) => void;
 }
 
 export function StreamView({
@@ -15,6 +16,7 @@ export function StreamView({
   recently,
   emerging,
   onNavigateToNode,
+  onAction,
 }: StreamViewProps) {
   const isEmpty =
     rightNow.length === 0 && recently.length === 0 && emerging.length === 0;
@@ -22,10 +24,10 @@ export function StreamView({
   if (isEmpty) {
     return (
       <Card>
-        <CardContent className="flex flex-col items-center justify-center py-12 text-center">
+        <CardContent className="flex flex-col items-center justify-center py-16 text-center">
           <p className="text-lg font-semibold">You're caught up</p>
-          <p className="mt-1 text-sm text-ink-soft">
-            No items need your attention right now.
+          <p className="mt-1 text-sm text-muted-foreground">
+            Nothing needs your attention right now.
           </p>
         </CardContent>
       </Card>
@@ -33,38 +35,41 @@ export function StreamView({
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {rightNow.length > 0 && (
-        <StreamSection title="Right now" count={rightNow.length}>
+        <StreamSection title="Needs attention" count={rightNow.length}>
           {rightNow.map((item) => (
             <StreamItem
               key={item.id}
               item={item}
               onNavigate={onNavigateToNode}
+              onAction={onAction}
             />
           ))}
         </StreamSection>
       )}
 
       {recently.length > 0 && (
-        <StreamSection title="Recently" count={recently.length}>
+        <StreamSection title="Recent activity" count={recently.length}>
           {recently.map((item) => (
             <StreamItem
               key={item.id}
               item={item}
               onNavigate={onNavigateToNode}
+              onAction={onAction}
             />
           ))}
         </StreamSection>
       )}
 
       {emerging.length > 0 && (
-        <StreamSection title="Emerging" count={emerging.length}>
+        <StreamSection title="On the horizon" count={emerging.length}>
           {emerging.map((item) => (
             <StreamItem
               key={item.id}
               item={item}
               onNavigate={onNavigateToNode}
+              onAction={onAction}
             />
           ))}
         </StreamSection>

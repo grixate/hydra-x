@@ -10,7 +10,7 @@ export function StreamSection({ title, count, children }: StreamSectionProps) {
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2">
-        <h3 className="text-[10px] font-bold uppercase tracking-[0.3em] text-ink-soft">
+        <h3 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
           {title}
         </h3>
         {count > 0 && (
@@ -19,7 +19,7 @@ export function StreamSection({ title, count, children }: StreamSectionProps) {
           </Badge>
         )}
       </div>
-      <div className="space-y-2">{children}</div>
+      <div className="grid gap-3 md:grid-cols-2">{children}</div>
     </div>
   );
 }
