@@ -17,6 +17,7 @@ defmodule HydraX.Application do
         {DNSCluster, query: Application.get_env(:hydra_x, :dns_cluster_query) || :ignore},
         {Registry, keys: :unique, name: HydraX.ProcessRegistry},
         {Phoenix.PubSub, name: HydraX.PubSub},
+        HydraXWeb.BoardPresence,
         {Task.Supervisor, name: HydraX.TaskSupervisor},
         HydraX.Simulation.Registry,
         HydraX.Product.Propagation,

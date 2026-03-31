@@ -7,6 +7,7 @@ defmodule HydraXWeb.UserSocket do
   channel "project:*", HydraXWeb.ProjectChannel
   channel "source:*", HydraXWeb.SourceChannel
   channel "product_conversation:*", HydraXWeb.ProductConversationChannel
+  channel "board_session:*", HydraXWeb.BoardSessionChannel
 
   @impl true
   def connect(_params, socket, connect_info) do

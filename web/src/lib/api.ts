@@ -1,5 +1,8 @@
 import type {
   ArchitectureNode,
+  BoardEdge,
+  BoardNode,
+  BoardSession,
   Decision,
   DesignNode,
   Constraint,
@@ -329,6 +332,69 @@ export const api = {
   // Project counts
   getProjectCounts: (projectId: number) =>
     request<ProjectCounts>(`/projects/${projectId}/counts`),
+
+  // Board sessions
+  listBoardSessions: (projectId: number, status?: string) =>
+    request<BoardSession[]>(`/projects/${projectId}/board_sessions${status ? `?status=${status}` : ""}`),
+  createBoardSession: (projectId: number, payload: { title: string; description?: string }) =>
+    request<BoardSession>(`/projects/${projectId}/board_sessions`, {
+      method: "POST",
+      body: JSON.stringify({ board_session: payload }),
+    }),
+  getBoardSession: (projectId: number, sessionId: number) =>
+    request<BoardSession>(`/projects/${projectId}/board_sessions/${sessionId}`),
+  updateBoardSession: (projectId: number, sessionId: number, payload: Partial<BoardSession>) =>
+    request<BoardSession>(`/projects/${projectId}/board_sessions/${sessionId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ board_session: payload }),
+    }),
+  deleteBoardSession: (projectId: number, sessionId: number) =>
+    request<void>(`/projects/${projectId}/board_sessions/${sessionId}`, { method: "DELETE" }),
+
+  // Board nodes
+  listBoardNodes: (projectId: number, sessionId: number) =>
+    request<BoardNode[]>(`/projects/${projectId}/board_sessions/${sessionId}/nodes`),
+  createBoardNode: (projectId: number, sessionId: number, payload: {
+    node_type: string; title: string; body: string; created_by?: string;
+    metadata?: Record<string, unknown>;
+  }) =>
+    request<BoardNode>(`/projects/${projectId}/board_sessions/${sessionId}/nodes`, {
+      method: "POST",
+      body: JSON.stringify({ board_node: payload }),
+    }),
+  updateBoardNode: (projectId: number, sessionId: number, nodeId: number, payload: Partial<BoardNode>) =>
+    request<BoardNode>(`/projects/${projectId}/board_sessions/${sessionId}/nodes/${nodeId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ board_node: payload }),
+    }),
+  deleteBoardNode: (projectId: number, sessionId: number, nodeId: number) =>
+    request<void>(`/projects/${projectId}/board_sessions/${sessionId}/nodes/${nodeId}`, { method: "DELETE" }),
+  promoteBoardNode: (projectId: number, sessionId: number, nodeId: number) =>
+    request<{ board_node: BoardNode; promoted_node_type: string; promoted_node_id: number }>(
+      `/projects/${projectId}/board_sessions/${sessionId}/nodes/${nodeId}/promote`,
+      { method: "POST" },
+    ),
+  promoteBoardNodesBatch: (projectId: number, sessionId: number, nodeIds: number[]) =>
+    request<{ promoted_count: number; nodes: BoardNode[] }>(
+      `/projects/${projectId}/board_sessions/${sessionId}/nodes/promote_batch`,
+      { method: "POST", body: JSON.stringify({ node_ids: nodeIds }) },
+    ),
+  toggleBoardNodeReaction: (projectId: number, sessionId: number, nodeId: number, reaction: string, userId: string) =>
+    request<BoardNode>(
+      `/projects/${projectId}/board_sessions/${sessionId}/nodes/${nodeId}/react`,
+      { method: "POST", body: JSON.stringify({ reaction, user_id: userId }) },
+    ),
+
+  // Board edges
+  createBoardEdge: (projectId: number, sessionId: number, payload: {
+    from_board_node_id: number; to_board_node_id: number; kind: string;
+  }) =>
+    request<BoardEdge>(`/projects/${projectId}/board_sessions/${sessionId}/edges`, {
+      method: "POST",
+      body: JSON.stringify({ board_edge: payload }),
+    }),
+  deleteBoardEdge: (projectId: number, sessionId: number, edgeId: number) =>
+    request<void>(`/projects/${projectId}/board_sessions/${sessionId}/edges/${edgeId}`, { method: "DELETE" }),
 };
 
 export type StreamItem = {

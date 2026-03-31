@@ -395,6 +395,58 @@ defmodule HydraXWeb.ProductPayload do
     }
   end
 
+  def board_session_json(%HydraX.Product.BoardSession{} = s) do
+    nodes = loaded_assoc(s, :board_nodes)
+    draft_count = Enum.count(nodes, &(&1.status == "draft"))
+    promoted_count = Enum.count(nodes, &(&1.status == "promoted"))
+
+    %{
+      id: s.id,
+      project_id: s.project_id,
+      title: s.title,
+      description: s.description,
+      status: s.status,
+      created_by_user_id: s.created_by_user_id,
+      metadata: s.metadata || %{},
+      draft_node_count: draft_count,
+      promoted_node_count: promoted_count,
+      total_node_count: length(nodes),
+      inserted_at: s.inserted_at,
+      updated_at: s.updated_at
+    }
+  end
+
+  def board_node_json(%HydraX.Product.BoardNode{} = n) do
+    %{
+      id: n.id,
+      board_session_id: n.board_session_id,
+      project_id: n.project_id,
+      node_type: n.node_type,
+      title: n.title,
+      body: n.body,
+      status: n.status,
+      promoted_node_type: n.promoted_node_type,
+      promoted_node_id: n.promoted_node_id,
+      created_by: n.created_by,
+      metadata: n.metadata || %{},
+      inserted_at: n.inserted_at,
+      updated_at: n.updated_at
+    }
+  end
+
+  def board_edge_json(%HydraX.Product.BoardEdge{} = e) do
+    %{
+      id: e.id,
+      board_session_id: e.board_session_id,
+      from_board_node_id: e.from_board_node_id,
+      to_board_node_id: e.to_board_node_id,
+      kind: e.kind,
+      metadata: e.metadata || %{},
+      inserted_at: e.inserted_at,
+      updated_at: e.updated_at
+    }
+  end
+
   defp loaded_assoc(struct, key) do
     case Map.get(struct, key) do
       %Ecto.Association.NotLoaded{} -> []

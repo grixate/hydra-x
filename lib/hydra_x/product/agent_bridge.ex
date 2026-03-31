@@ -44,16 +44,23 @@ defmodule HydraX.Product.AgentBridge do
       Repo.get_by(ProductConversation, hydra_conversation_id: hydra_conversation.id)
       |> case do
         nil ->
-          conversation =
-            %ProductConversation{}
-            |> ProductConversation.changeset(%{
+          conversation_attrs = %{
               "project_id" => project.id,
               "hydra_conversation_id" => hydra_conversation.id,
               "persona" => persona,
               "title" => params["title"] || hydra_conversation.title,
               "status" => "active",
               "metadata" => params["metadata"] || %{}
-            })
+            }
+
+          conversation_attrs =
+            if params["board_session_id"],
+              do: Map.put(conversation_attrs, "board_session_id", params["board_session_id"]),
+              else: conversation_attrs
+
+          conversation =
+            %ProductConversation{}
+            |> ProductConversation.changeset(conversation_attrs)
             |> Repo.insert!()
 
           {conversation, true}
@@ -171,12 +178,17 @@ defmodule HydraX.Product.AgentBridge do
   end
 
   defp start_hydra_conversation!(project, agent, persona, params) do
+    board_session_id = params["board_session_id"]
+
     metadata =
       %{
         "product_project_id" => project.id,
         "product_project_slug" => project.slug,
         "product_persona" => persona
       }
+      |> then(fn m ->
+        if board_session_id, do: Map.put(m, "board_session_id", board_session_id), else: m
+      end)
       |> Map.merge(params["metadata"] || %{})
 
     {:ok, hydra_conversation} =

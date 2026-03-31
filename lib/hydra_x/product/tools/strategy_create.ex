@@ -2,6 +2,7 @@ defmodule HydraX.Product.Tools.StrategyCreate do
   @behaviour HydraX.Tool
 
   alias HydraX.Product
+  alias HydraX.Product.BoardAwareTools
   alias HydraX.Product.Graph
 
   @impl true
@@ -44,6 +45,14 @@ defmodule HydraX.Product.Tools.StrategyCreate do
 
   @impl true
   def execute(params, _context) do
+    if session_id = BoardAwareTools.board_session_id(params) do
+      BoardAwareTools.create_board_node(session_id, "strategy", params)
+    else
+      execute_graph(params)
+    end
+  end
+
+  defp execute_graph(params) do
     with {:ok, project_id} <- extract_project_id(params) do
       attrs = %{
         "title" => params[:title] || params["title"],

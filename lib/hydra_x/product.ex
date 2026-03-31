@@ -10,6 +10,9 @@ defmodule HydraX.Product do
   alias HydraX.Ingest.Parser
   alias HydraX.Memory
   alias HydraX.Product.ArchitectureNode
+  alias HydraX.Product.BoardEdge
+  alias HydraX.Product.BoardNode
+  alias HydraX.Product.BoardSession
   alias HydraX.Product.Citations
   alias HydraX.Product.Constraint
   alias HydraX.Product.Decision
@@ -959,6 +962,58 @@ defmodule HydraX.Product do
     Repo.delete(edge)
   end
 
+  @doc """
+  Return all graph nodes and edges for a project as a map suitable for the Graph LiveView.
+  """
+  def graph_data(project_or_id) do
+    project_id = project_id(project_or_id)
+
+    nodes =
+      Enum.flat_map(HydraX.Product.Graph.node_types(), fn type ->
+        case HydraX.Product.Graph.schema_for(type) do
+          nil ->
+            []
+
+          schema ->
+            try do
+              schema
+              |> where([r], r.project_id == ^project_id)
+              |> Repo.all()
+              |> Enum.map(fn record ->
+                %{
+                  id: record.id,
+                  type: type,
+                  title: Map.get(record, :title, ""),
+                  body: Map.get(record, :body, ""),
+                  status: Map.get(record, :status, "") || "active",
+                  metadata: Map.get(record, :metadata, %{}) || %{},
+                  inserted_at: Map.get(record, :inserted_at),
+                  updated_at: Map.get(record, :updated_at)
+                }
+              end)
+            rescue
+              _ -> []
+            end
+        end
+      end)
+
+    edges =
+      list_graph_edges(project_id)
+      |> Enum.map(fn e ->
+        %{
+          id: e.id,
+          from_type: e.from_node_type,
+          from_id: e.from_node_id,
+          to_type: e.to_node_type,
+          to_id: e.to_node_id,
+          kind: e.kind,
+          weight: e.weight
+        }
+      end)
+
+    %{nodes: nodes, edges: edges}
+  end
+
   # -------------------------------------------------------------------
   # Graph Flags
   # -------------------------------------------------------------------
@@ -1182,6 +1237,194 @@ defmodule HydraX.Product do
     |> TaskFeedback.changeset(Map.put(attrs, "task_id", task_id))
     |> Repo.insert()
   end
+
+  # -------------------------------------------------------------------
+  # Board Sessions
+  # -------------------------------------------------------------------
+
+  def list_board_sessions(project_or_id, opts \\ []) do
+    project_id = project_id(project_or_id)
+    status = Keyword.get(opts, :status)
+    search = Keyword.get(opts, :search)
+
+    BoardSession
+    |> where([s], s.project_id == ^project_id)
+    |> maybe_filter_product_record_status(status)
+    |> maybe_filter_title_body_search(search)
+    |> order_by([s], desc: s.updated_at)
+    |> Repo.all()
+  end
+
+  def get_board_session!(id) do
+    BoardSession
+    |> preload([:board_nodes, :board_edges])
+    |> Repo.get!(id)
+  end
+
+  def get_project_board_session!(project_or_id, id) do
+    project_id = project_id(project_or_id)
+
+    BoardSession
+    |> where([s], s.project_id == ^project_id and s.id == ^parse_integer(id))
+    |> preload([:board_nodes, :board_edges])
+    |> Repo.one!()
+  end
+
+  def create_board_session(project_or_id, attrs) when is_map(attrs) do
+    project_id = project_id(project_or_id)
+    attrs = normalize_product_record_attrs(attrs)
+
+    %BoardSession{}
+    |> BoardSession.changeset(Map.put(attrs, "project_id", project_id))
+    |> Repo.insert()
+    |> maybe_broadcast_project_record("board_session.created")
+  end
+
+  def update_board_session(%BoardSession{} = session, attrs) when is_map(attrs) do
+    attrs = normalize_product_record_attrs(attrs)
+
+    session
+    |> BoardSession.changeset(attrs)
+    |> Repo.update()
+    |> maybe_broadcast_project_record("board_session.updated")
+  end
+
+  def delete_board_session(%BoardSession{} = session) do
+    session
+    |> Repo.delete()
+    |> maybe_broadcast_project_record("board_session.deleted")
+  end
+
+  # -------------------------------------------------------------------
+  # Board Nodes
+  # -------------------------------------------------------------------
+
+  def list_board_nodes(session_id, opts \\ []) do
+    status = Keyword.get(opts, :status)
+    node_type = Keyword.get(opts, :node_type)
+
+    BoardNode
+    |> where([n], n.board_session_id == ^parse_integer(session_id))
+    |> maybe_filter_product_record_status(status)
+    |> maybe_filter_node_type(node_type)
+    |> order_by([n], desc: n.inserted_at)
+    |> Repo.all()
+  end
+
+  def get_board_node!(id), do: Repo.get!(BoardNode, parse_integer(id))
+
+  def get_session_board_node!(session_id, id) do
+    BoardNode
+    |> where([n], n.board_session_id == ^parse_integer(session_id) and n.id == ^parse_integer(id))
+    |> Repo.one!()
+  end
+
+  def create_board_node(session_id, attrs) when is_map(attrs) do
+    session = get_board_session!(parse_integer(session_id))
+    attrs = normalize_product_record_attrs(attrs)
+
+    %BoardNode{}
+    |> BoardNode.changeset(
+      attrs
+      |> Map.put("board_session_id", session.id)
+      |> Map.put("project_id", session.project_id)
+    )
+    |> Repo.insert()
+    |> tap(fn
+      {:ok, node} ->
+        ProductPubSub.broadcast_project_event(
+          session.project_id,
+          "board_node.created",
+          %{board_node: node, board_session_id: session.id}
+        )
+
+      _ ->
+        :ok
+    end)
+  end
+
+  def update_board_node(%BoardNode{} = node, attrs) when is_map(attrs) do
+    attrs = normalize_product_record_attrs(attrs)
+
+    node
+    |> BoardNode.changeset(attrs)
+    |> Repo.update()
+    |> maybe_broadcast_project_record("board_node.updated")
+  end
+
+  def delete_board_node(%BoardNode{} = node) do
+    node
+    |> Repo.delete()
+    |> maybe_broadcast_project_record("board_node.deleted")
+  end
+
+  # -------------------------------------------------------------------
+  # Board Edges
+  # -------------------------------------------------------------------
+
+  def create_board_edge(session_id, attrs) when is_map(attrs) do
+    attrs =
+      attrs
+      |> normalize_product_record_attrs()
+      |> Map.put("board_session_id", parse_integer(session_id))
+
+    %BoardEdge{}
+    |> BoardEdge.changeset(attrs)
+    |> Repo.insert()
+  end
+
+  def delete_board_edge(%BoardEdge{} = edge) do
+    Repo.delete(edge)
+  end
+
+  # -------------------------------------------------------------------
+  # Board Node Reactions
+  # -------------------------------------------------------------------
+
+  @reaction_types ~w(agree question flag star)
+
+  def toggle_board_node_reaction(node_id, reaction_type, user_id)
+      when reaction_type in @reaction_types do
+    node = Repo.get!(BoardNode, parse_integer(node_id))
+    reactions = get_in(node.metadata || %{}, ["reactions"]) || %{}
+
+    current_users = Map.get(reactions, reaction_type, [])
+
+    updated_users =
+      if user_id in current_users do
+        List.delete(current_users, user_id)
+      else
+        [user_id | current_users]
+      end
+
+    updated_reactions = Map.put(reactions, reaction_type, updated_users)
+    updated_metadata = Map.put(node.metadata || %{}, "reactions", updated_reactions)
+
+    node
+    |> BoardNode.changeset(%{metadata: updated_metadata})
+    |> Repo.update()
+    |> tap(fn
+      {:ok, updated} ->
+        ProductPubSub.broadcast_project_event(
+          updated.project_id,
+          "board_node.reaction_toggled",
+          %{
+            board_node_id: updated.id,
+            board_session_id: updated.board_session_id,
+            reaction: reaction_type,
+            user_id: user_id,
+            reactions: updated_reactions
+          }
+        )
+
+      _ ->
+        :ok
+    end)
+  end
+
+  # -------------------------------------------------------------------
+  # Prompt Context
+  # -------------------------------------------------------------------
 
   def prompt_context(conversation_or_metadata) do
     metadata = product_metadata(conversation_or_metadata)

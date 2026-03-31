@@ -2,6 +2,7 @@ defmodule HydraX.Product.Tools.ArchitectureCreate do
   @behaviour HydraX.Tool
 
   alias HydraX.Product
+  alias HydraX.Product.BoardAwareTools
   alias HydraX.Product.Graph
 
   @impl true
@@ -47,6 +48,14 @@ defmodule HydraX.Product.Tools.ArchitectureCreate do
 
   @impl true
   def execute(params, _context) do
+    if session_id = BoardAwareTools.board_session_id(params) do
+      BoardAwareTools.create_board_node(session_id, "architecture_node", params)
+    else
+      execute_graph(params)
+    end
+  end
+
+  defp execute_graph(params) do
     with {:ok, project_id} <- extract_project_id(params),
          {:ok, node} <- Product.create_architecture_node(project_id, params) do
       link_requirements(project_id, node.id, params)

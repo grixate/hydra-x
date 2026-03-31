@@ -343,6 +343,71 @@ export type TaskFeedback = {
   inserted_at?: string;
 };
 
+// Board types
+export type BoardNodePosition = { x: number; y: number };
+
+export type BoardNodeReactions = {
+  agree: string[];
+  question: string[];
+  flag: string[];
+  star: string[];
+};
+
+export type BoardSession = {
+  id: number;
+  project_id: number;
+  title: string;
+  description?: string | null;
+  status: string;
+  created_by_user_id?: string | null;
+  metadata: Record<string, unknown>;
+  draft_node_count: number;
+  promoted_node_count: number;
+  total_node_count: number;
+  inserted_at?: string;
+  updated_at?: string;
+};
+
+export type BoardNode = {
+  id: number;
+  board_session_id: number;
+  project_id: number;
+  node_type: string;
+  title: string;
+  body: string;
+  status: string;
+  promoted_node_type?: string | null;
+  promoted_node_id?: number | null;
+  created_by: string;
+  metadata: {
+    position?: BoardNodePosition;
+    reactions?: BoardNodeReactions;
+    source_id?: number;
+    [key: string]: unknown;
+  };
+  inserted_at?: string;
+  updated_at?: string;
+};
+
+export type BoardEdge = {
+  id: number;
+  board_session_id: number;
+  from_board_node_id: number;
+  to_board_node_id: number;
+  kind: string;
+  metadata: Record<string, unknown>;
+  inserted_at?: string;
+  updated_at?: string;
+};
+
+export type BoardPresenceUser = {
+  user_id: string;
+  name: string;
+  color: string;
+  cursor?: BoardNodePosition;
+  joined_at: string;
+};
+
 export type GraphDataNode = {
   id: string;
   node_type: string;

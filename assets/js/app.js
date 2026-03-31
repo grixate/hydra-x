@@ -25,12 +25,13 @@ import {LiveSocket} from "phoenix_live_view"
 import {hooks as colocatedHooks} from "phoenix-colocated/hydra_x"
 import topbar from "../vendor/topbar"
 import SimGraphHook from "./hooks/sim_graph_hook"
+import GraphVisualization from "./hooks/graph_visualization"
 
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 const liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
   params: {_csrf_token: csrfToken},
-  hooks: {...colocatedHooks, SimGraphHook},
+  hooks: {...colocatedHooks, SimGraphHook, GraphVisualization},
 })
 
 // Show progress bar on live navigation and form submits

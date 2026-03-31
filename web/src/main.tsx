@@ -22,6 +22,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           <Route path="stream" element={<StreamPage />} />
           <Route path="graph" element={<GraphPage />} />
           <Route path="board" element={<BoardPage />} />
+          <Route path="board/:sessionId" element={<BoardPage />} />
           <Route path="simulation" element={<SimulationPage />} />
           <Route path="chat" element={<AgentListPage />} />
           <Route path="chat/:persona" element={<AgentChatPage />} />

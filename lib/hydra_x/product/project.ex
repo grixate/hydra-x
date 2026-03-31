@@ -25,6 +25,7 @@ defmodule HydraX.Product.Project do
     has_many :insights, HydraX.Product.Insight
     has_many :requirements, HydraX.Product.Requirement
     has_many :product_conversations, HydraX.Product.ProductConversation
+    has_many :board_sessions, HydraX.Product.BoardSession
 
     timestamps(type: :utc_datetime_usec)
   end

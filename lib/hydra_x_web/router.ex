@@ -68,6 +68,12 @@ defmodule HydraXWeb.Router do
       live "/simulations/new", SimulationLive.Configure, :new
       live "/simulations/:id", SimulationLive.Show, :show
       live "/simulations/:id/report", SimulationLive.Report, :report
+
+      # Product surfaces
+      live "/projects/:project_id/stream", StreamLive
+      live "/projects/:project_id/graph", GraphLive
+      live "/projects/:project_id/board", BoardLive.Index, :index
+      live "/projects/:project_id/board/:id", BoardLive.Show, :show
     end
   end
 
@@ -210,6 +216,57 @@ defmodule HydraXWeb.Router do
     # Task feedback
     get "/projects/:project_id/tasks/:task_id/feedback", TaskFeedbackAPIController, :index
     post "/projects/:project_id/tasks/:task_id/feedback", TaskFeedbackAPIController, :create
+
+    # My Work
+    get "/projects/:project_id/my-work", MyWorkAPIController, :index
+    get "/projects/:project_id/agents/:agent_slug/work", AgentWorkAPIController, :show
+
+    # Board sessions
+    get "/projects/:project_id/board_sessions", BoardSessionAPIController, :index
+    post "/projects/:project_id/board_sessions", BoardSessionAPIController, :create
+    get "/projects/:project_id/board_sessions/:id", BoardSessionAPIController, :show
+    patch "/projects/:project_id/board_sessions/:id", BoardSessionAPIController, :update
+    delete "/projects/:project_id/board_sessions/:id", BoardSessionAPIController, :delete
+
+    # Board nodes (nested under sessions)
+    get "/projects/:project_id/board_sessions/:session_id/nodes", BoardNodeAPIController, :index
+
+    post "/projects/:project_id/board_sessions/:session_id/nodes",
+         BoardNodeAPIController,
+         :create
+
+    get "/projects/:project_id/board_sessions/:session_id/nodes/:id",
+        BoardNodeAPIController,
+        :show
+
+    patch "/projects/:project_id/board_sessions/:session_id/nodes/:id",
+          BoardNodeAPIController,
+          :update
+
+    delete "/projects/:project_id/board_sessions/:session_id/nodes/:id",
+           BoardNodeAPIController,
+           :delete
+
+    post "/projects/:project_id/board_sessions/:session_id/nodes/:id/promote",
+         BoardNodeAPIController,
+         :promote
+
+    post "/projects/:project_id/board_sessions/:session_id/nodes/:id/react",
+         BoardNodeAPIController,
+         :react
+
+    post "/projects/:project_id/board_sessions/:session_id/nodes/promote_batch",
+         BoardNodeAPIController,
+         :promote_batch
+
+    # Board edges
+    post "/projects/:project_id/board_sessions/:session_id/edges",
+         BoardEdgeAPIController,
+         :create
+
+    delete "/projects/:project_id/board_sessions/:session_id/edges/:id",
+           BoardEdgeAPIController,
+           :delete
   end
 
   # Other scopes may use custom stacks.

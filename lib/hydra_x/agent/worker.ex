@@ -61,7 +61,8 @@ defmodule HydraX.Agent.Worker do
       current_channel: conversation.channel,
       conversation_metadata: conversation.metadata || %{},
       product_project_id: get_in(conversation.metadata || %{}, ["product_project_id"]),
-      product_persona: get_in(conversation.metadata || %{}, ["product_persona"])
+      product_persona: get_in(conversation.metadata || %{}, ["product_persona"]),
+      board_session_id: get_in(conversation.metadata || %{}, ["board_session_id"])
     }
 
     results =
@@ -169,6 +170,7 @@ defmodule HydraX.Agent.Worker do
     arguments
     |> Map.put(:project_id, context.product_project_id)
     |> Map.put(:persona, context.product_persona)
+    |> maybe_put_board_session_id(context)
   end
 
   defp enrich_params(arguments, "insight_update", context) do
@@ -181,6 +183,35 @@ defmodule HydraX.Agent.Worker do
     arguments
     |> Map.put(:project_id, context.product_project_id)
     |> Map.put(:persona, context.product_persona)
+    |> maybe_put_board_session_id(context)
+  end
+
+  defp enrich_params(arguments, "decision_create", context) do
+    arguments
+    |> Map.put(:project_id, context.product_project_id)
+    |> Map.put(:persona, context.product_persona)
+    |> maybe_put_board_session_id(context)
+  end
+
+  defp enrich_params(arguments, "strategy_create", context) do
+    arguments
+    |> Map.put(:project_id, context.product_project_id)
+    |> Map.put(:persona, context.product_persona)
+    |> maybe_put_board_session_id(context)
+  end
+
+  defp enrich_params(arguments, "architecture_create", context) do
+    arguments
+    |> Map.put(:project_id, context.product_project_id)
+    |> Map.put(:persona, context.product_persona)
+    |> maybe_put_board_session_id(context)
+  end
+
+  defp enrich_params(arguments, "design_create", context) do
+    arguments
+    |> Map.put(:project_id, context.product_project_id)
+    |> Map.put(:persona, context.product_persona)
+    |> maybe_put_board_session_id(context)
   end
 
   defp enrich_params(arguments, "mcp_inspect", context) do
@@ -204,6 +235,10 @@ defmodule HydraX.Agent.Worker do
   end
 
   defp enrich_params(arguments, _name, _context), do: arguments
+
+  defp maybe_put_board_session_id(arguments, %{board_session_id: nil}), do: arguments
+  defp maybe_put_board_session_id(arguments, %{board_session_id: id}), do: Map.put(arguments, :board_session_id, id)
+  defp maybe_put_board_session_id(arguments, _context), do: arguments
 
   defp log_tool_warning(conversation, tool_name, params, reason) do
     Telemetry.tool_execution(tool_name, :error, %{reason: inspect(reason)})
