@@ -5,10 +5,15 @@ import { StreamView } from "@/components/stream/stream-view";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent } from "@/components/ui/card";
+import { UniversalInput } from "@/components/chat/universal-input";
+import { GraphChatCard } from "@/components/chat/chat-card";
+import { useChatState } from "@/hooks/use-chat-state";
 
 export function StreamPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
+  const pid = Number(projectId);
+
   const [stream, setStream] = useState<{
     right_now: StreamItem[];
     recently: StreamItem[];
@@ -18,8 +23,9 @@ export function StreamPage() {
   const [error, setError] = useState<string | null>(null);
   const mountedRef = useRef(true);
 
+  const chat = useChatState(pid, "memory");
+
   useEffect(() => {
-    const pid = Number(projectId);
     if (!projectId || isNaN(pid)) return;
 
     mountedRef.current = true;
@@ -44,7 +50,6 @@ export function StreamPage() {
   }, [projectId]);
 
   const refreshStream = () => {
-    const pid = Number(projectId);
     if (!projectId || isNaN(pid)) return;
     setError(null);
     api
@@ -77,27 +82,52 @@ export function StreamPage() {
   }
 
   return (
-    <div className="space-y-6 p-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Stream</h1>
-        <Button variant="ghost" size="sm" onClick={refreshStream}>
-          Refresh
-        </Button>
+    <div className="relative h-full overflow-hidden">
+      <div className="h-full space-y-6 overflow-auto p-6 pb-28">
+        <div className="flex items-center justify-between">
+          <h1 className="text-xl font-semibold">Stream</h1>
+          <Button variant="ghost" size="sm" onClick={refreshStream}>
+            Refresh
+          </Button>
+        </div>
+        <StreamView
+          rightNow={stream.right_now}
+          recently={stream.recently}
+          emerging={stream.emerging}
+          onNavigateToNode={(nodeType, nodeId) =>
+            navigate(`/projects/${projectId}/trail/${nodeType}/${nodeId}`)
+          }
+          onNavigateGraph={(nodeType, nodeId, _filterType) =>
+            navigate(
+              `/projects/${projectId}/graph?focus=${nodeType}-${nodeId}&highlight=${nodeType}-${nodeId}`,
+            )
+          }
+          onAction={(action, item) => {
+            console.log("Stream action:", action, item.id);
+          }}
+        />
       </div>
-      <StreamView
-        rightNow={stream.right_now}
-        recently={stream.recently}
-        emerging={stream.emerging}
-        onNavigateToNode={(nodeType, nodeId) =>
-          navigate(`/projects/${projectId}/trail/${nodeType}/${nodeId}`)
-        }
-        onNavigateGraph={(_nodeType, _nodeId, _filterType) =>
-          navigate(`/projects/${projectId}/graph`)
-        }
-        onAction={(action, item) => {
-          console.log("Stream action:", action, item.id);
-        }}
+
+      <UniversalInput
+        surface="stream"
+        projectId={pid}
+        onSubmit={chat.handleChatSubmit}
+        currentAgent={chat.activeTab?.agent ?? "memory"}
+        onAgentChange={chat.handleAgentChange}
       />
+
+      {chat.chatCardOpen && (
+        <GraphChatCard
+          tabs={chat.chatTabs}
+          activeIndex={chat.activeTabIndex}
+          minimized={chat.chatCardMinimized}
+          onTabClick={chat.handleTabClick}
+          onAddTab={chat.handleAddTab}
+          onMinimize={() => chat.setChatCardMinimized((prev) => !prev)}
+          onClose={() => chat.setChatCardOpen(false)}
+          onGraphCommand={() => {}}
+        />
+      )}
     </div>
   );
 }

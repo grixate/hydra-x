@@ -128,7 +128,11 @@ defmodule HydraXWeb.Router do
 
     # Graph visualization
     get "/projects/:project_id/graph/nodes", GraphNodesAPIController, :index
+    get "/projects/:project_id/graph/data", GraphDataAPIController, :show
     get "/projects/:project_id/graph/trail", GraphTrailAPIController, :show
+    post "/projects/:project_id/graph/edges", GraphEdgeAPIController, :create
+    get "/projects/:project_id/graph/edges/:id", GraphEdgeAPIController, :show
+    delete "/projects/:project_id/graph/edges/:id", GraphEdgeAPIController, :delete
 
     # Decisions CRUD
     get "/projects/:project_id/decisions", DecisionAPIController, :index

@@ -1,5 +1,6 @@
 import { Outlet } from "react-router-dom";
 import { WorkspaceSidebar } from "./workspace-sidebar";
+import { ToastContainer } from "@/components/ui/toast-notification";
 
 export function AppLayout() {
   return (
@@ -8,6 +9,7 @@ export function AppLayout() {
       <main className="flex-1 overflow-auto">
         <Outlet />
       </main>
+      <ToastContainer />
     </div>
   );
 }

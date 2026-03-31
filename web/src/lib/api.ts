@@ -2,6 +2,9 @@ import type {
   ArchitectureNode,
   Decision,
   DesignNode,
+  Constraint,
+  GraphData,
+  GraphDataEdge,
   GraphFlag,
   Insight,
   Learning,
@@ -289,14 +292,37 @@ export const api = {
     request<Learning[]>(`/projects/${projectId}/learnings`),
   createLearning: (projectId: number, payload: { title: string; body: string; learning_type: string }) =>
     request<Learning>(`/projects/${projectId}/learnings`, { method: "POST", body: JSON.stringify({ learning: payload }) }),
+  // Constraints
+  createConstraint: (projectId: number, payload: { title: string; body: string; scope: string; enforcement: string }) =>
+    request<Constraint>(`/projects/${projectId}/constraints`, { method: "POST", body: JSON.stringify({ constraint: payload }) }),
   // Graph flags
   listGraphFlags: (projectId: number) =>
     request<GraphFlag[]>(`/projects/${projectId}/graph/flags`),
   resolveGraphFlag: (projectId: number, flagId: number) =>
     request<GraphFlag>(`/projects/${projectId}/graph/flags/${flagId}/resolve`, { method: "POST", body: JSON.stringify({ resolved_by: "operator" }) }),
-  // Graph nodes (for visualization)
+  // Graph nodes (for visualization — legacy)
   getGraphNodes: (projectId: number) =>
     request<{ nodes: Array<{ id: string; db_id: number; node_type: string; title: string; status: string; body_excerpt: string }>; edges: Array<{ id: string; source: string; target: string; kind: string; weight: number }> }>(`/projects/${projectId}/graph/nodes`),
+  // Graph data (enriched — nodes, edges, flags, density)
+  getGraphData: (projectId: number) =>
+    request<GraphData>(`/projects/${projectId}/graph/data`),
+  // Graph edges (CRUD)
+  createGraphEdge: (projectId: number, payload: {
+    from_node_type: string;
+    from_node_id: number;
+    to_node_type: string;
+    to_node_id: number;
+    kind: string;
+    metadata?: Record<string, unknown>;
+  }) =>
+    request<GraphDataEdge>(`/projects/${projectId}/graph/edges`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  deleteGraphEdge: (projectId: number, edgeId: number) =>
+    request<void>(`/projects/${projectId}/graph/edges/${edgeId}`, { method: "DELETE" }),
+  getGraphEdge: (projectId: number, edgeId: number) =>
+    request<GraphDataEdge & { metadata: Record<string, unknown>; inserted_at: string }>(`/projects/${projectId}/graph/edges/${edgeId}`),
   // Graph health
   getGraphHealth: (projectId: number) =>
     request<Record<string, unknown>>(`/projects/${projectId}/graph/health`),

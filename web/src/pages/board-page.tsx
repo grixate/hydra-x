@@ -1,5 +1,8 @@
 import { useState, useEffect, useMemo } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useNavigate } from "react-router-dom";
+import { UniversalInput } from "@/components/chat/universal-input";
+import { GraphChatCard } from "@/components/chat/chat-card";
+import { useChatState } from "@/hooks/use-chat-state";
 import {
   DndContext,
   DragOverlay,
@@ -23,7 +26,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
-import { Plus } from "lucide-react";
+import { Plus, Network } from "lucide-react";
 
 const columns = [
   { key: "backlog", label: "Backlog" },
@@ -42,6 +45,8 @@ const priorityColors: Record<string, string> = {
 
 export function BoardPage() {
   const { projectId } = useParams<{ projectId: string }>();
+  const navigate = useNavigate();
+  const chat = useChatState(Number(projectId), "strategist");
   const [tasks, setTasks] = useState<ProductTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -120,11 +125,11 @@ export function BoardPage() {
   }
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="relative flex h-full flex-col">
       <div className="shrink-0 border-b px-6 py-4">
         <h1 className="text-xl font-semibold">Board</h1>
       </div>
-      <div className="flex-1 overflow-x-auto p-6">
+      <div className="flex-1 overflow-x-auto p-6 pb-24">
         <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
           <div className="flex gap-4">
             {columns.map((col) => (
@@ -159,11 +164,44 @@ export function BoardPage() {
                 {detailTask.body && <p className="text-sm text-muted-foreground whitespace-pre-wrap">{detailTask.body}</p>}
                 {detailTask.assignee && <p className="text-sm"><span className="text-muted-foreground">Assigned:</span> {detailTask.assignee}</p>}
                 {detailTask.effort_estimate && <p className="text-sm"><span className="text-muted-foreground">Effort:</span> {detailTask.effort_estimate}</p>}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-2"
+                  onClick={() => {
+                    setDetailTask(null);
+                    navigate(`/projects/${projectId}/graph?focus=task-${detailTask.id}`);
+                  }}
+                >
+                  <Network className="mr-1.5 h-3.5 w-3.5" />
+                  View in graph
+                </Button>
               </div>
             </>
           )}
         </SheetContent>
       </Sheet>
+
+      <UniversalInput
+        surface="board"
+        projectId={Number(projectId)}
+        onSubmit={chat.handleChatSubmit}
+        currentAgent={chat.activeTab?.agent ?? "strategist"}
+        onAgentChange={chat.handleAgentChange}
+      />
+
+      {chat.chatCardOpen && (
+        <GraphChatCard
+          tabs={chat.chatTabs}
+          activeIndex={chat.activeTabIndex}
+          minimized={chat.chatCardMinimized}
+          onTabClick={chat.handleTabClick}
+          onAddTab={chat.handleAddTab}
+          onMinimize={() => chat.setChatCardMinimized((prev) => !prev)}
+          onClose={() => chat.setChatCardOpen(false)}
+          onGraphCommand={() => {}}
+        />
+      )}
     </div>
   );
 }

@@ -343,6 +343,45 @@ export type TaskFeedback = {
   inserted_at?: string;
 };
 
+export type GraphDataNode = {
+  id: string;
+  node_type: string;
+  node_id: number;
+  title: string;
+  status: string;
+  body: string;
+  connection_count: number;
+  upstream_count: number;
+  downstream_count: number;
+  flag_count: number;
+  inserted_at?: string;
+  updated_at?: string;
+};
+
+export type GraphDataEdge = {
+  id: number;
+  source: string;
+  target: string;
+  kind: string;
+  weight: number;
+};
+
+export type GraphDataFlag = {
+  id: number;
+  node_id: string;
+  flag_type: string;
+  reason: string;
+  status: string;
+  source_agent: string;
+};
+
+export type GraphData = {
+  nodes: GraphDataNode[];
+  edges: GraphDataEdge[];
+  flags: GraphDataFlag[];
+  density: Record<string, { count: number; outgoing: number; avg_outgoing: number }>;
+};
+
 export type ProjectExport = {
   project_id: number;
   markdown_path: string;

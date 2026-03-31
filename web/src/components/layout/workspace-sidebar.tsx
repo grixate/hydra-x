@@ -1,5 +1,7 @@
-import { NavLink, useParams } from "react-router-dom";
+import { useState, useEffect, useRef } from "react";
+import { NavLink, useParams, useLocation } from "react-router-dom";
 import { cn } from "@/lib/utils";
+import { api } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
@@ -41,7 +43,37 @@ const agents = [
 
 export function WorkspaceSidebar() {
   const { projectId } = useParams<{ projectId: string }>();
+  const location = useLocation();
   const base = projectId ? `/projects/${projectId}` : "/projects";
+  const [streamUnread, setStreamUnread] = useState(0);
+  const lastViewedRef = useRef<number>(Date.now());
+
+  // Track when the user is on the stream page
+  const isOnStream =
+    location.pathname === `${base}` || location.pathname === `${base}/stream`;
+
+  useEffect(() => {
+    if (isOnStream) {
+      setStreamUnread(0);
+      lastViewedRef.current = Date.now();
+    }
+  }, [isOnStream]);
+
+  // Poll for new stream items
+  useEffect(() => {
+    if (!projectId) return;
+    const pid = Number(projectId);
+    const interval = setInterval(() => {
+      if (isOnStream) return;
+      api.getStream(pid).then((data) => {
+        const total =
+          data.right_now.length + data.recently.length + data.emerging.length;
+        // Simple heuristic: if total is higher than what we last saw, show a badge
+        setStreamUnread((prev) => (total > 0 ? Math.min(total, 9) : 0));
+      }).catch(() => {});
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [projectId, isOnStream]);
 
   return (
     <aside className="flex w-[220px] shrink-0 flex-col border-r bg-sidebar-background">
@@ -67,6 +99,11 @@ export function WorkspaceSidebar() {
             >
               <item.icon className="h-4 w-4" />
               <span>{item.label}</span>
+              {item.label === "Stream" && streamUnread > 0 && (
+                <Badge variant="default" className="ml-auto h-4 min-w-4 px-1 text-[9px]">
+                  {streamUnread}
+                </Badge>
+              )}
             </NavLink>
           ))}
         </nav>
