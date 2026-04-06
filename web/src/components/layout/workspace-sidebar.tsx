@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { NavLink, useParams, useLocation } from "react-router-dom";
+import { NavLink, useParams, useLocation, useNavigate } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
@@ -16,8 +16,12 @@ import {
   PenTool,
   Brain,
   Settings,
+  Plus,
+  Circle,
+  UserPlus,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import type { BoardSession } from "@/types";
 
 type NavItem = {
   path: string;
@@ -44,14 +48,35 @@ const agents = [
 export function WorkspaceSidebar() {
   const { projectId } = useParams<{ projectId: string }>();
   const location = useLocation();
+  const navigate = useNavigate();
   const base = projectId ? `/projects/${projectId}` : "/projects";
+  const pid = projectId ? Number(projectId) : null;
+
+  const [projectName, setProjectName] = useState("");
   const [streamUnread, setStreamUnread] = useState(0);
+  const [boardSessions, setBoardSessions] = useState<BoardSession[]>([]);
   const lastViewedRef = useRef<number>(Date.now());
 
-  // Track when the user is on the stream page
   const isOnStream =
     location.pathname === `${base}` || location.pathname === `${base}/stream`;
+  const isOnBoard = location.pathname.startsWith(`${base}/board`);
 
+  // Load project name
+  useEffect(() => {
+    if (!pid) return;
+    api.listProjects().then((projects) => {
+      const p = projects.find((proj) => proj.id === pid);
+      if (p) setProjectName(p.name);
+    }).catch(() => {});
+  }, [pid]);
+
+  // Load board sessions
+  useEffect(() => {
+    if (!pid) return;
+    api.listBoardSessions(pid).then(setBoardSessions).catch(() => {});
+  }, [pid]);
+
+  // Stream unread tracking
   useEffect(() => {
     if (isOnStream) {
       setStreamUnread(0);
@@ -59,57 +84,105 @@ export function WorkspaceSidebar() {
     }
   }, [isOnStream]);
 
-  // Poll for new stream items
   useEffect(() => {
-    if (!projectId) return;
-    const pid = Number(projectId);
+    if (!pid) return;
     const interval = setInterval(() => {
       if (isOnStream) return;
-      api.getStream(pid).then((data) => {
-        const total =
-          data.right_now.length + data.recently.length + data.emerging.length;
-        // Simple heuristic: if total is higher than what we last saw, show a badge
-        setStreamUnread((prev) => (total > 0 ? Math.min(total, 9) : 0));
-      }).catch(() => {});
+      api
+        .getStream(pid)
+        .then((data) => {
+          const total =
+            data.right_now.length + data.recently.length + data.emerging.length;
+          setStreamUnread((prev) => (total > 0 ? Math.min(total, 9) : 0));
+        })
+        .catch(() => {});
     }, 30000);
     return () => clearInterval(interval);
-  }, [projectId, isOnStream]);
+  }, [pid, isOnStream]);
+
+  async function handleNewSession() {
+    if (!pid) return;
+    try {
+      const session = await api.createBoardSession(pid, { title: "Untitled session" });
+      setBoardSessions((prev) => [...prev, session]);
+      navigate(`${base}/board/${session.id}`);
+    } catch {
+      // Silently fail — toast could be added later
+    }
+  }
 
   return (
     <aside className="flex w-[220px] shrink-0 flex-col border-r bg-sidebar-background">
-      <div className="flex items-center gap-2 px-4 py-4">
-        <span className="text-lg font-bold tracking-tight">Hydra</span>
+      {/* Project name header */}
+      <div className="flex items-center gap-2 px-4 py-3">
+        <span className="text-sm font-semibold truncate">{projectName}</span>
       </div>
       <Separator />
+
       <ScrollArea className="flex-1">
-        <nav className="space-y-1 px-2 py-3">
+        {/* Surfaces */}
+        <nav className="space-y-0.5 px-2 py-3">
           {surfaces.map((item) => (
-            <NavLink
-              key={item.path}
-              to={`${base}/${item.path}`}
-              end={item.end}
-              className={({ isActive }) =>
-                cn(
-                  "flex items-center gap-2 rounded-md px-3 py-1.5 text-sm transition-colors",
-                  isActive
-                    ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
-                    : "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground",
-                )
-              }
-            >
-              <item.icon className="h-4 w-4" />
-              <span>{item.label}</span>
-              {item.label === "Stream" && streamUnread > 0 && (
-                <Badge variant="default" className="ml-auto h-4 min-w-4 px-1 text-[9px]">
-                  {streamUnread}
-                </Badge>
+            <div key={item.path}>
+              <NavLink
+                to={`${base}/${item.path}`}
+                end={item.end}
+                className={({ isActive }) =>
+                  cn(
+                    "flex items-center gap-2 rounded-md px-3 py-1.5 text-sm transition-colors",
+                    isActive
+                      ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
+                      : "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground",
+                  )
+                }
+              >
+                <item.icon className="h-4 w-4" />
+                <span>{item.label}</span>
+                {item.label === "Stream" && streamUnread > 0 && (
+                  <Badge
+                    variant="default"
+                    className="ml-auto h-4 min-w-4 px-1 text-[9px]"
+                  >
+                    {streamUnread}
+                  </Badge>
+                )}
+              </NavLink>
+
+              {/* Board session sub-items — show when Board is active OR has sessions */}
+              {item.label === "Board" && (isOnBoard || boardSessions.length > 0) && (
+                <div className="ml-5 mt-0.5 space-y-0.5">
+                  {boardSessions.map((session) => (
+                    <NavLink
+                      key={session.id}
+                      to={`${base}/board/${session.id}`}
+                      className={({ isActive }) =>
+                        cn(
+                          "flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors",
+                          isActive
+                            ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
+                            : "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground",
+                        )
+                      }
+                    >
+                      <span className="truncate">{session.title}</span>
+                    </NavLink>
+                  ))}
+                  <button
+                    onClick={handleNewSession}
+                    className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-sidebar-foreground w-full text-left"
+                  >
+                    <Plus className="h-3 w-3 shrink-0" />
+                    <span>New session</span>
+                  </button>
+                </div>
               )}
-            </NavLink>
+            </div>
           ))}
         </nav>
 
         <Separator className="mx-2" />
 
+        {/* Agents */}
         <div className="px-2 py-3">
           <p className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
             Agents
@@ -142,6 +215,29 @@ export function WorkspaceSidebar() {
 
         <Separator className="mx-2" />
 
+        {/* Members */}
+        <div className="px-2 py-3">
+          <p className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+            Members
+          </p>
+          <div className="space-y-0.5">
+            <button className="flex items-center justify-between rounded-md px-3 py-1.5 text-sm text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground w-full transition-colors">
+              <div className="flex items-center gap-2">
+                <Circle className="h-2 w-2 fill-green-500 text-green-500" />
+                <span>Greg (you)</span>
+              </div>
+              <span className="text-[10px] text-muted-foreground">online</span>
+            </button>
+            <button className="flex items-center gap-2 rounded-md px-3 py-1.5 text-sm text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground w-full transition-colors">
+              <UserPlus className="h-3.5 w-3.5" />
+              <span>Invite</span>
+            </button>
+          </div>
+        </div>
+
+        <Separator className="mx-2" />
+
+        {/* Settings */}
         <div className="px-2 py-3">
           <NavLink
             to={`${base}/settings`}
