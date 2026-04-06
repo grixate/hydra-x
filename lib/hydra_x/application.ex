@@ -16,6 +16,7 @@ defmodule HydraX.Application do
          repos: Application.fetch_env!(:hydra_x, :ecto_repos), skip: skip_migrations?()},
         {DNSCluster, query: Application.get_env(:hydra_x, :dns_cluster_query) || :ignore},
         {Registry, keys: :unique, name: HydraX.ProcessRegistry},
+        {Registry, keys: :unique, name: HydraX.Product.InitiativeRegistry},
         {Phoenix.PubSub, name: HydraX.PubSub},
         HydraXWeb.BoardPresence,
         {Task.Supervisor, name: HydraX.TaskSupervisor},

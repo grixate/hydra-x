@@ -447,6 +447,36 @@ defmodule HydraXWeb.ProductPayload do
     }
   end
 
+  def artifact_json(%HydraX.Product.Artifact{} = artifact) do
+    %{
+      id: artifact.id,
+      project_id: artifact.project_id,
+      title: artifact.title,
+      artifact_type: artifact.artifact_type,
+      body: artifact.body,
+      owner_persona: artifact.owner_persona,
+      status: artifact.status,
+      version: artifact.version,
+      last_updated_by: artifact.last_updated_by,
+      metadata: artifact.metadata || %{},
+      inserted_at: artifact.inserted_at,
+      updated_at: artifact.updated_at
+    }
+  end
+
+  def artifact_version_json(%HydraX.Product.ArtifactVersion{} = version) do
+    %{
+      id: version.id,
+      artifact_id: version.artifact_id,
+      version: version.version,
+      body: version.body,
+      change_summary: version.change_summary,
+      updated_by: version.updated_by,
+      metadata: version.metadata || %{},
+      inserted_at: version.inserted_at
+    }
+  end
+
   defp loaded_assoc(struct, key) do
     case Map.get(struct, key) do
       %Ecto.Association.NotLoaded{} -> []

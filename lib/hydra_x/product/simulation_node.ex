@@ -2,7 +2,7 @@ defmodule HydraX.Product.SimulationNode do
   use Ecto.Schema
   import Ecto.Changeset
 
-  @statuses ~w(configuring running completed failed)
+  @statuses ~w(proposed configuring running completed failed)
 
   schema "product_simulations" do
     field :scenario_summary, :string

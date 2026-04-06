@@ -10,6 +10,8 @@ defmodule HydraX.Product do
   alias HydraX.Ingest.Parser
   alias HydraX.Memory
   alias HydraX.Product.ArchitectureNode
+  alias HydraX.Product.Artifact
+  alias HydraX.Product.ArtifactVersion
   alias HydraX.Product.BoardEdge
   alias HydraX.Product.BoardNode
   alias HydraX.Product.BoardSession
@@ -61,6 +63,11 @@ defmodule HydraX.Product do
   @history_search_tool HydraX.Product.Tools.HistorySearch
   @decision_create_tool HydraX.Product.Tools.DecisionCreate
   @strategy_create_tool HydraX.Product.Tools.StrategyCreate
+  @artifact_create_tool HydraX.Product.Tools.ArtifactCreate
+  @artifact_update_tool HydraX.Product.Tools.ArtifactUpdate
+  @simulation_propose_tool HydraX.Product.Tools.SimulationPropose
+  @knowledge_propose_tool HydraX.Product.Tools.KnowledgePropose
+  @knowledge_update_tool HydraX.Product.Tools.KnowledgeUpdate
 
   @agent_preloads [:researcher_agent, :strategist_agent, :architect_agent, :designer_agent, :memory_agent]
 
@@ -130,6 +137,8 @@ defmodule HydraX.Product do
       |> Repo.insert()
       |> case do
         {:ok, project} ->
+          provision_default_artifacts!(project)
+          maybe_start_initiative_engine(project)
           Repo.preload(project, @agent_preloads)
 
         {:error, changeset} ->
@@ -1210,6 +1219,72 @@ defmodule HydraX.Product do
 
   def delete_knowledge_entry(%KnowledgeEntry{} = entry), do: Repo.delete(entry)
 
+  @doc """
+  Agent-initiated knowledge proposal. Creates a pending_review entry with
+  source_type "generated". Deduplicates against existing entries with the
+  same title and entry_type in the project.
+  """
+  def propose_knowledge(project_or_id, attrs) when is_map(attrs) do
+    project_id = project_id(project_or_id)
+    attrs = normalize_product_record_attrs(attrs)
+    title = Map.get(attrs, "title", "")
+    entry_type = Map.get(attrs, "entry_type", "custom")
+
+    # Dedup check: skip if an active or pending entry with same title + type exists
+    existing =
+      KnowledgeEntry
+      |> where(
+        [k],
+        k.project_id == ^project_id and
+          k.title == ^title and
+          k.entry_type == ^entry_type and
+          k.status in ["active", "pending_review"]
+      )
+      |> limit(1)
+      |> Repo.one()
+
+    if existing do
+      {:ok, existing}
+    else
+      proposal_attrs =
+        attrs
+        |> Map.put("project_id", project_id)
+        |> Map.put("status", "pending_review")
+        |> Map.put("source_type", "generated")
+        |> Map.put_new("assigned_personas", [])
+
+      %KnowledgeEntry{}
+      |> KnowledgeEntry.changeset(proposal_attrs)
+      |> Repo.insert()
+      |> case do
+        {:ok, entry} ->
+          ProductPubSub.broadcast_project_event(project_id, "knowledge.proposed", entry)
+          {:ok, entry}
+
+        error ->
+          error
+      end
+    end
+  end
+
+  @doc """
+  Review a pending knowledge entry: accept, reject, or edit-then-accept.
+  """
+  def review_knowledge(entry_or_id, action, attrs \\ %{})
+
+  def review_knowledge(%KnowledgeEntry{} = entry, :accept, attrs) do
+    merged = Map.merge(%{"status" => "active"}, normalize_product_record_attrs(attrs))
+    entry |> KnowledgeEntry.changeset(merged) |> Repo.update()
+  end
+
+  def review_knowledge(%KnowledgeEntry{} = entry, :reject, _attrs) do
+    entry |> KnowledgeEntry.changeset(%{"status" => "archived"}) |> Repo.update()
+  end
+
+  def review_knowledge(id, action, attrs) when is_integer(id) do
+    review_knowledge(get_knowledge_entry!(id), action, attrs)
+  end
+
   # -------------------------------------------------------------------
   # Task Feedback
   # -------------------------------------------------------------------
@@ -1470,7 +1545,7 @@ defmodule HydraX.Product do
           "\n## Project constraints (non-negotiable)\n" <> Enum.join(lines, "\n")
       end
 
-    knowledge = list_knowledge_entries(project.id, persona: persona)
+    knowledge = list_knowledge_entries(project.id, persona: persona, status: "active")
 
     knowledge_section =
       case knowledge do
@@ -1561,7 +1636,15 @@ defmodule HydraX.Product do
   end
 
   defp tools_for_persona("researcher") do
-    [@source_search_tool, @insight_create_tool, @insight_update_tool]
+    [
+      @source_search_tool,
+      @insight_create_tool,
+      @insight_update_tool,
+      @artifact_create_tool,
+      @artifact_update_tool,
+      @knowledge_propose_tool,
+      @knowledge_update_tool
+    ]
   end
 
   defp tools_for_persona("strategist") do
@@ -1571,7 +1654,12 @@ defmodule HydraX.Product do
       @insight_update_tool,
       @requirement_create_tool,
       @decision_create_tool,
-      @strategy_create_tool
+      @strategy_create_tool,
+      @artifact_create_tool,
+      @artifact_update_tool,
+      @simulation_propose_tool,
+      @knowledge_propose_tool,
+      @knowledge_update_tool
     ]
   end
 
@@ -1581,7 +1669,12 @@ defmodule HydraX.Product do
       @architecture_create_tool,
       @architecture_update_tool,
       @feasibility_assess_tool,
-      @requirement_create_tool
+      @requirement_create_tool,
+      @artifact_create_tool,
+      @artifact_update_tool,
+      @simulation_propose_tool,
+      @knowledge_propose_tool,
+      @knowledge_update_tool
     ]
   end
 
@@ -1591,12 +1684,22 @@ defmodule HydraX.Product do
       @design_create_tool,
       @design_update_tool,
       @pattern_check_tool,
-      @insight_create_tool
+      @insight_create_tool,
+      @artifact_create_tool,
+      @artifact_update_tool,
+      @knowledge_propose_tool,
+      @knowledge_update_tool
     ]
   end
 
   defp tools_for_persona("memory_agent") do
-    [@source_search_tool, @graph_query_tool, @trail_trace_tool]
+    [
+      @source_search_tool,
+      @graph_query_tool,
+      @trail_trace_tool,
+      @artifact_create_tool,
+      @artifact_update_tool
+    ]
   end
 
   defp tools_for_persona(_), do: []
@@ -2953,6 +3056,166 @@ defmodule HydraX.Product do
     schema
     |> where([record], record.project_id == ^project_id)
     |> Repo.aggregate(:count, :id)
+  end
+
+  # -------------------------------------------------------------------
+  # Artifacts
+  # -------------------------------------------------------------------
+
+  def list_artifacts(project_or_id, opts \\ []) do
+    project_id = project_id(project_or_id)
+    status = Keyword.get(opts, :status)
+
+    Artifact
+    |> where([a], a.project_id == ^project_id)
+    |> then(fn q ->
+      if status, do: where(q, [a], a.status == ^status), else: q
+    end)
+    |> order_by([a], desc: a.updated_at)
+    |> Repo.all()
+  end
+
+  def get_artifact!(project_or_id, artifact_id) do
+    project_id = project_id(project_or_id)
+
+    Artifact
+    |> where([a], a.project_id == ^project_id and a.id == ^artifact_id)
+    |> Repo.one!()
+  end
+
+  def create_artifact(project_or_id, attrs) do
+    project_id = project_id(project_or_id)
+
+    attrs =
+      attrs
+      |> HydraX.Runtime.Helpers.normalize_string_keys()
+      |> Map.put("project_id", project_id)
+
+    %Artifact{}
+    |> Artifact.changeset(attrs)
+    |> Repo.insert()
+    |> case do
+      {:ok, artifact} ->
+        ProductPubSub.broadcast_project_event(project_id, "artifact.created", artifact)
+        {:ok, artifact}
+
+      error ->
+        error
+    end
+  end
+
+  @doc """
+  Updates an artifact body, creating a version snapshot of the previous content.
+  Uses Ecto.Multi for atomicity. The artifact's version field provides optimistic locking.
+  """
+  def update_artifact(project_or_id, artifact_id, attrs) do
+    project_id = project_id(project_or_id)
+    artifact = get_artifact!(project_id, artifact_id)
+
+    attrs = HydraX.Runtime.Helpers.normalize_string_keys(attrs)
+    updated_by = Map.get(attrs, "last_updated_by", "system")
+    change_summary = Map.get(attrs, "change_summary")
+
+    # Merge change_summary into metadata so stream can access it
+    current_metadata = artifact.metadata || %{}
+    merged_metadata = Map.merge(current_metadata, %{"last_change_summary" => change_summary})
+
+    update_attrs =
+      attrs
+      |> Map.put("last_updated_by", updated_by)
+      |> Map.put("metadata", merged_metadata)
+
+    Ecto.Multi.new()
+    |> Ecto.Multi.insert(:version, fn _changes ->
+      ArtifactVersion.changeset(%ArtifactVersion{}, %{
+        "artifact_id" => artifact.id,
+        "version" => artifact.version,
+        "body" => artifact.body,
+        "change_summary" => change_summary,
+        "updated_by" => updated_by,
+        "metadata" => %{}
+      })
+    end)
+    |> Ecto.Multi.update(:artifact, fn _changes ->
+      # optimistic_lock(:version) adds WHERE version = current AND auto-increments
+      Artifact.update_changeset(artifact, update_attrs)
+    end)
+    |> Repo.transaction()
+    |> case do
+      {:ok, %{artifact: updated_artifact}} ->
+        ProductPubSub.broadcast_project_event(project_id, "artifact.updated", %{
+          artifact: updated_artifact,
+          change_summary: change_summary,
+          updated_by: updated_by
+        })
+
+        {:ok, updated_artifact}
+
+      {:error, :artifact, %Ecto.Changeset{} = changeset, _changes} ->
+        {:error, changeset}
+
+      {:error, :artifact, %Ecto.StaleEntryError{}, _changes} ->
+        {:error, :stale_version}
+
+      {:error, :version, changeset, _changes} ->
+        {:error, changeset}
+    end
+  end
+
+  def list_artifact_versions(project_or_id, artifact_id) do
+    project_id = project_id(project_or_id)
+    # Verify artifact belongs to project (raises if not found)
+    _artifact = get_artifact!(project_id, artifact_id)
+
+    ArtifactVersion
+    |> where([v], v.artifact_id == ^artifact_id)
+    |> order_by([v], desc: v.version)
+    |> Repo.all()
+  end
+
+  @doc """
+  Start the initiative engine for a project. Safe to call multiple times —
+  will no-op if the engine is already running.
+  """
+  def start_initiative_engine(project_or_id) do
+    project_id = project_id(project_or_id)
+
+    case HydraX.Product.Initiative.start_link(project_id) do
+      {:ok, pid} -> {:ok, pid}
+      {:error, {:already_started, pid}} -> {:ok, pid}
+      error -> error
+    end
+  end
+
+  defp maybe_start_initiative_engine(%Project{trust_level: "cautious"}), do: :ok
+
+  defp maybe_start_initiative_engine(%Project{id: project_id}) do
+    start_initiative_engine(project_id)
+  end
+
+  defp provision_default_artifacts!(project) do
+    defaults = [
+      %{
+        "title" => "Project Summary",
+        "artifact_type" => "project_summary",
+        "body" => "# #{project.name}\n\nProject summary will be maintained as the product graph evolves.",
+        "owner_persona" => "memory_agent",
+        "last_updated_by" => "system"
+      },
+      %{
+        "title" => "Decision Log",
+        "artifact_type" => "decision_log",
+        "body" => "# Decision Log\n\nChronological record of all decisions with reasoning.",
+        "owner_persona" => "memory_agent",
+        "last_updated_by" => "system"
+      }
+    ]
+
+    Enum.each(defaults, fn attrs ->
+      %Artifact{}
+      |> Artifact.changeset(Map.put(attrs, "project_id", project.id))
+      |> Repo.insert!()
+    end)
   end
 
   defp load_project(%Project{} = project),

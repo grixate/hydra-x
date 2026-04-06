@@ -128,6 +128,8 @@ defmodule HydraXWeb.Router do
     post "/projects/:project_id/simulations", SimulationAPIController, :create
     get "/projects/:project_id/simulations/:id", SimulationAPIController, :show
     post "/projects/:project_id/simulations/:id/import", SimulationAPIController, :import_results
+    post "/projects/:project_id/simulations/:id/approve", SimulationAPIController, :approve
+    post "/projects/:project_id/simulations/:id/reject", SimulationAPIController, :reject
 
     # Stream
     get "/projects/:project_id/stream", StreamAPIController, :index
@@ -206,12 +208,20 @@ defmodule HydraXWeb.Router do
     post "/projects/:project_id/routines/:id/run", RoutineAPIController, :run
     get "/projects/:project_id/routines/:id/runs", RoutineAPIController, :runs
 
+    # Artifacts
+    get "/projects/:project_id/artifacts", ArtifactAPIController, :index
+    post "/projects/:project_id/artifacts", ArtifactAPIController, :create
+    get "/projects/:project_id/artifacts/:id", ArtifactAPIController, :show
+    patch "/projects/:project_id/artifacts/:id", ArtifactAPIController, :update
+    get "/projects/:project_id/artifacts/:id/versions", ArtifactAPIController, :versions
+
     # Knowledge entries
     get "/projects/:project_id/knowledge", KnowledgeEntryAPIController, :index
     post "/projects/:project_id/knowledge", KnowledgeEntryAPIController, :create
     get "/projects/:project_id/knowledge/:id", KnowledgeEntryAPIController, :show
     patch "/projects/:project_id/knowledge/:id", KnowledgeEntryAPIController, :update
     delete "/projects/:project_id/knowledge/:id", KnowledgeEntryAPIController, :delete
+    post "/projects/:project_id/knowledge/:id/review", KnowledgeEntryAPIController, :review
 
     # Task feedback
     get "/projects/:project_id/tasks/:task_id/feedback", TaskFeedbackAPIController, :index

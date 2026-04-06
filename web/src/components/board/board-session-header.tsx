@@ -1,16 +1,28 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { MoreHorizontal } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import type { BoardSession, BoardPresenceUser } from "@/types";
-import { PRESENCE_COLORS } from "./board-constants";
+import type { BoardView } from "./board-workspace";
 
 type BoardSessionHeaderProps = {
   projectId: number;
   session: BoardSession;
   participants: BoardPresenceUser[];
   draftCount: number;
+  view: BoardView;
+  onViewChange: (view: BoardView) => void;
   onSessionUpdate: (session: BoardSession) => void;
-  onPromoteAll: () => void;
+  onPushToGraph: () => void;
 };
 
 export function BoardSessionHeader({
@@ -18,98 +30,137 @@ export function BoardSessionHeader({
   session,
   participants,
   draftCount,
+  view,
+  onViewChange,
   onSessionUpdate,
-  onPromoteAll,
+  onPushToGraph,
 }: BoardSessionHeaderProps) {
   const navigate = useNavigate();
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(session.title);
 
-  // Sync local title when session prop changes (e.g. from remote update)
   useEffect(() => {
     setTitle(session.title);
   }, [session.title]);
 
   async function saveTitle() {
     setEditing(false);
-    if (title !== session.title) {
-      const updated = await api.updateBoardSession(projectId, session.id, { title });
+    if (title.trim() && title !== session.title) {
+      const updated = await api.updateBoardSession(projectId, session.id, { title: title.trim() });
       onSessionUpdate(updated);
     }
   }
 
-  async function completeSession() {
-    const updated = await api.updateBoardSession(projectId, session.id, { status: "completed" });
+  async function archiveSession() {
+    const updated = await api.updateBoardSession(projectId, session.id, { status: "archived" });
     onSessionUpdate(updated);
     navigate(`/projects/${projectId}/board`);
   }
 
   return (
-    <div className="flex h-12 items-center justify-between border-b border-zinc-800 bg-zinc-950/80 px-4 backdrop-blur-sm">
+    <div className="flex items-center justify-between px-4 py-3">
+      {/* Left: back + title */}
       <div className="flex items-center gap-3">
-        <button
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={() => navigate(`/projects/${projectId}/board`)}
-          className="text-xs text-zinc-500 hover:text-white transition"
         >
-          ← Board
-        </button>
-        <span className="text-zinc-700">|</span>
+          ← Sessions
+        </Button>
+
         {editing ? (
-          <input
+          <Input
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             onBlur={saveTitle}
             onKeyDown={(e) => e.key === "Enter" && saveTitle()}
             autoFocus
-            className="bg-transparent text-sm font-medium text-white border-b border-zinc-600 outline-none px-1"
+            className="w-80 text-sm font-medium"
           />
         ) : (
           <button
             onClick={() => setEditing(true)}
-            className="text-sm font-medium text-white hover:text-zinc-300 transition"
+            className="text-sm font-medium hover:underline"
           >
             {session.title}
           </button>
         )}
       </div>
 
-      <div className="flex items-center gap-4">
-        {/* Participants */}
-        <div className="flex -space-x-2">
-          {participants.slice(0, 5).map((p, i) => (
+      {/* Center: view toggle */}
+      <div className="flex rounded-lg border bg-muted/50 p-0.5">
+        <button
+          onClick={() => onViewChange("canvas")}
+          className={cn(
+            "rounded-md px-3 py-1 text-xs transition-colors",
+            view === "canvas"
+              ? "bg-background shadow-sm font-medium"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          Canvas
+        </button>
+        <button
+          onClick={() => onViewChange("chat")}
+          className={cn(
+            "rounded-md px-3 py-1 text-xs transition-colors",
+            view === "chat"
+              ? "bg-background shadow-sm font-medium"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          Chat
+        </button>
+      </div>
+
+      {/* Right: participants + actions */}
+      <div className="flex items-center gap-3">
+        {/* Participant avatars */}
+        <div className="flex -space-x-1.5">
+          {participants.slice(0, 5).map((p) => (
             <div
               key={p.user_id}
-              className="flex h-6 w-6 items-center justify-center rounded-full border border-zinc-800 text-[10px] font-bold text-white"
-              style={{ backgroundColor: PRESENCE_COLORS[i % PRESENCE_COLORS.length] }}
+              className="flex h-6 w-6 items-center justify-center rounded-full border border-background bg-muted text-[10px] font-medium"
               title={p.name}
             >
               {p.name.charAt(0).toUpperCase()}
             </div>
           ))}
           {participants.length > 5 && (
-            <div className="flex h-6 w-6 items-center justify-center rounded-full border border-zinc-800 bg-zinc-700 text-[10px] text-zinc-300">
+            <div className="flex h-6 w-6 items-center justify-center rounded-full border border-background bg-muted text-[10px] text-muted-foreground">
               +{participants.length - 5}
             </div>
           )}
         </div>
 
-        {/* Actions */}
-        {session.status === "active" && draftCount > 0 && (
-          <button
-            onClick={onPromoteAll}
-            className="rounded-lg border border-green-500/30 bg-green-500/10 px-3 py-1 text-[10px] uppercase tracking-wider text-green-400 hover:bg-green-500/20 transition"
-          >
-            Promote all ({draftCount})
-          </button>
+        <Button variant="outline" size="sm">
+          Invite
+        </Button>
+
+        {/* Push to graph */}
+        {draftCount > 0 && (
+          <Button size="sm" onClick={onPushToGraph}>
+            Push to graph ({draftCount})
+          </Button>
         )}
-        {session.status === "active" && (
-          <button
-            onClick={completeSession}
-            className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1 text-[10px] uppercase tracking-wider text-zinc-400 hover:bg-zinc-700 hover:text-white transition"
-          >
-            Complete ✓
-          </button>
-        )}
+
+        {/* More menu */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon-sm">
+              <MoreHorizontal className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={() => setEditing(true)}>
+              Rename
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={archiveSession}>
+              Archive session
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </div>
   );

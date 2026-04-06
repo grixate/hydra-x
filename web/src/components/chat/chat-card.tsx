@@ -26,7 +26,10 @@ interface GraphChatCardProps {
     nodeIds?: string[];
     nodeId?: string;
   }) => void;
+  onSwitchToChat?: () => void;
 }
+
+const LONG_RESPONSE_THRESHOLD = 500;
 
 export function GraphChatCard({
   tabs,
@@ -37,6 +40,7 @@ export function GraphChatCard({
   onMinimize,
   onClose,
   onGraphCommand,
+  onSwitchToChat,
 }: GraphChatCardProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -163,6 +167,14 @@ export function GraphChatCard({
                   <div className="mt-0.5 text-[10px] text-muted-foreground">
                     {timeAgo(msg.timestamp)}
                   </div>
+                  {!isUser && msg.content.length > LONG_RESPONSE_THRESHOLD && onSwitchToChat && (
+                    <button
+                      className="mt-1 text-[10px] text-primary hover:underline"
+                      onClick={onSwitchToChat}
+                    >
+                      Switch to Chat view for better reading
+                    </button>
+                  )}
                 </div>
               );
             })}

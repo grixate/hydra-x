@@ -75,6 +75,13 @@ export function StreamItem({ item, onNavigate, onNavigateGraph, onAction }: Stre
           </p>
         )}
 
+        {/* Row 3.5: narrative context */}
+        {item.narrative && (
+          <p className="mt-1.5 text-xs italic text-muted-foreground">
+            {item.narrative}
+          </p>
+        )}
+
         {/* Row 4: connection chips */}
         {item.connections && Object.keys(item.connections).length > 0 && (
           <ConnectionChips
@@ -150,6 +157,46 @@ export function StreamItem({ item, onNavigate, onNavigateGraph, onAction }: Stre
               >
                 Review
               </Button>
+            )}
+            {item.category === "simulation_proposed" && isAction && (
+              <>
+                <Button
+                  variant="default"
+                  size="sm"
+                  className="text-xs h-7"
+                  onClick={() => onAction?.("approve", item)}
+                >
+                  <Check className="mr-1 h-3 w-3" /> Approve
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs h-7 text-muted-foreground"
+                  onClick={() => onAction?.("reject", item)}
+                >
+                  <X className="h-3 w-3" />
+                </Button>
+              </>
+            )}
+            {item.category === "knowledge_proposed" && isAction && (
+              <>
+                <Button
+                  variant="default"
+                  size="sm"
+                  className="text-xs h-7"
+                  onClick={() => onAction?.("accept", item)}
+                >
+                  <Check className="mr-1 h-3 w-3" /> Accept
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs h-7 text-muted-foreground"
+                  onClick={() => onAction?.("reject", item)}
+                >
+                  <X className="h-3 w-3" />
+                </Button>
+              </>
             )}
             {isEmerging && (
               <Button

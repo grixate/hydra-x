@@ -3,7 +3,7 @@ defmodule HydraX.Product.KnowledgeEntry do
   import Ecto.Changeset
 
   @statuses ~w(active pending_review archived)
-  @entry_types ~w(design_language coding_conventions brand_guide product_vision domain_knowledge process_rules integration_docs custom)
+  @entry_types ~w(design_language coding_conventions brand_guide product_vision domain_knowledge process_rules integration_docs pattern custom)
   @source_types ~w(manual url generated)
 
   schema "knowledge_entries" do

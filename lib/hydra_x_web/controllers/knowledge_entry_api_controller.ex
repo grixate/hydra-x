@@ -42,4 +42,21 @@ defmodule HydraXWeb.KnowledgeEntryAPIController do
       send_resp(conn, :no_content, "")
     end
   end
+
+  def review(conn, %{"project_id" => project_id, "id" => id} = params) do
+    entry = Product.get_project_knowledge_entry!(project_id, id)
+
+    action =
+      case params["action"] do
+        "accept" -> :accept
+        "reject" -> :reject
+        _ -> :reject
+      end
+
+    edits = params["knowledge_entry"] || %{}
+
+    with {:ok, %KnowledgeEntry{} = updated} <- Product.review_knowledge(entry, action, edits) do
+      json(conn, %{data: ProductPayload.knowledge_entry_json(updated)})
+    end
+  end
 end

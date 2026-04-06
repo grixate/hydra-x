@@ -8,6 +8,10 @@ defmodule HydraX.Product.PubSub do
   def source_topic(source_or_id), do: "source:#{source_id(source_or_id)}"
   def board_session_topic(session_or_id), do: "board_session:#{board_session_id(session_or_id)}"
 
+  def subscribe_project(project_or_id) do
+    Phoenix.PubSub.subscribe(HydraX.PubSub, project_topic(project_or_id))
+  end
+
   def broadcast_project_event(project_or_id, event, payload) do
     Phoenix.PubSub.broadcast(
       HydraX.PubSub,

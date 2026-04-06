@@ -395,6 +395,28 @@ export const api = {
     }),
   deleteBoardEdge: (projectId: number, sessionId: number, edgeId: number) =>
     request<void>(`/projects/${projectId}/board_sessions/${sessionId}/edges/${edgeId}`, { method: "DELETE" }),
+
+  // Artifacts
+  listArtifacts: (projectId: number) =>
+    request<Artifact[]>(`/projects/${projectId}/artifacts`),
+  getArtifact: (projectId: number, artifactId: number) =>
+    request<Artifact>(`/projects/${projectId}/artifacts/${artifactId}`),
+  createArtifact: (projectId: number, payload: {
+    title: string; artifact_type: string; body: string; owner_persona: string;
+  }) =>
+    request<Artifact>(`/projects/${projectId}/artifacts`, {
+      method: "POST",
+      body: JSON.stringify({ artifact: payload }),
+    }),
+  updateArtifact: (projectId: number, artifactId: number, payload: {
+    body: string; last_updated_by: string; change_summary?: string;
+  }) =>
+    request<Artifact>(`/projects/${projectId}/artifacts/${artifactId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ artifact: payload }),
+    }),
+  listArtifactVersions: (projectId: number, artifactId: number) =>
+    request<ArtifactVersion[]>(`/projects/${projectId}/artifacts/${artifactId}/versions`),
 };
 
 export type StreamItem = {
@@ -402,12 +424,15 @@ export type StreamItem = {
   category: string;
   title: string;
   summary: string;
+  narrative?: string;
   node_type: string;
   node_id: number;
   urgency: "action" | "info" | "emerging";
   timestamp: string;
   connections: Record<string, number>;
   metadata: Record<string, unknown>;
+  type?: "group";
+  items?: StreamItem[];
 };
 
 export type TrailNode = {
@@ -434,4 +459,30 @@ export type TrailFlag = {
   reason: string;
   status: string;
   source_agent: string;
+};
+
+export type Artifact = {
+  id: number;
+  project_id: number;
+  title: string;
+  artifact_type: string;
+  body: string;
+  owner_persona: string;
+  status: string;
+  version: number;
+  last_updated_by?: string;
+  metadata: Record<string, unknown>;
+  inserted_at: string;
+  updated_at: string;
+};
+
+export type ArtifactVersion = {
+  id: number;
+  artifact_id: number;
+  version: number;
+  body: string;
+  change_summary?: string;
+  updated_by: string;
+  metadata: Record<string, unknown>;
+  inserted_at: string;
 };

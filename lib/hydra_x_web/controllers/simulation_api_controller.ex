@@ -23,9 +23,49 @@ defmodule HydraXWeb.SimulationAPIController do
     |> json(%{data: simulation_json(sim_node)})
   end
 
-  def show(conn, %{"project_id" => _project_id, "id" => id}) do
+  def show(conn, %{"project_id" => project_id, "id" => id}) do
     sim_node = SimulationBridge.get_product_simulation!(id)
-    json(conn, %{data: simulation_json(sim_node)})
+
+    if to_string(sim_node.project_id) == to_string(project_id) do
+      json(conn, %{data: simulation_json(sim_node)})
+    else
+      conn |> put_status(:not_found) |> json(%{error: "Not found"})
+    end
+  end
+
+  def approve(conn, %{"project_id" => project_id, "id" => id}) do
+    case SimulationBridge.run_from_proposal(project_id, id) do
+      {:ok, sim_node} ->
+        json(conn, %{data: simulation_json(sim_node)})
+
+      {:error, :not_in_proposed_status} ->
+        conn
+        |> put_status(:conflict)
+        |> json(%{error: "Simulation is not in proposed status"})
+    end
+  end
+
+  def reject(conn, %{"project_id" => project_id, "id" => id}) do
+    sim_node = SimulationBridge.get_product_simulation!(id)
+
+    cond do
+      to_string(sim_node.project_id) != to_string(project_id) ->
+        conn |> put_status(:not_found) |> json(%{error: "Not found"})
+
+      sim_node.status != "proposed" ->
+        conn |> put_status(:conflict) |> json(%{error: "Simulation is not in proposed status"})
+
+      true ->
+        updated =
+          sim_node
+          |> HydraX.Product.SimulationNode.changeset(%{
+            "status" => "failed",
+            "metadata" => Map.merge(sim_node.metadata || %{}, %{"rejected" => true})
+          })
+          |> HydraX.Repo.update!()
+
+        json(conn, %{data: simulation_json(updated)})
+    end
   end
 
   def import_results(conn, %{"project_id" => project_id, "id" => id}) do
