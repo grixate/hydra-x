@@ -459,3 +459,16 @@ export type ProjectExport = {
     conversations: number;
   };
 };
+
+export type Simulation = {
+  id: number;
+  project_id: number;
+  simulation_id: number | null;
+  scenario_summary: string | null;
+  archetype_summary: string | null;
+  status: string;
+  results_imported: boolean;
+  metadata: Record<string, unknown>;
+  inserted_at?: string;
+  updated_at?: string;
+};

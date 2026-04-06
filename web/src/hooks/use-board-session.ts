@@ -3,11 +3,10 @@ import type { Node, Edge, NodeChange, EdgeChange } from "@xyflow/react";
 import { applyNodeChanges, applyEdgeChanges } from "@xyflow/react";
 import { api } from "@/lib/api";
 import { getSocket } from "@/lib/socket";
-import type { BoardNode, BoardEdge, BoardSession } from "@/types";
+import type { BoardNode, BoardEdge, BoardNodeReactions, BoardSession } from "@/types";
 import { BOARD_NODE_WIDTH } from "@/components/board/board-constants";
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type Channel = { push: (event: string, payload: any) => any; on: (event: string, callback: (payload: any) => void) => number; off: (event: string, ref?: number) => void; join: () => any; leave: () => void };
+import type { Channel } from "phoenix";
 
 export function useBoardSession(projectId: number, sessionId: number) {
   const [session, setSession] = useState<BoardSession | null>(null);
@@ -18,7 +17,7 @@ export function useBoardSession(projectId: number, sessionId: number) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const channelRef = useRef<Channel | null>(null);
-  const moveTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const moveTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   // Convert board nodes to React Flow nodes
   const toFlowNodes = useCallback((nodes: BoardNode[]): Node[] => {
@@ -144,7 +143,7 @@ export function useBoardSession(projectId: number, sessionId: number) {
     );
 
     refs.push(
-      channel.on("reaction_toggled", ({ node_id, reactions }: { node_id: number; reactions: Record<string, string[]> }) => {
+      channel.on("reaction_toggled", ({ node_id, reactions }: { node_id: number; reactions: BoardNodeReactions }) => {
         setBoardNodes((prev) =>
           prev.map((n) =>
             n.id === node_id

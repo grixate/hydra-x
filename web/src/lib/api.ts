@@ -3,13 +3,14 @@ import type {
   BoardEdge,
   BoardNode,
   BoardSession,
+  Constraint,
   Decision,
   DesignNode,
-  Constraint,
   GraphData,
   GraphDataEdge,
   GraphFlag,
   Insight,
+  KnowledgeEntry,
   Learning,
   ProductConversation,
   ProductTask,
@@ -17,8 +18,12 @@ import type {
   ProjectExport,
   Project,
   Requirement,
+  Routine,
+  RoutineRun,
+  Simulation,
   Source,
   Strategy,
+  WatchTarget,
 } from "@/types";
 
 const API_PREFIX = import.meta.env.VITE_API_BASE ?? "/api/v1";
@@ -296,8 +301,52 @@ export const api = {
   createLearning: (projectId: number, payload: { title: string; body: string; learning_type: string }) =>
     request<Learning>(`/projects/${projectId}/learnings`, { method: "POST", body: JSON.stringify({ learning: payload }) }),
   // Constraints
+  listConstraints: (projectId: number) =>
+    request<Constraint[]>(`/projects/${projectId}/constraints`),
   createConstraint: (projectId: number, payload: { title: string; body: string; scope: string; enforcement: string }) =>
     request<Constraint>(`/projects/${projectId}/constraints`, { method: "POST", body: JSON.stringify({ constraint: payload }) }),
+  updateConstraint: (projectId: number, id: number, payload: Partial<{ title: string; body: string; scope: string; enforcement: string; status: string }>) =>
+    request<Constraint>(`/projects/${projectId}/constraints/${id}`, { method: "PATCH", body: JSON.stringify({ constraint: payload }) }),
+  deleteConstraint: (projectId: number, id: number) =>
+    request<void>(`/projects/${projectId}/constraints/${id}`, { method: "DELETE" }),
+
+  // Watch Targets
+  listWatchTargets: (projectId: number) =>
+    request<WatchTarget[]>(`/projects/${projectId}/watch_targets`),
+  createWatchTarget: (projectId: number, payload: { target_type: string; value: string; check_interval_hours?: number }) =>
+    request<WatchTarget>(`/projects/${projectId}/watch_targets`, { method: "POST", body: JSON.stringify({ watch_target: payload }) }),
+  deleteWatchTarget: (projectId: number, id: number) =>
+    request<void>(`/projects/${projectId}/watch_targets/${id}`, { method: "DELETE" }),
+
+  // Routines
+  listRoutines: (projectId: number) =>
+    request<Routine[]>(`/projects/${projectId}/routines`),
+  createRoutine: (projectId: number, payload: {
+    title: string; description?: string; prompt_template: string; assigned_persona: string;
+    schedule_type: string; cron_expression?: string; event_trigger?: string; output_target?: string;
+  }) =>
+    request<Routine>(`/projects/${projectId}/routines`, { method: "POST", body: JSON.stringify({ routine: payload }) }),
+  updateRoutine: (projectId: number, id: number, payload: Record<string, unknown>) =>
+    request<Routine>(`/projects/${projectId}/routines/${id}`, { method: "PATCH", body: JSON.stringify({ routine: payload }) }),
+  deleteRoutine: (projectId: number, id: number) =>
+    request<void>(`/projects/${projectId}/routines/${id}`, { method: "DELETE" }),
+  runRoutine: (projectId: number, id: number) =>
+    request<RoutineRun>(`/projects/${projectId}/routines/${id}/run`, { method: "POST" }),
+  listRoutineRuns: (projectId: number, id: number) =>
+    request<RoutineRun[]>(`/projects/${projectId}/routines/${id}/runs`),
+
+  // Knowledge Entries
+  listKnowledgeEntries: (projectId: number) =>
+    request<KnowledgeEntry[]>(`/projects/${projectId}/knowledge`),
+  createKnowledgeEntry: (projectId: number, payload: {
+    title: string; content: string; entry_type: string; assigned_personas?: string[];
+    source_type?: string; source_url?: string;
+  }) =>
+    request<KnowledgeEntry>(`/projects/${projectId}/knowledge`, { method: "POST", body: JSON.stringify({ knowledge_entry: payload }) }),
+  updateKnowledgeEntry: (projectId: number, id: number, payload: Record<string, unknown>) =>
+    request<KnowledgeEntry>(`/projects/${projectId}/knowledge/${id}`, { method: "PATCH", body: JSON.stringify({ knowledge_entry: payload }) }),
+  deleteKnowledgeEntry: (projectId: number, id: number) =>
+    request<void>(`/projects/${projectId}/knowledge/${id}`, { method: "DELETE" }),
   // Graph flags
   listGraphFlags: (projectId: number) =>
     request<GraphFlag[]>(`/projects/${projectId}/graph/flags`),
@@ -417,6 +466,21 @@ export const api = {
     }),
   listArtifactVersions: (projectId: number, artifactId: number) =>
     request<ArtifactVersion[]>(`/projects/${projectId}/artifacts/${artifactId}/versions`),
+
+  // Simulations
+  listSimulations: (projectId: number) =>
+    request<Simulation[]>(`/projects/${projectId}/simulations`),
+  createSimulation: (projectId: number, metadata?: Record<string, unknown>) =>
+    request<Simulation>(`/projects/${projectId}/simulations`, {
+      method: "POST",
+      body: JSON.stringify({ metadata }),
+    }),
+  getSimulation: (projectId: number, simulationId: number) =>
+    request<Simulation>(`/projects/${projectId}/simulations/${simulationId}`),
+  importSimulationResults: (projectId: number, simulationId: number) =>
+    request<Simulation>(`/projects/${projectId}/simulations/${simulationId}/import`, {
+      method: "POST",
+    }),
 };
 
 export type StreamItem = {

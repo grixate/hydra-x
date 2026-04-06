@@ -141,7 +141,7 @@ function BoardWorkspaceInner({ projectId, sessionId }: BoardWorkspaceInnerProps)
 
       {/* Canvas view — always mounted, hidden when chat active */}
       <div className={view === "canvas" ? "relative flex-1" : "hidden"} onMouseMove={handleMouseMove}>
-        {flowNodes.length === 0 && <BoardEmptyState />}
+        {flowNodes.length === 0 && <BoardEmptyState onSuggestion={() => {}} />}
 
         <ReactFlow
           nodes={flowNodes}

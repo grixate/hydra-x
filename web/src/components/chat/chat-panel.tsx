@@ -215,7 +215,7 @@ export function ChatPanel({
         </Card>
       </div>
 
-      <SourcePreviewDialog citation={revealedCitation} onClose={() => setRevealedCitation(null)} />
+      <SourcePreviewDialog citation={revealedCitation} relatedInsights={[]} relatedRequirements={[]} onClose={() => setRevealedCitation(null)} />
     </>
   );
 }
