@@ -16,7 +16,9 @@ defmodule HydraXWeb.ConstraintAPIController do
   end
 
   def show(conn, %{"project_id" => project_id, "id" => id}) do
-    constraint = project_id |> Product.get_project_constraint!(id) |> ProductPayload.constraint_json()
+    constraint =
+      project_id |> Product.get_project_constraint!(id) |> ProductPayload.constraint_json()
+
     json(conn, %{data: constraint})
   end
 
@@ -28,6 +30,7 @@ defmodule HydraXWeb.ConstraintAPIController do
 
   def update(conn, %{"project_id" => project_id, "id" => id, "constraint" => params}) do
     constraint = Product.get_project_constraint!(project_id, id)
+
     with {:ok, %Constraint{} = updated} <- Product.update_constraint(constraint, params) do
       json(conn, %{data: ProductPayload.constraint_json(updated)})
     end
@@ -35,6 +38,7 @@ defmodule HydraXWeb.ConstraintAPIController do
 
   def delete(conn, %{"project_id" => project_id, "id" => id}) do
     constraint = Product.get_project_constraint!(project_id, id)
+
     with {:ok, %Constraint{}} <- Product.delete_constraint(constraint) do
       send_resp(conn, :no_content, "")
     end

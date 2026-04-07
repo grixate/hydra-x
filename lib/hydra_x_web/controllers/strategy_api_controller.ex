@@ -31,6 +31,7 @@ defmodule HydraXWeb.StrategyAPIController do
 
   def update(conn, %{"project_id" => project_id, "id" => id, "strategy" => params}) do
     strategy = Product.get_project_strategy!(project_id, id)
+
     with {:ok, %Strategy{} = updated} <- Product.update_strategy(strategy, params) do
       json(conn, %{data: ProductPayload.strategy_json(updated)})
     end
@@ -38,6 +39,7 @@ defmodule HydraXWeb.StrategyAPIController do
 
   def delete(conn, %{"project_id" => project_id, "id" => id}) do
     strategy = Product.get_project_strategy!(project_id, id)
+
     with {:ok, %Strategy{}} <- Product.delete_strategy(strategy) do
       send_resp(conn, :no_content, "")
     end

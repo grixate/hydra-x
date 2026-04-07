@@ -19,7 +19,11 @@ defmodule HydraXWeb.KnowledgeEntryAPIController do
   end
 
   def show(conn, %{"project_id" => project_id, "id" => id}) do
-    entry = project_id |> Product.get_project_knowledge_entry!(id) |> ProductPayload.knowledge_entry_json()
+    entry =
+      project_id
+      |> Product.get_project_knowledge_entry!(id)
+      |> ProductPayload.knowledge_entry_json()
+
     json(conn, %{data: entry})
   end
 
@@ -31,6 +35,7 @@ defmodule HydraXWeb.KnowledgeEntryAPIController do
 
   def update(conn, %{"project_id" => project_id, "id" => id, "knowledge_entry" => params}) do
     entry = Product.get_project_knowledge_entry!(project_id, id)
+
     with {:ok, %KnowledgeEntry{} = updated} <- Product.update_knowledge_entry(entry, params) do
       json(conn, %{data: ProductPayload.knowledge_entry_json(updated)})
     end
@@ -38,6 +43,7 @@ defmodule HydraXWeb.KnowledgeEntryAPIController do
 
   def delete(conn, %{"project_id" => project_id, "id" => id}) do
     entry = Product.get_project_knowledge_entry!(project_id, id)
+
     with {:ok, %KnowledgeEntry{}} <- Product.delete_knowledge_entry(entry) do
       send_resp(conn, :no_content, "")
     end

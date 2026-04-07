@@ -27,6 +27,7 @@ defmodule HydraX.Runtime do
   defdelegate set_default_agent!(id), to: HydraX.Runtime.Agents
   defdelegate repair_agent_workspace!(id), to: HydraX.Runtime.Agents
   defdelegate agent_bulletin(id), to: HydraX.Runtime.Agents
+  defdelegate agent_wake_up_packet(id), to: HydraX.Runtime.Agents
   defdelegate compaction_policy(id), to: HydraX.Runtime.Agents
   defdelegate save_compaction_policy!(id, attrs), to: HydraX.Runtime.Agents
   defdelegate refresh_agent_bulletin!(id), to: HydraX.Runtime.Agents

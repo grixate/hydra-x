@@ -101,7 +101,7 @@ defmodule HydraXWeb.MemoryLiveTest do
         last_seen_at: DateTime.utc_now()
       })
 
-    {:ok, _goal} =
+    {:ok, goal} =
       Memory.create_memory(%{
         agent_id: agent.id,
         type: "Goal",
@@ -125,7 +125,7 @@ defmodule HydraXWeb.MemoryLiveTest do
 
     html = render(view)
     assert html =~ "Filterable fact memory"
-    refute html =~ "Filterable goal memory"
+    refute has_element?(view, ~s(button[phx-click="select_memory"][phx-value-id="#{goal.id}"]))
   end
 
   test "memory page shows ranked reasons and scores for search results", %{conn: conn} do
@@ -512,5 +512,74 @@ defmodule HydraXWeb.MemoryLiveTest do
     assert html =~ "ops.md"
     assert html =~ "Recent runs for this source"
     assert html =~ "restored 1"
+  end
+
+  test "memory page shows wake-up preview, evidence excerpts, and routed filters", %{conn: conn} do
+    agent = Runtime.ensure_default_agent!()
+    topic_key = HydraX.Memory.Routing.topic_key("handoff")
+
+    {:ok, matching} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Decision",
+        content: "Handoff packets should stay terse and explicit.",
+        importance: 0.9,
+        scope_kind: "agent",
+        scope_key: "agent:#{agent.id}",
+        hall: "facts",
+        topic_key: topic_key,
+        evidence: [
+          %{
+            "source_kind" => "conversation_turn",
+            "source_ref" => "conversation:1",
+            "excerpt" => "Operator confirmed terse handoff bullets."
+          }
+        ],
+        last_seen_at: DateTime.utc_now()
+      })
+
+    {:ok, other} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Goal",
+        content: "A different topic should filter out.",
+        importance: 0.7,
+        scope_kind: "agent",
+        scope_key: "agent:#{agent.id}",
+        hall: "advice",
+        topic_key: HydraX.Memory.Routing.topic_key("other"),
+        last_seen_at: DateTime.utc_now()
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/memory")
+
+    view
+    |> form("form[phx-submit=\"filter_memories\"]", %{
+      "filters" => %{
+        "query" => "handoff",
+        "agent_id" => to_string(agent.id),
+        "type" => "",
+        "status" => "active",
+        "scope_kind" => "agent",
+        "scope_key" => "agent:#{agent.id}",
+        "hall" => "facts",
+        "topic_key" => topic_key,
+        "as_of" => "",
+        "min_importance" => ""
+      }
+    })
+    |> render_submit()
+
+    view
+    |> element(~s(button[phx-click="select_memory"][phx-value-id="#{matching.id}"]))
+    |> render_click()
+
+    html = render(view)
+    assert html =~ "Wake-up packet preview"
+    assert html =~ "Evidence excerpts"
+    assert html =~ "Operator confirmed terse handoff bullets."
+    assert html =~ "conversation_turn"
+    assert html =~ topic_key
+    refute has_element?(view, ~s(button[phx-click="select_memory"][phx-value-id="#{other.id}"]))
   end
 end

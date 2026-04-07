@@ -43,9 +43,10 @@ defmodule HydraX.Product.SimulationBridge do
       |> Enum.filter(fn d -> d.id in design_node_ids end)
 
     scenario = %{
-      design_nodes: Enum.map(design_nodes, fn d ->
-        %{id: d.id, title: d.title, type: d.node_type, body: d.body}
-      end),
+      design_nodes:
+        Enum.map(design_nodes, fn d ->
+          %{id: d.id, title: d.title, type: d.node_type, body: d.body}
+        end),
       requirements: linked_requirements(project_id, design_node_ids)
     }
 
@@ -260,6 +261,7 @@ defmodule HydraX.Product.SimulationBridge do
   defp extract_traits_from_insight(insight) do
     # Simple trait extraction based on insight metadata
     metadata = insight.metadata || %{}
+
     %{
       type: Map.get(metadata, "insight_type", "general"),
       confidence: Map.get(metadata, "confidence", "medium")

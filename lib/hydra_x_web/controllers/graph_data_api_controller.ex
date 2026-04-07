@@ -85,7 +85,10 @@ defmodule HydraXWeb.GraphDataAPIController do
         node
         |> Map.put(:upstream_count, Map.get(upstream_counts, node.id, 0))
         |> Map.put(:downstream_count, Map.get(downstream_counts, node.id, 0))
-        |> Map.put(:connection_count, Map.get(upstream_counts, node.id, 0) + Map.get(downstream_counts, node.id, 0))
+        |> Map.put(
+          :connection_count,
+          Map.get(upstream_counts, node.id, 0) + Map.get(downstream_counts, node.id, 0)
+        )
         |> Map.put(:flag_count, Map.get(flag_counts, node.id, 0))
       end)
 

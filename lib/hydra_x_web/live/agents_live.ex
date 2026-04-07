@@ -715,21 +715,22 @@ defmodule HydraXWeb.AgentsLive do
               <div class="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-3">
                 <div class="flex items-center justify-between gap-3">
                   <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
-                    Bulletin
+                    Wake-up packet
                   </div>
                   <button
                     phx-click="refresh_bulletin"
                     phx-value-id={agent.id}
                     class="btn btn-sm btn-outline border-white/10 bg-white/5 text-white hover:bg-white/10"
                   >
-                    Refresh bulletin
+                    Refresh wake-up
                   </button>
                 </div>
                 <p class="mt-3 whitespace-pre-wrap text-sm text-[var(--hx-mute)]">
-                  {agent.bulletin.content || "No bulletin yet"}
+                  {get_in(agent.bulletin.wake_up_packet || %{}, ["compact_text"]) ||
+                    agent.bulletin.content || "No wake-up packet yet"}
                 </p>
                 <div class="mt-2 text-xs text-[var(--hx-mute)]">
-                  {agent.bulletin.memory_count} memory items in bulletin scope
+                  {agent.bulletin.memory_count} memory items in the wake-up scope
                 </div>
                 <div :if={agent.bulletin.top_memories != []} class="mt-3 space-y-2">
                   <div class="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--hx-mute)]">
@@ -746,6 +747,32 @@ defmodule HydraXWeb.AgentsLive do
                       <div class="text-xs text-[var(--hx-mute)]">
                         score {Float.round(bulletin_memory_value(memory, :score) || 0.0, 2)}
                       </div>
+                    </div>
+                    <div class="mt-2 flex flex-wrap gap-2 text-[11px] text-[var(--hx-mute)]">
+                      <span
+                        :if={bulletin_memory_value(memory, :hall)}
+                        class="rounded-full border border-white/10 px-3 py-1"
+                      >
+                        {bulletin_memory_value(memory, :hall)}
+                      </span>
+                      <span
+                        :if={bulletin_memory_value(memory, :scope_key)}
+                        class="rounded-full border border-white/10 px-3 py-1"
+                      >
+                        {bulletin_memory_value(memory, :scope_key)}
+                      </span>
+                      <span
+                        :if={bulletin_memory_value(memory, :topic_key)}
+                        class="rounded-full border border-white/10 px-3 py-1"
+                      >
+                        {bulletin_memory_value(memory, :topic_key)}
+                      </span>
+                      <span
+                        :if={bulletin_memory_value(memory, :evidence_count)}
+                        class="rounded-full border border-white/10 px-3 py-1"
+                      >
+                        evidence {bulletin_memory_value(memory, :evidence_count)}
+                      </span>
                     </div>
                     <p class="mt-2 text-sm text-[var(--hx-mute)]">
                       {bulletin_memory_value(memory, :content)}
@@ -3415,6 +3442,19 @@ defmodule HydraXWeb.AgentsLive do
 
     (bulletin_memory_value(memory, :reasons) || [])
     |> Enum.take(2)
+    |> Kernel.++(
+      [
+        bulletin_memory_value(memory, :hall),
+        bulletin_memory_value(memory, :scope_key),
+        bulletin_memory_value(memory, :topic_key),
+        if(bulletin_memory_value(memory, :evidence_count),
+          do: "evidence #{bulletin_memory_value(memory, :evidence_count)}",
+          else: nil
+        )
+      ]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.take(2)
+    )
     |> Kernel.++(if(source == "", do: [], else: [source]))
     |> Kernel.++(top_breakdown)
   end

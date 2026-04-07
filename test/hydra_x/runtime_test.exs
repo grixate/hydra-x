@@ -12436,6 +12436,222 @@ defmodule HydraX.RuntimeTest do
     assert reopened.operator_note == "regression"
   end
 
+  test "routed memory search prioritizes scoped topic matches and honors as_of" do
+    agent = create_agent()
+    topic_key = HydraX.Memory.Routing.topic_key("billing retention")
+    now = DateTime.utc_now()
+
+    {:ok, scoped} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Decision",
+        content: "Billing retention policy now keeps invoices for 18 months.",
+        importance: 0.8,
+        scope_kind: "conversation",
+        scope_key: "conversation:123",
+        hall: "facts",
+        topic_key: topic_key,
+        valid_from: now,
+        last_seen_at: now
+      })
+
+    {:ok, _global} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Decision",
+        content: "Billing retention policy used to keep invoices for 12 months.",
+        importance: 0.95,
+        hall: "facts",
+        topic_key: topic_key,
+        valid_to: DateTime.add(now, -86_400, :second),
+        last_seen_at: now
+      })
+
+    [top | _rest] =
+      Memory.search_ranked(agent.id, "billing retention policy", 5,
+        scope_key: "conversation:123",
+        topic_key: topic_key,
+        hall: "facts",
+        as_of: now
+      )
+
+    assert top.entry.id == scoped.id
+    assert top.score_breakdown["scope"] > 0
+    assert top.score_breakdown["topic"] > 0
+    assert top.score_breakdown["hall"] > 0
+
+    assert Enum.all?(
+             Memory.search(agent.id, "billing retention policy", 5, as_of: now),
+             &(is_nil(&1.valid_to) or DateTime.compare(&1.valid_to, now) != :lt)
+           )
+  end
+
+  test "bulletin ranking honors routing filters and invalid as_of values degrade safely" do
+    agent = create_agent()
+    topic_key = HydraX.Memory.Routing.topic_key("operator handoff")
+
+    {:ok, scoped} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Decision",
+        content: "Operator handoff summaries should stay terse.",
+        importance: 0.7,
+        scope_kind: "conversation",
+        scope_key: "conversation:42",
+        hall: "facts",
+        topic_key: topic_key,
+        last_seen_at: DateTime.utc_now()
+      })
+
+    {:ok, _unscoped} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Decision",
+        content: "A global handoff policy should not win scoped bulletin recall.",
+        importance: 0.95,
+        scope_kind: "agent",
+        scope_key: "agent:#{agent.id}",
+        hall: "facts",
+        topic_key: topic_key,
+        last_seen_at: DateTime.utc_now()
+      })
+
+    ranked =
+      Memory.bulletin_ranked(agent.id, 5,
+        scope_key: "conversation:42",
+        hall: "facts",
+        topic_key: topic_key
+      )
+
+    assert Enum.map(ranked, & &1.entry.id) == [scoped.id]
+
+    degraded =
+      Memory.list_memories(
+        agent_id: agent.id,
+        scope_key: "conversation:42",
+        as_of: "not-a-datetime",
+        limit: 5
+      )
+
+    assert Enum.any?(degraded, &(&1.id == scoped.id))
+  end
+
+  test "wake-up packets include scoped diary memory and checkpoint review persists the packet" do
+    agent = create_agent()
+
+    {:ok, _goal} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Goal",
+        content: "Keep operator summaries concise during handoffs.",
+        importance: 0.92,
+        scope_kind: "agent",
+        scope_key: "agent:#{agent.id}",
+        hall: "advice",
+        topic_key: HydraX.Memory.Routing.topic_key("handoff"),
+        last_seen_at: DateTime.utc_now()
+      })
+
+    {:ok, _diary} =
+      Memory.create_diary_entry(
+        agent.id,
+        "Observed that handoff notes work better with terse bullets.",
+        topic: "handoff"
+      )
+
+    packet =
+      Memory.wake_up(agent.id,
+        scope_key: "agent:#{agent.id}",
+        topic_key: HydraX.Memory.Routing.topic_key("handoff")
+      )
+
+    assert packet.l0_identity.slug == agent.slug
+    assert packet.l1_essential != []
+    assert Enum.any?(packet.l2_scoped, &(&1.hall == "diary"))
+    assert packet.compact_text =~ "Wake-Up Packet"
+
+    {:ok, conversation} =
+      Runtime.start_conversation(agent, %{channel: "control_plane", title: "Handoff Review"})
+
+    Enum.each(1..3, fn index ->
+      {:ok, _turn} =
+        Runtime.append_turn(conversation, %{
+          role: if(rem(index, 2) == 0, do: "assistant", else: "user"),
+          content: "Handoff turn #{index}",
+          metadata: %{}
+        })
+    end)
+
+    checkpoint = Memory.review_conversation_checkpoint(conversation.id, reason: "test_review")
+    persisted = Runtime.get_checkpoint(conversation.id, "memory_review")
+
+    assert checkpoint.process_type == "memory_review"
+    assert get_in(persisted.state, ["review_reason"]) == "test_review"
+    assert get_in(persisted.state, ["wake_up_packet", "compact_text"]) =~ "Wake-Up Packet"
+  end
+
+  test "graph query routes product search by hall topic and temporal truth" do
+    {:ok, project} = HydraX.Product.create_project(%{"name" => "Billing Roadmap"})
+    topic_key = HydraX.Memory.Routing.topic_key("billing retention")
+
+    {:ok, _historic} =
+      HydraX.Product.create_decision(project.id, %{
+        "title" => "Billing retention policy",
+        "body" => "Keep billing data for 12 months.",
+        "status" => "active",
+        "topic_key" => topic_key,
+        "valid_to" => "2024-12-31T00:00:00Z"
+      })
+
+    {:ok, current} =
+      HydraX.Product.create_decision(project.id, %{
+        "title" => "Billing retention policy",
+        "body" => "Keep billing data for 18 months.",
+        "status" => "active",
+        "topic_key" => topic_key,
+        "valid_from" => "2025-01-01T00:00:00Z"
+      })
+
+    {:ok, _learning} =
+      HydraX.Product.create_learning(project.id, %{
+        "title" => "Billing interviews",
+        "body" => "Users want easier retention controls.",
+        "learning_type" => "usage_data",
+        "status" => "active"
+      })
+
+    assert {:ok, %{results: [latest | _]}} =
+             HydraX.Product.Tools.GraphQuery.execute(
+               %{
+                 "project_id" => project.id,
+                 "query" => "billing retention",
+                 "hall" => "facts",
+                 "topic_key" => topic_key,
+                 "as_of" => "2025-04-01T00:00:00Z"
+               },
+               %{}
+             )
+
+    assert latest.node_id == current.id
+    assert latest.hall == "facts"
+    assert latest.topic_key == topic_key
+    assert latest.related != []
+
+    assert {:ok, %{results: [historic | _]}} =
+             HydraX.Product.Tools.GraphQuery.execute(
+               %{
+                 "project_id" => project.id,
+                 "query" => "billing retention",
+                 "hall" => "facts",
+                 "topic_key" => topic_key,
+                 "as_of" => "2024-06-01T00:00:00Z"
+               },
+               %{}
+             )
+
+    assert historic.body_preview =~ "12 months"
+  end
+
   defp create_agent do
     unique = System.unique_integer([:positive])
 

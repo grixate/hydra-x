@@ -29,6 +29,8 @@ defmodule HydraXWeb.MemoryLive do
      |> assign(:agents, Runtime.list_agents())
      |> assign(:memory_types, memory_types())
      |> assign(:memory_statuses, memory_statuses())
+     |> assign(:scope_kinds, HydraX.Memory.Routing.scope_kinds())
+     |> assign(:memory_halls, HydraX.Memory.Routing.halls())
      |> assign(:edge_kinds, edge_kinds())
      |> assign(:embedding_status, current_embedding_status(filters))
      |> assign(:ingest_agent, current_ingest_agent(filters))
@@ -619,6 +621,21 @@ defmodule HydraXWeb.MemoryLive do
               options={Enum.map(@memory_statuses, &{format_status_option(&1), &1})}
             />
             <.input
+              field={@filter_form[:scope_kind]}
+              type="select"
+              label="Scope"
+              options={[{"All scopes", ""} | Enum.map(@scope_kinds, &{String.capitalize(&1), &1})]}
+            />
+            <.input field={@filter_form[:scope_key]} label="Scope key" />
+            <.input
+              field={@filter_form[:hall]}
+              type="select"
+              label="Hall"
+              options={[{"All halls", ""} | Enum.map(@memory_halls, &{String.capitalize(&1), &1})]}
+            />
+            <.input field={@filter_form[:topic_key]} label="Topic key" />
+            <.input field={@filter_form[:as_of]} type="datetime-local" label="As of" />
+            <.input
               field={@filter_form[:min_importance]}
               type="number"
               label="Min importance"
@@ -671,6 +688,20 @@ defmodule HydraXWeb.MemoryLive do
                   </span>
                 </div>
                 <p class="mt-3 text-sm leading-6">{memory.content}</p>
+                <div class="mt-3 flex flex-wrap gap-2 text-[11px] text-[var(--hx-mute)]">
+                  <span :if={memory.scope_kind} class="rounded-full border border-white/10 px-3 py-1">
+                    {memory.scope_kind}
+                  </span>
+                  <span :if={memory.scope_key} class="rounded-full border border-white/10 px-3 py-1">
+                    {memory.scope_key}
+                  </span>
+                  <span :if={memory.hall} class="rounded-full border border-white/10 px-3 py-1">
+                    {memory.hall}
+                  </span>
+                  <span :if={memory.topic_key} class="rounded-full border border-white/10 px-3 py-1">
+                    {memory.topic_key}
+                  </span>
+                </div>
                 <div
                   :if={ranked = memory_ranking(@memory_rankings, memory)}
                   class="mt-3 flex flex-wrap gap-2 text-xs"
@@ -750,6 +781,22 @@ defmodule HydraXWeb.MemoryLive do
               max="1"
               step="0.1"
             />
+            <.input
+              field={@memory_form[:scope_kind]}
+              type="select"
+              label="Scope kind"
+              options={Enum.map(@scope_kinds, &{String.capitalize(&1), &1})}
+            />
+            <.input field={@memory_form[:scope_key]} label="Scope key" />
+            <.input
+              field={@memory_form[:hall]}
+              type="select"
+              label="Hall"
+              options={Enum.map(@memory_halls, &{String.capitalize(&1), &1})}
+            />
+            <.input field={@memory_form[:topic_key]} label="Topic key" />
+            <.input field={@memory_form[:valid_from]} type="datetime-local" label="Valid from" />
+            <.input field={@memory_form[:valid_to]} type="datetime-local" label="Valid to" />
             <.input field={@memory_form[:content]} type="textarea" label="Content" />
             <div class="pt-2">
               <.button>Save memory</.button>
@@ -757,6 +804,13 @@ defmodule HydraXWeb.MemoryLive do
           </.form>
 
           <div :if={@selected} class="mt-8">
+            <div class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+              <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">
+                Wake-up packet preview
+              </div>
+              <pre class="mt-3 overflow-x-auto whitespace-pre-wrap text-xs text-[var(--hx-mute)]">{wake_up_preview(@filters, @selected)}</pre>
+            </div>
+
             <div class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
               <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">
                 Embedding profile
@@ -767,6 +821,46 @@ defmodule HydraXWeb.MemoryLive do
                   <dd class="mt-1 break-all text-white">{value}</dd>
                 </div>
               </dl>
+            </div>
+
+            <div class="mt-6 rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+              <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">
+                Evidence excerpts
+              </div>
+              <div class="mt-3 space-y-3">
+                <div
+                  :for={evidence <- selected_evidence(@selected)}
+                  class="rounded-xl border border-white/10 bg-black/10 px-3 py-3"
+                >
+                  <div class="text-[11px] uppercase tracking-[0.18em] text-[var(--hx-accent)]">
+                    {evidence.source_kind}
+                  </div>
+                  <p class="mt-2 text-sm text-[var(--hx-mute)]">{evidence.excerpt}</p>
+                </div>
+                <p :if={selected_evidence(@selected) == []} class="text-sm text-[var(--hx-mute)]">
+                  No evidence attached yet.
+                </p>
+              </div>
+            </div>
+
+            <div class="mt-6 rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
+              <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">
+                Tunnel-related memory
+              </div>
+              <div class="mt-3 space-y-3">
+                <div
+                  :for={related <- selected_related(@selected)}
+                  class="rounded-xl border border-white/10 bg-black/10 px-3 py-3"
+                >
+                  <div class="text-[11px] uppercase tracking-[0.18em] text-[var(--hx-accent)]">
+                    {related.type} · {related.hall || "facts"}
+                  </div>
+                  <p class="mt-2 text-sm text-[var(--hx-mute)]">{related.content}</p>
+                </div>
+                <p :if={selected_related(@selected) == []} class="text-sm text-[var(--hx-mute)]">
+                  No related topic memory found.
+                </p>
+              </div>
             </div>
 
             <div
@@ -921,7 +1015,12 @@ defmodule HydraXWeb.MemoryLive do
       agent_id: parse_integer(filters["agent_id"]),
       type: blank_to_nil(filters["type"]),
       status: blank_to_nil(filters["status"]) || "active",
-      min_importance: parse_float(filters["min_importance"], nil)
+      min_importance: parse_float(filters["min_importance"], nil),
+      scope_kind: blank_to_nil(filters["scope_kind"]),
+      scope_key: blank_to_nil(filters["scope_key"]),
+      hall: blank_to_nil(filters["hall"]),
+      topic_key: blank_to_nil(filters["topic_key"]),
+      as_of: normalize_filter_datetime(filters["as_of"])
     ]
 
     case blank_to_nil(filters["query"]) do
@@ -958,7 +1057,12 @@ defmodule HydraXWeb.MemoryLive do
       agent_id: parse_integer(filters["agent_id"]),
       type: blank_to_nil(filters["type"]),
       status: blank_to_nil(filters["status"]) || "active",
-      min_importance: parse_float(filters["min_importance"], nil)
+      min_importance: parse_float(filters["min_importance"], nil),
+      scope_kind: blank_to_nil(filters["scope_kind"]),
+      scope_key: blank_to_nil(filters["scope_key"]),
+      hall: blank_to_nil(filters["hall"]),
+      topic_key: blank_to_nil(filters["topic_key"]),
+      as_of: normalize_filter_datetime(filters["as_of"])
     ]
 
     case blank_to_nil(filters["query"]) do
@@ -1043,6 +1147,8 @@ defmodule HydraXWeb.MemoryLive do
       agent_id: agent_id,
       type: "Fact",
       status: "active",
+      scope_kind: "agent",
+      hall: "facts",
       importance: 0.7,
       content: ""
     })
@@ -1065,6 +1171,8 @@ defmodule HydraXWeb.MemoryLive do
   defp normalize_memory_params(params) do
     params
     |> Map.put("importance", parse_float(params["importance"], 0.7))
+    |> Map.put("valid_from", normalize_filter_datetime(params["valid_from"]))
+    |> Map.put("valid_to", normalize_filter_datetime(params["valid_to"]))
     |> Map.put("last_seen_at", DateTime.utc_now())
   end
 
@@ -1204,6 +1312,17 @@ defmodule HydraXWeb.MemoryLive do
   defp blank_to_nil(""), do: nil
   defp blank_to_nil(value), do: value
 
+  defp normalize_filter_datetime(nil), do: nil
+  defp normalize_filter_datetime(""), do: nil
+
+  defp normalize_filter_datetime(value) when is_binary(value) do
+    if String.ends_with?(value, "Z") do
+      value
+    else
+      value <> ":00Z"
+    end
+  end
+
   defp truthy?(value), do: value in [true, "true", "on", "1"]
 
   defp ingest_message(filename, %{unchanged: true, skipped: skipped}) do
@@ -1239,7 +1358,18 @@ defmodule HydraXWeb.MemoryLive do
   defp format_datetime(datetime), do: Calendar.strftime(datetime, "%Y-%m-%d %H:%M UTC")
 
   defp default_filters do
-    %{"query" => "", "agent_id" => "", "type" => "", "status" => "active", "min_importance" => ""}
+    %{
+      "query" => "",
+      "agent_id" => "",
+      "type" => "",
+      "status" => "active",
+      "scope_kind" => "",
+      "scope_key" => "",
+      "hall" => "",
+      "topic_key" => "",
+      "as_of" => "",
+      "min_importance" => ""
+    }
   end
 
   defp format_status_option("all"), do: "All statuses"
@@ -1289,4 +1419,28 @@ defmodule HydraXWeb.MemoryLive do
   defp score_breakdown_labels(_ranked), do: []
 
   defp memory_ranking(rankings, memory), do: Map.get(rankings || %{}, memory.id)
+
+  defp selected_evidence(nil), do: []
+  defp selected_evidence(memory), do: Memory.list_evidence(memory_id: memory.id, limit: 6)
+
+  defp selected_related(nil), do: []
+  defp selected_related(memory), do: Memory.related_topic_snapshot(memory)
+
+  defp wake_up_preview(filters, selected) do
+    agent_id =
+      cond do
+        selected && selected.agent_id -> selected.agent_id
+        parse_integer(filters["agent_id"]) -> parse_integer(filters["agent_id"])
+        true -> Runtime.get_default_agent() |> then(&(&1 && &1.id))
+      end
+
+    if agent_id do
+      Memory.wake_up(agent_id,
+        scope_key: (selected && selected.scope_key) || blank_to_nil(filters["scope_key"]),
+        topic_key: (selected && selected.topic_key) || blank_to_nil(filters["topic_key"])
+      ).compact_text
+    else
+      "No agent available for wake-up preview."
+    end
+  end
 end

@@ -23,6 +23,14 @@ defmodule HydraX.Tools.MemoryRecall do
           limit: %{
             type: "integer",
             description: "Maximum number of results to return (default: 5)"
+          },
+          scope_kind: %{type: "string", description: "Optional scope kind to prioritize"},
+          scope_key: %{type: "string", description: "Optional scope key to prioritize"},
+          hall: %{type: "string", description: "Optional hall to prioritize"},
+          topic_key: %{type: "string", description: "Optional topic key to prioritize"},
+          as_of: %{
+            type: "string",
+            description: "Optional ISO datetime used for temporal truth filtering"
           }
         },
         required: ["query"]
@@ -36,7 +44,13 @@ defmodule HydraX.Tools.MemoryRecall do
       HydraX.Memory.search_ranked(
         params[:agent_id] || params["agent_id"],
         params[:query] || params["query"] || "",
-        params[:limit] || params["limit"] || 5
+        params[:limit] || params["limit"] || 5,
+        scope_kind: params[:scope_kind] || params["scope_kind"],
+        scope_key: params[:scope_key] || params["scope_key"],
+        hall: params[:hall] || params["hall"],
+        topic_key: params[:topic_key] || params["topic_key"],
+        as_of: params[:as_of] || params["as_of"],
+        include_related: true
       )
 
     {:ok,
@@ -61,7 +75,15 @@ defmodule HydraX.Tools.MemoryRecall do
              lexical_rank: ranked.lexical_rank,
              semantic_rank: ranked.semantic_rank,
              source_file: get_in(memory.metadata || %{}, ["source_file"]),
-             source_section: get_in(memory.metadata || %{}, ["source_section"])
+             source_section: get_in(memory.metadata || %{}, ["source_section"]),
+             scope_kind: memory.scope_kind,
+             scope_key: memory.scope_key,
+             hall: memory.hall,
+             topic_key: memory.topic_key,
+             valid_from: memory.valid_from,
+             valid_to: memory.valid_to,
+             evidence: ranked[:evidence] || [],
+             related: ranked[:related] || []
            }
          end)
      }}

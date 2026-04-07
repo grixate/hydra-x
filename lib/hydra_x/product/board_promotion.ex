@@ -43,7 +43,10 @@ defmodule HydraX.Product.BoardPromotion do
 
     nodes =
       BoardNode
-      |> where([n], n.board_session_id == ^session_id and n.id in ^node_ids and n.status == "draft")
+      |> where(
+        [n],
+        n.board_session_id == ^session_id and n.id in ^node_ids and n.status == "draft"
+      )
       |> where([n], n.node_type in ^@promotable_types)
       |> Repo.all()
 

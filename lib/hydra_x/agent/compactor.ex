@@ -74,6 +74,10 @@ defmodule HydraX.Agent.Compactor do
         "summary" => compaction.summary,
         "summary_source" => compaction.summary_source,
         "supporting_memories" => compaction.supporting_memories,
+        "supporting_evidence" => compaction[:supporting_evidence] || [],
+        "wake_up_packet" => compaction[:wake_up_packet] || %{},
+        "scope_key" => compaction[:scope_key],
+        "topic_key" => compaction[:topic_key],
         "updated_at" => DateTime.utc_now(),
         "estimated_tokens" => token_usage.estimated_tokens,
         "conversation_limit_tokens" => token_usage.conversation_limit_tokens,
@@ -93,8 +97,19 @@ defmodule HydraX.Agent.Compactor do
       turns
       |> Enum.map_join("\n", fn turn -> "#{turn.role}: #{turn.content}" end)
 
+    _ =
+      Memory.review_conversation_checkpoint(state.conversation_id,
+        reason: "pre_compaction"
+      )
+
+    scoped_context =
+      Memory.compact_context(state.agent_id,
+        scope_key: "conversation:#{state.conversation_id}",
+        topic_key: HydraX.Memory.Routing.topic_key(transcript)
+      )
+
     supporting_memories = supporting_memories(state.agent_id, transcript)
-    prompt = compaction_prompt(transcript, supporting_memories)
+    prompt = compaction_prompt(transcript, supporting_memories, scoped_context)
 
     messages = [
       %{
@@ -124,14 +139,22 @@ defmodule HydraX.Agent.Compactor do
             %{
               summary: response.content || fallback_summary(transcript),
               summary_source: "provider",
-              supporting_memories: supporting_memories
+              supporting_memories: supporting_memories,
+              wake_up_packet: scoped_context.wake_up_packet,
+              supporting_evidence: scoped_context.supporting_evidence,
+              scope_key: scoped_context.scope_key,
+              topic_key: scoped_context.topic_key
             }
 
           {:error, _reason} ->
             %{
               summary: fallback_summary(transcript),
               summary_source: "fallback",
-              supporting_memories: supporting_memories
+              supporting_memories: supporting_memories,
+              wake_up_packet: scoped_context.wake_up_packet,
+              supporting_evidence: scoped_context.supporting_evidence,
+              scope_key: scoped_context.scope_key,
+              topic_key: scoped_context.topic_key
             }
         end
 
@@ -139,7 +162,11 @@ defmodule HydraX.Agent.Compactor do
         %{
           summary: fallback_summary(transcript),
           summary_source: "fallback",
-          supporting_memories: supporting_memories
+          supporting_memories: supporting_memories,
+          wake_up_packet: scoped_context.wake_up_packet,
+          supporting_evidence: scoped_context.supporting_evidence,
+          scope_key: scoped_context.scope_key,
+          topic_key: scoped_context.topic_key
         }
     end
   end
@@ -159,7 +186,7 @@ defmodule HydraX.Agent.Compactor do
     |> String.slice(0, 1_200)
   end
 
-  defp compaction_prompt(transcript, supporting_memories) do
+  defp compaction_prompt(transcript, supporting_memories, scoped_context) do
     """
     Summarize the following conversation concisely. Preserve key facts, decisions, \
     user preferences, and any commitments made. Omit small talk and redundant exchanges. \
@@ -168,6 +195,9 @@ defmodule HydraX.Agent.Compactor do
     Use the supporting memories as grounding when they reinforce decisions, preferences, \
     or durable context from the transcript. Do not invent facts that are absent from both \
     the transcript and the supporting memories.
+
+    Scoped wake-up context:
+    #{scoped_context.compact_text}
 
     #{render_supporting_memories_prompt(supporting_memories)}
 

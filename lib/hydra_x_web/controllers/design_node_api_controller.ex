@@ -32,6 +32,7 @@ defmodule HydraXWeb.DesignNodeAPIController do
 
   def update(conn, %{"project_id" => project_id, "id" => id, "design_node" => params}) do
     node = Product.get_project_design_node!(project_id, id)
+
     with {:ok, %DesignNode{} = updated} <- Product.update_design_node(node, params) do
       json(conn, %{data: ProductPayload.design_node_json(updated)})
     end
@@ -39,6 +40,7 @@ defmodule HydraXWeb.DesignNodeAPIController do
 
   def delete(conn, %{"project_id" => project_id, "id" => id}) do
     node = Product.get_project_design_node!(project_id, id)
+
     with {:ok, %DesignNode{}} <- Product.delete_design_node(node) do
       send_resp(conn, :no_content, "")
     end

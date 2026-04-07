@@ -19,7 +19,7 @@ defmodule HydraX.Product.Tools.ArtifactUpdate do
       name: "artifact_update",
       description:
         "Update a living artifact with new content. The artifact retains its identity. " <>
-        "Previous version is preserved in history. Always provide the complete updated body.",
+          "Previous version is preserved in history. Always provide the complete updated body.",
       input_schema: %{
         type: "object",
         properties: %{
@@ -72,13 +72,17 @@ defmodule HydraX.Product.Tools.ArtifactUpdate do
 
   defp project_id(params) do
     case params[:project_id] || params["project_id"] do
-      value when is_integer(value) -> {:ok, value}
+      value when is_integer(value) ->
+        {:ok, value}
+
       value when is_binary(value) ->
         case Integer.parse(value) do
           {integer, ""} -> {:ok, integer}
           _ -> {:error, :product_project_context_required}
         end
-      _ -> {:error, :product_project_context_required}
+
+      _ ->
+        {:error, :product_project_context_required}
     end
   end
 

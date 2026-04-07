@@ -78,13 +78,21 @@ defmodule HydraX.Product.Propagation do
 
   defp process_batch(entries) do
     Enum.each(entries, fn entry ->
-      %{affected: affected} = Graph.impact_of_change(entry.project_id, entry.node_type, entry.node_id)
+      %{affected: affected} =
+        Graph.impact_of_change(entry.project_id, entry.node_type, entry.node_id)
 
       Enum.each(affected, fn {affected_type, affected_id, _edge_kind} ->
         reason =
           "Upstream #{entry.node_type}##{entry.node_id} was #{entry.change_type}"
 
-        case Graph.flag_node(entry.project_id, affected_type, affected_id, "needs_review", reason, "propagation") do
+        case Graph.flag_node(
+               entry.project_id,
+               affected_type,
+               affected_id,
+               "needs_review",
+               reason,
+               "propagation"
+             ) do
           {:ok, flag} ->
             ProductPubSub.broadcast_project_event(
               entry.project_id,

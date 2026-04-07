@@ -60,19 +60,25 @@ defmodule HydraX.Product.Tools.PatternCheck do
   end
 
   @impl true
-  def result_summary(%{similar_patterns: patterns}), do: "found #{length(patterns)} similar patterns"
+  def result_summary(%{similar_patterns: patterns}),
+    do: "found #{length(patterns)} similar patterns"
+
   def result_summary(%{error: error}) when is_binary(error), do: error
   def result_summary(payload), do: inspect(payload, limit: 8, printable_limit: 120)
 
   defp extract_project_id(params) do
     case params[:project_id] || params["project_id"] do
-      value when is_integer(value) -> {:ok, value}
+      value when is_integer(value) ->
+        {:ok, value}
+
       value when is_binary(value) ->
         case Integer.parse(value) do
           {integer, ""} -> {:ok, integer}
           _ -> {:error, :product_project_context_required}
         end
-      _ -> {:error, :product_project_context_required}
+
+      _ ->
+        {:error, :product_project_context_required}
     end
   end
 end

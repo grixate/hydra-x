@@ -97,7 +97,8 @@ defmodule HydraX.Product.Tools.StrategyCreate do
 
   defp extract_project_id(params) do
     case params[:project_id] || params["project_id"] do
-      value when is_integer(value) -> {:ok, value}
+      value when is_integer(value) ->
+        {:ok, value}
 
       value when is_binary(value) ->
         case Integer.parse(value) do

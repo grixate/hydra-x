@@ -36,7 +36,8 @@ defmodule HydraXWeb.GraphTrailAPIController do
 
     downstream =
       if direction in ["both", "downstream"],
-        do: resolve_chain(Graph.trace_downstream(project_id, node_type, node_id, max_depth: depth)),
+        do:
+          resolve_chain(Graph.trace_downstream(project_id, node_type, node_id, max_depth: depth)),
         else: []
 
     flags = Graph.open_flags(project_id, node_type: node_type)
@@ -63,7 +64,9 @@ defmodule HydraXWeb.GraphTrailAPIController do
 
   defp resolve_chain(nodes) do
     refs = Enum.map(nodes, fn n -> {n.node_type, n.node_id} end)
-    resolved = Graph.resolve_nodes(refs) |> Map.new(fn {type, id, record} -> {{type, id}, record} end)
+
+    resolved =
+      Graph.resolve_nodes(refs) |> Map.new(fn {type, id, record} -> {{type, id}, record} end)
 
     Enum.map(nodes, fn n ->
       record = Map.get(resolved, {n.node_type, n.node_id})

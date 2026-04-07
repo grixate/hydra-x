@@ -8,6 +8,9 @@ defmodule Mix.Tasks.HydraX.Memory do
     Mix.Task.run("app.start")
 
     case args do
+      ["wake-up" | rest] ->
+        wake_up_packet(rest)
+
       ["create", type, content | rest] ->
         create_memory(type, content, rest)
 
@@ -176,7 +179,12 @@ defmodule Mix.Tasks.HydraX.Memory do
           status: :string,
           search: :string,
           min_importance: :float,
-          limit: :integer
+          limit: :integer,
+          scope_kind: :string,
+          scope_key: :string,
+          hall: :string,
+          topic_key: :string,
+          as_of: :string
         ]
       )
 
@@ -194,7 +202,12 @@ defmodule Mix.Tasks.HydraX.Memory do
             agent_id: agent_id,
             type: opts[:type],
             status: opts[:status] || "active",
-            min_importance: opts[:min_importance]
+            min_importance: opts[:min_importance],
+            scope_kind: opts[:scope_kind],
+            scope_key: opts[:scope_key],
+            hall: opts[:hall],
+            topic_key: opts[:topic_key],
+            as_of: opts[:as_of]
           )
           |> Enum.map(&%{entry: &1, score: nil, reasons: []})
 
@@ -205,7 +218,13 @@ defmodule Mix.Tasks.HydraX.Memory do
             opts[:limit] || 50,
             type: opts[:type],
             status: opts[:status] || "active",
-            min_importance: opts[:min_importance]
+            min_importance: opts[:min_importance],
+            scope_kind: opts[:scope_kind],
+            scope_key: opts[:scope_key],
+            hall: opts[:hall],
+            topic_key: opts[:topic_key],
+            as_of: opts[:as_of],
+            include_related: true
           )
       end
 
@@ -229,6 +248,10 @@ defmodule Mix.Tasks.HydraX.Memory do
             get_in(memory.metadata || %{}, ["embedding_backend"]) || "-",
             Enum.join(ranked.reasons || [], ", "),
             render_score_breakdown(ranked[:score_breakdown] || %{}),
+            memory.scope_kind || "-",
+            memory.scope_key || "-",
+            memory.hall || "-",
+            memory.topic_key || "-",
             get_in(memory.metadata || %{}, ["source_file"]) || "-",
             memory.content
           ],
@@ -236,6 +259,23 @@ defmodule Mix.Tasks.HydraX.Memory do
         )
       )
     end)
+  end
+
+  defp wake_up_packet(rest) do
+    {opts, _args, _invalid} =
+      OptionParser.parse(rest,
+        strict: [agent: :string, scope_key: :string, topic_key: :string]
+      )
+
+    agent = resolve_agent(opts[:agent])
+
+    packet =
+      HydraX.Memory.wake_up(agent.id,
+        scope_key: opts[:scope_key],
+        topic_key: opts[:topic_key]
+      )
+
+    Mix.shell().info(packet.compact_text)
   end
 
   defp resolve_agent(nil), do: HydraX.Runtime.ensure_default_agent!()

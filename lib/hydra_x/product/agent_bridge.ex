@@ -45,13 +45,13 @@ defmodule HydraX.Product.AgentBridge do
       |> case do
         nil ->
           conversation_attrs = %{
-              "project_id" => project.id,
-              "hydra_conversation_id" => hydra_conversation.id,
-              "persona" => persona,
-              "title" => params["title"] || hydra_conversation.title,
-              "status" => "active",
-              "metadata" => params["metadata"] || %{}
-            }
+            "project_id" => project.id,
+            "hydra_conversation_id" => hydra_conversation.id,
+            "persona" => persona,
+            "title" => params["title"] || hydra_conversation.title,
+            "status" => "active",
+            "metadata" => params["metadata"] || %{}
+          }
 
           conversation_attrs =
             if params["board_session_id"],
@@ -275,7 +275,9 @@ defmodule HydraX.Product.AgentBridge do
   defp normalize_persona(persona) when persona in ["strategist", :strategist], do: "strategist"
   defp normalize_persona(persona) when persona in ["architect", :architect], do: "architect"
   defp normalize_persona(persona) when persona in ["designer", :designer], do: "designer"
-  defp normalize_persona(persona) when persona in ["memory_agent", :memory_agent], do: "memory_agent"
+
+  defp normalize_persona(persona) when persona in ["memory_agent", :memory_agent],
+    do: "memory_agent"
 
   defp default_title(project, persona) do
     "#{project.name} #{String.capitalize(persona)} conversation"

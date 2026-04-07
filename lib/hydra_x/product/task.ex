@@ -21,7 +21,16 @@ defmodule HydraX.Product.Task do
 
   def changeset(task, attrs) do
     task
-    |> cast(attrs, [:project_id, :title, :body, :status, :assignee, :effort_estimate, :priority, :metadata])
+    |> cast(attrs, [
+      :project_id,
+      :title,
+      :body,
+      :status,
+      :assignee,
+      :effort_estimate,
+      :priority,
+      :metadata
+    ])
     |> validate_required([:project_id, :title, :body, :status, :priority])
     |> validate_inclusion(:status, @statuses)
     |> validate_inclusion(:priority, @priorities)

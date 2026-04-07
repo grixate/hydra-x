@@ -20,7 +20,11 @@ defmodule HydraXWeb.ArchitectureNodeAPIController do
   end
 
   def show(conn, %{"project_id" => project_id, "id" => id}) do
-    node = project_id |> Product.get_project_architecture_node!(id) |> ProductPayload.architecture_node_json()
+    node =
+      project_id
+      |> Product.get_project_architecture_node!(id)
+      |> ProductPayload.architecture_node_json()
+
     json(conn, %{data: node})
   end
 
@@ -32,6 +36,7 @@ defmodule HydraXWeb.ArchitectureNodeAPIController do
 
   def update(conn, %{"project_id" => project_id, "id" => id, "architecture_node" => params}) do
     node = Product.get_project_architecture_node!(project_id, id)
+
     with {:ok, %ArchitectureNode{} = updated} <- Product.update_architecture_node(node, params) do
       json(conn, %{data: ProductPayload.architecture_node_json(updated)})
     end
@@ -39,6 +44,7 @@ defmodule HydraXWeb.ArchitectureNodeAPIController do
 
   def delete(conn, %{"project_id" => project_id, "id" => id}) do
     node = Product.get_project_architecture_node!(project_id, id)
+
     with {:ok, %ArchitectureNode{}} <- Product.delete_architecture_node(node) do
       send_resp(conn, :no_content, "")
     end

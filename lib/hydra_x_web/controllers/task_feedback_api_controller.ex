@@ -24,6 +24,7 @@ defmodule HydraXWeb.TaskFeedbackAPIController do
     case Product.create_task_feedback(task_id, params) do
       {:ok, feedback} ->
         conn |> put_status(:created) |> json(%{data: ProductPayload.task_feedback_json(feedback)})
+
       {:error, changeset} ->
         conn |> put_status(:unprocessable_entity) |> json(%{error: inspect(changeset.errors)})
     end

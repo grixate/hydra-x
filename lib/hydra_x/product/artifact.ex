@@ -24,8 +24,15 @@ defmodule HydraX.Product.Artifact do
   def changeset(artifact, attrs) do
     artifact
     |> cast(attrs, [
-      :project_id, :title, :artifact_type, :body, :owner_persona,
-      :status, :version, :last_updated_by, :metadata
+      :project_id,
+      :title,
+      :artifact_type,
+      :body,
+      :owner_persona,
+      :status,
+      :version,
+      :last_updated_by,
+      :metadata
     ])
     |> validate_required([:project_id, :title, :artifact_type, :body, :owner_persona])
     |> validate_inclusion(:artifact_type, @artifact_types)

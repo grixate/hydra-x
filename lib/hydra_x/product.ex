@@ -9,6 +9,7 @@ defmodule HydraX.Product do
   alias HydraX.Embeddings
   alias HydraX.Ingest.Parser
   alias HydraX.Memory
+  alias HydraX.Memory.{EvidenceRecord, Routing}
   alias HydraX.Product.ArchitectureNode
   alias HydraX.Product.Artifact
   alias HydraX.Product.ArtifactVersion
@@ -69,7 +70,23 @@ defmodule HydraX.Product do
   @knowledge_propose_tool HydraX.Product.Tools.KnowledgePropose
   @knowledge_update_tool HydraX.Product.Tools.KnowledgeUpdate
 
-  @agent_preloads [:researcher_agent, :strategist_agent, :architect_agent, :designer_agent, :memory_agent]
+  @agent_preloads [
+    :researcher_agent,
+    :strategist_agent,
+    :architect_agent,
+    :designer_agent,
+    :memory_agent
+  ]
+  @memory_projection_types %{
+    "insight" => Insight,
+    "decision" => Decision,
+    "strategy" => Strategy,
+    "requirement" => Requirement,
+    "design_node" => DesignNode,
+    "architecture_node" => ArchitectureNode,
+    "task" => ProductTask,
+    "learning" => Learning
+  }
 
   def list_projects(opts \\ []) do
     status = Keyword.get(opts, :status)
@@ -81,6 +98,54 @@ defmodule HydraX.Product do
     |> preload(^@agent_preloads)
     |> order_by([project], asc: project.name)
     |> Repo.all()
+  end
+
+  def related_memory_projection(project_or_id, topic_key, scope_key, limit \\ 6) do
+    project_id = project_id(project_or_id)
+    normalized_topic = Routing.topic_key(topic_key)
+    normalized_scope = normalize_scope_key(scope_key, project_id)
+
+    @memory_projection_types
+    |> Enum.flat_map(fn {type_name, schema} ->
+      schema
+      |> where([record], record.project_id == ^project_id)
+      |> order_by([record], desc: record.updated_at)
+      |> limit(^max(limit * 3, 12))
+      |> Repo.all()
+      |> Enum.map(&product_projection_snapshot(type_name, &1, normalized_topic, normalized_scope))
+    end)
+    |> Enum.filter(&(&1.rank > 0))
+    |> Enum.sort_by(fn snapshot ->
+      {-snapshot.rank, -DateTime.to_unix(snapshot.updated_at, :microsecond)}
+    end)
+    |> Enum.take(limit)
+  end
+
+  def search_graph_nodes(project_or_id, query, opts \\ []) do
+    project_id = project_id(project_or_id)
+    requested_types = Keyword.get(opts, :node_types)
+    hall = blank_to_nil(Keyword.get(opts, :hall))
+    topic_key = Routing.topic_key(Keyword.get(opts, :topic_key) || query)
+    as_of = Routing.parse_datetime(Keyword.get(opts, :as_of))
+    limit = Keyword.get(opts, :limit, 10)
+
+    types =
+      case requested_types do
+        nil -> @memory_projection_types
+        [] -> @memory_projection_types
+        values -> Map.take(@memory_projection_types, Enum.map(values, &to_string/1))
+      end
+
+    query_terms = search_terms(query)
+
+    types
+    |> Enum.flat_map(fn {type_name, schema} ->
+      search_graph_type(schema, project_id, query_terms, type_name, hall, topic_key, as_of)
+    end)
+    |> Enum.sort_by(fn result ->
+      {-result.rank, -DateTime.to_unix(result.updated_at, :microsecond)}
+    end)
+    |> Enum.take(limit)
   end
 
   def get_project!(id) do
@@ -371,16 +436,17 @@ defmodule HydraX.Product do
       case load_project_chunks(project.id, evidence_chunk_ids) do
         {:ok, chunks} ->
           Repo.transaction(fn ->
+            insert_attrs =
+              attrs
+              |> Map.put(
+                "metadata",
+                Map.put(attrs["metadata"] || %{}, "evidence_chunk_ids", evidence_chunk_ids)
+              )
+              |> enrich_product_record_attrs(project.id, "insight")
+
             insight =
               %Insight{}
-              |> Insight.changeset(%{
-                "project_id" => project.id,
-                "title" => attrs["title"],
-                "body" => attrs["body"],
-                "status" => attrs["status"] || "draft",
-                "metadata" =>
-                  Map.put(attrs["metadata"] || %{}, "evidence_chunk_ids", evidence_chunk_ids)
-              })
+              |> Insight.changeset(Map.put(insert_attrs, "project_id", project.id))
               |> Repo.insert()
               |> case do
                 {:ok, insight} -> insight
@@ -388,6 +454,7 @@ defmodule HydraX.Product do
               end
 
             persist_insight_evidence!(insight, chunks, attrs["evidence_quotes"] || %{})
+            sync_product_evidence!("insight", insight, attrs, chunks: chunks)
 
             Repo.preload(insight, insight_preloads())
           end)
@@ -429,17 +496,22 @@ defmodule HydraX.Product do
       case load_project_chunks(insight.project_id, desired_chunk_ids) do
         {:ok, chunks} ->
           Repo.transaction(fn ->
+            update_attrs =
+              attrs
+              |> Map.put(
+                "metadata",
+                (insight.metadata || %{})
+                |> Map.merge(attrs["metadata"] || %{})
+                |> Map.put("evidence_chunk_ids", desired_chunk_ids)
+              )
+              |> Map.put_new("title", insight.title)
+              |> Map.put_new("body", insight.body)
+              |> Map.put_new("status", insight.status)
+              |> enrich_product_record_attrs(insight.project_id, "insight", insight)
+
             updated =
               insight
-              |> Insight.changeset(%{
-                "title" => attrs["title"] || insight.title,
-                "body" => attrs["body"] || insight.body,
-                "status" => attrs["status"] || insight.status,
-                "metadata" =>
-                  (insight.metadata || %{})
-                  |> Map.merge(attrs["metadata"] || %{})
-                  |> Map.put("evidence_chunk_ids", desired_chunk_ids)
-              })
+              |> Insight.changeset(update_attrs)
               |> Repo.update()
               |> case do
                 {:ok, updated} -> updated
@@ -450,6 +522,8 @@ defmodule HydraX.Product do
               delete_insight_evidence!(updated.id)
               persist_insight_evidence!(updated, chunks, attrs["evidence_quotes"] || %{})
             end
+
+            sync_product_evidence!("insight", updated, attrs, chunks: chunks)
 
             Repo.preload(updated, insight_preloads())
           end)
@@ -512,16 +586,19 @@ defmodule HydraX.Product do
            )}
         else
           Repo.transaction(fn ->
+            insert_attrs =
+              attrs
+              |> Map.put("status", status)
+              |> Map.put("grounded", grounded)
+              |> Map.put(
+                "metadata",
+                Map.put(attrs["metadata"] || %{}, "insight_ids", insight_ids)
+              )
+              |> enrich_product_record_attrs(project.id, "requirement")
+
             requirement =
               %Requirement{}
-              |> Requirement.changeset(%{
-                "project_id" => project.id,
-                "title" => attrs["title"],
-                "body" => attrs["body"],
-                "status" => status,
-                "grounded" => grounded,
-                "metadata" => Map.put(attrs["metadata"] || %{}, "insight_ids", insight_ids)
-              })
+              |> Requirement.changeset(Map.put(insert_attrs, "project_id", project.id))
               |> Repo.insert()
               |> case do
                 {:ok, requirement} -> requirement
@@ -529,6 +606,7 @@ defmodule HydraX.Product do
               end
 
             persist_requirement_insights!(requirement, insights)
+            sync_product_evidence!("requirement", requirement, attrs, insights: insights)
 
             Repo.preload(requirement, requirement_preloads())
           end)
@@ -565,18 +643,23 @@ defmodule HydraX.Product do
            )}
         else
           Repo.transaction(fn ->
+            update_attrs =
+              attrs
+              |> Map.put_new("title", requirement.title)
+              |> Map.put_new("body", requirement.body)
+              |> Map.put("status", status)
+              |> Map.put("grounded", grounded)
+              |> Map.put(
+                "metadata",
+                (requirement.metadata || %{})
+                |> Map.merge(attrs["metadata"] || %{})
+                |> Map.put("insight_ids", insight_ids)
+              )
+              |> enrich_product_record_attrs(requirement.project_id, "requirement", requirement)
+
             updated =
               requirement
-              |> Requirement.changeset(%{
-                "title" => attrs["title"] || requirement.title,
-                "body" => attrs["body"] || requirement.body,
-                "status" => status,
-                "grounded" => grounded,
-                "metadata" =>
-                  (requirement.metadata || %{})
-                  |> Map.merge(attrs["metadata"] || %{})
-                  |> Map.put("insight_ids", insight_ids)
-              })
+              |> Requirement.changeset(update_attrs)
               |> Repo.update()
               |> case do
                 {:ok, updated} -> updated
@@ -587,6 +670,8 @@ defmodule HydraX.Product do
               delete_requirement_insights!(updated.id)
               persist_requirement_insights!(updated, insights)
             end
+
+            sync_product_evidence!("requirement", updated, attrs, insights: insights)
 
             Repo.preload(updated, requirement_preloads())
           end)
@@ -637,20 +722,33 @@ defmodule HydraX.Product do
 
   def create_decision(project_or_id, attrs) when is_map(attrs) do
     project_id = project_id(project_or_id)
-    attrs = normalize_product_record_attrs(attrs)
+
+    attrs =
+      attrs
+      |> normalize_product_record_attrs()
+      |> enrich_product_record_attrs(project_id, "decision")
 
     %Decision{}
     |> Decision.changeset(Map.put(attrs, "project_id", project_id))
     |> Repo.insert()
+    |> maybe_sync_product_evidence("decision", attrs)
     |> maybe_broadcast_project_record("decision.created")
   end
 
   def update_decision(%Decision{} = decision, attrs) when is_map(attrs) do
-    attrs = normalize_product_record_attrs(attrs)
+    attrs =
+      attrs
+      |> normalize_product_record_attrs()
+      |> Map.put_new("title", decision.title)
+      |> Map.put_new("body", decision.body)
+      |> Map.put_new("status", decision.status)
+      |> Map.put("metadata", Map.merge(decision.metadata || %{}, Map.get(attrs, "metadata", %{})))
+      |> enrich_product_record_attrs(decision.project_id, "decision", decision)
 
     decision
     |> Decision.changeset(attrs)
     |> Repo.update()
+    |> maybe_sync_product_evidence("decision", attrs)
     |> maybe_broadcast_project_record("decision.updated")
     |> maybe_notify_propagation("decision", :updated)
   end
@@ -691,20 +789,33 @@ defmodule HydraX.Product do
 
   def create_strategy(project_or_id, attrs) when is_map(attrs) do
     project_id = project_id(project_or_id)
-    attrs = normalize_product_record_attrs(attrs)
+
+    attrs =
+      attrs
+      |> normalize_product_record_attrs()
+      |> enrich_product_record_attrs(project_id, "strategy")
 
     %Strategy{}
     |> Strategy.changeset(Map.put(attrs, "project_id", project_id))
     |> Repo.insert()
+    |> maybe_sync_product_evidence("strategy", attrs)
     |> maybe_broadcast_project_record("strategy.created")
   end
 
   def update_strategy(%Strategy{} = strategy, attrs) when is_map(attrs) do
-    attrs = normalize_product_record_attrs(attrs)
+    attrs =
+      attrs
+      |> normalize_product_record_attrs()
+      |> Map.put_new("title", strategy.title)
+      |> Map.put_new("body", strategy.body)
+      |> Map.put_new("status", strategy.status)
+      |> Map.put("metadata", Map.merge(strategy.metadata || %{}, Map.get(attrs, "metadata", %{})))
+      |> enrich_product_record_attrs(strategy.project_id, "strategy", strategy)
 
     strategy
     |> Strategy.changeset(attrs)
     |> Repo.update()
+    |> maybe_sync_product_evidence("strategy", attrs)
     |> maybe_broadcast_project_record("strategy.updated")
     |> maybe_notify_propagation("strategy", :updated)
   end
@@ -747,20 +858,34 @@ defmodule HydraX.Product do
 
   def create_design_node(project_or_id, attrs) when is_map(attrs) do
     project_id = project_id(project_or_id)
-    attrs = normalize_product_record_attrs(attrs)
+
+    attrs =
+      attrs
+      |> normalize_product_record_attrs()
+      |> enrich_product_record_attrs(project_id, "design_node")
 
     %DesignNode{}
     |> DesignNode.changeset(Map.put(attrs, "project_id", project_id))
     |> Repo.insert()
+    |> maybe_sync_product_evidence("design_node", attrs)
     |> maybe_broadcast_project_record("design_node.created")
   end
 
   def update_design_node(%DesignNode{} = node, attrs) when is_map(attrs) do
-    attrs = normalize_product_record_attrs(attrs)
+    attrs =
+      attrs
+      |> normalize_product_record_attrs()
+      |> Map.put_new("title", node.title)
+      |> Map.put_new("body", node.body)
+      |> Map.put_new("status", node.status)
+      |> Map.put_new("node_type", node.node_type)
+      |> Map.put("metadata", Map.merge(node.metadata || %{}, Map.get(attrs, "metadata", %{})))
+      |> enrich_product_record_attrs(node.project_id, "design_node", node)
 
     node
     |> DesignNode.changeset(attrs)
     |> Repo.update()
+    |> maybe_sync_product_evidence("design_node", attrs)
     |> maybe_broadcast_project_record("design_node.updated")
     |> maybe_notify_propagation("design_node", :updated)
   end
@@ -803,20 +928,34 @@ defmodule HydraX.Product do
 
   def create_architecture_node(project_or_id, attrs) when is_map(attrs) do
     project_id = project_id(project_or_id)
-    attrs = normalize_product_record_attrs(attrs)
+
+    attrs =
+      attrs
+      |> normalize_product_record_attrs()
+      |> enrich_product_record_attrs(project_id, "architecture_node")
 
     %ArchitectureNode{}
     |> ArchitectureNode.changeset(Map.put(attrs, "project_id", project_id))
     |> Repo.insert()
+    |> maybe_sync_product_evidence("architecture_node", attrs)
     |> maybe_broadcast_project_record("architecture_node.created")
   end
 
   def update_architecture_node(%ArchitectureNode{} = node, attrs) when is_map(attrs) do
-    attrs = normalize_product_record_attrs(attrs)
+    attrs =
+      attrs
+      |> normalize_product_record_attrs()
+      |> Map.put_new("title", node.title)
+      |> Map.put_new("body", node.body)
+      |> Map.put_new("status", node.status)
+      |> Map.put_new("node_type", node.node_type)
+      |> Map.put("metadata", Map.merge(node.metadata || %{}, Map.get(attrs, "metadata", %{})))
+      |> enrich_product_record_attrs(node.project_id, "architecture_node", node)
 
     node
     |> ArchitectureNode.changeset(attrs)
     |> Repo.update()
+    |> maybe_sync_product_evidence("architecture_node", attrs)
     |> maybe_broadcast_project_record("architecture_node.updated")
     |> maybe_notify_propagation("architecture_node", :updated)
   end
@@ -859,20 +998,32 @@ defmodule HydraX.Product do
 
   def create_task(project_or_id, attrs) when is_map(attrs) do
     project_id = project_id(project_or_id)
-    attrs = normalize_product_record_attrs(attrs)
+
+    attrs =
+      attrs |> normalize_product_record_attrs() |> enrich_product_record_attrs(project_id, "task")
 
     %ProductTask{}
     |> ProductTask.changeset(Map.put(attrs, "project_id", project_id))
     |> Repo.insert()
+    |> maybe_sync_product_evidence("task", attrs)
     |> maybe_broadcast_project_record("task.created")
   end
 
   def update_task(%ProductTask{} = task, attrs) when is_map(attrs) do
-    attrs = normalize_product_record_attrs(attrs)
+    attrs =
+      attrs
+      |> normalize_product_record_attrs()
+      |> Map.put_new("title", task.title)
+      |> Map.put_new("body", task.body)
+      |> Map.put_new("status", task.status)
+      |> Map.put_new("priority", task.priority)
+      |> Map.put("metadata", Map.merge(task.metadata || %{}, Map.get(attrs, "metadata", %{})))
+      |> enrich_product_record_attrs(task.project_id, "task", task)
 
     task
     |> ProductTask.changeset(attrs)
     |> Repo.update()
+    |> maybe_sync_product_evidence("task", attrs)
     |> maybe_broadcast_project_record("task.updated")
     |> maybe_notify_propagation("task", :updated)
   end
@@ -915,20 +1066,34 @@ defmodule HydraX.Product do
 
   def create_learning(project_or_id, attrs) when is_map(attrs) do
     project_id = project_id(project_or_id)
-    attrs = normalize_product_record_attrs(attrs)
+
+    attrs =
+      attrs
+      |> normalize_product_record_attrs()
+      |> enrich_product_record_attrs(project_id, "learning")
 
     %Learning{}
     |> Learning.changeset(Map.put(attrs, "project_id", project_id))
     |> Repo.insert()
+    |> maybe_sync_product_evidence("learning", attrs)
     |> maybe_broadcast_project_record("learning.created")
   end
 
   def update_learning(%Learning{} = learning, attrs) when is_map(attrs) do
-    attrs = normalize_product_record_attrs(attrs)
+    attrs =
+      attrs
+      |> normalize_product_record_attrs()
+      |> Map.put_new("title", learning.title)
+      |> Map.put_new("body", learning.body)
+      |> Map.put_new("status", learning.status)
+      |> Map.put_new("learning_type", learning.learning_type)
+      |> Map.put("metadata", Map.merge(learning.metadata || %{}, Map.get(attrs, "metadata", %{})))
+      |> enrich_product_record_attrs(learning.project_id, "learning", learning)
 
     learning
     |> Learning.changeset(attrs)
     |> Repo.update()
+    |> maybe_sync_product_evidence("learning", attrs)
     |> maybe_broadcast_project_record("learning.updated")
     |> maybe_notify_propagation("learning", :updated)
   end
@@ -1083,7 +1248,10 @@ defmodule HydraX.Product do
 
   def get_project_constraint!(project_or_id, id) do
     project_id = project_id(project_or_id)
-    Constraint |> where([c], c.project_id == ^project_id and c.id == ^parse_integer(id)) |> Repo.one!()
+
+    Constraint
+    |> where([c], c.project_id == ^project_id and c.id == ^parse_integer(id))
+    |> Repo.one!()
   end
 
   def create_constraint(project_or_id, attrs) when is_map(attrs) do
@@ -1128,7 +1296,10 @@ defmodule HydraX.Product do
 
   def get_project_routine!(project_or_id, id) do
     project_id = project_id(project_or_id)
-    Routine |> where([r], r.project_id == ^project_id and r.id == ^parse_integer(id)) |> Repo.one!()
+
+    Routine
+    |> where([r], r.project_id == ^project_id and r.id == ^parse_integer(id))
+    |> Repo.one!()
   end
 
   def create_routine(project_or_id, attrs) when is_map(attrs) do
@@ -1148,10 +1319,12 @@ defmodule HydraX.Product do
   def delete_routine(%Routine{} = routine), do: Repo.delete(routine)
 
   def list_routine_runs(routine_or_id, opts \\ []) do
-    routine_id = case routine_or_id do
-      %Routine{id: id} -> id
-      id -> parse_integer(id)
-    end
+    routine_id =
+      case routine_or_id do
+        %Routine{id: id} -> id
+        id -> parse_integer(id)
+      end
+
     limit = Keyword.get(opts, :limit, 20)
 
     RoutineRun
@@ -1184,10 +1357,12 @@ defmodule HydraX.Product do
       if persona do
         p = to_string(persona)
 
-        where(query, [k],
+        where(
+          query,
+          [k],
           ^p in k.assigned_personas or
-          fragment("? = ANY(?)", "all", k.assigned_personas) or
-          k.assigned_personas == ^[]
+            fragment("? = ANY(?)", "all", k.assigned_personas) or
+            k.assigned_personas == ^[]
         )
       else
         query
@@ -1200,7 +1375,10 @@ defmodule HydraX.Product do
 
   def get_project_knowledge_entry!(project_or_id, id) do
     project_id = project_id(project_or_id)
-    KnowledgeEntry |> where([k], k.project_id == ^project_id and k.id == ^parse_integer(id)) |> Repo.one!()
+
+    KnowledgeEntry
+    |> where([k], k.project_id == ^project_id and k.id == ^parse_integer(id))
+    |> Repo.one!()
   end
 
   def create_knowledge_entry(project_or_id, attrs) when is_map(attrs) do
@@ -1290,10 +1468,11 @@ defmodule HydraX.Product do
   # -------------------------------------------------------------------
 
   def list_task_feedback(task_or_id) do
-    task_id = case task_or_id do
-      %{id: id} -> id
-      id -> parse_integer(id)
-    end
+    task_id =
+      case task_or_id do
+        %{id: id} -> id
+        id -> parse_integer(id)
+      end
 
     TaskFeedback
     |> where([f], f.task_id == ^task_id)
@@ -1302,10 +1481,12 @@ defmodule HydraX.Product do
   end
 
   def create_task_feedback(task_or_id, attrs) when is_map(attrs) do
-    task_id = case task_or_id do
-      %{id: id} -> id
-      id -> parse_integer(id)
-    end
+    task_id =
+      case task_or_id do
+        %{id: id} -> id
+        id -> parse_integer(id)
+      end
+
     attrs = HydraX.Runtime.Helpers.normalize_string_keys(attrs)
 
     %TaskFeedback{}
@@ -2426,6 +2607,47 @@ defmodule HydraX.Product do
     |> Map.put_new("metadata", %{})
   end
 
+  defp enrich_product_record_attrs(attrs, project_id, type_name, record \\ nil) do
+    metadata = Map.get(attrs, "metadata", %{}) || %{}
+
+    topic_key =
+      Routing.topic_key([
+        Map.get(attrs, "topic_key"),
+        metadata["topic_key"],
+        Map.get(attrs, "title"),
+        metadata["source_title"],
+        metadata["source_section"],
+        Map.get(attrs, "body")
+      ])
+
+    valid_from =
+      Routing.parse_datetime(
+        Map.get(attrs, "valid_from") || metadata["valid_from"] ||
+          get_in((record && record.metadata) || %{}, ["valid_from"])
+      )
+
+    valid_to =
+      Routing.parse_datetime(
+        Map.get(attrs, "valid_to") || metadata["valid_to"] ||
+          get_in((record && record.metadata) || %{}, ["valid_to"])
+      )
+
+    enriched_metadata =
+      metadata
+      |> Map.put("scope_kind", "project")
+      |> Map.put("scope_key", "project:#{project_id}")
+      |> Map.put("hall", product_hall(type_name))
+      |> maybe_put("topic_key", topic_key)
+      |> maybe_put("valid_from", valid_from && DateTime.to_iso8601(valid_from))
+      |> maybe_put("valid_to", valid_to && DateTime.to_iso8601(valid_to))
+
+    attrs
+    |> Map.put("metadata", enriched_metadata)
+    |> maybe_put("topic_key", topic_key)
+    |> maybe_put("valid_from", valid_from)
+    |> maybe_put("valid_to", valid_to)
+  end
+
   defp normalize_integer_list(nil), do: []
 
   defp normalize_integer_list(values) when is_list(values) do
@@ -2436,6 +2658,13 @@ defmodule HydraX.Product do
   end
 
   defp normalize_integer_list(_values), do: []
+
+  defp maybe_sync_product_evidence({:ok, record} = result, type_name, attrs) do
+    sync_product_evidence!(type_name, record, attrs)
+    result
+  end
+
+  defp maybe_sync_product_evidence(result, _type_name, _attrs), do: result
 
   defp insight_error_changeset(project_id, attrs, field, message) do
     %Insight{}
@@ -2644,6 +2873,285 @@ defmodule HydraX.Product do
 
   defp maybe_broadcast_project_record(result, _event), do: result
 
+  defp search_graph_type(schema, project_id, query_terms, type_name, hall, topic_key, as_of) do
+    schema
+    |> where([record], record.project_id == ^project_id)
+    |> order_by([record], desc: record.updated_at)
+    |> limit(24)
+    |> Repo.all()
+    |> Enum.map(fn record ->
+      lexical = product_lexical_score(record, query_terms)
+      routing = product_routing_score(record, type_name, hall, topic_key, as_of)
+      tunnel = if topic_tunnel_match?(record, topic_key), do: 0.06, else: 0.0
+      rank = Float.round(lexical + routing + tunnel, 4)
+
+      %{
+        node_type: type_name,
+        node_id: record.id,
+        title: record.title,
+        body_preview: String.slice(record.body || "", 0, 220),
+        status: Map.get(record, :status),
+        rank: rank,
+        lexical_rank: Float.round(lexical, 4),
+        routing_rank: Float.round(routing + tunnel, 4),
+        hall: product_record_hall(record, type_name),
+        topic_key: product_record_topic_key(record),
+        scope_key: product_record_scope_key(record),
+        valid_from: product_record_valid_from(record),
+        valid_to: product_record_valid_to(record),
+        updated_at: record.updated_at,
+        evidence: product_node_evidence(type_name, record.id),
+        related:
+          related_memory_projection(
+            project_id,
+            product_record_topic_key(record),
+            product_record_scope_key(record),
+            3
+          )
+      }
+    end)
+    |> Enum.filter(fn result ->
+      result.rank > 0 and
+        (is_nil(as_of) or
+           Routing.valid?(%{valid_from: result.valid_from, valid_to: result.valid_to}, as_of))
+    end)
+  end
+
+  defp product_lexical_score(record, query_terms) do
+    haystack =
+      [record.title, record.body]
+      |> Enum.reject(&is_nil_or_empty/1)
+      |> Enum.join(" ")
+      |> String.downcase()
+
+    cond do
+      haystack == "" or query_terms == [] ->
+        0.0
+
+      true ->
+        query_terms
+        |> Enum.reduce(0.0, fn term, acc ->
+          if String.contains?(haystack, term), do: acc + 0.12, else: acc
+        end)
+        |> min(0.72)
+    end
+  end
+
+  defp product_routing_score(record, type_name, hall, topic_key, as_of) do
+    hall_score =
+      if present?(hall) and product_record_hall(record, type_name) == hall, do: 0.14, else: 0.0
+
+    topic_score =
+      if present?(topic_key) and product_record_topic_key(record) == Routing.topic_key(topic_key),
+        do: 0.18,
+        else: 0.0
+
+    temporal_score =
+      cond do
+        is_nil(as_of) ->
+          0.0
+
+        Routing.valid?(
+          %{
+            valid_from: product_record_valid_from(record),
+            valid_to: product_record_valid_to(record)
+          },
+          as_of
+        ) ->
+          0.08
+
+        true ->
+          -0.3
+      end
+
+    hall_score + topic_score + temporal_score
+  end
+
+  defp product_projection_snapshot(type_name, record, topic_key, scope_key) do
+    record_topic = product_record_topic_key(record)
+    record_scope = product_record_scope_key(record)
+    hall = product_record_hall(record, type_name)
+    topic_score = if present?(topic_key) and record_topic == topic_key, do: 0.6, else: 0.0
+    scope_score = if present?(scope_key) and record_scope == scope_key, do: 0.35, else: 0.0
+
+    %{
+      node_type: type_name,
+      node_id: record.id,
+      title: record.title,
+      body_preview: String.slice(record.body || "", 0, 180),
+      status: Map.get(record, :status),
+      topic_key: record_topic,
+      scope_key: record_scope,
+      hall: hall,
+      rank: Float.round(topic_score + scope_score + 0.05, 4),
+      updated_at: record.updated_at
+    }
+  end
+
+  defp product_record_scope_key(record) do
+    get_in(record.metadata || %{}, ["scope_key"]) || "project:#{record.project_id}"
+  end
+
+  defp product_record_topic_key(record) do
+    Routing.topic_key(get_in(record.metadata || %{}, ["topic_key"]))
+  end
+
+  defp product_record_hall(record, type_name) do
+    get_in(record.metadata || %{}, ["hall"]) || product_hall(type_name)
+  end
+
+  defp product_record_valid_from(record) do
+    Routing.parse_datetime(get_in(record.metadata || %{}, ["valid_from"]))
+  end
+
+  defp product_record_valid_to(record) do
+    Routing.parse_datetime(get_in(record.metadata || %{}, ["valid_to"]))
+  end
+
+  defp product_hall("insight"), do: "discoveries"
+  defp product_hall("learning"), do: "discoveries"
+  defp product_hall("decision"), do: "facts"
+  defp product_hall("requirement"), do: "advice"
+  defp product_hall("strategy"), do: "advice"
+  defp product_hall("task"), do: "advice"
+  defp product_hall("design_node"), do: "discoveries"
+  defp product_hall("architecture_node"), do: "facts"
+  defp product_hall(_type_name), do: "facts"
+
+  defp product_node_evidence(type_name, node_id) do
+    EvidenceRecord
+    |> where(
+      [record],
+      record.product_node_type == ^type_name and record.product_node_id == ^node_id
+    )
+    |> order_by([record], desc: record.inserted_at)
+    |> limit(3)
+    |> Repo.all()
+    |> Enum.map(fn record ->
+      %{
+        id: record.id,
+        source_kind: record.source_kind,
+        source_ref: record.source_ref,
+        excerpt: record.excerpt,
+        speaker_role: record.speaker_role,
+        occurred_at: record.occurred_at
+      }
+    end)
+  end
+
+  defp sync_product_evidence!(type_name, record, attrs, opts \\ []) do
+    delete_product_evidence!(type_name, record.id)
+
+    attrs
+    |> product_evidence_candidates(record, opts)
+    |> Enum.each(fn evidence_attrs ->
+      %EvidenceRecord{}
+      |> EvidenceRecord.changeset(
+        evidence_attrs
+        |> Map.put("product_node_type", type_name)
+        |> Map.put("product_node_id", record.id)
+        |> Map.put_new("occurred_at", DateTime.utc_now())
+      )
+      |> Repo.insert!()
+    end)
+  end
+
+  defp delete_product_evidence!(type_name, node_id) do
+    EvidenceRecord
+    |> where(
+      [record],
+      record.product_node_type == ^type_name and record.product_node_id == ^node_id
+    )
+    |> Repo.delete_all()
+  end
+
+  defp product_evidence_candidates(attrs, record, opts) do
+    metadata = Map.get(attrs, "metadata", %{}) || %{}
+    direct = Map.get(attrs, "evidence") || metadata["evidence"] || []
+
+    chunk_candidates =
+      opts
+      |> Keyword.get(:chunks, [])
+      |> Enum.map(fn chunk ->
+        %{
+          "source_kind" => "product_source_chunk",
+          "source_ref" => "chunk:#{chunk.id}",
+          "excerpt" => String.slice(chunk.content || "", 0, 240),
+          "speaker_role" => nil,
+          "metadata" => %{
+            "product_project_id" => record.project_id,
+            "product_source_id" => chunk.source_id,
+            "product_source_chunk_id" => chunk.id
+          }
+        }
+      end)
+
+    insight_candidates =
+      opts
+      |> Keyword.get(:insights, [])
+      |> Enum.flat_map(fn insight ->
+        if Ecto.assoc_loaded?(insight.insight_evidence) do
+          Enum.map(insight.insight_evidence || [], fn evidence ->
+            %{
+              "source_kind" => "insight_evidence",
+              "source_ref" => "insight:#{insight.id}:evidence:#{evidence.id}",
+              "excerpt" => String.slice(evidence.quote || insight.body || "", 0, 240),
+              "speaker_role" => nil,
+              "metadata" => %{
+                "insight_id" => insight.id,
+                "source_chunk_id" => evidence.source_chunk_id
+              }
+            }
+          end)
+        else
+          [
+            %{
+              "source_kind" => "insight",
+              "source_ref" => "insight:#{insight.id}",
+              "excerpt" => String.slice(insight.body || "", 0, 240),
+              "speaker_role" => nil,
+              "metadata" => %{"insight_id" => insight.id}
+            }
+          ]
+        end
+      end)
+
+    metadata_candidates =
+      case blank_to_nil(metadata["evidence_excerpt"] || Map.get(attrs, "evidence_excerpt")) do
+        nil ->
+          []
+
+        excerpt ->
+          [
+            %{
+              "source_kind" => metadata["source_kind"] || "product_context",
+              "source_ref" => metadata["source_ref"] || "project:#{record.project_id}",
+              "excerpt" => excerpt,
+              "speaker_role" => metadata["speaker_role"],
+              "metadata" => %{"topic_key" => product_record_topic_key(record)}
+            }
+          ]
+      end
+
+    direct_candidates =
+      direct
+      |> List.wrap()
+      |> Enum.map(fn evidence ->
+        evidence
+        |> HydraX.Runtime.Helpers.normalize_string_keys()
+        |> Map.put_new("source_kind", "product_context")
+        |> Map.put_new("source_ref", "project:#{record.project_id}")
+      end)
+
+    (chunk_candidates ++ insight_candidates ++ metadata_candidates ++ direct_candidates)
+    |> Enum.filter(&present?(&1["excerpt"]))
+    |> Enum.uniq_by(fn item -> {item["source_kind"], item["source_ref"], item["excerpt"]} end)
+  end
+
+  defp topic_tunnel_match?(record, topic_key) do
+    present?(topic_key) and product_record_topic_key(record) == Routing.topic_key(topic_key)
+  end
+
   defp maybe_notify_propagation({:ok, record} = result, node_type, change_type) do
     if Map.has_key?(record, :project_id) do
       HydraX.Product.Propagation.notify_change(
@@ -2690,6 +3198,34 @@ defmodule HydraX.Product do
       _ -> []
     end
   end
+
+  defp normalize_scope_key(nil, project_id), do: "project:#{project_id}"
+  defp normalize_scope_key("", project_id), do: "project:#{project_id}"
+  defp normalize_scope_key(value, _project_id), do: to_string(value)
+
+  defp search_terms(query) do
+    query
+    |> to_string()
+    |> String.downcase()
+    |> String.split(~r/[^[:alnum:]:_-]+/u, trim: true)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+  end
+
+  defp blank_to_nil(nil), do: nil
+  defp blank_to_nil(""), do: nil
+  defp blank_to_nil(value), do: value
+
+  defp present?(value), do: not is_nil_or_empty(value)
+
+  defp is_nil_or_empty(nil), do: true
+  defp is_nil_or_empty(""), do: true
+  defp is_nil_or_empty(value) when is_binary(value), do: String.trim(value) == ""
+  defp is_nil_or_empty(_value), do: false
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, _key, ""), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   defp word_count(content) do
     content
@@ -3198,7 +3734,8 @@ defmodule HydraX.Product do
       %{
         "title" => "Project Summary",
         "artifact_type" => "project_summary",
-        "body" => "# #{project.name}\n\nProject summary will be maintained as the product graph evolves.",
+        "body" =>
+          "# #{project.name}\n\nProject summary will be maintained as the product graph evolves.",
         "owner_persona" => "memory_agent",
         "last_updated_by" => "system"
       },

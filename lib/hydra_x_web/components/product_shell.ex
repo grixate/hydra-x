@@ -59,7 +59,12 @@ defmodule HydraXWeb.ProductShell do
                 class="flex items-center justify-between rounded-xl px-3 py-2 text-xs text-[var(--hx-mute)] hover:bg-white/5 hover:text-white transition"
               >
                 <span class="truncate">{session.title}</span>
-                <span :if={session.status == "active"} class="ml-2 text-[10px] text-[var(--hx-accent)]">active</span>
+                <span
+                  :if={session.status == "active"}
+                  class="ml-2 text-[10px] text-[var(--hx-accent)]"
+                >
+                  active
+                </span>
               </.link>
               <.link
                 navigate={~p"/projects/#{@project.id}/board?new=1"}
@@ -79,7 +84,9 @@ defmodule HydraXWeb.ProductShell do
 
           <%!-- Agents section --%>
           <div class="border-t border-white/10 px-5 py-4">
-            <div class="mb-3 text-[10px] uppercase tracking-[0.25em] text-[var(--hx-mute)]">Agents</div>
+            <div class="mb-3 text-[10px] uppercase tracking-[0.25em] text-[var(--hx-mute)]">
+              Agents
+            </div>
             <div class="grid gap-2">
               <div
                 :for={agent <- @agents}
@@ -89,7 +96,9 @@ defmodule HydraXWeb.ProductShell do
                 <span class={[
                   "text-[10px] uppercase tracking-wider",
                   agent_status_color(agent)
-                ]}>{agent_status_label(agent)}</span>
+                ]}>
+                  {agent_status_label(agent)}
+                </span>
               </div>
             </div>
           </div>
@@ -135,7 +144,10 @@ defmodule HydraXWeb.ProductShell do
       ]}
     >
       <span class="font-mono text-xs uppercase tracking-[0.18em]">{@label}</span>
-      <span :if={@badge > 0} class="rounded-full bg-[var(--hx-accent)] px-2 py-0.5 text-[10px] font-bold text-white">
+      <span
+        :if={@badge > 0}
+        class="rounded-full bg-[var(--hx-accent)] px-2 py-0.5 text-[10px] font-bold text-white"
+      >
         {@badge}
       </span>
     </.link>

@@ -56,57 +56,57 @@ defmodule HydraX.Product.Tools.FeasibilityAssess do
   end
 
   defp execute_assessment(project_id, requirement, requirement_id) do
-      # Load linked insights
-      linked_insights =
-        RequirementInsight
-        |> where([ri], ri.requirement_id == ^requirement_id)
-        |> preload(:insight)
-        |> Repo.all()
-        |> Enum.map(fn ri ->
-          %{
-            id: ri.insight.id,
-            title: ri.insight.title,
-            body_excerpt: String.slice(ri.insight.body || "", 0, 300),
-            status: ri.insight.status
-          }
-        end)
+    # Load linked insights
+    linked_insights =
+      RequirementInsight
+      |> where([ri], ri.requirement_id == ^requirement_id)
+      |> preload(:insight)
+      |> Repo.all()
+      |> Enum.map(fn ri ->
+        %{
+          id: ri.insight.id,
+          title: ri.insight.title,
+          body_excerpt: String.slice(ri.insight.body || "", 0, 300),
+          status: ri.insight.status
+        }
+      end)
 
-      # Load existing architecture nodes for context
-      existing_arch =
-        ArchitectureNode
-        |> where([a], a.project_id == ^project_id and a.status == "active")
-        |> order_by([a], desc: a.updated_at)
-        |> limit(10)
-        |> Repo.all()
-        |> Enum.map(fn a ->
-          %{
-            id: a.id,
-            title: a.title,
-            node_type: a.node_type,
-            body_excerpt: String.slice(a.body || "", 0, 200)
-          }
-        end)
+    # Load existing architecture nodes for context
+    existing_arch =
+      ArchitectureNode
+      |> where([a], a.project_id == ^project_id and a.status == "active")
+      |> order_by([a], desc: a.updated_at)
+      |> limit(10)
+      |> Repo.all()
+      |> Enum.map(fn a ->
+        %{
+          id: a.id,
+          title: a.title,
+          node_type: a.node_type,
+          body_excerpt: String.slice(a.body || "", 0, 200)
+        }
+      end)
 
-      # Load upstream graph context
-      upstream = Graph.trace_upstream(project_id, "requirement", requirement_id, max_depth: 3)
+    # Load upstream graph context
+    upstream = Graph.trace_upstream(project_id, "requirement", requirement_id, max_depth: 3)
 
-      {:ok,
-       %{
-         context: %{
-           requirement: %{
-             id: requirement.id,
-             title: requirement.title,
-             body: requirement.body,
-             status: requirement.status
-           },
-           linked_insights: linked_insights,
-           existing_architecture: existing_arch,
-           upstream_chain:
-             Enum.map(upstream, fn n ->
-               %{node_type: n.node_type, node_id: n.node_id, edge_kind: n.edge_kind}
-             end)
-         }
-       }}
+    {:ok,
+     %{
+       context: %{
+         requirement: %{
+           id: requirement.id,
+           title: requirement.title,
+           body: requirement.body,
+           status: requirement.status
+         },
+         linked_insights: linked_insights,
+         existing_architecture: existing_arch,
+         upstream_chain:
+           Enum.map(upstream, fn n ->
+             %{node_type: n.node_type, node_id: n.node_id, edge_kind: n.edge_kind}
+           end)
+       }
+     }}
   end
 
   @impl true
@@ -119,7 +119,8 @@ defmodule HydraX.Product.Tools.FeasibilityAssess do
 
   defp extract_project_id(params) do
     case params[:project_id] || params["project_id"] do
-      value when is_integer(value) -> {:ok, value}
+      value when is_integer(value) ->
+        {:ok, value}
 
       value when is_binary(value) ->
         case Integer.parse(value) do

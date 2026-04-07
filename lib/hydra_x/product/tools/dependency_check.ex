@@ -52,7 +52,8 @@ defmodule HydraX.Product.Tools.DependencyCheck do
            downstream_count: length(downstream),
            downstream: Enum.map(downstream, &Map.take(&1, [:node_type, :node_id, :edge_kind])),
            impact_count: count,
-           affected: Enum.map(affected, fn {type, id, kind} -> %{type: type, id: id, kind: kind} end)
+           affected:
+             Enum.map(affected, fn {type, id, kind} -> %{type: type, id: id, kind: kind} end)
          }
        }}
     end
@@ -60,20 +61,25 @@ defmodule HydraX.Product.Tools.DependencyCheck do
 
   @impl true
   def result_summary(%{dependencies: d}),
-    do: "#{d.upstream_count} upstream, #{d.downstream_count} downstream, #{d.impact_count} impacted"
+    do:
+      "#{d.upstream_count} upstream, #{d.downstream_count} downstream, #{d.impact_count} impacted"
 
   def result_summary(%{error: error}) when is_binary(error), do: error
   def result_summary(payload), do: inspect(payload, limit: 8, printable_limit: 120)
 
   defp extract_project_id(params) do
     case params[:project_id] || params["project_id"] do
-      value when is_integer(value) -> {:ok, value}
+      value when is_integer(value) ->
+        {:ok, value}
+
       value when is_binary(value) ->
         case Integer.parse(value) do
           {integer, ""} -> {:ok, integer}
           _ -> {:error, :product_project_context_required}
         end
-      _ -> {:error, :product_project_context_required}
+
+      _ ->
+        {:error, :product_project_context_required}
     end
   end
 end

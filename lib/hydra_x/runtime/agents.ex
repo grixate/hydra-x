@@ -123,7 +123,8 @@ defmodule HydraX.Runtime.Agents do
 
   def agent_bulletin(id) when is_integer(id) do
     agent = get_agent!(id)
-    bulletin = get_in(agent.runtime_state, ["bulletin"])
+    wake_up_packet = get_in(agent.runtime_state, ["wake_up_packet"]) || %{}
+    bulletin = get_in(agent.runtime_state, ["bulletin"]) || wake_up_packet["compact_text"]
 
     top_memories =
       agent.runtime_state
@@ -135,9 +136,21 @@ defmodule HydraX.Runtime.Agents do
       content: bulletin,
       updated_at: get_in(agent.runtime_state, ["bulletin_updated_at"]),
       top_memories: top_memories,
+      wake_up_packet: wake_up_packet,
       memory_count:
         Memory.list_memories(agent_id: agent.id, limit: 6, status: "active") |> length()
     }
+  end
+
+  def agent_wake_up_packet(id) when is_integer(id) do
+    agent = get_agent!(id)
+    packet = get_in(agent.runtime_state, ["wake_up_packet"])
+
+    if is_map(packet) and map_size(packet) > 0 do
+      packet
+    else
+      Memory.wake_up(agent.id)
+    end
   end
 
   def compaction_policy(id) when is_integer(id) do
@@ -187,7 +200,8 @@ defmodule HydraX.Runtime.Agents do
       update_agent_runtime_state(agent, %{
         "bulletin" => bulletin.content,
         "bulletin_updated_at" => updated_at,
-        "bulletin_top_memories" => bulletin.top_memories
+        "bulletin_top_memories" => bulletin.top_memories,
+        "wake_up_packet" => bulletin.wake_up_packet
       })
 
     Helpers.audit_operator_action(
@@ -203,7 +217,8 @@ defmodule HydraX.Runtime.Agents do
       content: bulletin.content,
       updated_at: updated_at,
       top_memories: bulletin.top_memories,
-      memory_count: bulletin.memory_count
+      memory_count: bulletin.memory_count,
+      wake_up_packet: bulletin.wake_up_packet
     }
   end
 
@@ -292,55 +307,22 @@ defmodule HydraX.Runtime.Agents do
   # -- Private helpers --
 
   defp build_agent_bulletin(agent_id) do
-    ranked = Memory.bulletin_ranked(agent_id, 24)
-    active = Enum.map(ranked, & &1.entry)
-
-    conflict_count =
-      Memory.list_memories(agent_id: agent_id, limit: 50, status: "conflicted") |> length()
-
-    memory_count =
-      Memory.list_memories(agent_id: agent_id, limit: 6, status: "active") |> length()
-
-    prioritized =
-      prioritize_bulletin_memories(active)
-
-    sections =
-      []
-      |> maybe_add_section(
-        conflict_count > 0,
-        "Warnings",
-        ["- #{conflict_count} conflicted memories need operator review"]
-      )
-      |> maybe_add_section(
-        prioritized.goals != [],
-        "Active Goals And Todos",
-        Enum.map(prioritized.goals, &bulletin_line/1)
-      )
-      |> maybe_add_section(
-        prioritized.decisions != [],
-        "Current Decisions And Preferences",
-        Enum.map(prioritized.decisions, &bulletin_line/1)
-      )
-      |> maybe_add_section(
-        prioritized.channels != [],
-        "Channel-Specific Context",
-        Enum.map(prioritized.channels, &bulletin_line/1)
-      )
-      |> maybe_add_section(
-        prioritized.context != [],
-        "Relevant Context",
-        Enum.map(prioritized.context, &bulletin_line/1)
-      )
+    packet = Memory.wake_up(agent_id)
+    ranked = Memory.bulletin_ranked(agent_id, 12)
 
     %{
-      content:
-        case sections do
-          [] -> "No active memory yet."
-          _ -> Enum.join(sections, "\n\n")
-        end,
+      content: render_legacy_bulletin(ranked),
       top_memories: Enum.map(Enum.take(ranked, 5), &bulletin_memory_snapshot/1),
-      memory_count: memory_count
+      memory_count:
+        Memory.list_memories(agent_id: agent_id, limit: 6, status: "active") |> length(),
+      wake_up_packet: stringify_packet(packet)
     }
+  end
+
+  defp stringify_packet(packet) do
+    packet
+    |> Jason.encode!()
+    |> Jason.decode!()
   end
 
   defp bulletin_memory_snapshot(ranked) do
@@ -351,11 +333,15 @@ defmodule HydraX.Runtime.Agents do
       id: memory.id,
       type: memory.type,
       status: memory.status,
+      hall: memory.hall,
+      scope_key: memory.scope_key,
+      topic_key: memory.topic_key,
       content: memory.content,
       importance: memory.importance,
       score: ranked.score,
       reasons: ranked.reasons || [],
       score_breakdown: ranked[:score_breakdown] || %{},
+      evidence_count: length(ranked[:evidence] || []),
       source_file: metadata["source_file"],
       source_section: metadata["source_section"],
       source_channel: metadata["source_channel"]
@@ -373,11 +359,15 @@ defmodule HydraX.Runtime.Agents do
       id: bulletin_memory_value(memory, :id),
       type: bulletin_memory_value(memory, :type),
       status: bulletin_memory_value(memory, :status),
+      hall: bulletin_memory_value(memory, :hall),
+      scope_key: bulletin_memory_value(memory, :scope_key),
+      topic_key: bulletin_memory_value(memory, :topic_key),
       content: bulletin_memory_value(memory, :content),
       importance: bulletin_memory_value(memory, :importance),
       score: bulletin_memory_value(memory, :score),
       reasons: bulletin_memory_value(memory, :reasons) || [],
       score_breakdown: bulletin_memory_value(memory, :score_breakdown) || %{},
+      evidence_count: bulletin_memory_value(memory, :evidence_count),
       source_file: bulletin_memory_value(memory, :source_file),
       source_section: bulletin_memory_value(memory, :source_section),
       source_channel: bulletin_memory_value(memory, :source_channel)
@@ -386,6 +376,38 @@ defmodule HydraX.Runtime.Agents do
 
   defp bulletin_memory_value(memory, key) do
     Map.get(memory, key) || Map.get(memory, Atom.to_string(key))
+  end
+
+  defp render_legacy_bulletin(ranked) do
+    active = Enum.map(ranked, & &1.entry)
+
+    prioritized = prioritize_bulletin_memories(active)
+
+    []
+    |> maybe_add_section(
+      prioritized.goals != [],
+      "Active Goals And Todos",
+      Enum.map(prioritized.goals, &bulletin_line/1)
+    )
+    |> maybe_add_section(
+      prioritized.decisions != [],
+      "Current Decisions And Preferences",
+      Enum.map(prioritized.decisions, &bulletin_line/1)
+    )
+    |> maybe_add_section(
+      prioritized.channels != [],
+      "Channel-Specific Context",
+      Enum.map(prioritized.channels, &bulletin_line/1)
+    )
+    |> maybe_add_section(
+      prioritized.context != [],
+      "Relevant Context",
+      Enum.map(prioritized.context, &bulletin_line/1)
+    )
+    |> case do
+      [] -> "No bulletin yet."
+      sections -> Enum.join(sections, "\n\n")
+    end
   end
 
   defp prioritize_bulletin_memories(active) do

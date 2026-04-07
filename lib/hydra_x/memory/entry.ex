@@ -10,12 +10,19 @@ defmodule HydraX.Memory.Entry do
     field :status, :string, default: "active"
     field :content, :string
     field :importance, :float, default: 0.5
+    field :scope_kind, :string
+    field :scope_key, :string
+    field :hall, :string
+    field :topic_key, :string
+    field :valid_from, :utc_datetime_usec
+    field :valid_to, :utc_datetime_usec
     field :embedding, Pgvector.Ecto.Vector
     field :metadata, :map, default: %{}
     field :last_seen_at, :utc_datetime_usec
 
     belongs_to :agent, HydraX.Runtime.AgentProfile
     belongs_to :conversation, HydraX.Runtime.Conversation
+    has_many :evidence_records, HydraX.Memory.EvidenceRecord, foreign_key: :memory_id
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -29,6 +36,12 @@ defmodule HydraX.Memory.Entry do
       :status,
       :content,
       :importance,
+      :scope_kind,
+      :scope_key,
+      :hall,
+      :topic_key,
+      :valid_from,
+      :valid_to,
       :embedding,
       :metadata,
       :last_seen_at

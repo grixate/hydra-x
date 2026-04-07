@@ -8,7 +8,8 @@ defmodule HydraX.Product.Tools.ArtifactCreate do
 
   @impl true
   def description,
-    do: "Create a new living artifact — a document maintained over time (competitive analysis, strategy memo, etc.)"
+    do:
+      "Create a new living artifact — a document maintained over time (competitive analysis, strategy memo, etc.)"
 
   @impl true
   def safety_classification, do: "product_write"
@@ -19,15 +20,22 @@ defmodule HydraX.Product.Tools.ArtifactCreate do
       name: "artifact_create",
       description:
         "Create a new living artifact. Use for documents that should be maintained over time " <>
-        "(competitive analysis, strategy memo, design language, etc.). The artifact will be " <>
-        "versioned automatically on future updates.",
+          "(competitive analysis, strategy memo, design language, etc.). The artifact will be " <>
+          "versioned automatically on future updates.",
       input_schema: %{
         type: "object",
         properties: %{
           title: %{type: "string", description: "Title for the artifact"},
           artifact_type: %{
             type: "string",
-            enum: ["competitive_analysis", "strategy_memo", "project_summary", "decision_log", "design_language", "custom"],
+            enum: [
+              "competitive_analysis",
+              "strategy_memo",
+              "project_summary",
+              "decision_log",
+              "design_language",
+              "custom"
+            ],
             description: "Type of artifact"
           },
           body: %{type: "string", description: "Initial content in markdown"}
@@ -60,19 +68,25 @@ defmodule HydraX.Product.Tools.ArtifactCreate do
   end
 
   @impl true
-  def result_summary(%{artifact: artifact}), do: "created artifact #{artifact.id}: #{artifact.title}"
+  def result_summary(%{artifact: artifact}),
+    do: "created artifact #{artifact.id}: #{artifact.title}"
+
   def result_summary(%{error: error}) when is_binary(error), do: error
   def result_summary(payload), do: inspect(payload, limit: 8, printable_limit: 120)
 
   defp project_id(params) do
     case params[:project_id] || params["project_id"] do
-      value when is_integer(value) -> {:ok, value}
+      value when is_integer(value) ->
+        {:ok, value}
+
       value when is_binary(value) ->
         case Integer.parse(value) do
           {integer, ""} -> {:ok, integer}
           _ -> {:error, :product_project_context_required}
         end
-      _ -> {:error, :product_project_context_required}
+
+      _ ->
+        {:error, :product_project_context_required}
     end
   end
 

@@ -144,17 +144,22 @@ defmodule HydraXWeb.StreamLive do
                   <div>
                     <div class="flex items-center gap-2">
                       <span class="text-sm font-medium text-white">{item.title}</span>
-                      <span :if={item[:priority]} class={[
-                        "rounded px-2 py-0.5 text-[10px] uppercase",
-                        priority_color(item[:priority])
-                      ]}>
+                      <span
+                        :if={item[:priority]}
+                        class={[
+                          "rounded px-2 py-0.5 text-[10px] uppercase",
+                          priority_color(item[:priority])
+                        ]}
+                      >
                         {item[:priority]}
                       </span>
                     </div>
                     <div class="mt-1 text-xs text-[var(--hx-mute)]">
                       {item.type}
-                      <span :if={item[:status]}> · {item[:status]}</span>
-                      <span :if={item[:draft_node_count]}> · {item[:draft_node_count]} draft nodes</span>
+                      <span :if={item[:status]}> ·  {item[:status]}</span>
+                      <span :if={item[:draft_node_count]}>
+                         ·  {item[:draft_node_count]} draft nodes
+                      </span>
                     </div>
                   </div>
                   <.link
@@ -185,8 +190,16 @@ defmodule HydraXWeb.StreamLive do
             </div>
           </section>
 
-          <div :if={@my_work.needs_input == [] and @my_work.active_work == [] and @my_work.recent_output == []} class="text-center py-12">
-            <p class="text-[var(--hx-mute)]">Nothing here yet. Start a Board session to begin exploring.</p>
+          <div
+            :if={
+              @my_work.needs_input == [] and @my_work.active_work == [] and
+                @my_work.recent_output == []
+            }
+            class="text-center py-12"
+          >
+            <p class="text-[var(--hx-mute)]">
+              Nothing here yet. Start a Board session to begin exploring.
+            </p>
           </div>
         </div>
 
@@ -219,7 +232,13 @@ defmodule HydraXWeb.StreamLive do
             </div>
           </section>
 
-          <div :if={@stream_data.right_now == [] and @stream_data.recently == [] and @stream_data.emerging == []} class="text-center py-12">
+          <div
+            :if={
+              @stream_data.right_now == [] and @stream_data.recently == [] and
+                @stream_data.emerging == []
+            }
+            class="text-center py-12"
+          >
             <p class="text-[var(--hx-mute)]">No project activity yet.</p>
           </div>
         </div>

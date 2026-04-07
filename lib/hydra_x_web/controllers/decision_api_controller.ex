@@ -31,6 +31,7 @@ defmodule HydraXWeb.DecisionAPIController do
 
   def update(conn, %{"project_id" => project_id, "id" => id, "decision" => params}) do
     decision = Product.get_project_decision!(project_id, id)
+
     with {:ok, %Decision{} = updated} <- Product.update_decision(decision, params) do
       json(conn, %{data: ProductPayload.decision_json(updated)})
     end
@@ -38,6 +39,7 @@ defmodule HydraXWeb.DecisionAPIController do
 
   def delete(conn, %{"project_id" => project_id, "id" => id}) do
     decision = Product.get_project_decision!(project_id, id)
+
     with {:ok, %Decision{}} <- Product.delete_decision(decision) do
       send_resp(conn, :no_content, "")
     end

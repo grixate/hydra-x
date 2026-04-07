@@ -360,11 +360,28 @@ defmodule HydraXWeb.ProductPayload do
     }
 
     cond do
-      Map.has_key?(node, :node_type) -> Map.put(base, :node_type, node.node_type)
-      Map.has_key?(node, :priority) -> Map.merge(base, %{priority: node.priority, assignee: node.assignee, effort_estimate: node.effort_estimate})
-      Map.has_key?(node, :decided_by) -> Map.merge(base, %{decided_by: node.decided_by, decided_at: node.decided_at, alternatives_considered: node.alternatives_considered})
-      Map.has_key?(node, :learning_type) -> Map.put(base, :learning_type, node.learning_type)
-      true -> base
+      Map.has_key?(node, :node_type) ->
+        Map.put(base, :node_type, node.node_type)
+
+      Map.has_key?(node, :priority) ->
+        Map.merge(base, %{
+          priority: node.priority,
+          assignee: node.assignee,
+          effort_estimate: node.effort_estimate
+        })
+
+      Map.has_key?(node, :decided_by) ->
+        Map.merge(base, %{
+          decided_by: node.decided_by,
+          decided_at: node.decided_at,
+          alternatives_considered: node.alternatives_considered
+        })
+
+      Map.has_key?(node, :learning_type) ->
+        Map.put(base, :learning_type, node.learning_type)
+
+      true ->
+        base
     end
   end
 

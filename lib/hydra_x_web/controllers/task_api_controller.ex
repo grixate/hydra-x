@@ -32,6 +32,7 @@ defmodule HydraXWeb.TaskAPIController do
 
   def update(conn, %{"project_id" => project_id, "id" => id, "task" => params}) do
     task = Product.get_project_task!(project_id, id)
+
     with {:ok, %ProductTask{} = updated} <- Product.update_task(task, params) do
       json(conn, %{data: ProductPayload.task_json(updated)})
     end
@@ -39,6 +40,7 @@ defmodule HydraXWeb.TaskAPIController do
 
   def delete(conn, %{"project_id" => project_id, "id" => id}) do
     task = Product.get_project_task!(project_id, id)
+
     with {:ok, %ProductTask{}} <- Product.delete_task(task) do
       send_resp(conn, :no_content, "")
     end

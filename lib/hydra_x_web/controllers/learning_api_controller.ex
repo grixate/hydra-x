@@ -32,6 +32,7 @@ defmodule HydraXWeb.LearningAPIController do
 
   def update(conn, %{"project_id" => project_id, "id" => id, "learning" => params}) do
     learning = Product.get_project_learning!(project_id, id)
+
     with {:ok, %Learning{} = updated} <- Product.update_learning(learning, params) do
       json(conn, %{data: ProductPayload.learning_json(updated)})
     end
@@ -39,6 +40,7 @@ defmodule HydraXWeb.LearningAPIController do
 
   def delete(conn, %{"project_id" => project_id, "id" => id}) do
     learning = Product.get_project_learning!(project_id, id)
+
     with {:ok, %Learning{}} <- Product.delete_learning(learning) do
       send_resp(conn, :no_content, "")
     end

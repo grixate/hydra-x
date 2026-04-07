@@ -32,11 +32,30 @@ defmodule HydraX.Product.Routine do
   def changeset(routine, attrs) do
     routine
     |> cast(attrs, [
-      :project_id, :title, :description, :prompt_template, :assigned_persona,
-      :schedule_type, :cron_expression, :event_trigger, :timezone, :output_target,
-      :status, :last_run_at, :last_run_status, :last_run_tokens, :metadata
+      :project_id,
+      :title,
+      :description,
+      :prompt_template,
+      :assigned_persona,
+      :schedule_type,
+      :cron_expression,
+      :event_trigger,
+      :timezone,
+      :output_target,
+      :status,
+      :last_run_at,
+      :last_run_status,
+      :last_run_tokens,
+      :metadata
     ])
-    |> validate_required([:project_id, :title, :prompt_template, :assigned_persona, :schedule_type, :status])
+    |> validate_required([
+      :project_id,
+      :title,
+      :prompt_template,
+      :assigned_persona,
+      :schedule_type,
+      :status
+    ])
     |> validate_inclusion(:status, @statuses)
     |> validate_inclusion(:assigned_persona, @personas)
     |> validate_inclusion(:schedule_type, @schedule_types)

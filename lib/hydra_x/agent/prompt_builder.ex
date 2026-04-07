@@ -4,7 +4,7 @@ defmodule HydraX.Agent.PromptBuilder do
   alias HydraX.Workspace
   alias HydraX.Tool.Registry
 
-  def build(agent, history, bulletin, summary, opts \\ %{}) do
+  def build(agent, history, wake_up, summary, opts \\ %{}) do
     workspace = Workspace.load_context(agent.workspace_root)
     tool_policy = Map.get(opts, :tool_policy, %{})
     skill_context = Map.get(opts, :skill_context, "")
@@ -21,7 +21,7 @@ defmodule HydraX.Agent.PromptBuilder do
         if(skill_context not in [nil, ""], do: "## Enabled Skills\n\n#{skill_context}"),
         if(mcp_context not in [nil, ""], do: "## MCP Integrations\n\n#{mcp_context}"),
         if(product_context not in [nil, ""], do: "## Product Context\n\n#{product_context}"),
-        if(bulletin not in [nil, ""], do: "## Bulletin\n\n#{bulletin}"),
+        if(wake_up not in [nil, ""], do: "## Wake-Up Context\n\n#{wake_up}"),
         if(summary not in [nil, ""], do: "## Conversation Summary\n\n#{summary}")
       ]
       |> Enum.reject(&(&1 in [nil, ""]))
@@ -32,7 +32,7 @@ defmodule HydraX.Agent.PromptBuilder do
 
     tools = Registry.available_schemas(tool_policy, extra_tools: extra_tool_modules)
 
-    %{messages: messages, tools: tools, bulletin: bulletin}
+    %{messages: messages, tools: tools, bulletin: wake_up}
   end
 
   @doc """

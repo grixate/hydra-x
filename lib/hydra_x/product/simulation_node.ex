@@ -19,7 +19,15 @@ defmodule HydraX.Product.SimulationNode do
 
   def changeset(node, attrs) do
     node
-    |> cast(attrs, [:project_id, :simulation_id, :scenario_summary, :archetype_summary, :status, :results_imported, :metadata])
+    |> cast(attrs, [
+      :project_id,
+      :simulation_id,
+      :scenario_summary,
+      :archetype_summary,
+      :status,
+      :results_imported,
+      :metadata
+    ])
     |> validate_required([:project_id, :status])
     |> validate_inclusion(:status, @statuses)
     |> foreign_key_constraint(:project_id)

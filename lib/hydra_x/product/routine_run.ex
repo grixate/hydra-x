@@ -22,8 +22,15 @@ defmodule HydraX.Product.RoutineRun do
   def changeset(run, attrs) do
     run
     |> cast(attrs, [
-      :routine_id, :started_at, :completed_at, :status,
-      :prompt_resolved, :output, :token_count, :cost_cents, :metadata
+      :routine_id,
+      :started_at,
+      :completed_at,
+      :status,
+      :prompt_resolved,
+      :output,
+      :token_count,
+      :cost_cents,
+      :metadata
     ])
     |> validate_required([:routine_id, :started_at, :status])
     |> validate_inclusion(:status, @statuses)

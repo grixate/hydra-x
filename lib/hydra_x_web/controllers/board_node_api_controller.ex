@@ -97,7 +97,12 @@ defmodule HydraXWeb.BoardNodeAPIController do
     end
   end
 
-  def react(conn, %{"session_id" => _session_id, "id" => id, "reaction" => reaction, "user_id" => user_id}) do
+  def react(conn, %{
+        "session_id" => _session_id,
+        "id" => id,
+        "reaction" => reaction,
+        "user_id" => user_id
+      }) do
     case Product.toggle_board_node_reaction(String.to_integer(id), reaction, user_id) do
       {:ok, updated_node} ->
         json(conn, %{data: ProductPayload.board_node_json(updated_node)})

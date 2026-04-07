@@ -19,8 +19,8 @@ defmodule HydraX.Product.Tools.KnowledgeUpdate do
       name: "knowledge_update",
       description:
         "Propose an update to an existing knowledge entry. Use when you discover new " <>
-        "information that should be added, or when existing guidance is outdated. " <>
-        "The update will be reviewed before applying.",
+          "information that should be added, or when existing guidance is outdated. " <>
+          "The update will be reviewed before applying.",
       input_schema: %{
         type: "object",
         properties: %{
@@ -89,13 +89,17 @@ defmodule HydraX.Product.Tools.KnowledgeUpdate do
 
   defp project_id(params) do
     case params[:project_id] || params["project_id"] do
-      value when is_integer(value) -> {:ok, value}
+      value when is_integer(value) ->
+        {:ok, value}
+
       value when is_binary(value) ->
         case Integer.parse(value) do
           {integer, ""} -> {:ok, integer}
           _ -> {:error, :product_project_context_required}
         end
-      _ -> {:error, :product_project_context_required}
+
+      _ ->
+        {:error, :product_project_context_required}
     end
   end
 

@@ -283,13 +283,24 @@ defmodule HydraX.Agent.Channel do
   defp process_buffer_turns(data) do
     history = Runtime.list_turns(data.conversation.id)
     agent = Runtime.get_agent!(data.agent_id)
-    bulletin = HydraX.Agent.Cortex.current_bulletin(data.agent_id)
+
+    wake_up =
+      HydraX.Memory.wake_up(data.agent_id,
+        conversation: data.conversation,
+        scope_key: "conversation:#{data.conversation.id}",
+        topic_key:
+          HydraX.Memory.Routing.topic_key([
+            data.conversation.title,
+            List.last(history) && List.last(history).content
+          ])
+      )
+
     summary = Compactor.current_summary(data.conversation.id)
     tool_policy = Runtime.effective_tool_policy(data.agent_id)
     extra_tool_modules = Product.tool_modules(data.conversation)
 
     prompt =
-      PromptBuilder.build(agent, history, bulletin, summary, %{
+      PromptBuilder.build(agent, history, wake_up.compact_text, summary, %{
         tool_policy: tool_policy,
         skill_context:
           Runtime.skill_prompt_context(agent.id, %{
@@ -802,20 +813,25 @@ defmodule HydraX.Agent.Channel do
       try do
         {tool_results, cache_hits, cache_misses} = execute_tool_calls_with_cache(data, tool_calls)
 
-        send(caller, {
-          :tool_results_ready,
-          tool_task_ref,
-          %{
-            tool_results: tool_results,
-            cache_hits: cache_hits,
-            cache_misses: cache_misses
-          }
-        })
+        Process.send_after(
+          caller,
+          {
+            :tool_results_ready,
+            tool_task_ref,
+            %{
+              tool_results: tool_results,
+              cache_hits: cache_hits,
+              cache_misses: cache_misses
+            }
+          },
+          0
+        )
       rescue
         error ->
-          send(
+          Process.send_after(
             caller,
-            {:tool_results_error, tool_task_ref, Exception.format(:error, error, __STACKTRACE__)}
+            {:tool_results_error, tool_task_ref, Exception.format(:error, error, __STACKTRACE__)},
+            0
           )
       end
     end)
@@ -1025,6 +1041,8 @@ defmodule HydraX.Agent.Channel do
       "pending_response" => nil,
       "updated_at" => DateTime.utc_now()
     })
+
+    maybe_run_memory_checkpoint_review(data.conversation)
 
     Enum.each(data.pending_from, &:gen_statem.reply(&1, assistant_turn.content))
     Compactor.review(data.agent_id, data.conversation.id)
@@ -1612,6 +1630,18 @@ defmodule HydraX.Agent.Channel do
           "deferred_owner_node" => ownership["owner_node"]
         })
     })
+  end
+
+  defp maybe_run_memory_checkpoint_review(conversation) do
+    turns = Runtime.list_turns(conversation.id)
+
+    user_turn_count =
+      turns
+      |> Enum.count(&(&1.role == "user"))
+
+    if user_turn_count > 0 and rem(user_turn_count, 12) == 0 do
+      HydraX.Memory.review_conversation_checkpoint(conversation.id, reason: "12_user_turns")
+    end
   end
 
   defp append_execution_event(events, phase, details) do

@@ -316,6 +316,68 @@ defmodule HydraX.MemoryTaskTest do
     assert Enum.any?(Memory.list_edges_for(winner.id), &(&1.kind == "supersedes"))
   end
 
+  test "memory task supports routed search flags and wake-up preview" do
+    Mix.Task.reenable("hydra_x.memory")
+    agent = create_agent()
+    topic_key = HydraX.Memory.Routing.topic_key("handoff")
+
+    {:ok, _memory} =
+      Memory.create_memory(%{
+        agent_id: agent.id,
+        type: "Decision",
+        content: "Handoff policy prefers terse bullets and explicit owners.",
+        importance: 0.9,
+        scope_kind: "agent",
+        scope_key: "agent:#{agent.id}",
+        hall: "facts",
+        topic_key: topic_key,
+        last_seen_at: DateTime.utc_now()
+      })
+
+    output =
+      capture_io(fn ->
+        Mix.Tasks.HydraX.Memory.run([
+          "--agent",
+          agent.slug,
+          "--search",
+          "handoff policy",
+          "--scope-kind",
+          "agent",
+          "--scope-key",
+          "agent:#{agent.id}",
+          "--hall",
+          "facts",
+          "--topic-key",
+          topic_key,
+          "--as-of",
+          "2026-04-01T00:00:00Z"
+        ])
+      end)
+
+    assert output =~ "\tagent\tagent:#{agent.id}\tfacts\t#{topic_key}\t"
+    assert output =~ "scope routing"
+    assert output =~ "topic routing"
+    assert output =~ "hall routing"
+
+    Mix.Task.reenable("hydra_x.memory")
+
+    wake_up_output =
+      capture_io(fn ->
+        Mix.Tasks.HydraX.Memory.run([
+          "wake-up",
+          "--agent",
+          agent.slug,
+          "--scope-key",
+          "agent:#{agent.id}",
+          "--topic-key",
+          topic_key
+        ])
+      end)
+
+    assert wake_up_output =~ "Wake-Up Packet"
+    assert wake_up_output =~ "Handoff policy prefers terse bullets and explicit owners."
+  end
+
   defp create_agent do
     unique = System.unique_integer([:positive])
 

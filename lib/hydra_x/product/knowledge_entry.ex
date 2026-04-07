@@ -25,8 +25,16 @@ defmodule HydraX.Product.KnowledgeEntry do
   def changeset(entry, attrs) do
     entry
     |> cast(attrs, [
-      :project_id, :title, :content, :entry_type, :assigned_personas,
-      :source_type, :source_url, :status, :embedding, :metadata
+      :project_id,
+      :title,
+      :content,
+      :entry_type,
+      :assigned_personas,
+      :source_type,
+      :source_url,
+      :status,
+      :embedding,
+      :metadata
     ])
     |> validate_required([:project_id, :title, :content, :entry_type, :status])
     |> validate_inclusion(:status, @statuses)

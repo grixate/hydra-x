@@ -24,10 +24,19 @@ defmodule HydraX.Product.Tools.ArchitectureCreate do
         type: "object",
         properties: %{
           title: %{type: "string", description: "Short title for the architecture node"},
-          body: %{type: "string", description: "Detailed architecture description or specification"},
+          body: %{
+            type: "string",
+            description: "Detailed architecture description or specification"
+          },
           node_type: %{
             type: "string",
-            enum: ["system_design", "data_model", "api_contract", "infra_choice", "tech_selection"],
+            enum: [
+              "system_design",
+              "data_model",
+              "api_contract",
+              "infra_choice",
+              "tech_selection"
+            ],
             description: "Type of architecture artifact"
           },
           requirement_ids: %{
@@ -85,8 +94,9 @@ defmodule HydraX.Product.Tools.ArchitectureCreate do
   def result_summary(payload), do: inspect(payload, limit: 8, printable_limit: 120)
 
   defp link_requirements(project_id, node_id, params) do
-    req_ids = params[:requirement_ids] || params["requirement_ids"] ||
-              params[:linked_requirement_ids] || params["linked_requirement_ids"] || []
+    req_ids =
+      params[:requirement_ids] || params["requirement_ids"] ||
+        params[:linked_requirement_ids] || params["linked_requirement_ids"] || []
 
     Enum.each(req_ids, fn req_id ->
       Graph.link_nodes(project_id, "requirement", req_id, "architecture_node", node_id, "lineage")
@@ -103,13 +113,17 @@ defmodule HydraX.Product.Tools.ArchitectureCreate do
 
   defp extract_project_id(params) do
     case params[:project_id] || params["project_id"] do
-      value when is_integer(value) -> {:ok, value}
+      value when is_integer(value) ->
+        {:ok, value}
+
       value when is_binary(value) ->
         case Integer.parse(value) do
           {integer, ""} -> {:ok, integer}
           _ -> {:error, :product_project_context_required}
         end
-      _ -> {:error, :product_project_context_required}
+
+      _ ->
+        {:error, :product_project_context_required}
     end
   end
 
