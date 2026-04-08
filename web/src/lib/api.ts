@@ -148,24 +148,23 @@ export const api = {
   updateInsight: (
     projectId: number,
     insightId: number,
-    payload: {
+    payload: Partial<{
       title: string;
       body: string;
       status: string;
       evidenceChunkIds: number[];
-    },
-  ) =>
-    request<Insight>(`/projects/${projectId}/insights/${insightId}`, {
+    }>,
+  ) => {
+    const insight: Record<string, unknown> = {};
+    if (payload.title !== undefined) insight.title = payload.title;
+    if (payload.body !== undefined) insight.body = payload.body;
+    if (payload.status !== undefined) insight.status = payload.status;
+    if (payload.evidenceChunkIds !== undefined) insight.evidence_chunk_ids = payload.evidenceChunkIds;
+    return request<Insight>(`/projects/${projectId}/insights/${insightId}`, {
       method: "PATCH",
-      body: JSON.stringify({
-        insight: {
-          title: payload.title,
-          body: payload.body,
-          status: payload.status,
-          evidence_chunk_ids: payload.evidenceChunkIds,
-        },
-      }),
-    }),
+      body: JSON.stringify({ insight }),
+    });
+  },
   listRequirements: (projectId: number) =>
     request<Requirement[]>(`/projects/${projectId}/requirements`),
   createRequirement: (
@@ -191,24 +190,23 @@ export const api = {
   updateRequirement: (
     projectId: number,
     requirementId: number,
-    payload: {
+    payload: Partial<{
       title: string;
       body: string;
       status: string;
       insightIds: number[];
-    },
-  ) =>
-    request<Requirement>(`/projects/${projectId}/requirements/${requirementId}`, {
+    }>,
+  ) => {
+    const requirement: Record<string, unknown> = {};
+    if (payload.title !== undefined) requirement.title = payload.title;
+    if (payload.body !== undefined) requirement.body = payload.body;
+    if (payload.status !== undefined) requirement.status = payload.status;
+    if (payload.insightIds !== undefined) requirement.insight_ids = payload.insightIds;
+    return request<Requirement>(`/projects/${projectId}/requirements/${requirementId}`, {
       method: "PATCH",
-      body: JSON.stringify({
-        requirement: {
-          title: payload.title,
-          body: payload.body,
-          status: payload.status,
-          insight_ids: payload.insightIds,
-        },
-      }),
-    }),
+      body: JSON.stringify({ requirement }),
+    });
+  },
   listConversations: (projectId: number) =>
     request<ProductConversation[]>(`/projects/${projectId}/conversations`),
   getConversation: (projectId: number, conversationId: number) =>
@@ -249,6 +247,8 @@ export const api = {
       recently: StreamItem[];
       emerging: StreamItem[];
     }>(`/projects/${projectId}/stream${role ? `?role=${role}` : ""}`),
+  getMyWork: (projectId: number) =>
+    request<MyWorkData>(`/projects/${projectId}/my-work`),
   getTrail: (
     projectId: number,
     nodeType: string,
@@ -499,13 +499,46 @@ export type StreamItem = {
   items?: StreamItem[];
 };
 
+export type MyWorkItem = {
+  type: string;
+  title: string;
+  node_type?: string;
+  node_id?: number;
+  session_id?: number;
+  session_title?: string;
+  node_count?: number;
+  agent?: string;
+  flag_type?: string;
+  priority?: string;
+  status?: string;
+  assignee?: string;
+  actions?: string[];
+  created_at?: string;
+  updated_at?: string;
+  at?: string;
+};
+
+export type MyWorkData = {
+  needs_input: MyWorkItem[];
+  active_work: MyWorkItem[];
+  recent_output: MyWorkItem[];
+};
+
 export type TrailNode = {
   node_type: string;
   node_id: number;
   title: string;
   body?: string;
   status: string;
+  inserted_at?: string;
   updated_at?: string;
+  metadata?: Record<string, unknown>;
+  alternatives_considered?: Array<{ title: string; description?: string; rejected_reason?: string }>;
+  decided_by?: string;
+  decided_at?: string;
+  upstream_counts?: Record<string, number>;
+  downstream_counts?: Record<string, number>;
+  constraints?: Array<{ id: number; title: string; body: string }>;
 };
 
 export type TrailChainNode = {
@@ -515,6 +548,9 @@ export type TrailChainNode = {
   title: string;
   status: string;
   summary?: string;
+  updated_at?: string;
+  upstream_count?: number;
+  downstream_count?: number;
 };
 
 export type TrailFlag = {

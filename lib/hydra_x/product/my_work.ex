@@ -138,7 +138,7 @@ defmodule HydraX.Product.MyWork do
     |> Enum.map(fn f ->
       %{
         type: "flag",
-        title: "Flag: #{f.description || f.flag_type} on #{f.node_type} ##{f.node_id}",
+        title: "Flag: #{f.reason || f.flag_type} on #{f.node_type} ##{f.node_id}",
         node_type: f.node_type,
         node_id: f.node_id,
         flag_type: f.flag_type,

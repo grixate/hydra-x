@@ -1,47 +1,73 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { api, type StreamItem } from "@/lib/api";
+import { api, type StreamItem, type MyWorkData } from "@/lib/api";
 import { StreamView } from "@/components/stream/stream-view";
-import { Button } from "@/components/ui/button";
+import type { StreamMode } from "@/components/stream/stream-mode-toggle";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent } from "@/components/ui/card";
 import { UniversalInput } from "@/components/chat/universal-input";
 import { GraphChatCard } from "@/components/chat/chat-card";
 import { useChatState } from "@/hooks/use-chat-state";
 
+function loadMode(): StreamMode {
+  const stored = localStorage.getItem("stream-mode");
+  return stored === "project" ? "project" : "my-work";
+}
+
+type StreamDataShape = {
+  right_now: StreamItem[];
+  recently: StreamItem[];
+  emerging: StreamItem[];
+};
+
 export function StreamPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
   const pid = Number(projectId);
 
-  const [stream, setStream] = useState<{
-    right_now: StreamItem[];
-    recently: StreamItem[];
-    emerging: StreamItem[];
-  } | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [mode, setMode] = useState<StreamMode>(loadMode);
+  const [streamData, setStreamData] = useState<StreamDataShape | null>(null);
+  const [myWorkData, setMyWorkData] = useState<MyWorkData | null>(null);
+  const [initialLoading, setInitialLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const mountedRef = useRef(true);
 
   const chat = useChatState(pid, "memory");
 
+  const handleModeChange = (newMode: StreamMode) => {
+    setMode(newMode);
+    localStorage.setItem("stream-mode", newMode);
+  };
+
+  const fetchStream = useCallback(
+    (pid: number) =>
+      api.getStream(pid).then((data) => {
+        if (mountedRef.current) setStreamData(data);
+      }),
+    [],
+  );
+
+  const fetchMyWork = useCallback(
+    (pid: number) =>
+      api.getMyWork(pid).then((data) => {
+        if (mountedRef.current) setMyWorkData(data);
+      }),
+    [],
+  );
+
+  // On mount or project change: fetch BOTH datasets so switching is instant
   useEffect(() => {
     if (!projectId || isNaN(pid)) return;
-
     mountedRef.current = true;
-    setLoading(true);
+    setInitialLoading(true);
     setError(null);
 
-    api
-      .getStream(pid)
-      .then((data) => {
-        if (mountedRef.current) setStream(data);
-      })
+    Promise.all([fetchStream(pid), fetchMyWork(pid)])
       .catch((err) => {
         if (mountedRef.current) setError(err.message ?? "Failed to load stream");
       })
       .finally(() => {
-        if (mountedRef.current) setLoading(false);
+        if (mountedRef.current) setInitialLoading(false);
       });
 
     return () => {
@@ -49,16 +75,18 @@ export function StreamPage() {
     };
   }, [projectId]);
 
-  const refreshStream = () => {
-    if (!projectId || isNaN(pid)) return;
-    setError(null);
-    api
-      .getStream(pid)
-      .then(setStream)
-      .catch((err) => setError(err.message ?? "Failed to refresh"));
-  };
+  // On mode switch: refresh the active dataset in the background (keeps stale data visible)
+  useEffect(() => {
+    if (!projectId || isNaN(pid) || initialLoading) return;
 
-  if (error) {
+    if (mode === "project") {
+      fetchStream(pid).catch(() => {});
+    } else {
+      fetchMyWork(pid).catch(() => {});
+    }
+  }, [mode]);
+
+  if (error && !streamData && !myWorkData) {
     return (
       <div className="p-6">
         <Card>
@@ -70,32 +98,30 @@ export function StreamPage() {
     );
   }
 
-  if (loading || !stream) {
+  if (initialLoading) {
     return (
-      <div className="space-y-4 p-6">
+      <div className="mx-auto max-w-2xl space-y-4 px-4 py-6">
         <Skeleton className="h-8 w-48" />
-        <Skeleton className="h-24 w-full" />
-        <Skeleton className="h-24 w-full" />
-        <Skeleton className="h-24 w-full" />
+        <Skeleton className="h-32 w-full" />
+        <Skeleton className="h-8 w-full" />
+        <Skeleton className="h-8 w-full" />
+        <Skeleton className="h-8 w-full" />
       </div>
     );
   }
 
   return (
     <div className="relative h-full overflow-hidden">
-      <div className="h-full space-y-6 overflow-auto p-6 pb-28">
-        <div className="flex items-center justify-between">
-          <h1 className="text-xl font-semibold">Stream</h1>
-          <Button variant="ghost" size="sm" onClick={refreshStream}>
-            Refresh
-          </Button>
-        </div>
+      <div className="h-full overflow-auto pb-40">
         <StreamView
-          rightNow={stream.right_now}
-          recently={stream.recently}
-          emerging={stream.emerging}
+          mode={mode}
+          onModeChange={handleModeChange}
+          streamData={streamData}
+          myWorkData={myWorkData}
           onNavigateToNode={(nodeType, nodeId) =>
-            navigate(`/projects/${projectId}/trail/${nodeType}/${nodeId}`)
+            navigate(`/projects/${projectId}/trail/${nodeType}/${nodeId}`, {
+              state: { from: "stream" },
+            })
           }
           onNavigateGraph={(nodeType, nodeId, _filterType) =>
             navigate(
@@ -105,6 +131,12 @@ export function StreamPage() {
           onAction={(action, item) => {
             console.log("Stream action:", action, item.id);
           }}
+          onTalkToStrategist={() =>
+            navigate(`/projects/${projectId}/chat/strategist`)
+          }
+          onUploadResearch={() =>
+            navigate(`/projects/${projectId}/sources`)
+          }
         />
       </div>
 

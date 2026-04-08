@@ -9,18 +9,14 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import type { BoardSession, BoardPresenceUser } from "@/types";
-import type { BoardView } from "./board-workspace";
 
 type BoardSessionHeaderProps = {
   projectId: number;
   session: BoardSession;
   participants: BoardPresenceUser[];
   draftCount: number;
-  view: BoardView;
-  onViewChange: (view: BoardView) => void;
   onSessionUpdate: (session: BoardSession) => void;
   onPushToGraph: () => void;
 };
@@ -30,8 +26,6 @@ export function BoardSessionHeader({
   session,
   participants,
   draftCount,
-  view,
-  onViewChange,
   onSessionUpdate,
   onPushToGraph,
 }: BoardSessionHeaderProps) {
@@ -58,7 +52,7 @@ export function BoardSessionHeader({
   }
 
   return (
-    <div className="flex items-center justify-between px-4 py-3">
+    <div className="flex items-center justify-between px-4 h-[45px] border-b shrink-0">
       {/* Left: back + title */}
       <div className="flex items-center gap-3">
         <Button
@@ -70,13 +64,14 @@ export function BoardSessionHeader({
         </Button>
 
         {editing ? (
-          <Input
+          <input
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             onBlur={saveTitle}
             onKeyDown={(e) => e.key === "Enter" && saveTitle()}
             autoFocus
-            className="w-80 text-sm font-medium"
+            className="bg-transparent text-sm font-medium outline-none border-none p-0 min-w-[80px]"
+            style={{ width: `${Math.max(title.length, 8)}ch` }}
           />
         ) : (
           <button
@@ -86,32 +81,6 @@ export function BoardSessionHeader({
             {session.title}
           </button>
         )}
-      </div>
-
-      {/* Center: view toggle */}
-      <div className="flex rounded-lg border bg-muted/50 p-0.5">
-        <button
-          onClick={() => onViewChange("canvas")}
-          className={cn(
-            "rounded-md px-3 py-1 text-xs transition-colors",
-            view === "canvas"
-              ? "bg-background shadow-sm font-medium"
-              : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          Canvas
-        </button>
-        <button
-          onClick={() => onViewChange("chat")}
-          className={cn(
-            "rounded-md px-3 py-1 text-xs transition-colors",
-            view === "chat"
-              ? "bg-background shadow-sm font-medium"
-              : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          Chat
-        </button>
       </div>
 
       {/* Right: participants + actions */}

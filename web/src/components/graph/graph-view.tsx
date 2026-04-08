@@ -262,7 +262,9 @@ function GraphViewInner({ projectId }: { projectId: number }) {
   const onNodeDoubleClick = useCallback(
     (_: React.MouseEvent, node: Node) => {
       const d = node.data as unknown as GraphDataNode;
-      navigate(`/projects/${projectId}/trail/${d.node_type}/${d.node_id}`);
+      navigate(`/projects/${projectId}/trail/${d.node_type}/${d.node_id}`, {
+        state: { from: "graph" },
+      });
     },
     [navigate, projectId],
   );
@@ -606,7 +608,9 @@ function GraphViewInner({ projectId }: { projectId: number }) {
           containerHeight={containerHeight}
           onClose={() => setPreviewNodeId(null)}
           onOpenTrail={(nodeType, nodeId) => {
-            navigate(`/projects/${projectId}/trail/${nodeType}/${nodeId}`);
+            navigate(`/projects/${projectId}/trail/${nodeType}/${nodeId}`, {
+              state: { from: "graph" },
+            });
           }}
           onHighlightConnections={(nodeIds) => setHighlightedIds(new Set(nodeIds))}
           onChatAbout={handleChatAbout}

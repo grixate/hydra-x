@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { NavLink, useParams, useLocation, useNavigate } from "react-router-dom";
+import { NavLink, useParams, useLocation } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
@@ -16,12 +16,10 @@ import {
   PenTool,
   Brain,
   Settings,
-  Plus,
   Circle,
   UserPlus,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import type { BoardSession } from "@/types";
 
 type NavItem = {
   path: string;
@@ -33,7 +31,7 @@ type NavItem = {
 const surfaces: NavItem[] = [
   { path: "", label: "Stream", icon: Activity, end: true },
   { path: "graph", label: "Graph", icon: GitFork },
-  { path: "board", label: "Board", icon: LayoutDashboard },
+  { path: "board", label: "Boards", icon: LayoutDashboard },
   { path: "simulation", label: "Simulation", icon: FlaskConical },
 ];
 
@@ -48,18 +46,16 @@ const agents = [
 export function WorkspaceSidebar() {
   const { projectId } = useParams<{ projectId: string }>();
   const location = useLocation();
-  const navigate = useNavigate();
+
   const base = projectId ? `/projects/${projectId}` : "/projects";
   const pid = projectId ? Number(projectId) : null;
 
   const [projectName, setProjectName] = useState("");
   const [streamUnread, setStreamUnread] = useState(0);
-  const [boardSessions, setBoardSessions] = useState<BoardSession[]>([]);
   const lastViewedRef = useRef<number>(Date.now());
 
   const isOnStream =
     location.pathname === `${base}` || location.pathname === `${base}/stream`;
-  const isOnBoard = location.pathname.startsWith(`${base}/board`);
 
   // Load project name
   useEffect(() => {
@@ -68,12 +64,6 @@ export function WorkspaceSidebar() {
       const p = projects.find((proj) => proj.id === pid);
       if (p) setProjectName(p.name);
     }).catch(() => {});
-  }, [pid]);
-
-  // Load board sessions
-  useEffect(() => {
-    if (!pid) return;
-    api.listBoardSessions(pid).then(setBoardSessions).catch(() => {});
   }, [pid]);
 
   // Stream unread tracking
@@ -100,16 +90,6 @@ export function WorkspaceSidebar() {
     return () => clearInterval(interval);
   }, [pid, isOnStream]);
 
-  async function handleNewSession() {
-    if (!pid) return;
-    try {
-      const session = await api.createBoardSession(pid, { title: "Untitled session" });
-      setBoardSessions((prev) => [...prev, session]);
-      navigate(`${base}/board/${session.id}`);
-    } catch {
-      // Silently fail — toast could be added later
-    }
-  }
 
   return (
     <aside className="flex w-[220px] shrink-0 flex-col border-r bg-sidebar-background">
@@ -148,34 +128,6 @@ export function WorkspaceSidebar() {
                 )}
               </NavLink>
 
-              {/* Board session sub-items — show when Board is active OR has sessions */}
-              {item.label === "Board" && (isOnBoard || boardSessions.length > 0) && (
-                <div className="ml-5 mt-0.5 space-y-0.5">
-                  {boardSessions.map((session) => (
-                    <NavLink
-                      key={session.id}
-                      to={`${base}/board/${session.id}`}
-                      className={({ isActive }) =>
-                        cn(
-                          "flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors",
-                          isActive
-                            ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
-                            : "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground",
-                        )
-                      }
-                    >
-                      <span className="truncate">{session.title}</span>
-                    </NavLink>
-                  ))}
-                  <button
-                    onClick={handleNewSession}
-                    className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-sidebar-foreground w-full text-left"
-                  >
-                    <Plus className="h-3 w-3 shrink-0" />
-                    <span>New session</span>
-                  </button>
-                </div>
-              )}
             </div>
           ))}
         </nav>

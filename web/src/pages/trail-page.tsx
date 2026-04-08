@@ -1,12 +1,13 @@
-import { useState, useEffect, useRef } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { useParams, useNavigate, useLocation } from "react-router-dom";
+import { AnimatePresence, motion } from "motion/react";
 import {
   api,
   type TrailNode,
   type TrailChainNode,
   type TrailFlag,
 } from "@/lib/api";
-import { TrailView } from "@/components/trail/trail-view";
+import { TrailPageView } from "@/components/trail/trail-page-view";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent } from "@/components/ui/card";
 
@@ -17,21 +18,33 @@ export function TrailPage() {
     nodeId: string;
   }>();
   const navigate = useNavigate();
+  const location = useLocation();
+  const pid = Number(projectId);
+  const nid = Number(nodeId);
+
   const [center, setCenter] = useState<TrailNode | null>(null);
   const [upstream, setUpstream] = useState<TrailChainNode[]>([]);
   const [downstream, setDownstream] = useState<TrailChainNode[]>([]);
   const [flags, setFlags] = useState<TrailFlag[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [initialLoading, setInitialLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const mountedRef = useRef(true);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    const pid = Number(projectId);
-    const nid = Number(nodeId);
+  // Determine back label from navigation state
+  const from = (location.state as Record<string, string> | null)?.from;
+  const backLabel = from === "stream"
+    ? "Back to Stream"
+    : from === "graph"
+      ? "Back to Graph"
+      : from?.startsWith("board")
+        ? "Back to Board"
+        : "Back";
+
+  const fetchTrail = useCallback(() => {
     if (!projectId || !nodeType || !nodeId || isNaN(pid) || isNaN(nid)) return;
 
     mountedRef.current = true;
-    setLoading(true);
     setError(null);
 
     api
@@ -47,15 +60,23 @@ export function TrailPage() {
         if (mountedRef.current) setError(err.message ?? "Failed to load trail");
       })
       .finally(() => {
-        if (mountedRef.current) setLoading(false);
+        if (mountedRef.current) setInitialLoading(false);
       });
+  }, [projectId, nodeType, nodeId]);
 
+  useEffect(() => {
+    fetchTrail();
     return () => {
       mountedRef.current = false;
     };
-  }, [projectId, nodeType, nodeId]);
+  }, [fetchTrail]);
 
-  if (error) {
+  // Scroll to top when navigating to a new node
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+  }, [nodeType, nodeId]);
+
+  if (error && !center) {
     return (
       <div className="p-6">
         <Card>
@@ -67,29 +88,58 @@ export function TrailPage() {
     );
   }
 
-  if (loading) {
+  if (initialLoading) {
     return (
-      <div className="space-y-4 p-6">
-        <Skeleton className="h-8 w-48" />
-        <Skeleton className="h-32 w-full" />
+      <div className="mx-auto max-w-2xl space-y-4 px-4 py-6">
+        <Skeleton className="h-6 w-32" />
+        <Skeleton className="h-px w-full" />
+        <Skeleton className="h-24 w-full" />
+        <Skeleton className="h-px w-full" />
         <Skeleton className="h-48 w-full" />
-        <Skeleton className="h-32 w-full" />
+        <Skeleton className="h-px w-full" />
+        <Skeleton className="h-24 w-full" />
       </div>
     );
   }
 
+  if (!center) return null;
+
   return (
-    <div className="space-y-6 p-6">
-      <h1 className="text-xl font-semibold">Trail</h1>
-      <TrailView
-        center={center}
-        upstream={upstream}
-        downstream={downstream}
-        flags={flags}
-        onNodeClick={(type, id) =>
-          navigate(`/projects/${projectId}/trail/${type}/${id}`)
-        }
-      />
+    <div ref={scrollRef} className="h-full overflow-auto pb-40">
+      <AnimatePresence mode="popLayout">
+        <motion.div
+          key={`${nodeType}-${nodeId}`}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.15 }}
+        >
+          <TrailPageView
+            center={center}
+            upstream={upstream}
+            downstream={downstream}
+            flags={flags}
+            projectId={pid}
+            backLabel={backLabel}
+            onBack={() => navigate(-1)}
+            onNavigate={(type, id) =>
+              navigate(`/projects/${projectId}/trail/${type}/${id}`, {
+                state: location.state,
+                replace: true,
+              })
+            }
+            onNavigateGraph={() =>
+              navigate(
+                `/projects/${projectId}/graph?focus=${center.node_type}-${center.node_id}&highlight=${center.node_type}-${center.node_id}`,
+              )
+            }
+            onChat={() =>
+              navigate(`/projects/${projectId}/chat/strategist`)
+            }
+            onRefresh={fetchTrail}
+          />
+        </motion.div>
+      </AnimatePresence>
     </div>
   );
 }
