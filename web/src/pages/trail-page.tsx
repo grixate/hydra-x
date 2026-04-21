@@ -134,7 +134,7 @@ export function TrailPage() {
               )
             }
             onChat={() =>
-              navigate(`/projects/${projectId}/chat/strategist`)
+              navigate(`/projects/${projectId}/agents/strategist`)
             }
             onRefresh={fetchTrail}
           />

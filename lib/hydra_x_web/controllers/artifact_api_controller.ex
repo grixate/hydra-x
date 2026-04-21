@@ -7,9 +7,15 @@ defmodule HydraXWeb.ArtifactAPIController do
 
   action_fallback HydraXWeb.ProjectAPIFallbackController
 
-  def index(conn, %{"project_id" => project_id}) do
+  def index(conn, %{"project_id" => project_id} = params) do
+    opts =
+      []
+      |> then(fn o -> if params["status"], do: [{:status, params["status"]} | o], else: o end)
+      |> then(fn o -> if params["artifact_type"], do: [{:artifact_type, params["artifact_type"]} | o], else: o end)
+      |> then(fn o -> if params["search"], do: [{:search, params["search"]} | o], else: o end)
+
     artifacts =
-      Product.list_artifacts(project_id, status: conn.params["status"])
+      Product.list_artifacts(project_id, opts)
       |> Enum.map(&ProductPayload.artifact_json/1)
 
     json(conn, %{data: artifacts})

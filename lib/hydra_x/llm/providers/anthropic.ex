@@ -42,7 +42,7 @@ defmodule HydraX.LLM.Providers.Anthropic do
            retry: Keyword.get(request_options, :retry, false)
          ) do
       {:ok, %{status: 200, body: response_body}} ->
-        {:ok, parse_response(response_body, provider.name)}
+        {:ok, parse_response(response_body, provider.name) |> Map.put(:model, provider.model)}
 
       {:ok, response} ->
         {:error, {:provider_error, response.status, response.body}}
@@ -89,6 +89,7 @@ defmodule HydraX.LLM.Providers.Anthropic do
   defp parse_response(_body, provider_name) do
     %{content: nil, tool_calls: nil, stop_reason: "error", provider: provider_name}
   end
+
 
   defp anthropic_messages(messages) do
     system_prompt =

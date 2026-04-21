@@ -1,31 +1,31 @@
-import { useCallback, useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { useParams, useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import type { Simulation } from "@/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Play, Download, ChevronDown, ChevronUp } from "lucide-react";
+import { Plus, ArrowRight, FlaskConical } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { motion } from "motion/react";
 
-const statusColors: Record<string, string> = {
-  pending: "bg-yellow-100 text-yellow-800",
-  running: "bg-blue-100 text-blue-800",
-  completed: "bg-green-100 text-green-800",
-  failed: "bg-red-100 text-red-800",
+const statusConfig: Record<string, { label: string; className: string; dot: string }> = {
+  proposed: { label: "Proposed", className: "bg-yellow-100 text-yellow-800", dot: "bg-yellow-500" },
+  configuring: { label: "Configuring", className: "bg-slate-100 text-slate-700", dot: "bg-slate-400" },
+  running: { label: "Running", className: "bg-blue-100 text-blue-800", dot: "bg-blue-500 animate-pulse" },
+  completed: { label: "Completed", className: "bg-green-100 text-green-800", dot: "bg-green-500" },
+  failed: { label: "Failed", className: "bg-red-100 text-red-800", dot: "bg-red-500" },
 };
 
 export function SimulationPage() {
   const { projectId } = useParams<{ projectId: string }>();
+  const navigate = useNavigate();
   const pid = Number(projectId);
 
   const [simulations, setSimulations] = useState<Simulation[]>([]);
   const [loading, setLoading] = useState(true);
-  const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [expandedId, setExpandedId] = useState<number | null>(null);
-  const [importingId, setImportingId] = useState<number | null>(null);
 
   useEffect(() => {
     if (!projectId || isNaN(pid)) return;
@@ -38,62 +38,9 @@ export function SimulationPage() {
       .finally(() => setLoading(false));
   }, [projectId]);
 
-  const handleCreate = useCallback(async () => {
-    if (creating) return;
-    setCreating(true);
-    try {
-      const sim = await api.createSimulation(pid);
-      setSimulations((prev) => [sim, ...prev]);
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Failed to create simulation",
-      );
-    } finally {
-      setCreating(false);
-    }
-  }, [pid, creating]);
-
-  const handleImportResults = useCallback(
-    async (simId: number) => {
-      setImportingId(simId);
-      try {
-        const updated = await api.importSimulationResults(pid, simId);
-        setSimulations((prev) =>
-          prev.map((s) => (s.id === simId ? updated : s)),
-        );
-      } catch (err) {
-        setError(
-          err instanceof Error ? err.message : "Failed to import results",
-        );
-      } finally {
-        setImportingId(null);
-      }
-    },
-    [pid],
-  );
-
-  const handleExpand = useCallback(
-    async (simId: number) => {
-      if (expandedId === simId) {
-        setExpandedId(null);
-        return;
-      }
-      try {
-        const detail = await api.getSimulation(pid, simId);
-        setSimulations((prev) =>
-          prev.map((s) => (s.id === simId ? detail : s)),
-        );
-        setExpandedId(simId);
-      } catch {
-        setExpandedId(simId);
-      }
-    },
-    [pid, expandedId],
-  );
-
   if (loading) {
     return (
-      <div className="space-y-4 p-6">
+      <div className="mx-auto max-w-2xl space-y-4 px-4 py-6">
         <Skeleton className="h-8 w-48" />
         <Skeleton className="h-24 w-full" />
         <Skeleton className="h-24 w-full" />
@@ -102,17 +49,20 @@ export function SimulationPage() {
   }
 
   return (
-    <div className="space-y-6 p-6">
-      <div className="flex items-center justify-between">
+    <div className="mx-auto max-w-2xl px-4 py-6">
+      <div className="mb-6 flex items-center justify-between">
         <h1 className="text-xl font-semibold">Simulations</h1>
-        <Button onClick={handleCreate} disabled={creating} size="sm">
-          <Play className="mr-1.5 h-3.5 w-3.5" />
-          {creating ? "Starting..." : "New Simulation"}
+        <Button
+          size="sm"
+          onClick={() => navigate(`/projects/${projectId}/simulation/new`)}
+        >
+          <Plus className="mr-1.5 h-3.5 w-3.5" />
+          New simulation
         </Button>
       </div>
 
       {error && (
-        <Card>
+        <Card className="mb-4">
           <CardContent className="py-4 text-center text-sm text-destructive">
             {error}
           </CardContent>
@@ -120,97 +70,128 @@ export function SimulationPage() {
       )}
 
       {simulations.length === 0 && !error && (
-        <Card>
-          <CardContent className="py-12 text-center text-sm text-muted-foreground">
-            No simulations yet. Run one to test your product assumptions against
-            generated user archetypes.
-          </CardContent>
-        </Card>
+        <motion.div
+          initial={{ opacity: 0, scale: 0.97 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ duration: 0.4, delay: 0.1 }}
+          className="flex flex-col items-center justify-center py-24 text-center"
+        >
+          <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-muted">
+            <FlaskConical className="h-5 w-5 text-muted-foreground" />
+          </div>
+          <p className="text-base font-medium text-foreground">No simulations yet</p>
+          <p className="mt-2 max-w-sm text-sm text-muted-foreground">
+            Simulations let you test product decisions against simulated user populations before committing resources.
+            Create one to compare strategies, validate designs, or discover hidden risks.
+          </p>
+          <Button
+            className="mt-6"
+            onClick={() => navigate(`/projects/${projectId}/simulation/new`)}
+          >
+            <Plus className="mr-1.5 h-3.5 w-3.5" />
+            New simulation
+          </Button>
+        </motion.div>
       )}
 
       <div className="space-y-3">
-        {simulations.map((sim) => (
-          <Card key={sim.id}>
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <CardTitle className="text-sm">
-                    Simulation #{sim.id}
-                  </CardTitle>
-                  <Badge
-                    className={cn(
-                      "text-[9px]",
-                      statusColors[sim.status] ?? "bg-muted text-muted-foreground",
-                    )}
-                  >
-                    {sim.status}
-                  </Badge>
-                  {sim.results_imported && (
-                    <Badge variant="outline" className="text-[9px]">
-                      results imported
-                    </Badge>
-                  )}
-                </div>
-                <div className="flex items-center gap-1">
-                  {sim.status === "completed" && !sim.results_imported && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handleImportResults(sim.id)}
-                      disabled={importingId === sim.id}
-                    >
-                      <Download className="mr-1.5 h-3 w-3" />
-                      {importingId === sim.id ? "Importing..." : "Import Results"}
-                    </Button>
-                  )}
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8"
-                    onClick={() => handleExpand(sim.id)}
-                  >
-                    {expandedId === sim.id ? (
-                      <ChevronUp className="h-4 w-4" />
-                    ) : (
-                      <ChevronDown className="h-4 w-4" />
-                    )}
-                  </Button>
-                </div>
-              </div>
-            </CardHeader>
+        {simulations.map((sim, i) => {
+          const config = statusConfig[sim.status] ?? statusConfig.configuring;
+          const meta = sim.metadata || {};
+          const title = sim.title ?? (meta.title as string) ?? `Simulation #${sim.id}`;
+          const popSize = sim.population_size ?? (meta.population_size as number);
+          const maxTicks = sim.max_ticks ?? (meta.max_ticks as number);
+          const comparison = sim.comparison_mode ?? (meta.comparison_mode as boolean);
+          const results = (meta.results && typeof meta.results === "object" ? meta.results : {}) as Record<string, unknown>;
+          const costCents = (meta.cost_cents as number) ?? (results.cost_cents as number | undefined);
+          const keyFinding = results.key_finding as string | undefined;
+          const tickProgress = (meta.current_tick as number) ?? undefined;
 
-            {sim.scenario_summary && (
-              <CardContent className="pt-0 pb-3">
-                <p className="text-sm text-muted-foreground line-clamp-2">
-                  {sim.scenario_summary}
-                </p>
-              </CardContent>
-            )}
+          const detailUrl =
+            sim.status === "completed" || sim.status === "failed" || sim.status === "running"
+              ? `/projects/${projectId}/simulation/${sim.id}`
+              : undefined;
 
-            {expandedId === sim.id && (
-              <CardContent className="border-t pt-4 space-y-3">
-                {sim.archetype_summary && (
-                  <div>
-                    <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-muted-foreground mb-1">
-                      Archetypes
-                    </p>
-                    <p className="text-sm">{sim.archetype_summary}</p>
+          return (
+            <motion.div
+              key={sim.id}
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.2, delay: i * 0.04 }}
+            >
+              <Card
+                className={cn(
+                  "transition-colors",
+                  detailUrl && "cursor-pointer hover:bg-muted/30",
+                )}
+                onClick={() => detailUrl && navigate(detailUrl)}
+              >
+                <CardContent className="py-4 px-5">
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-sm font-medium truncate">{title}</h3>
+                        <Badge className={cn("text-[9px] shrink-0", config.className)}>
+                          <span className={cn("mr-1 inline-block h-1.5 w-1.5 rounded-full", config.dot)} />
+                          {config.label}
+                          {sim.status === "running" && tickProgress != null && maxTicks && (
+                            <span className="ml-1">{tickProgress}/{maxTicks}</span>
+                          )}
+                        </Badge>
+                      </div>
+
+                      <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+                        {popSize && <span>{popSize} agents</span>}
+                        {comparison && <span>A/B comparison</span>}
+                        {sim.archetype_summary && Array.isArray(sim.archetype_summary) && (
+                          <span>{sim.archetype_summary.length} archetypes</span>
+                        )}
+                        {costCents != null && <span>${((costCents as number) / 100).toFixed(2)}</span>}
+                        {sim.status === "completed" && sim.updated_at && (
+                          <span>
+                            {new Date(sim.updated_at).toLocaleDateString("en-US", {
+                              month: "short",
+                              day: "numeric",
+                              year: "numeric",
+                            })}
+                          </span>
+                        )}
+                      </div>
+
+                      {keyFinding && (
+                        <p className="mt-2 text-xs text-muted-foreground line-clamp-1">
+                          Key finding: {keyFinding}
+                        </p>
+                      )}
+
+                      {sim.scenario_summary && !keyFinding && (
+                        <p className="mt-2 text-xs text-muted-foreground line-clamp-1">
+                          {sim.scenario_summary}
+                        </p>
+                      )}
+                    </div>
+
+                    {detailUrl && (
+                      <ArrowRight className="ml-3 mt-1 h-4 w-4 shrink-0 text-muted-foreground/50" />
+                    )}
                   </div>
-                )}
-                {sim.inserted_at && (
-                  <p className="text-[10px] text-muted-foreground">
-                    Created{" "}
-                    {new Date(sim.inserted_at).toLocaleString([], {
-                      dateStyle: "medium",
-                      timeStyle: "short",
-                    })}
-                  </p>
-                )}
-              </CardContent>
-            )}
-          </Card>
-        ))}
+                </CardContent>
+              </Card>
+            </motion.div>
+          );
+        })}
       </div>
+
+      {/* New simulation CTA at bottom */}
+      {simulations.length > 0 && (
+        <button
+          onClick={() => navigate(`/projects/${projectId}/simulation/new`)}
+          className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-dashed py-4 text-sm text-muted-foreground hover:bg-muted/30 hover:text-foreground transition-colors"
+        >
+          <Plus className="h-3.5 w-3.5" />
+          New simulation
+        </button>
+      )}
     </div>
   );
 }

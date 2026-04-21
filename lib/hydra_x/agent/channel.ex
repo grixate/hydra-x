@@ -2,7 +2,7 @@ defmodule HydraX.Agent.Channel do
   @moduledoc false
   @behaviour :gen_statem
 
-  alias HydraX.Agent.{Compactor, Planner, PromptBuilder, Worker}
+  alias HydraX.Agent.{Compactor, Hooks, Planner, PromptBuilder, Worker}
   alias HydraX.Budget
   alias HydraX.Cluster
   alias HydraX.Config
@@ -11,11 +11,16 @@ defmodule HydraX.Agent.Channel do
   alias HydraX.Product
   alias HydraX.Repo
   alias HydraX.Runtime
+  alias HydraX.Runtime.SessionBranches
   alias HydraX.Safety
   alias HydraX.Telemetry
 
+  require Logger
+
+  @auto_branch_tools ~w(code_test code_exec)
+
   @max_tool_rounds 5
-  @streamable_channels ~w(control_plane cli webchat)
+  @streamable_channels ~w(control_plane cli webchat chat_dock source_processing board_session)
 
   def start_link(opts) do
     conversation = Keyword.fetch!(opts, :conversation)
@@ -36,6 +41,46 @@ defmodule HydraX.Agent.Channel do
       start: {__MODULE__, :start_link, [opts]},
       restart: :transient
     }
+  end
+
+  @doc """
+  Queue a steering message that the agent will see before its next LLM call.
+
+  Steering messages are delivered as synthetic user turns *between tool
+  batches* during an active tool execution loop. They let the user
+  course-correct without aborting work in progress (e.g. "actually use
+  PostgreSQL not MongoDB").
+
+  Steering is only valid while the channel is in `:processing` state.
+  When the channel is `:ready`, callers should use `submit/4` instead.
+
+  Fires the `:on_steering_message` hook synchronously when accepted.
+
+  Returns `:ok` on success, `{:error, :not_processing}` if the channel
+  is idle, `{:error, :not_running}` if no channel process exists for the
+  conversation.
+
+  ## v1 limitations
+
+    * Steering messages are **ephemeral**: held in the channel process'
+      in-memory queue, not persisted as conversation turns. A channel
+      crash before the queue drains loses any pending steering.
+    * Steering only drains **between tool batches**. If the agent's
+      current LLM round produces a final response (no tool calls), any
+      queued steering is silently dropped — the work being steered is
+      already done, and re-stating in a new message is the right pattern.
+    * The `:on_steering_message` hook fires regardless, so extensions
+      that need a durable audit trail can persist content themselves.
+  """
+  def steer(conversation_id, content)
+      when is_integer(conversation_id) and is_binary(content) do
+    case channel_lookup(conversation_id) do
+      {:ok, _pid} ->
+        :gen_statem.call(channel_name(conversation_id), {:steer, content}, 5_000)
+
+      :not_found ->
+        {:error, :not_running}
+    end
   end
 
   def submit(agent, conversation, content, metadata \\ %{}) do
@@ -134,8 +179,22 @@ defmodule HydraX.Agent.Channel do
   def init(opts) do
     conversation = Keyword.fetch!(opts, :conversation)
     agent_id = Keyword.fetch!(opts, :agent_id)
+
+    start_ctx = %{agent_id: agent_id, conversation_id: conversation.id}
+
+    case Hooks.fire(agent_id, :before_session_start, start_ctx) do
+      {:halt, reason} ->
+        {:stop, {:halted_by_hook, reason}}
+
+      {:ok, _} ->
+        do_init(conversation, agent_id)
+    end
+  end
+
+  defp do_init(conversation, agent_id) do
     turns = Runtime.list_turns(conversation.id)
     {:ok, _pid} = Compactor.ensure_started(agent_id, conversation.id)
+    _ = maybe_register_auto_branch(agent_id)
 
     pending_turns = resumable_pending_turns(conversation.id, turns)
     recovered? = pending_turns != []
@@ -147,6 +206,7 @@ defmodule HydraX.Agent.Channel do
         turns: turns,
         coalesce_buffer: pending_turns,
         pending_from: [],
+        steering_queue: [],
         ownership: nil,
         release_ownership_on_terminate: true,
         handoff_pending: nil,
@@ -170,8 +230,22 @@ defmodule HydraX.Agent.Channel do
         "updated_at" => DateTime.utc_now()
       })
 
+      _ =
+        Hooks.fire(agent_id, :after_session_start, %{
+          agent_id: agent_id,
+          conversation_id: conversation.id,
+          recovered?: true
+        })
+
       {:ok, :processing, data, [{:next_event, :internal, :process_buffer}]}
     else
+      _ =
+        Hooks.fire(agent_id, :after_session_start, %{
+          agent_id: agent_id,
+          conversation_id: conversation.id,
+          recovered?: false
+        })
+
       {:ok, :ready, data}
     end
   end
@@ -200,6 +274,43 @@ defmodule HydraX.Agent.Channel do
       :processing ->
         {:keep_state, data}
     end
+  end
+
+  def handle_event({:call, from}, {:steer, content}, :processing, data) do
+    # Persist the steering message as a real turn so it appears in the
+    # conversation history / transcripts / audit. The in-memory queue is
+    # still used to inject the content between tool batches so the current
+    # LLM round sees it without having to re-read turns.
+    _ =
+      Runtime.append_turn(data.conversation, %{
+        role: "user",
+        kind: "steering",
+        content: content,
+        metadata: %{"delivered_via" => "steer"}
+      })
+
+    _ =
+      Hooks.fire(data.agent_id, :on_steering_message, %{
+        conversation_id: data.conversation.id,
+        agent_id: data.agent_id,
+        content: content
+      })
+
+    queue = (data[:steering_queue] || []) ++ [content]
+    {:keep_state, Map.put(data, :steering_queue, queue), [{:reply, from, :ok}]}
+  end
+
+  def handle_event({:call, from}, {:steer, _content}, _state, _data) do
+    {:keep_state_and_data, [{:reply, from, {:error, :not_processing}}]}
+  end
+
+  # Non-blocking peek used by `HydraX.Agent.Worker` between tool executions so
+  # that steering messages can interrupt an in-flight tool batch. Replies with
+  # `true` when there is pending steering, `false` otherwise. Handled in every
+  # state so the worker can call safely whenever the channel is alive.
+  def handle_event({:call, from}, :peek_steering, _state, data) do
+    pending? = (data[:steering_queue] || []) != []
+    {:keep_state_and_data, [{:reply, from, pending?}]}
   end
 
   def handle_event(:state_timeout, :flush, :ready, data) do
@@ -281,6 +392,12 @@ defmodule HydraX.Agent.Channel do
   end
 
   defp process_buffer_turns(data) do
+    # Auto-trigger compaction so the summary fed into the prompt below is
+    # fresh. The compactor short-circuits when the conversation is below
+    # token-pressure thresholds, so this is cheap on the common path.
+    # Sync (review_now) so the next line sees the new checkpoint.
+    _ = Compactor.review_now(data.agent_id, data.conversation.id)
+
     history = Runtime.list_turns(data.conversation.id)
     agent = Runtime.get_agent!(data.agent_id)
     bulletin = HydraX.Agent.Cortex.current_bulletin(data.agent_id)
@@ -298,6 +415,8 @@ defmodule HydraX.Agent.Channel do
           }),
         mcp_context: Runtime.mcp_prompt_context(agent.id),
         product_context: Product.prompt_context(data.conversation),
+        product_instructions:
+          HydraX.Product.WorkspaceContext.format_for_conversation(data.conversation),
         extra_tool_modules: extra_tool_modules
       })
 
@@ -370,30 +489,42 @@ defmodule HydraX.Agent.Channel do
 
   defp handle_stream_chunk(ref, delta, data) do
     if data[:stream_ref] == ref do
-      updated_data =
-        data
-        |> Map.update(:stream_content, delta, &(&1 <> delta))
-        |> Map.update(:stream_chunk_count, 1, &(&1 + 1))
+      case Hooks.fire(data.agent_id, :before_response_stream, %{
+             chunk: delta,
+             conversation_id: data.conversation.id
+           }) do
+        {:halt, _reason} ->
+          # Hook dropped this chunk — don't accumulate or broadcast it.
+          {:keep_state, data}
 
-      if is_nil(updated_data[:handoff_pending]) do
-        Phoenix.PubSub.broadcast(
-          HydraX.PubSub,
-          "conversations:stream",
-          {:stream_chunk, data.conversation.id, delta}
-        )
+        {:ok, hook_ctx} ->
+          effective_delta = Map.get(hook_ctx, :chunk, delta)
 
-        maybe_refresh_streaming_delivery(updated_data)
-        maybe_persist_stream_snapshot(updated_data)
-      else
-        update_channel_checkpoint(
-          data.conversation.id,
-          %{"stream_capture" => stream_capture_payload(updated_data)}
-        )
+          updated_data =
+            data
+            |> Map.update(:stream_content, effective_delta, &(&1 <> effective_delta))
+            |> Map.update(:stream_chunk_count, 1, &(&1 + 1))
 
-        maybe_refresh_streaming_delivery(updated_data)
+          if is_nil(updated_data[:handoff_pending]) do
+            Phoenix.PubSub.broadcast(
+              HydraX.PubSub,
+              "conversations:stream",
+              {:stream_chunk, data.conversation.id, effective_delta}
+            )
+
+            maybe_refresh_streaming_delivery(updated_data)
+            maybe_persist_stream_snapshot(updated_data)
+          else
+            update_channel_checkpoint(
+              data.conversation.id,
+              %{"stream_capture" => stream_capture_payload(updated_data)}
+            )
+
+            maybe_refresh_streaming_delivery(updated_data)
+          end
+
+          {:keep_state, updated_data}
       end
-
-      {:keep_state, updated_data}
     else
       {:keep_state, data}
     end
@@ -554,6 +685,27 @@ defmodule HydraX.Agent.Channel do
   end
 
   defp do_llm_call(messages, tools, data) do
+    case Hooks.fire(data.agent_id, :before_llm_call, %{messages: messages, tools: tools}) do
+      {:ok, %{messages: hooked_messages, tools: hooked_tools}} ->
+        result = do_llm_call_inner(hooked_messages, hooked_tools, data)
+        _ = Hooks.fire(data.agent_id, :after_llm_call, %{result: result})
+
+        case result do
+          {:error_response, _, _} ->
+            _ = Hooks.fire(data.agent_id, :on_error, %{site: :llm_call, result: result})
+            result
+
+          other ->
+            other
+        end
+
+      {:halt, reason} ->
+        {:error_response, "LLM call halted by hook: #{inspect(reason)}",
+         %{provider: "hook-halt", hook_reason: inspect(reason)}}
+    end
+  end
+
+  defp do_llm_call_inner(messages, tools, data) do
     estimated_input_tokens = Budget.estimate_prompt_tokens(messages)
 
     case Budget.preflight(data.agent_id, data.conversation.id, estimated_input_tokens) do
@@ -563,6 +715,7 @@ defmodule HydraX.Agent.Channel do
         request =
           %{messages: messages}
           |> Map.put(:agent_id, data.agent_id)
+          |> Map.put(:conversation_id, data.conversation.id)
           |> Map.put(:process_type, "channel")
           |> maybe_put_tools(tools)
 
@@ -580,7 +733,7 @@ defmodule HydraX.Agent.Channel do
             Budget.record_usage(data.agent_id, data.conversation.id,
               tokens_in: estimated_input_tokens,
               tokens_out: output_tokens,
-              metadata: %{provider: response.provider}
+              metadata: %{provider: response.provider, model: response[:model]}
             )
 
             append_channel_event(data.conversation.id, "provider_succeeded", %{
@@ -647,6 +800,7 @@ defmodule HydraX.Agent.Channel do
           request =
             %{messages: messages}
             |> Map.put(:agent_id, data.agent_id)
+            |> Map.put(:conversation_id, data.conversation.id)
             |> Map.put(:process_type, "channel")
             |> maybe_put_tools(tools)
 
@@ -798,9 +952,20 @@ defmodule HydraX.Agent.Channel do
     caller = self()
     tool_calls = restore_active_tool_calls(active_tool_calls)
 
+    # Pass a steering peek back into the worker so it can halt the batch as
+    # soon as a steering message arrives on this channel.
+    steering_check = fn ->
+      try do
+        :gen_statem.call(caller, :peek_steering, 1_000) == true
+      catch
+        _, _ -> false
+      end
+    end
+
     Task.Supervisor.start_child(HydraX.TaskSupervisor, fn ->
       try do
-        {tool_results, cache_hits, cache_misses} = execute_tool_calls_with_cache(data, tool_calls)
+        {tool_results, cache_hits, cache_misses} =
+          execute_tool_calls_with_cache(data, tool_calls, steering_check: steering_check)
 
         send(caller, {
           :tool_results_ready,
@@ -930,6 +1095,9 @@ defmodule HydraX.Agent.Channel do
                 messages
                 |> PromptBuilder.append_assistant_tool_use(response)
                 |> PromptBuilder.append_tool_results(tool_results)
+
+              {next_messages, post_tool_data} =
+                drain_steering_into_messages(next_messages, post_tool_data)
 
               case run_tool_loop(
                      next_messages,
@@ -1062,6 +1230,9 @@ defmodule HydraX.Agent.Channel do
       |> Map.delete(:tool_task_updated_steps)
       |> Map.put(:handoff_pending, nil)
       |> Map.put(:handoff_waiting_for, nil)
+      # Drop unconsumed steering — the loop has ended; remaining content
+      # belongs to whatever the next user message says.
+      |> Map.put(:steering_queue, [])
 
     {:next_state, :ready,
      %{
@@ -1417,6 +1588,59 @@ defmodule HydraX.Agent.Channel do
     |> Map.delete(:tool_task_response)
     |> Map.delete(:tool_task_all_results)
     |> Map.delete(:tool_task_updated_steps)
+  end
+
+  # Register an after_tool_call callback that forks the conversation onto a
+  # preserved (inactive) branch whenever a test/exec tool returns non-zero.
+  # Hook registration is process-tied to this channel — cleans up on exit.
+  defp maybe_register_auto_branch(agent_id) do
+    if Runtime.auto_branch_on_test_failure?(agent_id) do
+      Hooks.register(agent_id, :after_tool_call, &__MODULE__.auto_branch_on_failure/1)
+    else
+      :ok
+    end
+  end
+
+  @doc false
+  def auto_branch_on_failure(ctx) do
+    with %{tool: tool, result: wrapper, conversation_id: conversation_id} <- ctx,
+         true <- tool in @auto_branch_tools,
+         %{result: payload} when is_map(payload) <- wrapper,
+         exit_code when is_integer(exit_code) and exit_code != 0 <-
+           Map.get(payload, :exit_code) || Map.get(payload, "exit_code"),
+         %HydraX.Runtime.Turn{} = turn <-
+           Runtime.latest_user_turn_on_active_branch(conversation_id),
+         label = "failed: #{tool} exit=#{exit_code}",
+         {:ok, branch} <- SessionBranches.fork(turn, label, switch?: false) do
+      Logger.info(
+        "auto_branch_on_test_failure: forked conversation #{conversation_id} at turn " <>
+          "#{turn.sequence} (#{label}), branch_uuid=#{branch.branch_uuid}"
+      )
+
+      :ok
+    else
+      _ -> :ok
+    end
+  end
+
+  @doc false
+  # Pop pending steering messages and append them as synthetic user turns
+  # to the message list before the next LLM round. The queue is cleared
+  # in the returned data; the caller should replace its data with the
+  # returned one.
+  def drain_steering_into_messages(messages, data) do
+    case data[:steering_queue] || [] do
+      [] ->
+        {messages, data}
+
+      queue ->
+        steering_messages =
+          Enum.map(queue, fn content ->
+            %{role: "user", content: "[STEERING] #{content}"}
+          end)
+
+        {messages ++ steering_messages, Map.put(data, :steering_queue, [])}
+    end
   end
 
   defp clear_handoff_state(data) do
@@ -1778,7 +2002,9 @@ defmodule HydraX.Agent.Channel do
     Runtime.conversation_channel_state(conversation_id).steps || []
   end
 
-  defp execute_tool_calls_with_cache(data, tool_calls) do
+  defp execute_tool_calls_with_cache(data, tool_calls, opts) do
+    steering_check = Keyword.get(opts, :steering_check)
+
     cache =
       data.conversation.id
       |> current_tool_cache()
@@ -1811,7 +2037,9 @@ defmodule HydraX.Agent.Channel do
           fingerprints =
             Map.new(calls, fn call -> {call.id, tool_call_fingerprint(call)} end)
 
-          Worker.execute_tool_calls(data.agent_id, data.conversation, calls)
+          Worker.execute_tool_calls(data.agent_id, data.conversation, calls,
+            steering_check: steering_check
+          )
           |> Enum.map(fn result ->
             result
             |> Map.put(:fingerprint, Map.fetch!(fingerprints, result.tool_use_id))

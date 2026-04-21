@@ -113,7 +113,7 @@ export function BoardInlineArtifact({ projectId, artifactId }: BoardInlineArtifa
           {/* Actions */}
           <div className="mt-2 flex gap-2">
             <a
-              href={`/projects/${projectId}/artifacts/${artifactId}`}
+              href={`/projects/${projectId}/library/${artifactId}`}
               target="_blank"
               rel="noopener noreferrer"
               className="text-[10px] text-primary hover:underline"

@@ -68,6 +68,16 @@ export function SourceList({
                     >
                       {source.processing_status}
                     </Badge>
+                    {source.promoted_to_graph && (
+                      <Badge variant="neutral" title="Visible as a Source node in the graph">
+                        in graph
+                      </Badge>
+                    )}
+                    {source.archived_at && (
+                      <Badge variant="neutral" title="Archived">
+                        archived
+                      </Badge>
+                    )}
                     <span>{source.source_type}</span>
                     <span>{source.source_chunk_count} chunks</span>
                     <span>{formatDate(source.updated_at)}</span>

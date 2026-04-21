@@ -10,6 +10,7 @@ defmodule HydraX.Agent.PromptBuilder do
     skill_context = Map.get(opts, :skill_context, "")
     mcp_context = Map.get(opts, :mcp_context, "")
     product_context = Map.get(opts, :product_context, "")
+    product_instructions = Map.get(opts, :product_instructions, "")
     extra_tool_modules = Map.get(opts, :extra_tool_modules, [])
 
     system_parts =
@@ -21,6 +22,8 @@ defmodule HydraX.Agent.PromptBuilder do
         if(skill_context not in [nil, ""], do: "## Enabled Skills\n\n#{skill_context}"),
         if(mcp_context not in [nil, ""], do: "## MCP Integrations\n\n#{mcp_context}"),
         if(product_context not in [nil, ""], do: "## Product Context\n\n#{product_context}"),
+        if(product_instructions not in [nil, ""],
+          do: "## Project Instructions\n\n#{product_instructions}"),
         if(bulletin not in [nil, ""], do: "## Bulletin\n\n#{bulletin}"),
         if(summary not in [nil, ""], do: "## Conversation Summary\n\n#{summary}")
       ]

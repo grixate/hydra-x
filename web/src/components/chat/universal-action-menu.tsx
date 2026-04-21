@@ -1,11 +1,12 @@
 import { useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { Plus, FileUp, StickyNote, Link, CheckSquare, Lock, Lightbulb } from "lucide-react";
+import { Plus, FileUp, StickyNote, Link, CheckSquare, Lock, Lightbulb, FolderUp } from "lucide-react";
 import { UploadSourceForm } from "./action-forms/upload-source-form";
 import { QuickNoteForm } from "./action-forms/quick-note-form";
 import { AddUrlForm } from "./action-forms/add-url-form";
@@ -32,6 +33,8 @@ interface UniversalActionMenuProps {
 export function UniversalActionMenu({ projectId, onComplete }: UniversalActionMenuProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [activeForm, setActiveForm] = useState<ActionKey | null>(null);
+  const navigate = useNavigate();
+  const { projectId: routeProjectId } = useParams<{ projectId: string }>();
 
   const handleAction = (key: ActionKey) => {
     setMenuOpen(false);
@@ -74,6 +77,21 @@ export function UniversalActionMenu({ projectId, onComplete }: UniversalActionMe
                 </button>
               );
             })}
+            <div className="my-1 h-px bg-border" />
+            <button
+              type="button"
+              onClick={() => {
+                setMenuOpen(false);
+                navigate(`/projects/${routeProjectId ?? projectId}/import`);
+              }}
+              className="flex w-full items-center gap-3 rounded-md px-2.5 py-2 text-left transition-colors hover:bg-muted"
+            >
+              <FolderUp className="h-4 w-4 shrink-0 text-muted-foreground" />
+              <div>
+                <div className="text-sm font-medium">Bulk import</div>
+                <div className="text-[11px] text-muted-foreground">Import many files at once</div>
+              </div>
+            </button>
           </div>
         </PopoverContent>
       </Popover>

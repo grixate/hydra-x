@@ -9,7 +9,8 @@ import Config
 
 config :hydra_x,
   ecto_repos: [HydraX.Repo],
-  generators: [timestamp_type: :utc_datetime]
+  generators: [timestamp_type: :utc_datetime],
+  workspace_root: nil
 
 # Configures the endpoint
 config :hydra_x, HydraXWeb.Endpoint,

@@ -43,6 +43,26 @@ defmodule HydraXWeb.BoardSessionAPIController do
     end
   end
 
+  def events(conn, %{"project_id" => _project_id, "session_id" => session_id}) do
+    events =
+      Product.list_board_session_events(session_id)
+      |> Enum.map(fn e ->
+        %{
+          id: e.id,
+          event_type: e.event_type,
+          actor_type: e.actor_type,
+          actor_name: e.actor_name,
+          target_type: e.target_type,
+          target_id: e.target_id,
+          target_title: e.target_title,
+          metadata: e.metadata || %{},
+          inserted_at: e.inserted_at
+        }
+      end)
+
+    json(conn, %{data: events})
+  end
+
   def delete(conn, %{"project_id" => project_id, "id" => id}) do
     session = Product.get_project_board_session!(project_id, id)
 

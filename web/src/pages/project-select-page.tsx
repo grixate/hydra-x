@@ -5,73 +5,52 @@ import type { Project } from "@/types";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ArrowUp } from "lucide-react";
 
 export function ProjectSelectPage() {
   const navigate = useNavigate();
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [loading, setLoading] = useState(true);
-  const [input, setInput] = useState("");
+  const [name, setName] = useState("");
   const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     api
       .listProjects()
-      .then((p) => {
-        setProjects(p);
-        if (p.length > 0) {
-          // If they have projects, show the list (don't auto-redirect)
+      .then((p) => setProjects(p))
+      .catch((err) => {
+        if (err?.message?.includes("401")) {
+          navigate("/auth", { replace: true });
+        } else {
+          setProjects([]);
         }
       })
-      .catch(() => setProjects([]))
       .finally(() => setLoading(false));
-  }, []);
+  }, [navigate]);
 
-  const handleSubmit = useCallback(async () => {
-    const text = input.trim();
-    if (!text || creating) return;
+  const handleCreate = useCallback(async () => {
+    const trimmed = name.trim();
+    if (!trimmed || creating) return;
     setCreating(true);
     try {
-      // Create a project from the description
-      const name = text.length > 60 ? text.slice(0, 57) + "..." : text;
       const project = await api.createProject({
-        name,
-        description: text,
+        name: trimmed,
         status: "active",
       });
-      // Start a conversation with the strategist
-      const conv = await api.createConversation(project.id, {
-        persona: "strategist",
-        title: "Project setup",
-      });
-      await api.sendConversationMessage(
-        project.id,
-        conv.id,
-        `I want to build a product. Here's my idea: ${text}`,
-      );
-      navigate(`/projects/${project.id}`, { replace: true });
-    } catch {
+
+      // Navigate to the onboarding board session if available
+      if (project.onboarding_session_id) {
+        navigate(`/projects/${project.id}/board/${project.onboarding_session_id}`, {
+          replace: true,
+        });
+      } else {
+        navigate(`/projects/${project.id}`, { replace: true });
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create project");
       setCreating(false);
     }
-  }, [input, creating, navigate]);
-
-  const handleSuggestion = useCallback(
-    (suggestion: string) => {
-      if (suggestion === "I already have research to upload") {
-        // For existing projects, redirect. For new, create first.
-        setInput("I have research documents I'd like to upload and analyze.");
-      } else if (suggestion === "I want to start from research") {
-        setInput(
-          "I want to start a new product from research. I'll upload documents next.",
-        );
-      } else {
-        setInput(
-          "I want to build a product. Let me tell you about it.",
-        );
-      }
-    },
-    [],
-  );
+  }, [name, creating, navigate]);
 
   if (loading) {
     return (
@@ -117,86 +96,57 @@ export function ProjectSelectPage() {
     );
   }
 
-  // No projects — onboarding
+  // No projects — simplified onboarding
   return (
     <div className="flex h-screen flex-col items-center justify-center bg-background px-4">
-      <div className="w-full max-w-2xl space-y-8 text-center">
+      <div className="w-full max-w-md space-y-6 text-center">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">
-            What are you building?
+          <h1 className="text-2xl font-semibold tracking-tight">
+            Welcome to Hydra
           </h1>
-          <p className="mt-2 text-muted-foreground">
-            Tell us about your product and we'll help you structure your
-            thinking.
+          <p className="mt-2 text-sm text-muted-foreground">
+            Start by telling us about your product.
+            <br />
+            Your AI agents will take it from there.
           </p>
         </div>
 
-        {/* Suggestion cards */}
-        <div className="flex justify-center gap-3">
-          {[
-            {
-              label: "I have a product idea",
-              desc: "Start from a concept",
-            },
-            {
-              label: "I want to start from research",
-              desc: "Upload docs first",
-            },
-            {
-              label: "I already have research to upload",
-              desc: "Batch import files",
-            },
-          ].map((s) => (
-            <button
-              key={s.label}
-              type="button"
-              onClick={() => handleSuggestion(s.label)}
-              className="w-48 rounded-xl border bg-card p-4 text-left shadow-sm transition-all hover:border-primary/50 hover:shadow-md"
+        <Card>
+          <CardContent className="p-5">
+            <label className="block text-left text-sm font-medium mb-2">
+              What's your product called?
+            </label>
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. ClearDesk"
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  handleCreate();
+                }
+              }}
+              autoFocus
+            />
+            <Button
+              className="mt-4 w-full"
+              onClick={handleCreate}
+              disabled={!name.trim() || creating}
             >
-              <div className="text-sm font-medium">{s.label}</div>
-              <div className="mt-1 text-[11px] text-muted-foreground">
-                {s.desc}
-              </div>
-            </button>
-          ))}
-        </div>
+              {creating ? "Setting up..." : "Create project"}
+            </Button>
+          </CardContent>
+        </Card>
 
-        {/* Input */}
-        <div className="mx-auto w-full max-w-xl">
-          <div className="rounded-2xl border bg-background shadow-lg overflow-hidden">
-            <div className="px-4 pt-3 pb-1">
-              <textarea
-                rows={3}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder="Tell us about your product..."
-                className="w-full resize-none bg-transparent text-sm leading-relaxed placeholder:text-muted-foreground focus:outline-none"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    handleSubmit();
-                  }
-                }}
-              />
-            </div>
-            <div className="flex items-center justify-end px-3 pb-2.5">
-              <Button
-                size="icon"
-                variant={input.trim() ? "default" : "ghost"}
-                className="h-8 w-8 rounded-lg"
-                onClick={handleSubmit}
-                disabled={!input.trim() || creating}
-              >
-                <ArrowUp className="h-4 w-4" />
-              </Button>
-            </div>
-          </div>
-          {creating && (
-            <p className="mt-3 text-sm text-muted-foreground animate-pulse">
-              Setting up your project...
-            </p>
-          )}
-        </div>
+        {error && (
+          <p className="text-sm text-destructive">{error}</p>
+        )}
+        {creating && !error && (
+          <p className="text-sm text-muted-foreground animate-pulse">
+            Provisioning your AI team...
+          </p>
+        )}
       </div>
     </div>
   );

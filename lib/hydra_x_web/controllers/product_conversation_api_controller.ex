@@ -20,13 +20,37 @@ defmodule HydraXWeb.ProductConversationAPIController do
     json(conn, %{data: conversations})
   end
 
-  def show(conn, %{"project_id" => project_id, "id" => id}) do
+  def show(conn, %{"project_id" => project_id, "id" => id} = params) do
+    msg_limit = parse_int_param(params["limit"], nil)
+    msg_before = params["before"]
+
+    opts = if msg_limit, do: [limit: msg_limit, before: msg_before], else: []
+
     conversation =
       project_id
-      |> AgentBridge.get_project_conversation!(id)
+      |> AgentBridge.get_project_conversation!(id, opts)
       |> ProductConversationPayload.conversation_json(include_messages?: true)
 
-    json(conn, %{data: conversation})
+    result =
+      if msg_limit do
+        conv_id = parse_int_param(id, 0)
+        total = HydraX.Product.count_product_messages(conv_id)
+        loaded = length(conversation[:messages] || [])
+        Map.put(conversation, :has_more, loaded < total)
+      else
+        Map.put(conversation, :has_more, false)
+      end
+
+    json(conn, %{data: result})
+  end
+
+  defp parse_int_param(nil, default), do: default
+  defp parse_int_param(val, _default) when is_integer(val), do: val
+  defp parse_int_param(val, default) when is_binary(val) do
+    case Integer.parse(val) do
+      {n, _} -> n
+      :error -> default
+    end
   end
 
   def create(conn, %{"project_id" => project_id, "conversation" => params}) do

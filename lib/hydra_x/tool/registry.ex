@@ -13,6 +13,8 @@ defmodule HydraX.Tool.Registry do
     Reply,
     ShellCommand,
     SkillInspect,
+    SkillLoad,
+    SwitchModel,
     WebSearch,
     WorkspaceList,
     WorkspacePatch,
@@ -34,6 +36,8 @@ defmodule HydraX.Tool.Registry do
     {MCPInvoke, nil},
     {MCPProbe, nil},
     {SkillInspect, nil},
+    {SkillLoad, nil},
+    {SwitchModel, :switch_model_enabled},
     {MemoryRecall, nil},
     {MemorySave, nil},
     {Reply, nil}

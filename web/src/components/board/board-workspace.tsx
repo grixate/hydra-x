@@ -69,6 +69,7 @@ function BoardWorkspaceInner({ projectId, sessionId }: BoardWorkspaceInnerProps)
         left={
           <BoardCanvasPane
             projectId={projectId}
+            sessionId={sessionId}
             session={session}
             flowNodes={flowNodes}
             flowEdges={flowEdges}
@@ -86,6 +87,7 @@ function BoardWorkspaceInner({ projectId, sessionId }: BoardWorkspaceInnerProps)
         right={
           <BoardResponsePane
             projectId={projectId}
+            sessionId={sessionId}
             chatState={chatState}
             onCollapse={() => setRightCollapsed(true)}
             onHighlightNode={handleHighlightNode}

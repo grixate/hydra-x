@@ -1,10 +1,20 @@
-import { useMemo } from "react";
-import type { GraphData, GraphDataNode } from "@/types";
+import { useEffect, useMemo, useState } from "react";
+import type { GraphData, GraphDataNode, SourceReference } from "@/types";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { NODE_COLORS } from "./graph-constants";
-import { X, Route, Focus, MessageSquare, Check } from "lucide-react";
+import { api } from "@/lib/api";
+import {
+  Check,
+  Compass,
+  FileText,
+  Focus,
+  GitBranch,
+  MessageSquare,
+  Route,
+  X,
+} from "lucide-react";
 
 interface GraphNodeDetailProps {
   node: GraphDataNode;
@@ -15,8 +25,11 @@ interface GraphNodeDetailProps {
   containerHeight: number;
   onClose: () => void;
   onOpenTrail: (nodeType: string, nodeId: number) => void;
+  onOpenWhy: (nodeType: string, nodeId: number) => void;
   onHighlightConnections: (nodeIds: string[]) => void;
   onChatAbout: (node: GraphDataNode) => void;
+  onShowLineage?: (nodeId: string) => void;
+  onOpenSource?: (sourceId: number) => void;
   isInChatContext?: boolean;
 }
 
@@ -29,10 +42,35 @@ export function GraphNodeDetail({
   containerHeight,
   onClose,
   onOpenTrail,
+  onOpenWhy,
   onHighlightConnections,
   onChatAbout,
+  onShowLineage,
+  onOpenSource,
   isInChatContext = false,
 }: GraphNodeDetailProps) {
+  // Source-as-Data §6 — surface source references for the selected node.
+  const [sourceRefs, setSourceRefs] = useState<SourceReference[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    // Only fetch when there's at least one reference to show (cheap early-out).
+    if ((node.source_reference_count ?? 0) === 0) {
+      setSourceRefs([]);
+      return;
+    }
+    api
+      .getNodeSourceReferences(projectId, node.node_type, node.node_id)
+      .then((refs) => {
+        if (!cancelled) setSourceRefs(refs);
+      })
+      .catch(() => {
+        if (!cancelled) setSourceRefs([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, node.node_type, node.node_id, node.source_reference_count]);
   const { upstreamNodes, downstreamNodes, connectedIds } = useMemo(() => {
     const up: GraphDataNode[] = [];
     const down: GraphDataNode[] = [];
@@ -116,6 +154,16 @@ export function GraphNodeDetail({
             </Badge>
           </div>
           <Button
+            variant="outline"
+            size="sm"
+            className="h-6 shrink-0 gap-1 px-2 text-[10px]"
+            onClick={() => onOpenWhy(node.node_type, node.node_id)}
+            aria-label="Explain why this exists"
+          >
+            <Compass className="h-3 w-3" />
+            Why?
+          </Button>
+          <Button
             variant="ghost"
             size="icon"
             className="h-5 w-5 shrink-0"
@@ -184,6 +232,42 @@ export function GraphNodeDetail({
           </div>
         )}
 
+        {/* Sources — Source-as-Data §6. Shows Library sources referenced by
+            this node. Click a source to open it in the Library. */}
+        {sourceRefs.length > 0 && (
+          <div className="mt-3 rounded-md border bg-muted/30 p-2">
+            <div className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              <FileText className="h-3 w-3" />
+              Sources ({sourceRefs.length})
+            </div>
+            <div className="space-y-1">
+              {sourceRefs.slice(0, 5).map((ref) => (
+                <button
+                  key={ref.id}
+                  type="button"
+                  onClick={() => onOpenSource?.(ref.source_id)}
+                  className="flex w-full items-start gap-1.5 rounded px-1.5 py-1 text-left text-[11px] hover:bg-muted"
+                  title={ref.excerpt ?? undefined}
+                >
+                  <FileText className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground" />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-medium">{ref.source?.title ?? `Source #${ref.source_id}`}</p>
+                    <p className="text-[9px] text-muted-foreground">
+                      {ref.relationship.replace(/_/g, " ")}
+                      {ref.confidence ? ` · ${ref.confidence}` : ""}
+                    </p>
+                  </div>
+                </button>
+              ))}
+              {sourceRefs.length > 5 && (
+                <p className="px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                  +{sourceRefs.length - 5} more
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Actions */}
         <div className="mt-3 flex flex-wrap gap-1.5">
           <Button
@@ -195,6 +279,18 @@ export function GraphNodeDetail({
             <Route className="mr-1 h-3 w-3" />
             Open trail
           </Button>
+          {onShowLineage && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-[11px]"
+              onClick={() => onShowLineage(node.id)}
+              title="Enter Lineage View (keyboard: L)"
+            >
+              <GitBranch className="mr-1 h-3 w-3" />
+              Lineage
+            </Button>
+          )}
           <Button
             variant={isInChatContext ? "default" : "outline"}
             size="sm"

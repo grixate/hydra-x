@@ -2,10 +2,14 @@ defmodule HydraX.Agent.Compactor do
   @moduledoc false
   use GenServer
 
+  alias HydraX.Agent.Hooks
   alias HydraX.Budget
   alias HydraX.LLM.Router
   alias HydraX.Memory
+  alias HydraX.Product.WorkspaceEvents
+  alias HydraX.Repo
   alias HydraX.Runtime
+  alias HydraX.Runtime.Conversation
 
   def start_link(opts) do
     conversation_id = Keyword.fetch!(opts, :conversation_id)
@@ -65,36 +69,93 @@ defmodule HydraX.Agent.Compactor do
     level = level_for(length(turns), thresholds, token_usage.ratio)
 
     if level do
-      # Summarize all turns except the most recent 3 (those stay in full context)
-      older_turns = Enum.take(turns, max(length(turns) - 3, 0))
-      compaction = summarize_turns(older_turns, state)
+      auto_strategy = resolve_strategy(state)
 
-      Runtime.upsert_checkpoint(state.conversation_id, "compactor", %{
-        "level" => level,
-        "summary" => compaction.summary,
-        "summary_source" => compaction.summary_source,
-        "supporting_memories" => compaction.supporting_memories,
-        "updated_at" => DateTime.utc_now(),
-        "estimated_tokens" => token_usage.estimated_tokens,
-        "conversation_limit_tokens" => token_usage.conversation_limit_tokens,
-        "token_ratio" => token_usage.ratio
-      })
+      hook_ctx = %{
+        conversation_id: state.conversation_id,
+        agent_id: state.agent_id,
+        level: level,
+        turns: turns,
+        token_usage: token_usage,
+        strategy: auto_strategy
+      }
+
+      case Hooks.fire(state.agent_id, :before_compaction, hook_ctx) do
+        {:halt, _reason} ->
+          state
+
+        {:ok, modified} ->
+          modified_turns = Map.get(modified, :turns, turns)
+          # Hooks may override the auto-resolved strategy via the context.
+          override_strategy = Map.get(modified, :strategy, auto_strategy)
+          # Summarize all turns except the most recent `keep_recent` (those stay verbatim)
+          keep_recent = Map.get(thresholds, :keep_recent, 3)
+
+          older_turns =
+            Enum.take(modified_turns, max(length(modified_turns) - keep_recent, 0))
+
+          compaction = summarize_turns(older_turns, state, override_strategy)
+
+          Runtime.upsert_checkpoint(state.conversation_id, "compactor", %{
+            "level" => level,
+            "summary" => compaction.summary,
+            "summary_source" => compaction.summary_source,
+            "supporting_memories" => compaction.supporting_memories,
+            "updated_at" => DateTime.utc_now(),
+            "estimated_tokens" => token_usage.estimated_tokens,
+            "conversation_limit_tokens" => token_usage.conversation_limit_tokens,
+            "token_ratio" => token_usage.ratio
+          })
+
+          _ =
+            Hooks.fire(state.agent_id, :after_compaction, %{
+              conversation_id: state.conversation_id,
+              agent_id: state.agent_id,
+              level: level,
+              turns_compacted: length(older_turns),
+              summary: compaction.summary
+            })
+
+          broadcast_compacted(state.conversation_id, %{
+            level: level,
+            turns_compacted: length(older_turns),
+            estimated_tokens: token_usage.estimated_tokens,
+            token_ratio: token_usage.ratio
+          })
+
+          state
+      end
+    else
+      state
     end
-
-    state
   end
 
-  defp summarize_turns([], _state) do
+  @doc false
+  def broadcast_compacted(conversation_id, payload) do
+    Phoenix.PubSub.broadcast(
+      HydraX.PubSub,
+      "conversations:#{conversation_id}",
+      {:context_compacted, conversation_id, payload}
+    )
+  end
+
+  defp summarize_turns([], _state, _strategy) do
     %{summary: nil, summary_source: nil, supporting_memories: []}
   end
 
-  defp summarize_turns(turns, state) do
+  defp summarize_turns(turns, state, strategy) do
     transcript =
       turns
       |> Enum.map_join("\n", fn turn -> "#{turn.role}: #{turn.content}" end)
 
     supporting_memories = supporting_memories(state.agent_id, transcript)
-    prompt = compaction_prompt(transcript, supporting_memories)
+    effective_strategy = strategy || resolve_strategy(state)
+
+    prompt =
+      case effective_strategy do
+        "code_aware" -> code_aware_compaction_prompt(transcript, supporting_memories, state)
+        _ -> compaction_prompt(transcript, supporting_memories)
+      end
 
     messages = [
       %{
@@ -145,6 +206,154 @@ defmodule HydraX.Agent.Compactor do
   end
 
   defp fallback_summary(transcript), do: String.slice(transcript, 0, 800)
+
+  # ---------------------------------------------------------------------------
+  # Strategy resolution + code-aware prompt
+  # ---------------------------------------------------------------------------
+
+  @doc false
+  # Auto-detect strategy from the conversation's persona. A "coder" persona
+  # (set when the conversation is wired to product workspace tools) triggers
+  # code_aware; everything else gets the legacy simple prompt.
+  def resolve_strategy(%{conversation_id: conversation_id}) do
+    case Repo.get(Conversation, conversation_id) do
+      %Conversation{metadata: metadata} when is_map(metadata) ->
+        case metadata["product_persona"] do
+          "coder" -> "code_aware"
+          _ -> "simple"
+        end
+
+      _ ->
+        "simple"
+    end
+  end
+
+  @doc false
+  def code_aware_compaction_prompt(transcript, supporting_memories, state) do
+    workspace_section = workspace_activity_section(state)
+
+    """
+    Summarize this coding session. Preserve:
+    - ALL file paths created, modified, or deleted
+    - ALL test runs and their pass/fail outcomes
+    - ALL architectural decisions and the reasoning behind them
+    - ALL errors encountered and how they were resolved
+    - The current state of the workspace
+
+    Do NOT summarize away specific technical details like file paths,
+    function signatures, or exit codes. This summary replaces the earlier
+    conversation; the agent will use it as context for continuing the work.
+
+    #{workspace_section}
+
+    #{render_supporting_memories_prompt(supporting_memories)}
+
+    Conversation transcript:
+    #{transcript}
+    """
+    |> String.trim()
+  end
+
+  @doc false
+  def workspace_activity_section(%{conversation_id: conversation_id}) do
+    case Repo.get(Conversation, conversation_id) do
+      %Conversation{metadata: metadata} when is_map(metadata) ->
+        case parse_int(metadata["product_project_id"]) do
+          {:ok, project_id} -> render_workspace_events(project_id)
+          :error -> "Workspace activity:\n- (no workspace bound)"
+        end
+
+      _ ->
+        "Workspace activity:\n- (no workspace bound)"
+    end
+  end
+
+  defp parse_int(n) when is_integer(n) and n > 0, do: {:ok, n}
+
+  defp parse_int(s) when is_binary(s) do
+    case Integer.parse(s) do
+      {n, ""} when n > 0 -> {:ok, n}
+      _ -> :error
+    end
+  end
+
+  defp parse_int(_), do: :error
+
+  defp render_workspace_events(project_id) do
+    events = WorkspaceEvents.list_for_project(project_id, limit: 80)
+
+    if events == [] do
+      "Workspace activity:\n- (no recorded operations)"
+    else
+      file_ops = group_file_ops(events)
+      tests = filter_test_events(events)
+      errors = filter_error_events(events)
+
+      [
+        "Workspace activity:",
+        format_file_ops(file_ops),
+        format_tests(tests),
+        format_errors(errors)
+      ]
+      |> Enum.reject(&(&1 in [nil, ""]))
+      |> Enum.join("\n")
+    end
+  end
+
+  defp group_file_ops(events) do
+    events
+    |> Enum.filter(&(&1.kind in ["write", "edit"] and &1.outcome == "ok"))
+    |> Enum.group_by(& &1.path)
+    |> Enum.map(fn {path, ops} -> {path, length(ops)} end)
+    |> Enum.sort_by(fn {path, _} -> path end)
+  end
+
+  defp filter_test_events(events) do
+    events
+    |> Enum.filter(&(&1.kind in ["exec", "test"]))
+    |> Enum.take(10)
+  end
+
+  defp filter_error_events(events) do
+    events
+    |> Enum.filter(&(&1.outcome == "error"))
+    |> Enum.take(10)
+  end
+
+  defp format_file_ops([]), do: nil
+
+  defp format_file_ops(ops) do
+    lines =
+      ops
+      |> Enum.take(20)
+      |> Enum.map_join("\n", fn {path, count} -> "  - #{path} (#{count}x)" end)
+
+    "Files modified:\n#{lines}"
+  end
+
+  defp format_tests([]), do: nil
+
+  defp format_tests(events) do
+    lines =
+      Enum.map_join(events, "\n", fn event ->
+        program = get_in(event.command || %{}, ["program"]) || "exec"
+        outcome = if event.exit_code == 0, do: "ok", else: "exit #{event.exit_code}"
+        "  - #{program} → #{outcome}"
+      end)
+
+    "Test/exec runs:\n#{lines}"
+  end
+
+  defp format_errors([]), do: nil
+
+  defp format_errors(events) do
+    lines =
+      Enum.map_join(events, "\n", fn event ->
+        "  - #{event.kind} #{event.path || ""}: #{event.error}"
+      end)
+
+    "Errors:\n#{lines}"
+  end
 
   defp supporting_memories(agent_id, transcript) do
     agent_id

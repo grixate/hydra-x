@@ -29,6 +29,7 @@ defmodule HydraX.Runtime do
   defdelegate agent_bulletin(id), to: HydraX.Runtime.Agents
   defdelegate compaction_policy(id), to: HydraX.Runtime.Agents
   defdelegate save_compaction_policy!(id, attrs), to: HydraX.Runtime.Agents
+  defdelegate auto_branch_on_test_failure?(id), to: HydraX.Runtime.Agents
   defdelegate refresh_agent_bulletin!(id), to: HydraX.Runtime.Agents
   defdelegate agent_runtime_status(agent_or_id), to: HydraX.Runtime.Agents
   defdelegate start_agent_runtime!(id), to: HydraX.Runtime.Agents
@@ -167,6 +168,10 @@ defmodule HydraX.Runtime do
   defdelegate reset_conversation_compaction!(id), to: HydraX.Runtime.Conversations
   defdelegate export_conversation_transcript!(id), to: HydraX.Runtime.Conversations
   defdelegate list_turns(conversation_id), to: HydraX.Runtime.Conversations
+  defdelegate list_turns(conversation_id, opts), to: HydraX.Runtime.Conversations
+  defdelegate latest_user_turn_on_active_branch(conversation_id),
+    to: HydraX.Runtime.Conversations
+
   defdelegate append_turn(conversation, attrs), to: HydraX.Runtime.Conversations
   defdelegate list_owned_resumable_conversations(opts), to: HydraX.Runtime.Conversations
   defdelegate list_owned_pending_deliveries(opts), to: HydraX.Runtime.Conversations

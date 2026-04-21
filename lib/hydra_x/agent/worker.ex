@@ -2,6 +2,7 @@ defmodule HydraX.Agent.Worker do
   @moduledoc false
   @behaviour :gen_statem
 
+  alias HydraX.Agent.Hooks
   alias HydraX.Runtime
   alias HydraX.Safety
   alias HydraX.Telemetry
@@ -22,12 +23,26 @@ defmodule HydraX.Agent.Worker do
   @doc """
   Execute a list of tool calls from the LLM response.
   Returns a list of `%{tool_use_id, tool_name, result}` maps.
+
+  `opts` accepts:
+    * `:steering_check` — a zero-arity function that returns `true` when
+      there is pending steering for this conversation. When provided, the
+      worker calls it before every tool and halts the remainder of the
+      batch as soon as steering is pending. Halted tools surface as
+      skipped placeholders so the LLM can see what wasn't executed.
   """
-  def execute_tool_calls(agent_id, conversation, tool_calls) do
+  def execute_tool_calls(agent_id, conversation, tool_calls, opts \\ []) do
+    steering_check = Keyword.get(opts, :steering_check)
+
     {:ok, pid} =
       DynamicSupervisor.start_child(
         HydraX.Agent.worker_supervisor(agent_id),
-        {__MODULE__, %{conversation: conversation, tool_calls: tool_calls}}
+        {__MODULE__,
+         %{
+           conversation: conversation,
+           tool_calls: tool_calls,
+           steering_check: steering_check
+         }}
       )
 
     :gen_statem.call(pid, :run, 15_000)
@@ -65,17 +80,116 @@ defmodule HydraX.Agent.Worker do
       board_session_id: get_in(conversation.metadata || %{}, ["board_session_id"])
     }
 
+    steering_check = Map.get(data, :steering_check)
+
     results =
-      Enum.map(tool_calls, fn tool_call ->
-        execute_single(tool_call, context, conversation, tool_policy, extra_tool_modules)
+      tool_calls
+      |> Enum.reduce_while({[], false}, fn tool_call, {acc, halted?} ->
+        cond do
+          halted? ->
+            {:cont, {[skipped_result(tool_call) | acc], true}}
+
+          steering_pending?(steering_check) ->
+            {:cont, {[skipped_result(tool_call) | acc], true}}
+
+          true ->
+            result =
+              execute_single(tool_call, context, conversation, tool_policy, extra_tool_modules)
+
+            {:cont, {[result | acc], false}}
+        end
       end)
+      |> elem(0)
+      |> Enum.reverse()
 
     {:stop_and_reply, :normal, [{:reply, from, results}], data}
   end
 
   def handle_event(_type, _event, _state, data), do: {:keep_state, data}
 
+  defp steering_pending?(nil), do: false
+
+  defp steering_pending?(check) when is_function(check, 0) do
+    check.() == true
+  rescue
+    _ -> false
+  catch
+    _, _ -> false
+  end
+
+  defp skipped_result(%{id: id, name: name}) do
+    %{
+      tool_use_id: id,
+      tool_name: name,
+      result: %{skipped: true, reason: "steering_received"},
+      is_error: false,
+      summary: "skipped — steering message received",
+      safety_classification: "skipped"
+    }
+  end
+
   defp execute_single(
+         %{id: id, name: name, arguments: arguments} = tool_call,
+         context,
+         conversation,
+         tool_policy,
+         extra_tool_modules
+       ) do
+    hook_ctx = %{
+      tool: name,
+      arguments: arguments,
+      agent_id: conversation.agent_id,
+      conversation_id: conversation.id
+    }
+
+    case Hooks.fire(conversation.agent_id, :before_tool_call, hook_ctx) do
+      {:halt, reason} ->
+        result = %{
+          tool_use_id: id,
+          tool_name: name,
+          result: %{error: "halted by hook: #{inspect(reason)}"},
+          is_error: true,
+          summary: "halted by hook",
+          safety_classification: "halted"
+        }
+
+        _ =
+          Hooks.fire(conversation.agent_id, :after_tool_call, %{
+            tool: name,
+            arguments: arguments,
+            result: result,
+            agent_id: conversation.agent_id,
+            conversation_id: conversation.id
+          })
+
+        result
+
+      {:ok, modified} ->
+        modified_arguments = Map.get(modified, :arguments, arguments)
+
+        result =
+          do_execute_single(
+            %{tool_call | arguments: modified_arguments},
+            context,
+            conversation,
+            tool_policy,
+            extra_tool_modules
+          )
+
+        _ =
+          Hooks.fire(conversation.agent_id, :after_tool_call, %{
+            tool: name,
+            arguments: modified_arguments,
+            result: result,
+            agent_id: conversation.agent_id,
+            conversation_id: conversation.id
+          })
+
+        result
+    end
+  end
+
+  defp do_execute_single(
          %{id: id, name: name, arguments: arguments},
          context,
          conversation,
@@ -232,6 +346,14 @@ defmodule HydraX.Agent.Worker do
 
   defp enrich_params(arguments, "skill_inspect", context) do
     Map.put(arguments, :agent_id, context.agent_id)
+  end
+
+  defp enrich_params(arguments, "skill_load", context) do
+    Map.put(arguments, :agent_id, context.agent_id)
+  end
+
+  defp enrich_params(arguments, "switch_model", context) do
+    Map.put(arguments, :conversation_id, context.conversation_id)
   end
 
   defp enrich_params(arguments, _name, _context), do: arguments

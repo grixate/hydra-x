@@ -7,6 +7,8 @@ defmodule HydraXWeb.BoardSessionChannel do
   alias HydraXWeb.ProductChannelAuth
   alias HydraXWeb.ProductPayload
 
+  intercept ["presence_diff"]
+
   @impl true
   def join("board_session:" <> raw_id, params, socket) do
     with :ok <- ProductChannelAuth.authorize(socket),
@@ -60,6 +62,22 @@ defmodule HydraXWeb.BoardSessionChannel do
           push(socket, event, board_event_json(event, payload))
         end
 
+      "board_session_event.created" ->
+        if Map.get(payload, :board_session_id) == board_session_id do
+          event_data = payload.event
+          push(socket, "session_event", %{
+            id: event_data.id,
+            event_type: event_data.event_type,
+            actor_type: event_data.actor_type,
+            actor_name: event_data.actor_name,
+            target_type: event_data.target_type,
+            target_id: event_data.target_id,
+            target_title: event_data.target_title,
+            metadata: event_data.metadata || %{},
+            inserted_at: event_data.inserted_at
+          })
+        end
+
       "board_session." <> _ ->
         push(socket, event, board_event_json(event, payload))
 
@@ -71,6 +89,12 @@ defmodule HydraXWeb.BoardSessionChannel do
   end
 
   def handle_info(_message, socket), do: {:noreply, socket}
+
+  @impl true
+  def handle_out("presence_diff", payload, socket) do
+    push(socket, "presence_diff", payload)
+    {:noreply, socket}
+  end
 
   # --- Client events ---
 
@@ -133,6 +157,15 @@ defmodule HydraXWeb.BoardSessionChannel do
   # --- JSON helpers ---
 
   defp board_event_json("board_node.created", %{board_node: node}) do
+    %{board_node: ProductPayload.board_node_json(node)}
+  end
+
+  # board_node.updated/deleted are broadcast with the raw record (not wrapped)
+  defp board_event_json("board_node.updated", %HydraX.Product.BoardNode{} = node) do
+    %{board_node: ProductPayload.board_node_json(node)}
+  end
+
+  defp board_event_json("board_node.deleted", %HydraX.Product.BoardNode{} = node) do
     %{board_node: ProductPayload.board_node_json(node)}
   end
 

@@ -13,6 +13,7 @@ defmodule HydraX.Runtime.Conversations do
     Checkpoint,
     Conversation,
     Helpers,
+    SessionBranches,
     Turn
   }
 
@@ -289,18 +290,52 @@ defmodule HydraX.Runtime.Conversations do
     %{conversation: conversation, agent: agent, path: path}
   end
 
-  def list_turns(conversation_id) do
-    Turn
-    |> where([turn], turn.conversation_id == ^conversation_id)
-    |> order_by([turn], asc: turn.sequence)
-    |> Repo.all()
+  @doc """
+  List turns for a conversation. Defaults to the conversation's active
+  branch only. Pass `branch: :all` to include every branch (used by the
+  branch-tree view), or `branch: branch_uuid` for a specific branch.
+  """
+  def list_turns(conversation_id, opts \\ []) do
+    branch_filter = Keyword.get(opts, :branch, :active)
+
+    base =
+      Turn
+      |> where([turn], turn.conversation_id == ^conversation_id)
+      |> order_by([turn], asc: turn.sequence)
+
+    case branch_filter do
+      :all ->
+        Repo.all(base)
+
+      :active ->
+        case Repo.get(Conversation, conversation_id) do
+          nil ->
+            []
+
+          %Conversation{active_branch_id: nil} ->
+            # Conversation has no active branch yet — that's the normal
+            # state for a brand-new conversation with no turns. Return
+            # [] without writing anything; the main branch is created
+            # lazily on first append_turn, not on first read.
+            []
+
+          %Conversation{active_branch_id: uuid} ->
+            base |> where([t], t.branch_id == ^uuid) |> Repo.all()
+        end
+
+      branch_uuid when is_binary(branch_uuid) ->
+        base |> where([t], t.branch_id == ^branch_uuid) |> Repo.all()
+    end
   end
 
   def append_turn(%Conversation{} = conversation, attrs) do
+    branch = ensure_active_branch!(conversation)
+    branch_uuid = branch.branch_uuid
+
     sequence =
       Repo.one(
         from(turn in Turn,
-          where: turn.conversation_id == ^conversation.id,
+          where: turn.conversation_id == ^conversation.id and turn.branch_id == ^branch_uuid,
           select: coalesce(max(turn.sequence), 0)
         )
       ) + 1
@@ -310,6 +345,7 @@ defmodule HydraX.Runtime.Conversations do
       |> Helpers.normalize_string_keys()
       |> Map.merge(%{
         "conversation_id" => conversation.id,
+        "branch_id" => branch_uuid,
         "sequence" => sequence,
         "content" =>
           attrs
@@ -334,6 +370,39 @@ defmodule HydraX.Runtime.Conversations do
       turn
     end)
     |> Helpers.unwrap_transaction()
+  end
+
+  defp ensure_active_branch!(%Conversation{active_branch_id: nil, id: id}) do
+    SessionBranches.ensure_main_branch(id)
+  end
+
+  defp ensure_active_branch!(%Conversation{} = conversation) do
+    case SessionBranches.active_branch(conversation) do
+      nil -> SessionBranches.ensure_main_branch(conversation.id)
+      branch -> branch
+    end
+  end
+
+  @doc """
+  Returns the most recent user turn on the conversation's active branch, or
+  `nil` if there aren't any. Useful for branching: when a test fails, you
+  typically want to fork from the user's last instruction rather than from
+  the failed assistant attempt itself.
+  """
+  def latest_user_turn_on_active_branch(conversation_id) when is_integer(conversation_id) do
+    case Repo.get(Conversation, conversation_id) do
+      %Conversation{active_branch_id: uuid} when is_binary(uuid) ->
+        Repo.one(
+          from t in Turn,
+            where:
+              t.conversation_id == ^conversation_id and t.branch_id == ^uuid and t.role == "user",
+            order_by: [desc: t.sequence],
+            limit: 1
+        )
+
+      _ ->
+        nil
+    end
   end
 
   def get_checkpoint(conversation_id, process_type) do
@@ -400,7 +469,10 @@ defmodule HydraX.Runtime.Conversations do
     channel_state = conversation_channel_state(conversation.id)
     compaction = conversation_compaction(conversation.id)
     delivery = last_delivery(conversation)
-    attachment_count = transcript_attachment_count(conversation.turns)
+    # Filter the preloaded turns down to the active branch so transcripts
+    # don't mix forked branches together.
+    active_turns = active_branch_turns(conversation)
+    attachment_count = transcript_attachment_count(active_turns)
 
     header = [
       "# #{conversation.title || "Untitled conversation"}",
@@ -457,7 +529,7 @@ defmodule HydraX.Runtime.Conversations do
       end
 
     turns =
-      Enum.map(conversation.turns, fn turn ->
+      Enum.map(active_turns, fn turn ->
         [
           "## #{String.capitalize(turn.role)} ##{turn.sequence}",
           "",
@@ -474,6 +546,15 @@ defmodule HydraX.Runtime.Conversations do
     |> List.flatten()
     |> Enum.join("\n")
   end
+
+  defp active_branch_turns(%Conversation{turns: turns} = conversation) when is_list(turns) do
+    case conversation.active_branch_id do
+      nil -> turns
+      uuid -> Enum.filter(turns, &(&1.branch_id == uuid))
+    end
+  end
+
+  defp active_branch_turns(_conversation), do: []
 
   defp normalize_turn_metadata(metadata) when is_map(metadata) do
     metadata
@@ -1148,7 +1229,7 @@ defmodule HydraX.Runtime.Conversations do
       not (is_binary(delivery["external_ref"]) and delivery["external_ref"] != "") ->
         :skip
 
-      not Enum.any?(conversation.turns || [], &(&1.role == "assistant")) ->
+      not Enum.any?(active_branch_turns(conversation), &(&1.role == "assistant")) ->
         :skip
 
       true ->

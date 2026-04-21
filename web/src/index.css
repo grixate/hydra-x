@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@plugin "@tailwindcss/typography";
 
 :root {
   --radius: 0.625rem;
@@ -86,3 +87,129 @@ body {
 a {
   color: inherit;
 }
+
+.react-flow__node-graphNode,
+.react-flow__node-graphNode.selected,
+.react-flow__node-graphNode.selectable,
+.react-flow__node-graphNode:focus,
+.react-flow__node-graphNode:focus-visible,
+.react-flow__node-graphNode:hover {
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  outline: none !important;
+}
+
+/* -----------------------------------------------------------------
+   Graph motion language (Graph-Opt spec §7). All animations are CSS
+   transitions on compositor-friendly properties (opacity, transform)
+   so they don't thrash the main thread during bulk restructure.
+   ----------------------------------------------------------------- */
+
+/* Arrival: new nodes fade + gently scale in. */
+.react-flow__node-graphNode {
+  animation: graph-arrival 250ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  will-change: transform, opacity;
+}
+
+@keyframes graph-arrival {
+  from {
+    opacity: 0;
+    transform: scale(0.92) translate(var(--xyflow-tx, 0), var(--xyflow-ty, 0));
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translate(var(--xyflow-tx, 0), var(--xyflow-ty, 0));
+  }
+}
+
+/* WIP node styling — spec §10: dashed, translucent, desaturated. */
+.graph-wip {
+  filter: saturate(0.75);
+  position: relative;
+}
+
+.graph-wip::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 0.75rem;
+  border: 1.5px dashed rgba(150, 120, 200, 0.8);
+  pointer-events: none;
+  animation: graph-wip-dash 6s linear infinite;
+}
+
+@keyframes graph-wip-dash {
+  0% {
+    background-position: 0 0;
+  }
+  100% {
+    background-position: 30px 0;
+  }
+}
+
+/* Pulse — state change (§7). Triggered by the `pulse` data flag and
+   lasts ~600ms then clears. */
+.graph-pulse-tension {
+  animation: graph-pulse-tension 600ms cubic-bezier(0.4, 0.0, 0.2, 1);
+}
+@keyframes graph-pulse-tension {
+  0%,
+  100% {
+    box-shadow: inset 0 0 0 2px rgba(217, 119, 6, 0);
+  }
+  50% {
+    box-shadow: inset 0 0 0 3px rgba(217, 119, 6, 0.9),
+      0 0 16px rgba(217, 119, 6, 0.35);
+  }
+}
+
+.graph-pulse-activity {
+  animation: graph-pulse-activity 600ms cubic-bezier(0.4, 0.0, 0.2, 1);
+}
+@keyframes graph-pulse-activity {
+  0%,
+  100% {
+    box-shadow: inset 0 0 0 2px rgba(59, 108, 184, 0);
+  }
+  50% {
+    box-shadow: inset 0 0 0 3px rgba(59, 108, 184, 0.9),
+      0 0 14px rgba(59, 108, 184, 0.3);
+  }
+}
+
+/* Edge path draw-in for freshly-added edges. The edge component toggles
+   `data-fresh` for ~400ms. */
+.react-flow__edge-path[data-fresh="true"] {
+  stroke-dasharray: 600;
+  stroke-dashoffset: 600;
+  animation: graph-edge-draw 400ms cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+@keyframes graph-edge-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+/* Reduced motion — respect OS-level preference per §12 (graceful
+   degradation). */
+@media (prefers-reduced-motion: reduce) {
+  .react-flow__node-graphNode {
+    animation: none;
+  }
+  .graph-pulse-tension,
+  .graph-pulse-activity {
+    animation: none;
+  }
+  .react-flow__edge-path[data-fresh="true"] {
+    animation: none;
+    stroke-dasharray: 0;
+  }
+  .graph-wip::after {
+    animation: none;
+  }
+}
+
+

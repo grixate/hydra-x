@@ -6,7 +6,6 @@ defmodule HydraX.Product.ContinuousResearch do
 
   import Ecto.Query
 
-  alias HydraX.Product.PubSub, as: ProductPubSub
   alias HydraX.Product.WatchTarget
   alias HydraX.Repo
 

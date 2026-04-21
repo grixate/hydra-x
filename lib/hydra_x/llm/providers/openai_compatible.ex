@@ -36,7 +36,7 @@ defmodule HydraX.LLM.Providers.OpenAICompatible do
            retry: Keyword.get(request_options, :retry, false)
          ) do
       {:ok, %{status: 200, body: response_body}} ->
-        {:ok, parse_response(response_body, provider.name)}
+        {:ok, parse_response(response_body, provider.name) |> Map.put(:model, provider.model)}
 
       {:ok, response} ->
         {:error, {:provider_error, response.status, response.body}}

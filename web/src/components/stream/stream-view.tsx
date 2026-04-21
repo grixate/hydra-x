@@ -169,12 +169,15 @@ export function StreamView({
               transition={{ duration: 0.4, delay: 0.1 }}
               className="flex flex-col items-center justify-center py-24 text-center"
             >
-              <p className="text-base font-medium text-muted-foreground">
-                Your product graph is empty.
+              <p className="text-base font-medium text-foreground">
+                {mode === "my-work"
+                  ? "Nothing needs your attention yet"
+                  : "Your stream is quiet"}
               </p>
               <p className="mt-2 max-w-sm text-sm text-muted-foreground">
-                Start by talking to the Strategist about what you're building,
-                or upload research sources to begin.
+                {mode === "my-work"
+                  ? "Items appear here when agents surface insights, decisions, or flags that need your review. Talk to the Strategist or upload research to kick things off."
+                  : "The stream shows a live feed of your product graph — new insights, decisions, flags, and activity from agents working on your project. Upload research or start a conversation to see it come alive."}
               </p>
               <div className="mt-6 flex gap-3">
                 <Button variant="default" onClick={onTalkToStrategist}>

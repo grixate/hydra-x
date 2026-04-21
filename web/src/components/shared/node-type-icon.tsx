@@ -18,6 +18,7 @@ import type { LucideIcon } from "lucide-react";
 const iconMap: Record<string, LucideIcon> = {
   signal: FileStack,
   source: FileStack,
+  source_ref: FileStack,
   insight: Telescope,
   decision: Scale,
   strategy: Compass,
@@ -50,6 +51,7 @@ export function nodeTypeLabel(nodeType: string): string {
   const labels: Record<string, string> = {
     signal: "Signal",
     source: "Source",
+    source_ref: "Source",
     insight: "Insight",
     decision: "Decision",
     strategy: "Strategy",

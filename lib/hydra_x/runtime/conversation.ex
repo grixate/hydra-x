@@ -9,11 +9,13 @@ defmodule HydraX.Runtime.Conversation do
     field :title, :string
     field :last_message_at, :utc_datetime_usec
     field :metadata, :map, default: %{}
+    field :active_branch_id, Ecto.UUID
 
     belongs_to :agent, HydraX.Runtime.AgentProfile
     has_many :turns, HydraX.Runtime.Turn
     has_many :hx_turns, HydraX.Runtime.Turn, foreign_key: :conversation_id
     has_many :checkpoints, HydraX.Runtime.Checkpoint
+    has_many :branches, HydraX.Runtime.ConversationBranch
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -27,7 +29,8 @@ defmodule HydraX.Runtime.Conversation do
       :status,
       :title,
       :last_message_at,
-      :metadata
+      :metadata,
+      :active_branch_id
     ])
     |> validate_required([:agent_id, :channel, :status])
     |> assoc_constraint(:agent)

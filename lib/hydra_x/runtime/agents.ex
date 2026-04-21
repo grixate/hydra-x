@@ -140,6 +140,21 @@ defmodule HydraX.Runtime.Agents do
     }
   end
 
+  @doc """
+  Returns whether the agent should automatically fork a new branch when a
+  test/exec tool call exits non-zero. Persisted at
+  `runtime_state["auto_branch_on_test_failure"]`. Defaults to `false`.
+  """
+  def auto_branch_on_test_failure?(id) when is_integer(id) do
+    agent = get_agent!(id)
+
+    case get_in(agent.runtime_state || %{}, ["auto_branch_on_test_failure"]) do
+      true -> true
+      "true" -> true
+      _ -> false
+    end
+  end
+
   def compaction_policy(id) when is_integer(id) do
     agent = get_agent!(id)
     persisted = get_in(agent.runtime_state || %{}, ["compaction_policy"]) || %{}
@@ -148,7 +163,8 @@ defmodule HydraX.Runtime.Agents do
     %{
       soft: map_integer(persisted["soft"], defaults.soft),
       medium: map_integer(persisted["medium"], defaults.medium),
-      hard: map_integer(persisted["hard"], defaults.hard)
+      hard: map_integer(persisted["hard"], defaults.hard),
+      keep_recent: map_integer(persisted["keep_recent"], defaults.keep_recent)
     }
   end
 
@@ -162,7 +178,8 @@ defmodule HydraX.Runtime.Agents do
         "compaction_policy" => %{
           "soft" => policy.soft,
           "medium" => policy.medium,
-          "hard" => policy.hard
+          "hard" => policy.hard,
+          "keep_recent" => policy.keep_recent
         }
       })
 
@@ -171,7 +188,8 @@ defmodule HydraX.Runtime.Agents do
       metadata: %{
         "soft" => policy.soft,
         "medium" => policy.medium,
-        "hard" => policy.hard
+        "hard" => policy.hard,
+        "keep_recent" => policy.keep_recent
       }
     )
 
@@ -473,17 +491,26 @@ defmodule HydraX.Runtime.Agents do
     %{
       soft: map_integer(normalized["soft"], defaults.soft),
       medium: map_integer(normalized["medium"], defaults.medium),
-      hard: map_integer(normalized["hard"], defaults.hard)
+      hard: map_integer(normalized["hard"], defaults.hard),
+      keep_recent: map_integer(normalized["keep_recent"], defaults.keep_recent)
     }
   end
 
-  defp validate_compaction_policy!(%{soft: soft, medium: medium, hard: hard}) do
+  defp validate_compaction_policy!(%{
+         soft: soft,
+         medium: medium,
+         hard: hard,
+         keep_recent: keep_recent
+       }) do
     cond do
       soft < 1 or medium < 1 or hard < 1 ->
         raise ArgumentError, "compaction thresholds must be positive integers"
 
       not (soft < medium and medium < hard) ->
         raise ArgumentError, "compaction thresholds must satisfy soft < medium < hard"
+
+      keep_recent < 0 ->
+        raise ArgumentError, "keep_recent must be a non-negative integer"
 
       true ->
         :ok

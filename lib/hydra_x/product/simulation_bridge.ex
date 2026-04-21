@@ -223,7 +223,7 @@ defmodule HydraX.Product.SimulationBridge do
   # Results integration
   # -------------------------------------------------------------------
 
-  def import_simulation_results(project_id, simulation_node_id) do
+  def import_simulation_results(_project_id, simulation_node_id) do
     sim_node = Repo.get!(SimulationNode, simulation_node_id)
 
     if sim_node.results_imported do

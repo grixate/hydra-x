@@ -2,6 +2,8 @@ defmodule HydraX.Product.Insight do
   use Ecto.Schema
   import Ecto.Changeset
 
+  alias HydraX.Product.Scope
+
   @statuses ~w(draft accepted rejected)
 
   schema "insights" do
@@ -9,6 +11,9 @@ defmodule HydraX.Product.Insight do
     field :body, :string
     field :status, :string, default: "draft"
     field :metadata, :map, default: %{}
+
+    field :scope, :string, default: "project"
+    field :scope_root_id, :integer
 
     belongs_to :project, HydraX.Product.Project
     has_many :insight_evidence, HydraX.Product.InsightEvidence
@@ -19,9 +24,10 @@ defmodule HydraX.Product.Insight do
 
   def changeset(insight, attrs) do
     insight
-    |> cast(attrs, [:project_id, :title, :body, :status, :metadata])
+    |> cast(attrs, [:project_id, :title, :body, :status, :metadata, :scope, :scope_root_id])
     |> validate_required([:project_id, :title, :body, :status])
     |> validate_inclusion(:status, @statuses)
+    |> Scope.validate_and_default()
     |> foreign_key_constraint(:project_id)
   end
 end

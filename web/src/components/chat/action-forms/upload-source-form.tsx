@@ -1,5 +1,6 @@
 import { useState, useRef } from "react";
 import { api } from "@/lib/api";
+import { showToast } from "@/components/ui/toast-notification";
 import {
   Dialog,
   DialogContent,
@@ -8,9 +9,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { FileUp } from "lucide-react";
+import { FileUp, X } from "lucide-react";
 
 interface UploadSourceFormProps {
   projectId: number;
@@ -18,73 +17,108 @@ interface UploadSourceFormProps {
 }
 
 export function UploadSourceForm({ projectId, onClose }: UploadSourceFormProps) {
-  const [title, setTitle] = useState("");
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [submitting, setSubmitting] = useState(false);
+  const [progress, setProgress] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  const removeFile = (index: number) => {
+    setFiles((prev) => prev.filter((_, i) => i !== index));
+  };
+
   const handleSubmit = async () => {
-    if (!file) return;
+    if (files.length === 0) return;
     setSubmitting(true);
-    try {
-      await api.createSource(projectId, {
-        title: title || file.name,
-        sourceType: "document",
-        file,
-      });
-      onClose();
-    } finally {
-      setSubmitting(false);
+    setProgress(0);
+
+    let successCount = 0;
+    for (let i = 0; i < files.length; i++) {
+      setProgress(i + 1);
+      try {
+        const file = files[i];
+        const source = await api.createSource(projectId, {
+          title: file.name,
+          sourceType: "document",
+          file,
+        });
+        api.analyzeSource(projectId, source.id).catch(() => {});
+        successCount++;
+      } catch {
+        // Continue with remaining files
+      }
     }
+    if (successCount > 0) {
+      showToast(`${successCount} file${successCount > 1 ? "s" : ""} uploaded — analysis starting`);
+    }
+    if (successCount < files.length) {
+      showToast(`${files.length - successCount} file${files.length - successCount > 1 ? "s" : ""} failed to upload`);
+    }
+    setSubmitting(false);
+    onClose();
   };
 
   return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
+    <Dialog open onOpenChange={(open) => { if (!open && !submitting) onClose(); }}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Upload source</DialogTitle>
+          <DialogTitle>Upload sources</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
-          <div>
-            <Label className="text-xs mb-1 block">File</Label>
-            <div
-              className="flex cursor-pointer items-center justify-center rounded-lg border-2 border-dashed p-8 text-muted-foreground hover:border-primary/50 transition-colors"
-              onClick={() => inputRef.current?.click()}
-            >
-              <div className="text-center">
-                <FileUp className="mx-auto h-8 w-8 mb-2" />
-                <p className="text-sm">{file ? file.name : "Click to select a file"}</p>
-                <p className="text-[11px]">PDF, DOCX, TXT, MD, CSV</p>
-              </div>
+          <div
+            className="flex cursor-pointer items-center justify-center rounded-lg border-2 border-dashed p-8 text-muted-foreground hover:border-primary/50 transition-colors"
+            onClick={() => inputRef.current?.click()}
+          >
+            <div className="text-center">
+              <FileUp className="mx-auto h-8 w-8 mb-2" />
+              <p className="text-sm">Click to select files</p>
+              <p className="text-[11px]">PDF, DOCX, TXT, MD, CSV</p>
             </div>
-            <input
-              ref={inputRef}
-              type="file"
-              accept=".pdf,.docx,.txt,.md,.csv"
-              className="hidden"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) {
-                  setFile(f);
-                  if (!title) setTitle(f.name.replace(/\.[^.]+$/, ""));
-                }
-              }}
-            />
           </div>
-          <div>
-            <Label className="text-xs mb-1 block">Title</Label>
-            <Input
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="Source title"
-              className="text-sm"
-            />
-          </div>
+          <input
+            ref={inputRef}
+            type="file"
+            multiple
+            accept=".pdf,.docx,.txt,.md,.csv"
+            className="hidden"
+            onChange={(e) => {
+              const selected = Array.from(e.target.files ?? []);
+              if (selected.length > 0) {
+                setFiles((prev) => [...prev, ...selected]);
+              }
+              if (inputRef.current) inputRef.current.value = "";
+            }}
+          />
+
+          {/* File list */}
+          {files.length > 0 && (
+            <div className="space-y-1 max-h-48 overflow-y-auto">
+              {files.map((f, i) => (
+                <div key={`${f.name}-${i}`} className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm">
+                  <span className="flex-1 truncate">{f.name}</span>
+                  <span className="shrink-0 text-xs text-muted-foreground">
+                    {(f.size / 1024).toFixed(0)} KB
+                  </span>
+                  <button
+                    onClick={() => removeFile(i)}
+                    className="shrink-0 text-muted-foreground hover:text-foreground"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            Agents will analyze uploaded files and create insights automatically.
+            For 10+ files, use bulk import from the + menu.
+          </p>
         </div>
         <DialogFooter>
-          <Button variant="outline" size="sm" onClick={onClose}>Cancel</Button>
-          <Button size="sm" onClick={handleSubmit} disabled={!file || submitting}>
-            {submitting ? "Uploading..." : "Upload"}
+          <Button variant="outline" size="sm" onClick={onClose} disabled={submitting}>Cancel</Button>
+          <Button size="sm" onClick={handleSubmit} disabled={files.length === 0 || submitting}>
+            {submitting
+              ? `Uploading ${progress} of ${files.length}...`
+              : `Upload${files.length > 0 ? ` (${files.length})` : ""}`}
           </Button>
         </DialogFooter>
       </DialogContent>

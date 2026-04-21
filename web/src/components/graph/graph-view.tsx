@@ -17,16 +17,34 @@ import {
 import "@xyflow/react/dist/style.css";
 
 import { api } from "@/lib/api";
+import { subscribeToProject } from "@/lib/project-channel";
 import type { GraphData, GraphDataNode } from "@/types";
-import { computeLayout } from "./graph-layout";
+import { computeLayout, type LayoutMode } from "./graph-layout";
 import { GraphCustomNode } from "./graph-custom-node";
+import { GraphGroupNode } from "./graph-group-node";
+import { GraphSummaryNode } from "./graph-summary-node";
 import { GraphCustomEdge } from "./graph-custom-edge";
+import { LayoutControlsContext } from "./graph-layout-controls";
+import { Loader2 } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectSeparator,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { GraphSmartViewSelector } from "./graph-smart-view-selector";
 import { GraphFilterChips } from "./graph-filter-chips";
+import { GraphViewModeToolbar, type GraphViewMode } from "./graph-view-mode-toolbar";
+import { computeLineage, layoutLineageChain } from "./graph-lineage";
+import { composeView, type ComposedViewSpec } from "./graph-composed-views";
+import { MOTION } from "./graph-constants";
 import { GraphSpotlight, SpotlightTrigger } from "./graph-spotlight";
 import { UniversalInput } from "@/components/chat/universal-input";
 import { GraphChatCard } from "@/components/chat/chat-card";
 import { GraphNodeDetail } from "./graph-node-detail";
+import { WhyPanel } from "./why-panel";
 import { ConnectionDialog } from "./connection-dialog";
 import { EdgeDetailPopover } from "./edge-detail-popover";
 import { FILTERABLE_NODE_TYPES } from "./graph-constants";
@@ -34,7 +52,14 @@ import { applySmartView, type SmartView } from "./graph-smart-views";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { ChatTab } from "@/components/chat/chat-tabs";
 
-const nodeTypes = { graphNode: GraphCustomNode };
+const nodeTypes = {
+  graphNode: GraphCustomNode,
+  groupNode: GraphGroupNode,
+  summaryNode: GraphSummaryNode,
+};
+
+const COLLAPSE_THRESHOLD = 200;
+const EDGE_FADE_THRESHOLD = 200;
 const edgeTypes = { graphEdge: GraphCustomEdge };
 
 function ArrowMarker() {
@@ -75,12 +100,16 @@ function GraphViewInner({ projectId }: { projectId: number }) {
 
   // Data
   const [graphData, setGraphData] = useState<GraphData | null>(null);
+  const [badgesByNode, setBadgesByNode] = useState<Map<string, { severity: "high" | "medium" | "low"; count: number }>>(
+    new Map(),
+  );
   const [loading, setLoading] = useState(true);
   const [nodes, setNodes, onNodesChange] = useNodesState([] as Node[]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([] as Edge[]);
 
   // Selection — detail preview (single node being inspected)
   const [previewNodeId, setPreviewNodeId] = useState<string | null>(null);
+  const [whyTarget, setWhyTarget] = useState<{ nodeType: string; nodeId: number } | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   // Chat context — nodes explicitly added for agent conversations (persists across previews)
   const [chatContextIds, setChatContextIds] = useState<string[]>([]);
@@ -101,20 +130,77 @@ function GraphViewInner({ projectId }: { projectId: number }) {
   const [chatCardOpen, setChatCardOpen] = useState(false);
   const [chatCardMinimized, setChatCardMinimized] = useState(false);
 
+  // Layout mode
+  const [layoutMode, setLayoutMode] = useState<LayoutMode>("structured");
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [layouting, setLayouting] = useState(false);
+
+  // Graph-Opt §8/§9 — view-mode (Lineage / Composed view).
+  const [viewMode, setViewMode] = useState<GraphViewMode>({ kind: "default" });
+  const [composedSpec, setComposedSpec] = useState<ComposedViewSpec | null>(null);
+  const [lineageTargetId, setLineageTargetId] = useState<string | null>(null);
+
+  const requestIdRef = useRef(0);
+  const latestRequestRef = useRef(0);
+
+  const toggleGroup = useCallback((groupKey: string) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupKey)) next.delete(groupKey);
+      else next.add(groupKey);
+      return next;
+    });
+  }, []);
+
   // Spotlight
   const [spotlightOpen, setSpotlightOpen] = useState(false);
 
-  // ⌘K shortcut
+  // ⌘K spotlight + ?/W Why-button shortcut (Stream B2.5).
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      // Ignore shortcuts while user is typing in an input.
+      const target = e.target as HTMLElement | null;
+      const inEditable =
+        target &&
+        (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
+
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {
         e.preventDefault();
         setSpotlightOpen((prev) => !prev);
+        return;
+      }
+
+      if (inEditable) return;
+
+      if ((e.key === "?" || e.key.toLowerCase() === "w") && previewNodeId) {
+        const node = graphData?.nodes.find((n) => n.id === previewNodeId);
+        if (node) {
+          e.preventDefault();
+          setWhyTarget({ nodeType: node.node_type, nodeId: node.node_id });
+        }
+      }
+
+      // Graph-Opt §8 — `L` toggles Lineage View on the focused node.
+      if (e.key.toLowerCase() === "l" && previewNodeId) {
+        const node = graphData?.nodes.find((n) => n.id === previewNodeId);
+        if (node) {
+          e.preventDefault();
+          setLineageTargetId((prev) => (prev === node.id ? null : node.id));
+          setComposedSpec(null);
+          setViewMode({ kind: "lineage", targetTitle: node.title });
+        }
+      }
+
+      // Escape — return to default view.
+      if (e.key === "Escape" && viewMode.kind !== "default") {
+        setViewMode({ kind: "default" });
+        setLineageTargetId(null);
+        setComposedSpec(null);
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, []);
+  }, [previewNodeId, graphData, viewMode]);
 
   // Connection dialog
   const [pendingConnection, setPendingConnection] = useState<{
@@ -137,8 +223,35 @@ function GraphViewInner({ projectId }: { projectId: number }) {
     return data;
   }, [projectId]);
 
+  const refreshBadges = useCallback(async () => {
+    try {
+      const badges = await api.getContradictionBadges(projectId);
+      const map = new Map<string, { severity: "high" | "medium" | "low"; count: number }>();
+      for (const b of badges) {
+        const severity: "high" | "medium" | "low" =
+          b.high > 0 ? "high" : b.medium > 0 ? "medium" : "low";
+        map.set(`${b.node_type}:${b.node_id}`, { severity, count: b.total });
+      }
+      setBadgesByNode(map);
+    } catch {
+      /* leave badges empty — graph still renders */
+    }
+  }, [projectId]);
+
+  // Live-update badges on contradiction lifecycle events so the graph
+  // stays in sync with the Coherence agent.
+  useEffect(() => {
+    return subscribeToProject(projectId, [
+      { event: "contradiction.detected", handler: refreshBadges },
+      { event: "contradiction.resolved", handler: refreshBadges },
+      { event: "contradiction.dismissed", handler: refreshBadges },
+      { event: "contradiction.stale", handler: refreshBadges },
+    ]);
+  }, [projectId, refreshBadges]);
+
   useEffect(() => {
     setLoading(true);
+    refreshBadges();
     refreshGraphData()
       .then(async (data) => {
         const defaultView: SmartView | null =
@@ -155,28 +268,78 @@ function GraphViewInner({ projectId }: { projectId: number }) {
       .catch(() => setLoading(false));
   }, [projectId]);
 
+  // Auto-collapse all groups when entering grouped mode on a large graph
+  useEffect(() => {
+    if (layoutMode === "structured") {
+      if (expandedGroups.size > 0) setExpandedGroups(new Set());
+      return;
+    }
+    if (graphData && graphData.nodes.length > COLLAPSE_THRESHOLD) {
+      setExpandedGroups(new Set());
+    }
+  }, [layoutMode, graphData]);
+
   useEffect(() => {
     if (!graphData) return;
     layoutAndSetNodes(graphData, visibleTypes, highlightedIds, chatContextIds).then(() => {
       setTimeout(() => fitView({ padding: 0.1, duration: 300 }), 100);
     });
-  }, [visibleTypes]);
+  }, [visibleTypes, layoutMode, expandedGroups]);
 
   useEffect(() => {
     if (!graphData) return;
+
+    // Graph-Opt §8/§9 — apply lineage/composed overrides.
+    let chainIds: Set<string> | null = null;
+    let overridePositions: Map<string, { x: number; y: number }> | null = null;
+
+    if (lineageTargetId && graphData.nodes.some((n) => n.id === lineageTargetId)) {
+      const lineage = computeLineage(graphData.nodes, graphData.edges, lineageTargetId);
+      chainIds = lineage.chainIds;
+      overridePositions = layoutLineageChain(lineage);
+    } else if (composedSpec) {
+      const view = composeView(graphData.nodes, graphData.edges, composedSpec);
+      chainIds = view.relevantIds;
+      overridePositions = view.positions;
+    }
+
+    const shouldSkipAnimation =
+      !!overridePositions && overridePositions.size > MOTION.RESTRUCTURE_SKIP_THRESHOLD;
+
     setNodes((prev) =>
-      prev.map((n) => ({
-        ...n,
-        data: {
-          ...n.data,
-          highlighted: highlightedIds.size > 0 && highlightedIds.has(n.id),
-          dimmed: highlightedIds.size > 0 && !highlightedIds.has(n.id),
-          multiSelected: chatContextIds.includes(n.id),
-          previewing: n.id === previewNodeId,
-        },
-      })),
+      prev.map((n) => {
+        if (n.type === "groupNode" || n.type === "summaryNode") return n;
+
+        const inChain = chainIds ? chainIds.has(n.id) : null;
+        const overridden = overridePositions?.get(n.id);
+
+        const positionUpdate = overridden
+          ? { position: overridden }
+          : {};
+
+        return {
+          ...n,
+          ...positionUpdate,
+          data: {
+            ...n.data,
+            highlighted: highlightedIds.size > 0 && highlightedIds.has(n.id),
+            dimmed:
+              (highlightedIds.size > 0 && !highlightedIds.has(n.id)) ||
+              (chainIds !== null && !chainIds.has(n.id)),
+            multiSelected: chatContextIds.includes(n.id),
+            previewing: n.id === previewNodeId,
+            inLineage: inChain,
+          },
+          // Skip the restructure animation if too many nodes move at once
+          // (§4 O4). React Flow doesn't natively tween positions; we rely
+          // on CSS transitions on the node wrapper.
+          style: shouldSkipAnimation
+            ? { ...(n.style as object), transition: "none" }
+            : { ...(n.style as object), transition: `transform ${MOTION.RESTRUCTURE_MOVE_MS}ms ${MOTION.EASE_IN_OUT}` },
+        };
+      }),
     );
-  }, [highlightedIds, chatContextIds, previewNodeId]);
+  }, [highlightedIds, chatContextIds, previewNodeId, lineageTargetId, composedSpec, graphData]);
 
   async function layoutAndSetNodes(
     data: GraphData,
@@ -189,21 +352,36 @@ function GraphViewInner({ projectId }: { projectId: number }) {
     const visibleEdges = data.edges.filter(
       (e) => visibleNodeIds.has(e.source) && visibleNodeIds.has(e.target),
     );
-    const { nodes: layoutNodes, edges: layoutEdges } = await computeLayout(
-      visibleNodes,
-      visibleEdges,
-    );
-    const finalNodes = layoutNodes.map((n) => ({
-      ...n,
-      data: {
-        ...n.data,
-        highlighted: highlighted.size > 0 && highlighted.has(n.id),
-        dimmed: highlighted.size > 0 && !highlighted.has(n.id),
-        multiSelected: selected.includes(n.id),
-      },
-    }));
-    setNodes(finalNodes);
-    setEdges(layoutEdges);
+    setLayouting(true);
+    const requestId = ++requestIdRef.current;
+    latestRequestRef.current = requestId;
+    const result = await computeLayout({
+      graphNodes: visibleNodes,
+      graphEdges: visibleEdges,
+      mode: layoutMode,
+      expandedGroups: Array.from(expandedGroups),
+      edgeFadeThreshold: EDGE_FADE_THRESHOLD,
+    });
+    // Drop stale results
+    if (requestId !== latestRequestRef.current) return;
+    const finalNodes = result.nodes.map((n) => {
+      const gd = n.data as unknown as GraphDataNode;
+      const badge = badgesByNode.get(`${gd.node_type}:${gd.node_id}`);
+      return {
+        ...n,
+        data: {
+          ...n.data,
+          highlighted: highlighted.size > 0 && highlighted.has(n.id),
+          dimmed: highlighted.size > 0 && !highlighted.has(n.id),
+          multiSelected: selected.includes(n.id),
+          contradiction_severity: badge?.severity ?? null,
+          contradiction_count: badge?.count ?? 0,
+        },
+      };
+    });
+    setNodes([...result.groupNodes, ...finalNodes, ...result.summaryNodes]);
+    setEdges(result.edges);
+    setLayouting(false);
   }
 
   // --- SEARCH ---
@@ -434,7 +612,18 @@ function GraphViewInner({ projectId }: { projectId: number }) {
   }, []);
 
   const handleGraphCommand = useCallback(
-    (command: { type: string; nodeIds?: string[]; nodeId?: string }) => {
+    (command: {
+      type: string;
+      nodeIds?: string[];
+      nodeId?: string;
+      fromId?: string;
+      toId?: string;
+      rootId?: string;
+      centerId?: string;
+      leftId?: string;
+      rightId?: string;
+      label?: string;
+    }) => {
       switch (command.type) {
         case "highlight":
           if (command.nodeIds) setHighlightedIds(new Set(command.nodeIds));
@@ -443,6 +632,9 @@ function GraphViewInner({ projectId }: { projectId: number }) {
           setHighlightedIds(new Set());
           setSearchQuery("");
           setActiveSmartView(null);
+          setLineageTargetId(null);
+          setComposedSpec(null);
+          setViewMode({ kind: "default" });
           break;
         case "focus":
           if (command.nodeId) {
@@ -453,9 +645,53 @@ function GraphViewInner({ projectId }: { projectId: number }) {
         case "node_created":
           refreshGraphData();
           break;
+        // Graph-Opt §8
+        case "show_lineage":
+          if (command.nodeId) {
+            const node = graphData?.nodes.find((n) => n.id === command.nodeId);
+            if (node) {
+              setLineageTargetId(command.nodeId);
+              setComposedSpec(null);
+              setViewMode({ kind: "lineage", targetTitle: node.title });
+            }
+          }
+          break;
+        // Graph-Opt §9 — Composed Views
+        case "compose_path":
+          if (command.fromId && command.toId) {
+            setLineageTargetId(null);
+            setComposedSpec({ kind: "path", fromId: command.fromId, toId: command.toId });
+            setViewMode({ kind: "composed", label: command.label ?? "Path" });
+          }
+          break;
+        case "compose_radial":
+          if (command.centerId) {
+            setLineageTargetId(null);
+            setComposedSpec({ kind: "radial", centerId: command.centerId });
+            setViewMode({ kind: "composed", label: command.label ?? "Radial" });
+          }
+          break;
+        case "compose_tree":
+          if (command.rootId) {
+            setLineageTargetId(null);
+            setComposedSpec({ kind: "tree", rootId: command.rootId });
+            setViewMode({ kind: "composed", label: command.label ?? "Tree" });
+          }
+          break;
+        case "compose_comparison":
+          if (command.leftId && command.rightId) {
+            setLineageTargetId(null);
+            setComposedSpec({
+              kind: "comparison",
+              leftId: command.leftId,
+              rightId: command.rightId,
+            });
+            setViewMode({ kind: "composed", label: command.label ?? "Comparison" });
+          }
+          break;
       }
     },
-    [refreshGraphData],
+    [refreshGraphData, graphData],
   );
 
   // --- "CHAT ABOUT THIS" from node detail ---
@@ -522,6 +758,7 @@ function GraphViewInner({ projectId }: { projectId: number }) {
   }
 
   return (
+    <LayoutControlsContext.Provider value={{ toggleGroup }}>
     <div ref={containerRef} className="relative h-full w-full overflow-hidden">
       <ArrowMarker />
 
@@ -542,6 +779,8 @@ function GraphViewInner({ projectId }: { projectId: number }) {
         maxZoom={3}
         proOptions={{ hideAttribution: true }}
         edgesReconnectable={false}
+        nodesDraggable={false}
+        onlyRenderVisibleElements
       >
         <Background gap={24} size={1} color="hsl(var(--border))" />
         <Controls position="bottom-left" showInteractive={false} />
@@ -555,6 +794,17 @@ function GraphViewInner({ projectId }: { projectId: number }) {
         />
       </ReactFlow>
 
+      {/* View mode toolbar — top center (Lineage / Composed view exit) */}
+      <GraphViewModeToolbar
+        mode={viewMode}
+        onExit={() => {
+          setViewMode({ kind: "default" });
+          setLineageTargetId(null);
+          setComposedSpec(null);
+          setTimeout(() => fitView({ padding: 0.1, duration: 300 }), 50);
+        }}
+      />
+
       {/* Smart views — top left */}
       <div className="absolute left-4 top-4 z-10">
         <GraphSmartViewSelector
@@ -566,6 +816,23 @@ function GraphViewInner({ projectId }: { projectId: number }) {
 
       {/* Filter chips + search — top right */}
       <div className="absolute right-4 top-4 z-10 flex items-center gap-1.5">
+        <Select value={layoutMode} onValueChange={(v) => setLayoutMode(v as LayoutMode)}>
+          <SelectTrigger className="h-7 w-[160px] text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="structured">Structured</SelectItem>
+            <SelectSeparator />
+            <SelectItem value="group-type">Grouped by type</SelectItem>
+            <SelectItem value="group-status">Grouped by status</SelectItem>
+          </SelectContent>
+        </Select>
+        {layouting && (
+          <div className="flex items-center gap-1 rounded-md border bg-background/80 px-2 py-1 text-[11px] text-muted-foreground shadow-sm backdrop-blur">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            <span>Laying out…</span>
+          </div>
+        )}
         <GraphFilterChips visibleTypes={visibleTypes} onToggle={handleToggleType} />
         <SpotlightTrigger onClick={() => setSpotlightOpen(true)} />
       </div>
@@ -612,11 +879,32 @@ function GraphViewInner({ projectId }: { projectId: number }) {
               state: { from: "graph" },
             });
           }}
+          onOpenWhy={(nodeType, nodeId) => setWhyTarget({ nodeType, nodeId })}
           onHighlightConnections={(nodeIds) => setHighlightedIds(new Set(nodeIds))}
           onChatAbout={handleChatAbout}
+          onShowLineage={(nodeId) => {
+            const n = graphData?.nodes.find((gn) => gn.id === nodeId);
+            if (n) {
+              setLineageTargetId(nodeId);
+              setComposedSpec(null);
+              setViewMode({ kind: "lineage", targetTitle: n.title });
+            }
+          }}
+          onOpenSource={(sourceId) =>
+            navigate(`/projects/${projectId}/library?source=${sourceId}`)
+          }
           isInChatContext={chatContextIds.includes(previewNode?.id ?? "")}
         />
       )}
+
+      <WhyPanel
+        open={whyTarget !== null}
+        projectId={projectId}
+        nodeType={whyTarget?.nodeType ?? null}
+        nodeId={whyTarget?.nodeId ?? null}
+        onClose={() => setWhyTarget(null)}
+        onNavigateToNode={(nodeType, nodeId) => setWhyTarget({ nodeType, nodeId })}
+      />
 
       {/* Connection dialog */}
       {pendingConnection && pendingSourceNode && pendingTargetNode && (
@@ -670,6 +958,7 @@ function GraphViewInner({ projectId }: { projectId: number }) {
         onSearch={handleSearch}
       />
     </div>
+    </LayoutControlsContext.Provider>
   );
 }
 

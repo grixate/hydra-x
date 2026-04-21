@@ -21,6 +21,13 @@ export const AGENTS = [
 
 export type Surface = "stream" | "graph" | "board" | "onboarding";
 
+const BOARD_PLACEHOLDERS = [
+  "Drop files above or type here to start...",
+  "Try: 'Analyze our pricing strategy'",
+  "Try: 'What should we focus on first?'",
+  "Try: 'Compare options for authentication'",
+];
+
 const SURFACE_DEFAULTS: Record<Surface, { agent: string; placeholder: string; suggestions: string[] }> = {
   stream: {
     agent: "memory",
@@ -54,6 +61,7 @@ interface UniversalInputProps {
   previewNode?: GraphDataNode | null;
   onClearSelection?: () => void;
   onRemoveNode?: (nodeId: string) => void;
+  initialValue?: string;
 }
 
 export function UniversalInput({
@@ -66,12 +74,25 @@ export function UniversalInput({
   previewNode,
   onClearSelection,
   onRemoveNode,
+  initialValue,
 }: UniversalInputProps) {
   const defaults = SURFACE_DEFAULTS[surface];
   const agent = currentAgent ?? defaults.agent;
 
-  const [input, setInput] = useState("");
+  const [input, setInput] = useState(initialValue ?? "");
+
+  // Parent-driven prefill (e.g., onboarding chip "I'm building a product for…")
+  useEffect(() => {
+    if (initialValue !== undefined) {
+      setInput(initialValue);
+      // Focus the textarea so the user can continue typing.
+      queueMicrotask(() => textareaRef.current?.focus());
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialValue]);
   const [agentOpen, setAgentOpen] = useState(false);
+  const [isFocused, setIsFocused] = useState(false);
+  const [rotatingIndex, setRotatingIndex] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const activeAgent = AGENTS.find((a) => a.slug === agent) ?? AGENTS[0];
@@ -102,11 +123,22 @@ export function UniversalInput({
   const hasPreview = !!previewNode && !selectedNodes.some((n) => n.id === previewNode.id);
   const showContextBar = hasContext || hasPreview;
 
+  // Rotating placeholders for board surface
+  useEffect(() => {
+    if (surface !== "board" || isFocused || hasText) return;
+    const interval = setInterval(() => {
+      setRotatingIndex((i) => (i + 1) % BOARD_PLACEHOLDERS.length);
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [surface, isFocused, hasText]);
+
   const placeholder = hasContext
     ? selectedNodes.length === 1
       ? `Ask about this ${selectedNodes[0].node_type.replace(/_/g, " ")}...`
       : "Compare, ask about connections, or explore..."
-    : defaults.placeholder;
+    : surface === "board" && !isFocused && !hasText
+      ? BOARD_PLACEHOLDERS[rotatingIndex]
+      : defaults.placeholder;
 
   // Show surface-specific suggestions when no context, or context-based when nodes selected
   const showSuggestions = !hasText;
@@ -140,6 +172,8 @@ export function UniversalInput({
             rows={1}
             value={input}
             onChange={(e) => setInput(e.target.value)}
+            onFocus={() => setIsFocused(true)}
+            onBlur={() => setIsFocused(false)}
             placeholder={placeholder}
             className="w-full resize-none bg-transparent text-sm leading-relaxed placeholder:text-muted-foreground focus:outline-none"
             style={{ minHeight: "24px", maxHeight: "160px" }}

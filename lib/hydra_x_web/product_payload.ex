@@ -56,6 +56,10 @@ defmodule HydraXWeb.ProductPayload do
       metadata: source.metadata || %{},
       source_chunk_count: length(loaded_assoc(source, :source_chunks)),
       chunks: chunks,
+      # Source-as-Data (Cycle 3)
+      promoted_to_graph: Map.get(source, :promoted_to_graph, false),
+      promoted_at: Map.get(source, :promoted_at),
+      archived_at: Map.get(source, :archived_at),
       inserted_at: source.inserted_at,
       updated_at: source.updated_at
     }
@@ -213,6 +217,37 @@ defmodule HydraXWeb.ProductPayload do
       metadata: a.metadata || %{},
       inserted_at: a.inserted_at,
       updated_at: a.updated_at
+    }
+  end
+
+  def agent_task_json(%HydraX.Product.AgentTask{} = t) do
+    %{
+      id: t.id,
+      project_id: t.project_id,
+      agent_id: t.agent_id,
+      title: t.title,
+      description: t.description,
+      state: t.state,
+      state_reason: t.state_reason,
+      priority: t.priority,
+      progress_current: t.progress_current,
+      progress_total: t.progress_total,
+      progress_label: t.progress_label,
+      context_type: t.context_type,
+      context_id: t.context_id,
+      parent_task_id: t.parent_task_id,
+      assigned_by: t.assigned_by,
+      assigned_by_user_id: t.assigned_by_user_id,
+      assigned_by_agent_id: t.assigned_by_agent_id,
+      proposal_payload: t.proposal_payload,
+      result_payload: t.result_payload,
+      error_payload: t.error_payload,
+      started_at: t.started_at,
+      completed_at: t.completed_at,
+      last_state_change_at: t.last_state_change_at,
+      lock_version: t.lock_version,
+      inserted_at: t.inserted_at,
+      updated_at: t.updated_at
     }
   end
 
@@ -400,6 +435,18 @@ defmodule HydraXWeb.ProductPayload do
     draft_count = Enum.count(nodes, &(&1.status == "draft"))
     promoted_count = Enum.count(nodes, &(&1.status == "promoted"))
 
+    node_types =
+      nodes
+      |> Enum.map(& &1.node_type)
+      |> Enum.uniq()
+      |> Enum.reject(&is_nil/1)
+
+    active_agents =
+      nodes
+      |> Enum.map(& &1.created_by)
+      |> Enum.reject(fn c -> c in [nil, "human"] end)
+      |> Enum.uniq()
+
     %{
       id: s.id,
       project_id: s.project_id,
@@ -411,6 +458,8 @@ defmodule HydraXWeb.ProductPayload do
       draft_node_count: draft_count,
       promoted_node_count: promoted_count,
       total_node_count: length(nodes),
+      node_types: node_types,
+      active_agents: active_agents,
       inserted_at: s.inserted_at,
       updated_at: s.updated_at
     }

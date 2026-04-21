@@ -8,6 +8,7 @@ defmodule HydraX.Runtime.Turn do
     field :kind, :string, default: "message"
     field :content, :string
     field :metadata, :map, default: %{}
+    field :branch_id, Ecto.UUID
 
     belongs_to :conversation, HydraX.Runtime.Conversation
 
@@ -16,9 +17,9 @@ defmodule HydraX.Runtime.Turn do
 
   def changeset(turn, attrs) do
     turn
-    |> cast(attrs, [:conversation_id, :sequence, :role, :kind, :content, :metadata])
-    |> validate_required([:conversation_id, :sequence, :role, :kind, :content])
+    |> cast(attrs, [:conversation_id, :sequence, :role, :kind, :content, :metadata, :branch_id])
+    |> validate_required([:conversation_id, :sequence, :role, :kind, :content, :branch_id])
     |> assoc_constraint(:conversation)
-    |> unique_constraint([:conversation_id, :sequence])
+    |> unique_constraint([:conversation_id, :branch_id, :sequence])
   end
 end

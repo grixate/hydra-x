@@ -111,13 +111,15 @@ defmodule HydraX.Config do
   @spec compaction_thresholds() :: %{
           soft: pos_integer(),
           medium: pos_integer(),
-          hard: pos_integer()
+          hard: pos_integer(),
+          keep_recent: pos_integer()
         }
   def compaction_thresholds do
     %{
       soft: env_integer("HYDRA_X_COMPACTOR_SOFT_TURNS", 12),
       medium: env_integer("HYDRA_X_COMPACTOR_MEDIUM_TURNS", 18),
-      hard: env_integer("HYDRA_X_COMPACTOR_HARD_TURNS", 24)
+      hard: env_integer("HYDRA_X_COMPACTOR_HARD_TURNS", 24),
+      keep_recent: env_integer("HYDRA_X_COMPACTOR_KEEP_RECENT", 3)
     }
   end
 

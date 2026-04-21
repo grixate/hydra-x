@@ -1,8 +1,17 @@
 import type {
+  AgentTask,
   ArchitectureNode,
+  Flow,
+  OnboardingStatus,
+  StreamEntry,
+  StreamTab,
+  StreamTabCounts,
+  StreamTabItem,
+  WhyPayload,
   BoardEdge,
   BoardNode,
   BoardSession,
+  BoardSessionEvent,
   Constraint,
   Decision,
   DesignNode,
@@ -12,6 +21,7 @@ import type {
   Insight,
   KnowledgeEntry,
   Learning,
+  Mention,
   ProductConversation,
   ProductTask,
   ProjectCounts,
@@ -20,8 +30,13 @@ import type {
   Requirement,
   Routine,
   RoutineRun,
+  SimArchetype,
+  SimEstimate,
+  SimGraphNode,
   Simulation,
   Source,
+  SourceReference,
+  SourceReferenceSummary,
   Strategy,
   WatchTarget,
 } from "@/types";
@@ -31,6 +46,25 @@ const API_PREFIX = import.meta.env.VITE_API_BASE ?? "/api/v1";
 type Envelope<T> = {
   data: T;
 };
+
+export class ApiError extends Error {
+  status: number;
+  body: Record<string, unknown> | null;
+
+  constructor(status: number, message: string, body: Record<string, unknown> | null = null) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.body = body;
+  }
+
+  /** If the server returned an envelope `{error, data}`, pull `data` out. */
+  data<T>(): T | null {
+    if (!this.body) return null;
+    const data = this.body["data"];
+    return (data as T) ?? null;
+  }
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_PREFIX}${path}`, {
@@ -44,7 +78,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
-    throw new Error(`Request failed (${response.status})`);
+    let body: Record<string, unknown> | null = null;
+    try {
+      body = (await response.json()) as Record<string, unknown>;
+    } catch {
+      body = null;
+    }
+    const message =
+      (body && typeof body["error"] === "string" ? (body["error"] as string) : null) ||
+      (body && typeof body["message"] === "string" ? (body["message"] as string) : null) ||
+      `Request failed (${response.status})`;
+    throw new ApiError(response.status, message, body);
   }
 
   if (response.status === 204) {
@@ -123,6 +167,95 @@ export const api = {
         },
       }),
     });
+  },
+  analyzeSource: (projectId: number, sourceId: number, boardSessionId?: number) =>
+    request<{ conversation_id: number; source_id: number }>(
+      `/projects/${projectId}/sources/${sourceId}/analyze`,
+      {
+        method: "POST",
+        body: JSON.stringify({ board_session_id: boardSessionId ?? null }),
+      },
+    ),
+  processAllPendingSources: (projectId: number) =>
+    request<{ triggered: number; total_pending: number }>(
+      `/projects/${projectId}/sources/process_pending`,
+      { method: "POST" },
+    ),
+
+  // ---- Library API (Source-as-Data, Cycle 3) ----
+  searchLibrary: (projectId: number, query: string, opts?: { limit?: number; includeArchived?: boolean }) => {
+    const params = new URLSearchParams({ q: query });
+    if (opts?.limit != null) params.set("limit", String(opts.limit));
+    if (opts?.includeArchived) params.set("include_archived", "true");
+    return request<Source[]>(`/projects/${projectId}/library/search?${params.toString()}`);
+  },
+  listLibraryRecent: (projectId: number, limit = 25) =>
+    request<Source[]>(`/projects/${projectId}/library/recent?limit=${limit}`),
+  listLibraryUnprocessed: (projectId: number) =>
+    request<Source[]>(`/projects/${projectId}/library/unprocessed`),
+  listLibraryByBucket: (
+    projectId: number,
+    bucket: "all" | "referenced" | "unreferenced" | "promoted" | "unprocessed" | "archived",
+  ) => request<Source[]>(`/projects/${projectId}/library/bucket/${bucket}`),
+  listLibraryCandidates: (projectId: number, threshold = 5) =>
+    request<Source[]>(`/projects/${projectId}/library/candidates?threshold=${threshold}`),
+  getLibrarySource: (projectId: number, sourceId: number) =>
+    request<Source>(`/projects/${projectId}/library/sources/${sourceId}`),
+  getLibrarySourceContent: (projectId: number, sourceId: number, maxChars?: number) => {
+    const q = maxChars != null ? `?max_chars=${maxChars}` : "";
+    return request<{ content: string }>(`/projects/${projectId}/library/sources/${sourceId}/content${q}`);
+  },
+  getLibraryReferencedBy: (projectId: number, sourceId: number) =>
+    request<SourceReferenceSummary[]>(
+      `/projects/${projectId}/library/sources/${sourceId}/referenced_by`,
+    ),
+  promoteSource: (projectId: number, sourceId: number) =>
+    request<Source>(`/projects/${projectId}/library/sources/${sourceId}/promote`, {
+      method: "POST",
+      body: "{}",
+    }),
+  demoteSource: (projectId: number, sourceId: number) =>
+    request<Source>(`/projects/${projectId}/library/sources/${sourceId}/demote`, {
+      method: "POST",
+      body: "{}",
+    }),
+  archiveSource: (projectId: number, sourceId: number) =>
+    request<Source>(`/projects/${projectId}/library/sources/${sourceId}/archive`, {
+      method: "POST",
+      body: "{}",
+    }),
+  unarchiveSource: (projectId: number, sourceId: number) =>
+    request<Source>(`/projects/${projectId}/library/sources/${sourceId}/unarchive`, {
+      method: "POST",
+      body: "{}",
+    }),
+  getNodeSourceReferences: (projectId: number, nodeType: string, nodeId: number) =>
+    request<SourceReference[]>(`/projects/${projectId}/nodes/${nodeType}/${nodeId}/sources`),
+  createSourceReference: (
+    projectId: number,
+    payload: {
+      source_id: number;
+      node_type: string;
+      node_id: number;
+      relationship?: "extracted_from" | "supports" | "cites" | "contradicts";
+      excerpt?: string;
+      confidence?: "high" | "medium" | "low";
+      page_or_position?: string;
+    },
+  ) =>
+    request<{ id: number }>(`/projects/${projectId}/source_references`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  deleteSourceReference: (projectId: number, referenceId: number) =>
+    request<void>(`/projects/${projectId}/source_references/${referenceId}`, { method: "DELETE" }),
+  bulkCreateSources: async (projectId: number, files: File[]) => {
+    const form = new FormData();
+    files.forEach((f) => form.append("source[files][]", f));
+    return request<{ sources: Source[]; errors: string[] }>(
+      `/projects/${projectId}/sources/bulk`,
+      { method: "POST", body: form },
+    );
   },
   listInsights: (projectId: number) => request<Insight[]>(`/projects/${projectId}/insights`),
   createInsight: (
@@ -209,11 +342,22 @@ export const api = {
   },
   listConversations: (projectId: number) =>
     request<ProductConversation[]>(`/projects/${projectId}/conversations`),
-  getConversation: (projectId: number, conversationId: number) =>
-    request<ProductConversation>(`/projects/${projectId}/conversations/${conversationId}`),
+  getConversation: (
+    projectId: number,
+    conversationId: number,
+    opts?: { limit?: number; before?: number },
+  ) => {
+    const params = new URLSearchParams();
+    if (opts?.limit) params.set("limit", String(opts.limit));
+    if (opts?.before) params.set("before", String(opts.before));
+    const qs = params.toString();
+    return request<ProductConversation & { has_more?: boolean }>(
+      `/projects/${projectId}/conversations/${conversationId}${qs ? `?${qs}` : ""}`,
+    );
+  },
   createConversation: (
     projectId: number,
-    payload: { persona: string; title?: string; externalRef?: string },
+    payload: { persona: string; title?: string; externalRef?: string; channel?: string },
   ) =>
     request<ProductConversation>(`/projects/${projectId}/conversations`, {
       method: "POST",
@@ -222,6 +366,7 @@ export const api = {
           persona: payload.persona,
           title: payload.title,
           external_ref: payload.externalRef,
+          channel: payload.channel,
         },
       }),
     }),
@@ -237,6 +382,255 @@ export const api = {
         }),
       },
     ),
+
+  // --- Runtime control: branches, steering, model switching ---
+
+  listBranches: (projectId: number, conversationId: number) =>
+    request<{
+      branches: Array<{
+        id: number;
+        branch_uuid: string;
+        label: string;
+        parent_branch_id: number | null;
+        forked_from_sequence: number | null;
+        turn_count: number;
+        inserted_at: string;
+        active: boolean;
+      }>;
+      active_branch_uuid: string | null;
+    }>(`/projects/${projectId}/conversations/${conversationId}/branches`),
+
+  createBranch: (
+    projectId: number,
+    conversationId: number,
+    payload: { fromTurnId: number; label: string },
+  ) =>
+    request<{
+      branch_uuid: string;
+      label: string;
+      active: boolean;
+    }>(`/projects/${projectId}/conversations/${conversationId}/branches`, {
+      method: "POST",
+      body: JSON.stringify({
+        from_turn_id: payload.fromTurnId,
+        label: payload.label,
+      }),
+    }),
+
+  activateBranch: (projectId: number, conversationId: number, branchUuid: string) =>
+    request<{ active_branch_uuid: string }>(
+      `/projects/${projectId}/conversations/${conversationId}/branches/${branchUuid}/activate`,
+      { method: "POST", body: "{}" },
+    ),
+
+  sendSteeringMessage: (projectId: number, conversationId: number, content: string) =>
+    request<{ queued: boolean }>(
+      `/projects/${projectId}/conversations/${conversationId}/steer`,
+      {
+        method: "POST",
+        body: JSON.stringify({ content }),
+      },
+    ),
+
+  listModels: (projectId: number, conversationId: number) =>
+    request<{ available: string[]; current_override: string | null }>(
+      `/projects/${projectId}/conversations/${conversationId}/models`,
+    ),
+
+  switchModel: (
+    projectId: number,
+    conversationId: number,
+    payload: { model: string; reason: string },
+  ) =>
+    request<{
+      model: string;
+      provider_id: number;
+      provider_name: string;
+      reason: string;
+    }>(`/projects/${projectId}/conversations/${conversationId}/model`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  getAgentFeed: (projectId: number, persona: string, limit = 20, offset = 0) =>
+    request<{
+      items: Array<{
+        type: "node" | "artifact";
+        node_type?: string;
+        node_id?: number;
+        artifact_id?: number;
+        title: string;
+        body?: string;
+        status?: string;
+        version?: number;
+        change_summary?: string;
+        upstream_count?: number;
+        downstream_count?: number;
+        flag_count?: number;
+        origin?: string;
+        origin_title?: string | null;
+        created_at?: string;
+        updated_at?: string;
+      }>;
+      stats: {
+        nodes_created: number;
+        nodes_accepted: number;
+        acceptance_rate: number;
+        spend_cents: number;
+        tokens: number;
+        activity_heatmap: number[][];
+      };
+      total_count: number;
+    }>(`/projects/${projectId}/agents/${persona}/feed?limit=${limit}&offset=${offset}`),
+  getAgentWork: (projectId: number, persona: string) =>
+    request<{
+      current: Array<{ type: string; title: string }>;
+      completed: Array<{ type: string; title: string; node_id?: number; node_type?: string; status?: string; at?: string }>;
+      queued: Array<{ type: string; title: string }>;
+    }>(`/projects/${projectId}/agents/${persona}/work`),
+  getAgentStatuses: (projectId: number) =>
+    request<Array<{
+      persona: string;
+      state: string;
+      summary?: string | null;
+      active_count?: number;
+      working_detail: string | null;
+      ready_count: number;
+      last_active_at: string | null;
+    }>>(`/projects/${projectId}/agents/statuses`),
+  listAgentTasks: (
+    projectId: number,
+    filters: { state?: string; agent_id?: string; search?: string; exclude_terminal?: boolean } = {},
+  ) => {
+    const params = new URLSearchParams();
+    if (filters.state) params.set("state", filters.state);
+    if (filters.agent_id) params.set("agent_id", filters.agent_id);
+    if (filters.search) params.set("search", filters.search);
+    if (filters.exclude_terminal) params.set("exclude_terminal", "true");
+    const qs = params.toString();
+    return request<AgentTask[]>(
+      `/projects/${projectId}/agent_tasks${qs ? `?${qs}` : ""}`,
+    );
+  },
+  transitionAgentTask: (projectId: number, id: number, to: string, reason?: string) =>
+    request<AgentTask>(`/projects/${projectId}/agent_tasks/${id}/state`, {
+      method: "PATCH",
+      body: JSON.stringify({ to, reason }),
+    }),
+  redirectAgentTask: (projectId: number, id: number, refinement: string) =>
+    request<AgentTask>(`/projects/${projectId}/agent_tasks/${id}/redirect`, {
+      method: "POST",
+      body: JSON.stringify({ refinement }),
+    }),
+  listProposals: (projectId: number, filters: { agent_id?: string } = {}) => {
+    const params = new URLSearchParams();
+    if (filters.agent_id) params.set("agent_id", filters.agent_id);
+    const qs = params.toString();
+    return request<AgentTask[]>(
+      `/projects/${projectId}/proposals${qs ? `?${qs}` : ""}`,
+    );
+  },
+  recordProposalDecisions: (
+    projectId: number,
+    id: number,
+    decisions: Array<{ item_index: number; decision: string; edits?: unknown }>,
+  ) =>
+    request<AgentTask>(`/projects/${projectId}/proposals/${id}/decisions`, {
+      method: "POST",
+      body: JSON.stringify({ decisions }),
+    }),
+  applyProposal: (projectId: number, id: number) =>
+    request<AgentTask>(`/projects/${projectId}/proposals/${id}/apply`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
+  dismissProposal: (projectId: number, id: number, reason?: string) =>
+    request<AgentTask>(`/projects/${projectId}/proposals/${id}/dismiss`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    }),
+  listStreamEntries: (
+    projectId: number,
+    filters: { tab?: string; unread?: boolean } = {},
+  ) => {
+    const params = new URLSearchParams();
+    if (filters.tab) params.set("tab", filters.tab);
+    if (filters.unread) params.set("unread", "true");
+    const qs = params.toString();
+    return request<StreamEntry[]>(
+      `/projects/${projectId}/stream_entries${qs ? `?${qs}` : ""}`,
+    );
+  },
+  getStreamEntryCounts: (projectId: number) =>
+    request<{ activity: number; needs_you: number; blockers: number; total: number }>(
+      `/projects/${projectId}/stream_entries/counts`,
+    ),
+  markStreamEntriesRead: (projectId: number, ids: number[]) =>
+    request<{ marked: number }>(`/projects/${projectId}/stream_entries/read`, {
+      method: "POST",
+      body: JSON.stringify({ ids }),
+    }),
+  listFlows: (projectId: number) =>
+    request<Flow[]>(`/projects/${projectId}/flows`),
+  getAnalytics: (projectId: number) =>
+    request<{
+      period: string;
+      productivity: {
+        nodes_created: number;
+        nodes_accepted: number;
+        acceptance_rate: number;
+        cost_per_accepted_node_cents: number;
+        by_node_type: Record<string, number>;
+      };
+      spend: {
+        total_tokens: number;
+        total_cost_cents: number;
+        projected_cost_cents: number;
+        budget_limit_cents: number;
+        budget_used_percent: number;
+      };
+      spend_by_agent: Array<{ persona: string; tokens: number; cost_cents: number }>;
+      this_week: { cost_cents: number; vs_last_week_percent: number };
+      today: { cost_cents: number };
+    }>(`/projects/${projectId}/analytics`),
+  getSpendSummary: (projectId: number) =>
+    request<{
+      month_tokens: number;
+      month_cost_cents: number;
+      week_tokens: number;
+      week_cost_cents: number;
+      today_tokens: number;
+      today_cost_cents: number;
+      yesterday_tokens: number;
+      yesterday_cost_cents: number;
+      budget_cents: number | null;
+      budget_percent: number | null;
+    }>(`/projects/${projectId}/spend/summary`),
+  getSpendAnalytics: (projectId: number, period = "30d", from?: string, to?: string) => {
+    const params = new URLSearchParams({ period });
+    if (from) params.set("from", from);
+    if (to) params.set("to", to);
+    return request<{
+      summary: { month_tokens: number; month_cost_cents: number; budget_cents: number | null; budget_percent: number | null };
+      spend_by_agent: Array<{ persona: string; tokens: number; cost_cents: number; by_model: Array<{ model: string; tokens_in: number; tokens_out: number; cost_cents: number }> }>;
+      spend_by_model: Array<{ model: string; tokens_in: number; tokens_out: number; cost_cents: number }>;
+      daily_spend: Array<{ date: string; tokens: number; cost_cents: number }>;
+    }>(`/projects/${projectId}/spend/analytics?${params.toString()}`);
+  },
+  getSpendLog: (projectId: number, limit = 25, offset = 0) =>
+    request<{
+      entries: Array<{
+        id: number;
+        agent: string;
+        model: string;
+        tokens_in: number;
+        tokens_out: number;
+        cost_cents: number;
+        inserted_at: string;
+      }>;
+      total: number;
+      limit: number;
+      offset: number;
+    }>(`/projects/${projectId}/spend/log?limit=${limit}&offset=${offset}`),
   exportProject: (projectId: number) =>
     request<ProjectExport>(`/projects/${projectId}/exports`, {
       method: "POST",
@@ -264,6 +658,42 @@ export const api = {
     }>(
       `/projects/${projectId}/graph/trail?node_type=${nodeType}&node_id=${nodeId}${direction ? `&direction=${direction}` : ""}${depth ? `&depth=${depth}` : ""}`,
     ),
+  getWhy: (projectId: number, nodeType: string, nodeId: number, force = false) =>
+    request<WhyPayload>(
+      `/projects/${projectId}/graph/why?node_type=${nodeType}&node_id=${nodeId}${force ? "&force=true" : ""}`,
+    ),
+  getStreamTabCounts: (projectId: number) =>
+    request<StreamTabCounts>(`/projects/${projectId}/stream/tabs/counts`),
+  getStreamTab: (
+    projectId: number,
+    tab: StreamTab,
+    filters: { agent_id?: string; search?: string } = {},
+  ) => {
+    const params = new URLSearchParams();
+    if (filters.agent_id) params.set("agent_id", filters.agent_id);
+    if (filters.search) params.set("search", filters.search);
+    const qs = params.toString();
+    return request<StreamTabItem[]>(
+      `/projects/${projectId}/stream/tabs/${tab}${qs ? `?${qs}` : ""}`,
+    );
+  },
+  getOnboarding: (projectId: number) =>
+    request<OnboardingStatus>(`/projects/${projectId}/onboarding`),
+  startOnboarding: (projectId: number) =>
+    request<OnboardingStatus>(`/projects/${projectId}/onboarding/start`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
+  skipOnboarding: (projectId: number) =>
+    request<OnboardingStatus>(`/projects/${projectId}/onboarding/skip`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
+  resetOnboarding: (projectId: number) =>
+    request<OnboardingStatus>(`/projects/${projectId}/onboarding/reset`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
   // Decisions
   listDecisions: (projectId: number) =>
     request<Decision[]>(`/projects/${projectId}/decisions`),
@@ -418,6 +848,8 @@ export const api = {
     }),
   deleteBoardNode: (projectId: number, sessionId: number, nodeId: number) =>
     request<void>(`/projects/${projectId}/board_sessions/${sessionId}/nodes/${nodeId}`, { method: "DELETE" }),
+  listBoardSessionEvents: (projectId: number, sessionId: number) =>
+    request<BoardSessionEvent[]>(`/projects/${projectId}/board_sessions/${sessionId}/events`),
   promoteBoardNode: (projectId: number, sessionId: number, nodeId: number) =>
     request<{ board_node: BoardNode; promoted_node_type: string; promoted_node_id: number }>(
       `/projects/${projectId}/board_sessions/${sessionId}/nodes/${nodeId}/promote`,
@@ -446,8 +878,14 @@ export const api = {
     request<void>(`/projects/${projectId}/board_sessions/${sessionId}/edges/${edgeId}`, { method: "DELETE" }),
 
   // Artifacts
-  listArtifacts: (projectId: number) =>
-    request<Artifact[]>(`/projects/${projectId}/artifacts`),
+  listArtifacts: (projectId: number, opts?: { status?: string; artifact_type?: string; search?: string }) => {
+    const params = new URLSearchParams();
+    if (opts?.status) params.set("status", opts.status);
+    if (opts?.artifact_type) params.set("artifact_type", opts.artifact_type);
+    if (opts?.search) params.set("search", opts.search);
+    const qs = params.toString();
+    return request<Artifact[]>(`/projects/${projectId}/artifacts${qs ? `?${qs}` : ""}`);
+  },
   getArtifact: (projectId: number, artifactId: number) =>
     request<Artifact>(`/projects/${projectId}/artifacts/${artifactId}`),
   createArtifact: (projectId: number, payload: {
@@ -470,17 +908,84 @@ export const api = {
   // Simulations
   listSimulations: (projectId: number) =>
     request<Simulation[]>(`/projects/${projectId}/simulations`),
-  createSimulation: (projectId: number, metadata?: Record<string, unknown>) =>
+  createSimulation: (projectId: number, payload: {
+    title?: string;
+    scenario?: string;
+    archetypes?: SimArchetype[];
+    selected_node_ids?: Array<{ node_type: string; node_id: number }>;
+    population_size?: number;
+    max_ticks?: number;
+    comparison_mode?: boolean;
+    scenario_b?: string;
+  }) =>
     request<Simulation>(`/projects/${projectId}/simulations`, {
       method: "POST",
-      body: JSON.stringify({ metadata }),
+      body: JSON.stringify({ simulation: payload }),
     }),
   getSimulation: (projectId: number, simulationId: number) =>
     request<Simulation>(`/projects/${projectId}/simulations/${simulationId}`),
+  getSimulationArchetypes: (projectId: number) =>
+    request<SimArchetype[]>(`/projects/${projectId}/simulations/archetypes`),
+  getSimulationGraphNodes: (projectId: number) =>
+    request<SimGraphNode[]>(`/projects/${projectId}/simulations/graph_nodes`),
+  getSimulationEstimate: (projectId: number, params: { population_size: number; max_ticks: number; comparison_mode: boolean }) => {
+    const qs = new URLSearchParams({
+      population_size: String(params.population_size),
+      max_ticks: String(params.max_ticks),
+      comparison_mode: String(params.comparison_mode),
+    }).toString();
+    return request<SimEstimate>(`/projects/${projectId}/simulations/estimate?${qs}`);
+  },
   importSimulationResults: (projectId: number, simulationId: number) =>
     request<Simulation>(`/projects/${projectId}/simulations/${simulationId}/import`, {
       method: "POST",
     }),
+
+  getContradictionBadges: (projectId: number) =>
+    request<ContradictionBadge[]>(`/projects/${projectId}/contradictions/badges`),
+  updateMentionIntent: (
+    projectId: number,
+    mentionId: number,
+    intent: "request_task" | "share_context" | "request_input" | "notify",
+  ) =>
+    request<Mention>(`/projects/${projectId}/mentions/${mentionId}/intent`, {
+      method: "PATCH",
+      body: JSON.stringify({ intent }),
+    }),
+
+  // Cycle 2 simple user auth
+  devLogin: (payload: { email: string; display_name?: string }) =>
+    request<CurrentUser>("/user_auth/dev_login", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  currentUser: () => request<CurrentUser>("/user_auth/me"),
+  logoutUser: () =>
+    request<{ signed_out: boolean }>("/user_auth/logout", { method: "POST" }),
+  seedIdentity: (
+    nodes: { node_type: string; title: string; body?: string }[],
+  ) =>
+    request<{ seeded: number }>("/user_auth/identity_bootstrap", {
+      method: "POST",
+      body: JSON.stringify({ nodes }),
+    }),
+};
+
+export type ContradictionBadge = {
+  node_type: string;
+  node_id: number;
+  total: number;
+  high: number;
+  medium: number;
+  low: number;
+};
+
+export type CurrentUser = {
+  id: string;
+  email: string;
+  display_name: string | null;
+  avatar_url: string | null;
+  workspaces: { id: string; name: string; slug: string }[];
 };
 
 export type StreamItem = {

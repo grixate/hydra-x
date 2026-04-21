@@ -19,6 +19,8 @@ export type Project = {
   architect_agent?: AgentSummary | null;
   designer_agent?: AgentSummary | null;
   memory_agent?: AgentSummary | null;
+  onboarding_session_id?: number | null;
+  onboarding_conversation_id?: number | null;
   inserted_at?: string;
   updated_at?: string;
 };
@@ -44,8 +46,47 @@ export type Source = {
   metadata: Record<string, unknown>;
   source_chunk_count: number;
   chunks?: SourceChunk[] | null;
+  // Source-as-Data (Cycle 3)
+  promoted_to_graph?: boolean;
+  promoted_at?: string | null;
+  archived_at?: string | null;
+  // Enriched when returned from /library endpoints:
+  score?: number;
+  top_chunk?: { id: number; ordinal: number; excerpt: string } | null;
+  reference_count?: number;
+  referenced_by?: SourceReferenceSummary[];
   inserted_at?: string;
   updated_at?: string;
+};
+
+export type SourceReferenceRelationship =
+  | "extracted_from"
+  | "supports"
+  | "cites"
+  | "contradicts";
+
+export type SourceReference = {
+  id: number;
+  source_id: number;
+  relationship: SourceReferenceRelationship;
+  excerpt?: string | null;
+  confidence?: "high" | "medium" | "low" | null;
+  page_or_position?: string | null;
+  created_by: "agent" | "user" | "system";
+  created_at: string;
+  source?: Source | null;
+};
+
+export type SourceReferenceSummary = {
+  node_type: string;
+  count: number;
+  nodes: Array<{
+    node_id: number;
+    relationship: SourceReferenceRelationship;
+    excerpt?: string | null;
+    confidence?: "high" | "medium" | "low" | null;
+    created_at: string;
+  }>;
 };
 
 export type Citation = {
@@ -364,8 +405,22 @@ export type BoardSession = {
   draft_node_count: number;
   promoted_node_count: number;
   total_node_count: number;
+  node_types?: string[];
+  active_agents?: string[];
   inserted_at?: string;
   updated_at?: string;
+};
+
+export type BoardSessionEvent = {
+  id: number;
+  event_type: string;
+  actor_type: string;
+  actor_name: string;
+  target_type?: string;
+  target_id?: number;
+  target_title?: string;
+  metadata?: Record<string, unknown>;
+  inserted_at: string;
 };
 
 export type BoardNode = {
@@ -419,6 +474,13 @@ export type GraphDataNode = {
   upstream_count: number;
   downstream_count: number;
   flag_count: number;
+  // Source-as-Data (Cycle 3): count of Library sources referenced by this node.
+  source_reference_count?: number;
+  // Present only for source / signal nodes.
+  promoted_to_graph?: boolean | null;
+  // Work-in-progress styling (Graph-Opt §10): draft / forming / proposed.
+  wip?: boolean;
+  wip_reason?: "board_draft" | "agent_proposed" | "agent_forming" | "user_draft" | null;
   inserted_at?: string;
   updated_at?: string;
 };
@@ -445,6 +507,10 @@ export type GraphData = {
   edges: GraphDataEdge[];
   flags: GraphDataFlag[];
   density: Record<string, { count: number; outgoing: number; avg_outgoing: number }>;
+  meta?: {
+    include_sources?: "promoted" | "all";
+    total_source_references?: number;
+  };
 };
 
 export type ProjectExport = {
@@ -465,10 +531,210 @@ export type Simulation = {
   project_id: number;
   simulation_id: number | null;
   scenario_summary: string | null;
-  archetype_summary: string | null;
+  archetype_summary: SimArchetype[] | null;
   status: string;
   results_imported: boolean;
   metadata: Record<string, unknown>;
+  title?: string | null;
+  population_size?: number;
+  max_ticks?: number;
+  comparison_mode?: boolean;
   inserted_at?: string;
   updated_at?: string;
+};
+
+export type SimArchetype = {
+  source_insight_id?: number;
+  title: string;
+  description: string;
+  traits: Record<string, string>;
+};
+
+export type SimGraphNode = {
+  id: number;
+  node_type: "decision" | "requirement" | "design_node";
+  title: string;
+  status: string;
+  body: string;
+};
+
+export type SimEstimate = {
+  estimated_cost_cents: number;
+  estimated_duration_seconds: number;
+  population_size: number;
+  max_ticks: number;
+  comparison_mode: boolean;
+};
+
+export type AgentTaskState =
+  | "pending"
+  | "running"
+  | "paused"
+  | "waiting_for_input"
+  | "blocked"
+  | "proposing"
+  | "completed"
+  | "rejected"
+  | "cancelled"
+  | "failed";
+
+export type AgentTaskPriority = "low" | "normal" | "high" | "urgent";
+
+export type AgentTask = {
+  id: number;
+  project_id: number;
+  agent_id: string;
+  title: string;
+  description: string | null;
+  state: AgentTaskState;
+  state_reason: string | null;
+  priority: AgentTaskPriority;
+  progress_current: number | null;
+  progress_total: number | null;
+  progress_label: string | null;
+  context_type: string | null;
+  context_id: number | null;
+  parent_task_id: number | null;
+  assigned_by: "user" | "agent" | "system";
+  assigned_by_user_id: number | null;
+  assigned_by_agent_id: string | null;
+  proposal_payload: Record<string, unknown> | null;
+  result_payload: Record<string, unknown> | null;
+  error_payload: Record<string, unknown> | null;
+  started_at: string | null;
+  completed_at: string | null;
+  last_state_change_at: string;
+  lock_version: number;
+  inserted_at: string;
+  updated_at: string;
+};
+
+export type StreamEntry = {
+  id: number;
+  project_id: number;
+  tab: "activity" | "needs_you" | "blockers";
+  source_task_id: number | null;
+  source_agent_id: string | null;
+  title: string;
+  summary: string | null;
+  context_type: string | null;
+  context_id: number | null;
+  read_at: string | null;
+  actioned_at: string | null;
+  inserted_at: string;
+};
+
+export type ProposalDecision = "accepted" | "rejected" | "deferred" | "edited";
+
+export type ProposalItemDecision = {
+  item_index: number;
+  decision: ProposalDecision;
+  edits?: Record<string, unknown> | null;
+};
+
+export type OnboardingState = "pending" | "in_progress" | "completed" | "skipped";
+
+export type OnboardingStatus = {
+  project_id: number;
+  state: OnboardingState;
+  vision_set: boolean;
+  bets_count: number;
+  hint: string | null;
+  onboarded_at: string | null;
+  onboarding_skipped_at: string | null;
+};
+
+export type StreamTab = "activity" | "needs_you" | "blockers";
+
+export type StreamTabItem = {
+  id: string;
+  tab: StreamTab;
+  kind:
+    | "stream_entry"
+    | "proposing"
+    | "waiting_for_input"
+    | "blocked"
+    | "failed"
+    | "stalled_flow"
+    | "contradiction"
+    | "burst";
+  title: string;
+  summary: string | null;
+  actor_agent_id: string | null;
+  age_seconds: number;
+  source_task_id: number | null;
+  stream_entry_id: number | null;
+  flow_id: number | null;
+  context_type: string | null;
+  context_id: number | null;
+  state: string | null;
+  severity: number;
+  inserted_at: string | null;
+};
+
+export type StreamTabCounts = {
+  activity: number | null;
+  needs_you: number;
+  blockers: number;
+  default_tab: StreamTab;
+};
+
+export type WhyLineageCard = {
+  node_type: string;
+  node_id: number | null;
+  title: string;
+  body: string;
+  status: string | null;
+  is_vision: boolean;
+  is_target: boolean;
+  edge_kind: string | null;
+  stale?: boolean;
+  updated_at?: string | null;
+};
+
+export type WhyContradictionRef = {
+  id: number;
+  severity: "low" | "medium" | "high";
+  explanation: string | null;
+  status: string;
+  mode: string;
+};
+
+export type WhyPayload = {
+  lineage: WhyLineageCard[];
+  prose: string | null;
+  vision_present: boolean;
+  orphan: boolean;
+  cached: boolean;
+  error: string | null;
+  contradictions?: WhyContradictionRef[];
+};
+
+export type Flow = {
+  id: number;
+  project_id: number;
+  name: string;
+  originating_task_id: number | null;
+  status: "ongoing" | "complete" | "stalled" | "cancelled";
+  participating_agent_ids: string[];
+  task_ids: number[];
+  completed_at: string | null;
+  inserted_at: string;
+  updated_at: string;
+};
+
+export type MentionIntent = "request_task" | "share_context" | "request_input" | "notify";
+
+export type Mention = {
+  id: number;
+  project_id: number;
+  source_type: string;
+  source_task_id: number | null;
+  source_agent_id: string | null;
+  target_agent_id: string;
+  target_task_id: number | null;
+  intent: MentionIntent;
+  content: string;
+  metadata: { ambiguous_intent?: boolean; inferred?: MentionIntent } & Record<string, unknown>;
+  inserted_at: string;
 };

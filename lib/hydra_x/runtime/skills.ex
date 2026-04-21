@@ -115,13 +115,53 @@ defmodule HydraX.Runtime.Skills do
 
   def skill_prompt_context(agent_id), do: skill_prompt_context(agent_id, %{})
 
+  # Compact-mode threshold. When more than this many compatible skills are
+  # enabled, the system prompt switches to a one-line-per-skill index
+  # (slug + short description only, no extras). Agents can pull full bodies
+  # on demand via the `skill_load` tool. Override with `:compact_threshold`.
+  @default_compact_threshold 10
+
   def skill_prompt_context(agent_id, opts) do
     agent = Repo.get!(AgentProfile, agent_id)
     channel = Helpers.blank_to_nil(opts[:channel] || opts["channel"])
     tool_names = normalize_tool_names(opts[:tool_names] || opts["tool_names"] || [])
 
-    enabled_skills(agent_id)
-    |> Enum.filter(&skill_compatible?(&1, channel, tool_names))
+    threshold =
+      opts[:compact_threshold] || opts["compact_threshold"] || @default_compact_threshold
+
+    compatible =
+      enabled_skills(agent_id)
+      |> Enum.filter(&skill_compatible?(&1, channel, tool_names))
+
+    render_style =
+      cond do
+        opts[:style] == :compact or opts["style"] == "compact" -> :compact
+        opts[:style] == :full or opts["style"] == "full" -> :full
+        length(compatible) >= threshold -> :compact
+        true -> :full
+      end
+
+    render_skill_lines(compatible, agent, channel, tool_names, render_style)
+  end
+
+  defp render_skill_lines(skills, _agent, _channel, _tool_names, :compact) do
+    [
+      "(#{length(skills)} skills available — use the `skill_load` tool to read any skill's full body by slug)"
+      | Enum.map(skills, fn skill ->
+          description =
+            skill.description
+            |> Helpers.blank_to_nil()
+            |> Kernel.||("No description provided.")
+            |> String.slice(0, 100)
+
+          "- `#{skill.slug}`: #{description}"
+        end)
+    ]
+    |> Enum.join("\n")
+  end
+
+  defp render_skill_lines(skills, agent, channel, tool_names, :full) do
+    skills
     |> Enum.map(fn skill ->
       relative_path =
         get_in(skill.metadata || %{}, ["relative_path"]) ||
@@ -167,6 +207,25 @@ defmodule HydraX.Runtime.Skills do
       "- #{skill.name} (`#{skill.slug}`): #{description} [#{relative_path}]#{if(extras == "", do: "", else: " (#{extras})")}"
     end)
     |> Enum.join("\n")
+  end
+
+  @doc """
+  Load the full body content of a skill by slug for a given agent.
+  Returns `{:ok, %{slug, name, path, content}}` on success,
+  `{:error, :not_found}` if the slug is unknown for the agent,
+  or `{:error, reason}` if the underlying file read fails.
+  """
+  def load_skill_body(agent_id, slug) when is_integer(agent_id) and is_binary(slug) do
+    case Repo.get_by(SkillInstall, agent_id: agent_id, slug: slug) do
+      nil ->
+        {:error, :not_found}
+
+      %SkillInstall{path: path, name: name} ->
+        case File.read(path) do
+          {:ok, content} -> {:ok, %{slug: slug, name: name, path: path, content: content}}
+          {:error, reason} -> {:error, reason}
+        end
+    end
   end
 
   def skill_posture(%SkillInstall{} = skill) do

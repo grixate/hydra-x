@@ -21,6 +21,62 @@ defmodule HydraX.Runtime.Providers do
 
   def get_provider_config!(id), do: Repo.get!(ProviderConfig, id) |> decrypt_provider()
 
+  @doc """
+  Find an enabled provider config by its model name. Returns `nil` if no
+  enabled provider matches. Used by the `switch_model` tool to translate a
+  human-friendly model name into a provider id.
+  """
+  def find_provider_by_model(model) when is_binary(model) do
+    Repo.one(
+      from(p in ProviderConfig,
+        where: p.enabled == true and p.model == ^model,
+        limit: 1
+      )
+    )
+    |> decrypt_provider()
+  end
+
+  def find_provider_by_model(_), do: nil
+
+  @doc "List all enabled providers' models. Useful for agent-facing introspection."
+  def list_available_models do
+    Repo.all(from(p in ProviderConfig, where: p.enabled == true, select: p.model))
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
+  # Per-conversation provider override lookup. Reads
+  # `hx_conversations.metadata["model_override_provider_id"]` and returns
+  # the integer or nil.
+  defp conversation_model_override(nil), do: nil
+
+  defp conversation_model_override(conversation_id) when is_integer(conversation_id) do
+    case Repo.one(
+           from(c in HydraX.Runtime.Conversation,
+             where: c.id == ^conversation_id,
+             select: c.metadata
+           )
+         ) do
+      metadata when is_map(metadata) ->
+        case metadata["model_override_provider_id"] do
+          id when is_integer(id) -> id
+          id when is_binary(id) ->
+            case Integer.parse(id) do
+              {n, ""} -> n
+              _ -> nil
+            end
+
+          _ ->
+            nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp conversation_model_override(_), do: nil
+
   def enabled_provider do
     Repo.one(from(provider in ProviderConfig, where: provider.enabled == true, limit: 1))
     |> decrypt_provider()
@@ -49,8 +105,14 @@ defmodule HydraX.Runtime.Providers do
     override_id = get_in(profile, ["process_overrides", to_string(process_type)])
     default_id = profile["default_provider_id"]
 
+    # Per-conversation model override: takes precedence over agent-level
+    # overrides and defaults. Set by `switch_model` tool or explicit calls
+    # to `Runtime.Conversations.update_conversation_metadata/2`.
+    conversation_override_id = conversation_model_override(opts[:conversation_id])
+
     primary =
-      resolve_provider_id(override_id) ||
+      resolve_provider_id(conversation_override_id) ||
+        resolve_provider_id(override_id) ||
         resolve_provider_id(default_id) ||
         enabled_provider()
 

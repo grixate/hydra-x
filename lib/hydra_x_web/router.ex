@@ -22,8 +22,20 @@ defmodule HydraXWeb.Router do
     plug :accepts, ["json"]
   end
 
+  pipeline :api_with_session do
+    plug :fetch_session
+  end
+
+  pipeline :user_session do
+    plug :fetch_session
+    plug HydraXWeb.Plugs.UserAuth
+  end
+
   pipeline :api_authenticated do
     plug :fetch_session
+    # Stream A4.2 — same-origin check on state-changing requests.
+    # Mitigates CSRF without introducing a token dance on the JSON API.
+    plug HydraXWeb.Plugs.APIOriginCheck
     plug HydraXWeb.Plugs.OperatorAPIAuth
   end
 
@@ -85,6 +97,26 @@ defmodule HydraXWeb.Router do
     post "/slack/webhook", SlackWebhookController, :create
   end
 
+  # Auth API — no authentication required
+  scope "/api/v1", HydraXWeb do
+    pipe_through [:api, :api_with_session]
+
+    post "/auth/login", AuthAPIController, :login
+    get "/auth/status", AuthAPIController, :status
+  end
+
+  # Cycle 2 simple user auth (see HydraXWeb.Plugs.UserAuth). Separate
+  # from the operator-password `/auth/login` above. `:user_session` runs
+  # UserAuth so `me`/`identity_bootstrap` see `conn.assigns[:current_user]`.
+  scope "/api/v1", HydraXWeb do
+    pipe_through [:api, :user_session]
+
+    post "/user_auth/dev_login", UserAuthAPIController, :dev_login
+    get "/user_auth/me", UserAuthAPIController, :me
+    post "/user_auth/logout", UserAuthAPIController, :logout
+    post "/user_auth/identity_bootstrap", UserAuthAPIController, :identity_bootstrap
+  end
+
   scope "/api/v1", HydraXWeb do
     pipe_through [:api, :api_authenticated]
 
@@ -95,8 +127,36 @@ defmodule HydraXWeb.Router do
     delete "/projects/:id", ProjectAPIController, :delete
     get "/projects/:project_id/sources", SourceAPIController, :index
     post "/projects/:project_id/sources", SourceAPIController, :create
+    post "/projects/:project_id/sources/bulk", SourceAPIController, :bulk_create
+    post "/projects/:project_id/sources/process_pending", SourceAPIController, :process_pending
     get "/projects/:project_id/sources/:id", SourceAPIController, :show
     delete "/projects/:project_id/sources/:id", SourceAPIController, :delete
+    post "/projects/:project_id/sources/:id/analyze", SourceAPIController, :analyze
+
+    # Source-as-Data (Cycle 3) — Library API + promotion lifecycle
+    get "/projects/:project_id/library/search", LibraryAPIController, :search
+    get "/projects/:project_id/library/recent", LibraryAPIController, :recent
+    get "/projects/:project_id/library/unprocessed", LibraryAPIController, :unprocessed
+    get "/projects/:project_id/library/bucket/:bucket", LibraryAPIController, :by_bucket
+    get "/projects/:project_id/library/candidates", LibraryAPIController, :candidates
+    get "/projects/:project_id/library/sources/:id", LibraryAPIController, :show
+    get "/projects/:project_id/library/sources/:id/content", LibraryAPIController, :content
+    get "/projects/:project_id/library/sources/:id/referenced_by",
+        LibraryAPIController,
+        :referenced_by
+
+    post "/projects/:project_id/library/sources/:id/promote", LibraryAPIController, :promote
+    post "/projects/:project_id/library/sources/:id/demote", LibraryAPIController, :demote
+    post "/projects/:project_id/library/sources/:id/archive", LibraryAPIController, :archive
+    post "/projects/:project_id/library/sources/:id/unarchive", LibraryAPIController, :unarchive
+
+    # Source references — polymorphic node ↔ source link
+    get "/projects/:project_id/nodes/:node_type/:node_id/sources",
+        LibraryAPIController,
+        :for_node
+
+    post "/projects/:project_id/source_references", LibraryAPIController, :create_reference
+    delete "/projects/:project_id/source_references/:id", LibraryAPIController, :delete_reference
     get "/projects/:project_id/insights", InsightAPIController, :index
     post "/projects/:project_id/insights", InsightAPIController, :create
     get "/projects/:project_id/insights/:id", InsightAPIController, :show
@@ -116,6 +176,31 @@ defmodule HydraXWeb.Router do
          ProductConversationAPIController,
          :create_message
 
+    # Runtime-level controls: branching, steering, model switching.
+    get "/projects/:project_id/conversations/:id/branches",
+        RuntimeControlAPIController,
+        :list_branches
+
+    post "/projects/:project_id/conversations/:id/branches",
+         RuntimeControlAPIController,
+         :create_branch
+
+    post "/projects/:project_id/conversations/:id/branches/:branch_uuid/activate",
+         RuntimeControlAPIController,
+         :activate_branch
+
+    post "/projects/:project_id/conversations/:id/steer",
+         RuntimeControlAPIController,
+         :steer
+
+    get "/projects/:project_id/conversations/:id/models",
+        RuntimeControlAPIController,
+        :list_models
+
+    post "/projects/:project_id/conversations/:id/model",
+         RuntimeControlAPIController,
+         :switch_model
+
     post "/projects/:project_id/exports", ProjectExportAPIController, :create
 
     # Watch targets (Continuous Research)
@@ -126,18 +211,40 @@ defmodule HydraXWeb.Router do
     # Product simulations
     get "/projects/:project_id/simulations", SimulationAPIController, :index
     post "/projects/:project_id/simulations", SimulationAPIController, :create
+    get "/projects/:project_id/simulations/archetypes", SimulationAPIController, :archetypes
+    get "/projects/:project_id/simulations/graph_nodes", SimulationAPIController, :graph_nodes
+    get "/projects/:project_id/simulations/estimate", SimulationAPIController, :estimate
     get "/projects/:project_id/simulations/:id", SimulationAPIController, :show
     post "/projects/:project_id/simulations/:id/import", SimulationAPIController, :import_results
     post "/projects/:project_id/simulations/:id/approve", SimulationAPIController, :approve
     post "/projects/:project_id/simulations/:id/reject", SimulationAPIController, :reject
 
-    # Stream
+    # Stream (legacy — right-now/recently/emerging; sidebar + bell use it)
     get "/projects/:project_id/stream", StreamAPIController, :index
+
+    # Stream three-tab restructure
+    get "/projects/:project_id/stream/tabs/counts", StreamTabsAPIController, :counts
+    get "/projects/:project_id/stream/tabs/:tab", StreamTabsAPIController, :index
+
+    # Onboarding state machine
+    get "/projects/:project_id/onboarding", OnboardingAPIController, :show
+    post "/projects/:project_id/onboarding/start", OnboardingAPIController, :start
+    post "/projects/:project_id/onboarding/skip", OnboardingAPIController, :skip
+    post "/projects/:project_id/onboarding/reset", OnboardingAPIController, :reset
+
+    # Coherence contradictions (Cycle 2 hero)
+    get "/projects/:project_id/contradictions", ContradictionAPIController, :index
+    get "/projects/:project_id/contradictions/badges", ContradictionAPIController, :badges
+    get "/projects/:project_id/contradictions/:id", ContradictionAPIController, :show
+    post "/projects/:project_id/contradictions/:id/dismiss", ContradictionAPIController, :dismiss
+    post "/projects/:project_id/contradictions/:id/resolve", ContradictionAPIController, :resolve
+    post "/projects/:project_id/contradictions/:id/acknowledge", ContradictionAPIController, :acknowledge_tension
 
     # Graph visualization
     get "/projects/:project_id/graph/nodes", GraphNodesAPIController, :index
     get "/projects/:project_id/graph/data", GraphDataAPIController, :show
     get "/projects/:project_id/graph/trail", GraphTrailAPIController, :show
+    get "/projects/:project_id/graph/why", WhyAPIController, :show
     post "/projects/:project_id/graph/edges", GraphEdgeAPIController, :create
     get "/projects/:project_id/graph/edges/:id", GraphEdgeAPIController, :show
     delete "/projects/:project_id/graph/edges/:id", GraphEdgeAPIController, :delete
@@ -169,6 +276,29 @@ defmodule HydraXWeb.Router do
     get "/projects/:project_id/architecture_nodes/:id", ArchitectureNodeAPIController, :show
     patch "/projects/:project_id/architecture_nodes/:id", ArchitectureNodeAPIController, :update
     delete "/projects/:project_id/architecture_nodes/:id", ArchitectureNodeAPIController, :delete
+
+    # Agent tasks (Command Center)
+    get "/projects/:project_id/agent_tasks", AgentTaskAPIController, :index
+    get "/projects/:project_id/agent_tasks/:id", AgentTaskAPIController, :show
+    patch "/projects/:project_id/agent_tasks/:id/state", AgentTaskAPIController, :transition
+    post "/projects/:project_id/agent_tasks/:id/redirect", AgentTaskAPIController, :redirect
+    post "/projects/:project_id/agent_tasks/:id/defer", AgentTaskAPIController, :defer
+
+    # Proposals (Zone 3)
+    get "/projects/:project_id/proposals", ProposalAPIController, :index
+    post "/projects/:project_id/proposals/:id/decisions", ProposalAPIController, :record
+    post "/projects/:project_id/proposals/:id/apply", ProposalAPIController, :apply
+    post "/projects/:project_id/proposals/:id/dismiss", ProposalAPIController, :dismiss
+
+    # Stream entries (bell dropdown + persisted activity)
+    get "/projects/:project_id/stream_entries", StreamEntryAPIController, :index
+    get "/projects/:project_id/stream_entries/counts", StreamEntryAPIController, :counts
+    post "/projects/:project_id/stream_entries/read", StreamEntryAPIController, :mark_read
+
+    # Flows (Zone 4) + mentions
+    get "/projects/:project_id/flows", FlowAPIController, :index
+    post "/projects/:project_id/mentions", FlowAPIController, :create_mention
+    patch "/projects/:project_id/mentions/:id/intent", FlowAPIController, :update_intent
 
     # Tasks CRUD
     get "/projects/:project_id/tasks", TaskAPIController, :index
@@ -229,7 +359,15 @@ defmodule HydraXWeb.Router do
 
     # My Work
     get "/projects/:project_id/my-work", MyWorkAPIController, :index
+    get "/projects/:project_id/agents/statuses", AgentStatusAPIController, :index
+    get "/projects/:project_id/agents/:persona/feed", AgentFeedAPIController, :show
     get "/projects/:project_id/agents/:agent_slug/work", AgentWorkAPIController, :show
+
+    # Analytics & Spend
+    get "/projects/:project_id/analytics", AnalyticsAPIController, :index
+    get "/projects/:project_id/spend/summary", SpendAPIController, :summary
+    get "/projects/:project_id/spend/analytics", SpendAPIController, :analytics
+    get "/projects/:project_id/spend/log", SpendAPIController, :log
 
     # Board sessions
     get "/projects/:project_id/board_sessions", BoardSessionAPIController, :index
@@ -237,6 +375,9 @@ defmodule HydraXWeb.Router do
     get "/projects/:project_id/board_sessions/:id", BoardSessionAPIController, :show
     patch "/projects/:project_id/board_sessions/:id", BoardSessionAPIController, :update
     delete "/projects/:project_id/board_sessions/:id", BoardSessionAPIController, :delete
+
+    # Board session events
+    get "/projects/:project_id/board_sessions/:session_id/events", BoardSessionAPIController, :events
 
     # Board nodes (nested under sessions)
     get "/projects/:project_id/board_sessions/:session_id/nodes", BoardNodeAPIController, :index

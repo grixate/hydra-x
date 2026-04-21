@@ -4,15 +4,22 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AppLayout } from "@/components/layout/app-layout";
 import { LandingLayout } from "@/components/layout/landing-layout";
 import { StreamPage } from "@/pages/stream-page";
+import { CommandCenterPage } from "@/pages/command-center-page";
 import { GraphPage } from "@/pages/graph-page";
 import { BoardPage } from "@/pages/board-page";
 import { TasksPage } from "@/pages/project-tasks";
 import { TrailPage } from "@/pages/trail-page";
 import { SimulationPage } from "@/pages/simulation-page";
-import { AgentListPage } from "@/pages/agent-list-page";
-import { AgentChatPage } from "@/pages/agent-chat-page";
+import { SimulationConfigurePage } from "@/pages/simulation-configure-page";
+import { SimulationDetailPage } from "@/pages/simulation-detail-page";
+import { AgentPage } from "@/pages/agent-page";
 import { SettingsPage } from "@/pages/project-settings";
+import { BulkImportPage } from "@/pages/bulk-import-page";
+import { UsagePage } from "@/pages/usage-page";
+import { LibraryPage } from "@/pages/library-page";
+import { LibraryDetailPage } from "@/pages/library-detail-page";
 import { ProjectSelectPage } from "@/pages/project-select-page";
+import { AuthPage } from "@/pages/auth-page";
 import "@/index.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
@@ -23,15 +30,21 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
         <Route path="/projects/:projectId" element={<AppLayout />}>
           <Route index element={<StreamPage />} />
           <Route path="stream" element={<StreamPage />} />
+          <Route path="command-center" element={<CommandCenterPage />} />
           <Route path="graph" element={<GraphPage />} />
           <Route path="board" element={<BoardPage />} />
           <Route path="board/:sessionId" element={<BoardPage />} />
           <Route path="tasks" element={<TasksPage />} />
           <Route path="simulation" element={<SimulationPage />} />
-          <Route path="chat" element={<AgentListPage />} />
-          <Route path="chat/:persona" element={<AgentChatPage />} />
+          <Route path="simulation/new" element={<SimulationConfigurePage />} />
+          <Route path="simulation/:simId" element={<SimulationDetailPage />} />
+          <Route path="library" element={<LibraryPage />} />
+          <Route path="library/:artifactId" element={<LibraryDetailPage />} />
+          <Route path="usage" element={<UsagePage />} />
+          <Route path="agents/:persona" element={<AgentPage />} />
           <Route path="trail/:nodeType/:nodeId" element={<TrailPage />} />
           <Route path="settings" element={<SettingsPage />} />
+          <Route path="import" element={<BulkImportPage />} />
         </Route>
 
         {/* No project selected — show rail + landing */}
@@ -52,6 +65,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
             </div>
           }
         />
+
+        {/* Auth */}
+        <Route path="/auth" element={<AuthPage />} />
 
         {/* Legacy redirect */}
         <Route path="/product" element={<Navigate to="/" replace />} />

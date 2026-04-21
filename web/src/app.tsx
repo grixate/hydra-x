@@ -10,7 +10,7 @@ import { ProjectOverview } from "@/components/overview/project-overview";
 import { RequirementDialog } from "@/components/requirements/requirement-dialog";
 import { RequirementDetail } from "@/components/requirements/requirement-detail";
 import { RequirementList } from "@/components/requirements/requirement-list";
-import { CommandCenter } from "@/components/shared/command-center";
+import { CommandPalette } from "@/components/shared/command-palette";
 import { ExportDialog } from "@/components/shared/export-dialog";
 import { ProjectDialog } from "@/components/shared/project-dialog";
 import { ProjectSidebar } from "@/components/shared/project-sidebar";
@@ -876,19 +876,37 @@ export function App() {
                             </SelectContent>
                           </Select>
                         </div>
-                        {hasSourceFilters ? (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => {
-                              setSourceStatusFilter("all");
-                              setSourceTypeFilter("all");
-                            }}
-                          >
-                            <X className="h-4 w-4" />
-                            Clear filters
-                          </Button>
-                        ) : null}
+                        <div className="flex items-center gap-2">
+                          {activeProject &&
+                          sources.some((s) => s.processing_status !== "completed") ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={async () => {
+                                try {
+                                  await api.processAllPendingSources(activeProject.id);
+                                } catch {
+                                  /* noop */
+                                }
+                              }}
+                            >
+                              Process pending
+                            </Button>
+                          ) : null}
+                          {hasSourceFilters ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                setSourceStatusFilter("all");
+                                setSourceTypeFilter("all");
+                              }}
+                            >
+                              <X className="h-4 w-4" />
+                              Clear filters
+                            </Button>
+                          ) : null}
+                        </div>
                       </CardContent>
                     </Card>
                     <ProcessingProgress progress={selectedSourceId ? progressBySource[selectedSourceId] : null} />
@@ -898,6 +916,17 @@ export function App() {
                       relatedRequirements={relatedRequirementsForSource}
                       onSelectInsight={focusInsight}
                       onSelectRequirement={focusRequirement}
+                      onReanalyze={
+                        activeProject
+                          ? async (sourceId) => {
+                              try {
+                                await api.analyzeSource(activeProject.id, sourceId);
+                              } catch {
+                                /* noop — progress panel surfaces failures */
+                              }
+                            }
+                          : undefined
+                      }
                     />
                   </div>
                 </div>
@@ -1042,7 +1071,7 @@ export function App() {
         </section>
       </div>
 
-      <CommandCenter
+      <CommandPalette
         open={commandOpen}
         projects={projects}
         conversations={conversations}

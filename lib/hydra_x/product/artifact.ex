@@ -2,7 +2,7 @@ defmodule HydraX.Product.Artifact do
   use Ecto.Schema
   import Ecto.Changeset
 
-  @artifact_types ~w(competitive_analysis strategy_memo project_summary decision_log design_language custom)
+  @artifact_types ~w(competitive_analysis strategy_memo project_summary decision_log design_language spec campaign report reference brief custom)
   @statuses ~w(active archived)
 
   schema "artifacts" do

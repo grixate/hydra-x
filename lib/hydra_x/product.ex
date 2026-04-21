@@ -23,6 +23,7 @@ defmodule HydraX.Product do
   alias HydraX.Product.GraphFlag
   alias HydraX.Product.Insight
   alias HydraX.Product.InsightEvidence
+  alias HydraX.Product.Onboarding
   alias HydraX.Product.KnowledgeEntry
   alias HydraX.Product.Learning
   alias HydraX.Product.Project
@@ -48,19 +49,18 @@ defmodule HydraX.Product do
   @chunk_overlap_words 30
   @default_search_limit 5
   @source_search_tool HydraX.Product.Tools.SourceSearch
+  @library_query_tool HydraX.Product.Tools.LibraryQuery
   @insight_create_tool HydraX.Product.Tools.InsightCreate
   @insight_update_tool HydraX.Product.Tools.InsightUpdate
   @requirement_create_tool HydraX.Product.Tools.RequirementCreate
   @architecture_create_tool HydraX.Product.Tools.ArchitectureCreate
   @architecture_update_tool HydraX.Product.Tools.ArchitectureUpdate
   @feasibility_assess_tool HydraX.Product.Tools.FeasibilityAssess
-  @dependency_check_tool HydraX.Product.Tools.DependencyCheck
   @design_create_tool HydraX.Product.Tools.DesignCreate
   @design_update_tool HydraX.Product.Tools.DesignUpdate
   @pattern_check_tool HydraX.Product.Tools.PatternCheck
   @graph_query_tool HydraX.Product.Tools.GraphQuery
   @trail_trace_tool HydraX.Product.Tools.TrailTrace
-  @history_search_tool HydraX.Product.Tools.HistorySearch
   @decision_create_tool HydraX.Product.Tools.DecisionCreate
   @strategy_create_tool HydraX.Product.Tools.StrategyCreate
   @artifact_create_tool HydraX.Product.Tools.ArtifactCreate
@@ -68,8 +68,24 @@ defmodule HydraX.Product do
   @simulation_propose_tool HydraX.Product.Tools.SimulationPropose
   @knowledge_propose_tool HydraX.Product.Tools.KnowledgePropose
   @knowledge_update_tool HydraX.Product.Tools.KnowledgeUpdate
+  @project_context_update_tool HydraX.Product.Tools.ProjectContextUpdate
 
-  @agent_preloads [:researcher_agent, :strategist_agent, :architect_agent, :designer_agent, :memory_agent]
+  @code_read_tool HydraX.Product.Tools.CodeRead
+  @code_write_tool HydraX.Product.Tools.CodeWrite
+  @code_edit_tool HydraX.Product.Tools.CodeEdit
+  @code_list_tool HydraX.Product.Tools.CodeList
+  @code_search_tool HydraX.Product.Tools.CodeSearch
+  @code_exec_tool HydraX.Product.Tools.CodeExec
+  @code_test_tool HydraX.Product.Tools.CodeTest
+
+  @agent_preloads [
+    :researcher_agent,
+    :strategist_agent,
+    :architect_agent,
+    :designer_agent,
+    :memory_agent,
+    :coder_agent
+  ]
 
   def list_projects(opts \\ []) do
     status = Keyword.get(opts, :status)
@@ -146,8 +162,20 @@ defmodule HydraX.Product do
       end
     end)
     |> case do
-      {:ok, project} -> {:ok, project}
-      {:error, changeset} -> {:error, changeset}
+      {:ok, project} ->
+        # Run onboarding setup outside the transaction
+        onboarding =
+          case Onboarding.setup_project!(project) do
+            {:ok, %{session_id: sid, conversation_id: cid}} ->
+              %{onboarding_session_id: sid, onboarding_conversation_id: cid}
+            _ ->
+              %{}
+          end
+
+        {:ok, project, onboarding}
+
+      {:error, changeset} ->
+        {:error, changeset}
     end
   end
 
@@ -643,6 +671,7 @@ defmodule HydraX.Product do
     |> Decision.changeset(Map.put(attrs, "project_id", project_id))
     |> Repo.insert()
     |> maybe_broadcast_project_record("decision.created")
+    |> maybe_notify_coherence("decision", :created)
   end
 
   def update_decision(%Decision{} = decision, attrs) when is_map(attrs) do
@@ -697,6 +726,7 @@ defmodule HydraX.Product do
     |> Strategy.changeset(Map.put(attrs, "project_id", project_id))
     |> Repo.insert()
     |> maybe_broadcast_project_record("strategy.created")
+    |> maybe_notify_coherence("strategy", :created)
   end
 
   def update_strategy(%Strategy{} = strategy, attrs) when is_map(attrs) do
@@ -985,8 +1015,22 @@ defmodule HydraX.Product do
 
           schema ->
             try do
-              schema
-              |> where([r], r.project_id == ^project_id)
+              base =
+                schema
+                |> where([r], r.project_id == ^project_id)
+
+              # Source-as-Data: hide non-promoted sources from the default
+              # graph (spec §3). They remain queryable via the Library API.
+              base =
+                if type in ["source", "signal"] do
+                  base
+                  |> where([r], r.promoted_to_graph == true)
+                  |> where([r], is_nil(r.archived_at))
+                else
+                  base
+                end
+
+              base
               |> Repo.all()
               |> Enum.map(fn record ->
                 %{
@@ -1327,6 +1371,7 @@ defmodule HydraX.Product do
     |> maybe_filter_product_record_status(status)
     |> maybe_filter_title_body_search(search)
     |> order_by([s], desc: s.updated_at)
+    |> preload([:board_nodes])
     |> Repo.all()
   end
 
@@ -1394,6 +1439,42 @@ defmodule HydraX.Product do
     |> Repo.one!()
   end
 
+  # -------------------------------------------------------------------
+  # Board Session Events
+  # -------------------------------------------------------------------
+
+  alias HydraX.Product.BoardSessionEvent
+
+  def create_board_session_event(session_id, attrs) when is_map(attrs) do
+    %BoardSessionEvent{}
+    |> BoardSessionEvent.changeset(Map.put(attrs, "board_session_id", parse_integer(session_id)))
+    |> Repo.insert()
+    |> tap(fn
+      {:ok, event} ->
+        # Find project_id from session for broadcast
+        session = get_board_session!(event.board_session_id)
+        ProductPubSub.broadcast_project_event(
+          session.project_id,
+          "board_session_event.created",
+          %{event: event, board_session_id: event.board_session_id}
+        )
+
+      _ ->
+        :ok
+    end)
+  end
+
+  def list_board_session_events(session_id) do
+    BoardSessionEvent
+    |> where([e], e.board_session_id == ^parse_integer(session_id))
+    |> order_by([e], asc: e.inserted_at)
+    |> Repo.all()
+  end
+
+  # -------------------------------------------------------------------
+  # Board Nodes
+  # -------------------------------------------------------------------
+
   def create_board_node(session_id, attrs) when is_map(attrs) do
     session = get_board_session!(parse_integer(session_id))
     attrs = normalize_product_record_attrs(attrs)
@@ -1413,6 +1494,17 @@ defmodule HydraX.Product do
           %{board_node: node, board_session_id: session.id}
         )
 
+        # Record session event
+        event_type = if node.node_type == "source_ref", do: "source_uploaded", else: "node_created"
+        create_board_session_event(session.id, %{
+          "event_type" => event_type,
+          "actor_type" => if(node.created_by == "human", do: "human", else: "agent"),
+          "actor_name" => node.created_by || "unknown",
+          "target_type" => node.node_type,
+          "target_id" => node.id,
+          "target_title" => node.title
+        })
+
       _ ->
         :ok
     end)
@@ -1420,14 +1512,52 @@ defmodule HydraX.Product do
 
   def update_board_node(%BoardNode{} = node, attrs) when is_map(attrs) do
     attrs = normalize_product_record_attrs(attrs)
+    old_status = node.status
 
     node
     |> BoardNode.changeset(attrs)
     |> Repo.update()
+    |> tap(fn
+      {:ok, updated} ->
+        new_status = updated.status
+
+        if old_status != new_status do
+          event_type =
+            case new_status do
+              "promoted" -> "node_promoted"
+              "discarded" -> "node_discarded"
+              _ -> nil
+            end
+
+          if event_type do
+            create_board_session_event(updated.board_session_id, %{
+              "event_type" => event_type,
+              "actor_type" => "human",
+              "actor_name" => "operator",
+              "target_type" => updated.node_type,
+              "target_id" => updated.id,
+              "target_title" => updated.title
+            })
+          end
+        end
+
+      _ ->
+        :ok
+    end)
     |> maybe_broadcast_project_record("board_node.updated")
   end
 
   def delete_board_node(%BoardNode{} = node) do
+    # Record event before deletion
+    create_board_session_event(node.board_session_id, %{
+      "event_type" => "node_removed",
+      "actor_type" => "human",
+      "actor_name" => "operator",
+      "target_type" => node.node_type,
+      "target_id" => node.id,
+      "target_title" => node.title
+    })
+
     node
     |> Repo.delete()
     |> maybe_broadcast_project_record("board_node.deleted")
@@ -1563,6 +1693,8 @@ defmodule HydraX.Product do
           |> then(&("\n## Knowledge\n" <> &1))
       end
 
+    shared_memory_section = shared_memory_section(project)
+
     """
     Project: #{project.name}
     Persona: #{persona || "product"}
@@ -1574,7 +1706,44 @@ defmodule HydraX.Product do
     #{source_summary}
     #{constraint_section}
     #{knowledge_section}
+    #{shared_memory_section}
     """
+  end
+
+  # Inject the project owner's cross-project "You" scope — principles,
+  # identity, recurring constraints — so agents working on *this* project
+  # stay consistent with the user's broader worldview. Silent fallback to
+  # "" when the owner hasn't seeded a shared scope yet.
+  defp shared_memory_section(%Project{workspace_id: nil}), do: ""
+
+  defp shared_memory_section(%Project{} = project) do
+    with %HydraX.Accounts.Workspace{created_by_user_id: user_id} when not is_nil(user_id) <-
+           Repo.get(HydraX.Accounts.Workspace, project.workspace_id),
+         %HydraX.Accounts.SharedScope{} = scope <-
+           Repo.get_by(HydraX.Accounts.SharedScope, owner_user_id: user_id) do
+      nodes =
+        scope.id
+        |> HydraX.SharedMemory.list_nodes()
+        |> Enum.take(8)
+
+      case nodes do
+        [] ->
+          ""
+
+        items ->
+          lines =
+            Enum.map(items, fn n ->
+              body = n.body |> to_string() |> String.slice(0, 240)
+              "- [#{n.node_type}] #{n.title}: #{body}"
+            end)
+
+          "\n## Your identity & cross-project principles\n" <>
+            Enum.join(lines, "\n") <>
+            "\nHonor these when proposing work — flag a contradiction instead of silently violating them."
+      end
+    else
+      _ -> ""
+    end
   end
 
   defp persona_prompt_context(project_id, "strategist") do
@@ -1638,6 +1807,7 @@ defmodule HydraX.Product do
   defp tools_for_persona("researcher") do
     [
       @source_search_tool,
+      @library_query_tool,
       @insight_create_tool,
       @insight_update_tool,
       @artifact_create_tool,
@@ -1650,6 +1820,7 @@ defmodule HydraX.Product do
   defp tools_for_persona("strategist") do
     [
       @source_search_tool,
+      @library_query_tool,
       @insight_create_tool,
       @insight_update_tool,
       @requirement_create_tool,
@@ -1659,13 +1830,15 @@ defmodule HydraX.Product do
       @artifact_update_tool,
       @simulation_propose_tool,
       @knowledge_propose_tool,
-      @knowledge_update_tool
+      @knowledge_update_tool,
+      @project_context_update_tool
     ]
   end
 
   defp tools_for_persona("architect") do
     [
       @source_search_tool,
+      @library_query_tool,
       @architecture_create_tool,
       @architecture_update_tool,
       @feasibility_assess_tool,
@@ -1681,6 +1854,7 @@ defmodule HydraX.Product do
   defp tools_for_persona("designer") do
     [
       @source_search_tool,
+      @library_query_tool,
       @design_create_tool,
       @design_update_tool,
       @pattern_check_tool,
@@ -1692,9 +1866,22 @@ defmodule HydraX.Product do
     ]
   end
 
+  defp tools_for_persona("coder") do
+    [
+      @code_read_tool,
+      @code_write_tool,
+      @code_edit_tool,
+      @code_list_tool,
+      @code_search_tool,
+      @code_exec_tool,
+      @code_test_tool
+    ]
+  end
+
   defp tools_for_persona("memory_agent") do
     [
       @source_search_tool,
+      @library_query_tool,
       @graph_query_tool,
       @trail_trace_tool,
       @artifact_create_tool,
@@ -1725,17 +1912,30 @@ defmodule HydraX.Product do
     |> Repo.all()
   end
 
-  def get_product_conversation!(project_or_id, conversation_id) do
+  def get_product_conversation!(project_or_id, conversation_id, opts \\ []) do
     project_id = project_id(project_or_id)
 
-    ProductConversation
-    |> where(
-      [conversation],
-      conversation.project_id == ^project_id and
-        conversation.id == ^parse_integer(conversation_id)
-    )
-    |> preload(^product_conversation_preloads())
-    |> Repo.one!()
+    conversation =
+      ProductConversation
+      |> where(
+        [conversation],
+        conversation.project_id == ^project_id and
+          conversation.id == ^parse_integer(conversation_id)
+      )
+      |> preload([:project, :hydra_conversation])
+      |> Repo.one!()
+
+    limit = Keyword.get(opts, :limit)
+    before = Keyword.get(opts, :before)
+
+    if limit do
+      messages = list_product_messages(conversation.id, limit: limit, before: before)
+      %{conversation | product_messages: messages}
+    else
+      Repo.preload(conversation,
+        product_messages: from(m in ProductMessage, order_by: [asc: m.inserted_at])
+      )
+    end
   end
 
   def get_product_conversation!(conversation_id) do
@@ -2134,6 +2334,34 @@ defmodule HydraX.Product do
   defp maybe_add_reason(reasons, true, reason), do: reasons ++ [reason]
   defp maybe_add_reason(reasons, false, _reason), do: reasons
 
+  def list_product_messages(conversation_id, opts \\ []) do
+    limit = Keyword.get(opts, :limit, 30)
+    before = Keyword.get(opts, :before)
+
+    query =
+      ProductMessage
+      |> where([m], m.product_conversation_id == ^conversation_id)
+      |> order_by([m], desc: m.inserted_at)
+      |> limit(^limit)
+
+    query =
+      if before do
+        where(query, [m], m.id < ^parse_integer(before))
+      else
+        query
+      end
+
+    query
+    |> Repo.all()
+    |> Enum.reverse()
+  end
+
+  def count_product_messages(conversation_id) do
+    ProductMessage
+    |> where([m], m.product_conversation_id == ^conversation_id)
+    |> Repo.aggregate(:count)
+  end
+
   defp product_conversation_preloads do
     [
       :project,
@@ -2375,6 +2603,39 @@ defmodule HydraX.Product do
       |> case do
         {:ok, _evidence} -> :ok
         {:error, changeset} -> Repo.rollback(changeset)
+      end
+    end)
+
+    # Source-as-Data (spec §5): auto-populate source_references when an
+    # Insight is extracted from a source. One reference per unique source,
+    # `relationship: extracted_from`.
+    #
+    # Best-effort — a reference failure must not roll back the insight +
+    # evidence insert. Evidence already links back to the source via the
+    # chunk; the reference is a convenience for Node Detail.
+    chunks
+    |> Enum.map(& &1.source_id)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+    |> Enum.each(fn source_id ->
+      excerpt =
+        chunks
+        |> Enum.find(&(&1.source_id == source_id))
+        |> case do
+          %{content: c} when is_binary(c) -> String.slice(c, 0, 280)
+          _ -> nil
+        end
+
+      try do
+        HydraX.Product.Library.reference(insight.project_id, source_id, "insight", insight.id, %{
+          "relationship" => "extracted_from",
+          "excerpt" => excerpt,
+          "created_by" => "agent"
+        })
+      rescue
+        _ -> :ok
+      catch
+        _, _ -> :ok
       end
     end)
   end
@@ -2658,6 +2919,22 @@ defmodule HydraX.Product do
   end
 
   defp maybe_notify_propagation(result, _node_type, _change_type), do: result
+
+  @doc false
+  def maybe_notify_coherence({:ok, record} = result, node_type, change_type)
+      when change_type in [:created, :updated] do
+    if Map.has_key?(record, :project_id) do
+      HydraX.Coherence.DetectionService.on_project_node_change(
+        record.project_id,
+        to_string(node_type),
+        record.id
+      )
+    end
+
+    result
+  end
+
+  def maybe_notify_coherence(result, _node_type, _change_type), do: result
 
   defp unwrap_transaction({:ok, value}), do: {:ok, value}
   defp unwrap_transaction({:error, %Ecto.Changeset{} = changeset}), do: {:error, changeset}
@@ -3065,11 +3342,24 @@ defmodule HydraX.Product do
   def list_artifacts(project_or_id, opts \\ []) do
     project_id = project_id(project_or_id)
     status = Keyword.get(opts, :status)
+    artifact_type = Keyword.get(opts, :artifact_type)
+    search = Keyword.get(opts, :search)
 
     Artifact
     |> where([a], a.project_id == ^project_id)
     |> then(fn q ->
       if status, do: where(q, [a], a.status == ^status), else: q
+    end)
+    |> then(fn q ->
+      if artifact_type, do: where(q, [a], a.artifact_type == ^artifact_type), else: q
+    end)
+    |> then(fn q ->
+      if search && search != "" do
+        escaped = search |> String.replace("\\", "\\\\") |> String.replace("%", "\\%") |> String.replace("_", "\\_")
+        where(q, [a], ilike(a.title, ^"%#{escaped}%"))
+      else
+        q
+      end
     end)
     |> order_by([a], desc: a.updated_at)
     |> Repo.all()

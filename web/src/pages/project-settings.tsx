@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import type { WatchTarget, Constraint, Routine, KnowledgeEntry } from "@/types";
 import { Badge } from "@/components/ui/badge";
@@ -8,8 +8,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Plus, Trash2, Play } from "lucide-react";
+import { Plus, Trash2, Play, FolderUp, User } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { IdentityBootstrapDialog } from "@/components/onboarding/identity-bootstrap-dialog";
+import { showToast } from "@/components/ui/toast-notification";
 
 export function SettingsPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -18,13 +20,46 @@ export function SettingsPage() {
   return (
     <div className="space-y-8 p-6">
       <h1 className="text-xl font-semibold">Settings</h1>
+      <IdentitySection />
       <WatchTargetsSection projectId={pid} />
       <RoutinesSection projectId={pid} />
       <KnowledgeSection projectId={pid} />
+      <BulkImportSection projectId={pid} />
       <ConstraintsSection projectId={pid} />
     </div>
   );
 }
+
+function IdentitySection() {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Your identity & cross-project principles</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-sm text-muted-foreground">
+          Seed your "You" scope with principles, identity facts, and values. Every project you
+          start inherits them, so agents stay consistent with how you actually think.
+        </p>
+        <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
+          <User className="mr-1 h-3.5 w-3.5" />
+          Update identity
+        </Button>
+        <IdentityBootstrapDialog
+          open={open}
+          onClose={() => setOpen(false)}
+          onSeeded={(count) => {
+            if (count > 0) showToast(`Saved ${count} to your "You" scope.`);
+          }}
+        />
+      </CardContent>
+    </Card>
+  );
+}
+
+// Usage section moved to standalone /usage page
 
 /* ───────────── Watch Targets ───────────── */
 
@@ -510,6 +545,42 @@ function KnowledgeSection({ projectId }: { projectId: number }) {
             </Button>
           </div>
         ))}
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ───────────── Bulk Import ───────────── */
+
+function BulkImportSection({ projectId }: { projectId: number }) {
+  const navigate = useNavigate();
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-sm">Bulk import</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-sm text-muted-foreground leading-relaxed">
+          Import a large collection of documents to bootstrap your product graph.
+          Best for onboarding existing research, meeting notes, design docs, and prior knowledge.
+        </p>
+        <p className="text-sm text-muted-foreground leading-relaxed">
+          The Researcher agent will process files in batches, extract insights, and
+          cross-reference with existing graph knowledge. This may take several minutes
+          for large collections.
+        </p>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => navigate(`/projects/${projectId}/import`)}
+        >
+          <FolderUp className="mr-2 h-4 w-4" />
+          Import files
+        </Button>
+        <p className="text-xs text-muted-foreground">
+          Supported: PDF, DOCX, MD, TXT, CSV — Recommended: up to 500 files per import
+        </p>
       </CardContent>
     </Card>
   );

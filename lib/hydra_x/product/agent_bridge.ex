@@ -17,11 +17,11 @@ defmodule HydraX.Product.AgentBridge do
     Product.list_product_conversations(project_or_id, opts)
   end
 
-  def get_project_conversation!(project_or_id, conversation_id) do
+  def get_project_conversation!(project_or_id, conversation_id, opts \\ []) do
     product_conversation = Product.get_product_conversation!(project_or_id, conversation_id)
     hydra_conversation = Runtime.get_conversation!(product_conversation.hydra_conversation_id)
     sync_messages!(product_conversation, hydra_conversation)
-    Product.get_product_conversation!(project_or_id, conversation_id)
+    Product.get_product_conversation!(project_or_id, conversation_id, opts)
   end
 
   def ensure_project_conversation(project_or_id, persona, attrs \\ %{}) do
@@ -211,17 +211,58 @@ defmodule HydraX.Product.AgentBridge do
       {content, citations} =
         Product.parse_citations(product_conversation.project_id, turn.content)
 
-      %ProductMessage{}
-      |> ProductMessage.changeset(%{
-        "product_conversation_id" => product_conversation.id,
-        "hydra_turn_id" => turn.id,
-        "role" => turn.role,
-        "content" => content,
-        "citations" => citations,
-        "metadata" => turn.metadata || %{}
-      })
-      |> Repo.insert!()
+      message =
+        %ProductMessage{}
+        |> ProductMessage.changeset(%{
+          "product_conversation_id" => product_conversation.id,
+          "hydra_turn_id" => turn.id,
+          "role" => turn.role,
+          "content" => content,
+          "citations" => citations,
+          "metadata" => turn.metadata || %{}
+        })
+        |> Repo.insert!()
+
+      dispatch_mentions(product_conversation, message, turn.role, content)
+
+      message
     end)
+  end
+
+  defp dispatch_mentions(product_conversation, message, role, content) do
+    targets = HydraX.Product.Mentions.parse_agents(content)
+
+    if targets == [] do
+      :ok
+    else
+      {inferred_intent, confidence} = HydraX.Product.Mentions.infer_intent(content)
+
+      Enum.each(targets, fn agent_id ->
+        # Spec §8: low-confidence intent inferences should prompt the user
+        # rather than silently spawn a task. We emit the Mention with the
+        # safe `share_context` default plus `ambiguous_intent` metadata;
+        # the frontend disambiguation UI picks these up and asks.
+        {intent, metadata} =
+          case confidence do
+            :low -> {"share_context", %{"ambiguous_intent" => true, "inferred" => inferred_intent}}
+            _ -> {inferred_intent, %{"inferred_confidence" => to_string(confidence)}}
+          end
+
+        HydraX.Product.Mentions.create_mention(%{
+          project_id: product_conversation.project_id,
+          source_type: "chat_message",
+          source_message_id: message.id,
+          source_agent_id: if(role == "assistant", do: product_conversation.persona, else: nil),
+          source_user_id: nil,
+          target_agent_id: agent_id,
+          content: content,
+          intent: intent,
+          metadata: metadata
+        })
+      end)
+    end
+  rescue
+    _ -> :ok
   end
 
   defp existing_turn_ids(product_conversation_id) do
@@ -263,6 +304,9 @@ defmodule HydraX.Product.AgentBridge do
   defp agent_for_persona!(project, "memory_agent"),
     do: project.memory_agent || Runtime.get_agent!(project.memory_agent_id)
 
+  defp agent_for_persona!(project, "coder"),
+    do: project.coder_agent || Runtime.get_agent!(project.coder_agent_id)
+
   defp normalize_attrs(attrs) do
     attrs = HydraX.Runtime.Helpers.normalize_string_keys(attrs)
 
@@ -276,6 +320,7 @@ defmodule HydraX.Product.AgentBridge do
   defp normalize_persona(persona) when persona in ["architect", :architect], do: "architect"
   defp normalize_persona(persona) when persona in ["designer", :designer], do: "designer"
   defp normalize_persona(persona) when persona in ["memory_agent", :memory_agent], do: "memory_agent"
+  defp normalize_persona(persona) when persona in ["coder", :coder], do: "coder"
 
   defp default_title(project, persona) do
     "#{project.name} #{String.capitalize(persona)} conversation"

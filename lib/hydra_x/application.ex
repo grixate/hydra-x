@@ -17,6 +17,7 @@ defmodule HydraX.Application do
         {DNSCluster, query: Application.get_env(:hydra_x, :dns_cluster_query) || :ignore},
         {Registry, keys: :unique, name: HydraX.ProcessRegistry},
         {Registry, keys: :unique, name: HydraX.Product.InitiativeRegistry},
+        {Registry, keys: :duplicate, name: HydraX.Agent.HookRegistry},
         {Phoenix.PubSub, name: HydraX.PubSub},
         HydraXWeb.BoardPresence,
         {Task.Supervisor, name: HydraX.TaskSupervisor},
@@ -51,7 +52,11 @@ defmodule HydraX.Application do
 
   defp scheduler_children do
     if Application.get_env(:hydra_x, :scheduler_enabled, true) do
-      [HydraX.Scheduler]
+      [
+        HydraX.Scheduler,
+        HydraX.Product.CommandCenterJanitor,
+        HydraX.Product.ProgressThrottle
+      ]
     else
       []
     end

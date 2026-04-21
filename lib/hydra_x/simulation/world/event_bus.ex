@@ -42,5 +42,6 @@ defmodule HydraX.Simulation.World.EventBus do
     )
   end
 
-  defp topic(sim_id), do: "simulation:#{sim_id}"
+  @doc "Returns the PubSub topic for a simulation."
+  def topic(sim_id), do: "simulation:#{sim_id}"
 end

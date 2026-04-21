@@ -5,7 +5,6 @@ defmodule HydraX.Product.Tools.FeasibilityAssess do
 
   alias HydraX.Product.ArchitectureNode
   alias HydraX.Product.Graph
-  alias HydraX.Product.Insight
   alias HydraX.Product.Requirement
   alias HydraX.Product.RequirementInsight
   alias HydraX.Repo

@@ -20,7 +20,7 @@ defmodule HydraXWeb.GraphNodesAPIController do
           schema ->
             try do
               schema
-              |> Ecto.Query.where([r], r.project_id == ^project_id)
+              |> where([r], r.project_id == ^project_id)
               |> HydraX.Repo.all()
               |> Enum.map(fn record ->
                 %{

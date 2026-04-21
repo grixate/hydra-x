@@ -89,9 +89,10 @@ export function useBoardSession(projectId: number, sessionId: number) {
     channel.join().receive("ok", () => {});
 
     refs.push(
-      channel.on("board_node.created", ({ board_node }: { board_node: BoardNode }) => {
+      channel.on("board_node.created", (payload: { board_node?: BoardNode }) => {
+        const board_node = payload.board_node;
+        if (!board_node) return;
         setBoardNodes((prev) => {
-          // Avoid duplicates if we already added this node optimistically
           if (prev.some((n) => n.id === board_node.id)) return prev;
           return [...prev, board_node];
         });
@@ -111,7 +112,9 @@ export function useBoardSession(projectId: number, sessionId: number) {
     );
 
     refs.push(
-      channel.on("board_node.updated", ({ board_node }: { board_node: BoardNode }) => {
+      channel.on("board_node.updated", (payload: { board_node?: BoardNode }) => {
+        const board_node = payload.board_node;
+        if (!board_node) return;
         setBoardNodes((prev) => prev.map((n) => (n.id === board_node.id ? board_node : n)));
         setFlowNodes((prev) =>
           prev.map((n) =>
@@ -122,7 +125,9 @@ export function useBoardSession(projectId: number, sessionId: number) {
     );
 
     refs.push(
-      channel.on("board_node.promoted", ({ board_node }: { board_node: BoardNode }) => {
+      channel.on("board_node.promoted", (payload: { board_node?: BoardNode }) => {
+        const board_node = payload.board_node;
+        if (!board_node) return;
         setBoardNodes((prev) => prev.map((n) => (n.id === board_node.id ? board_node : n)));
         setFlowNodes((prev) =>
           prev.map((n) =>
@@ -184,13 +189,13 @@ export function useBoardSession(projectId: number, sessionId: number) {
     return () => { clearTimeout(moveTimerRef.current); };
   }, []);
 
-  // Handle React Flow node changes (includes drag)
+  // Handle React Flow node changes (includes drag and remove)
   const onNodesChange = useCallback(
     (changes: NodeChange[]) => {
       setFlowNodes((prev) => applyNodeChanges(changes, prev));
 
-      // Debounce position persistence for drag events
       for (const change of changes) {
+        // Persist position changes (drag)
         if (change.type === "position" && change.position && !change.dragging) {
           const nodeId = parseInt(change.id);
           const { x, y } = change.position;
@@ -200,9 +205,18 @@ export function useBoardSession(projectId: number, sessionId: number) {
             channelRef.current?.push("node_moved", { node_id: nodeId, x, y });
           }, 100);
         }
+
+        // Persist node removal (backspace/delete key)
+        if (change.type === "remove") {
+          const nodeId = parseInt(change.id);
+          if (!isNaN(nodeId)) {
+            setBoardNodes((prev) => prev.filter((n) => n.id !== nodeId));
+            api.deleteBoardNode(projectId, sessionId, nodeId).catch(() => {});
+          }
+        }
       }
     },
-    [],
+    [projectId, sessionId],
   );
 
   const onEdgesChange = useCallback(

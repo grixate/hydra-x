@@ -642,27 +642,32 @@ defmodule HydraX.Product.Initiative do
   defp execute_work_item(_project_id, _work), do: :ok
 
   defp execute_autonomous_work(project_id, persona, prompt) do
-    case AgentBridge.ensure_project_conversation(
-      project_id, persona, %{
-        "channel" => "autonomous",
-        "external_ref" => "initiative_#{persona}",
-        "title" => "#{String.capitalize(persona)} autonomous work",
-        "metadata" => %{"source" => "initiative_engine"}
-      }
-    ) do
-      {:ok, conversation} ->
-        case AgentBridge.submit_message(conversation, prompt, %{
-          "autonomous" => true,
-          "initiative_source" => true
-        }) do
-          {:ok, _result} -> :ok
-          {:error, reason} ->
-            Logger.warning("[Initiative] Failed to submit message for #{persona}: #{inspect(reason)}")
-        end
+    {:ok, conversation} =
+      AgentBridge.ensure_project_conversation(
+        project_id,
+        persona,
+        %{
+          "channel" => "autonomous",
+          "external_ref" => "initiative_#{persona}",
+          "title" => "#{String.capitalize(persona)} autonomous work",
+          "metadata" => %{"source" => "initiative_engine"}
+        }
+      )
 
-      {:error, reason} ->
-        Logger.warning("[Initiative] Failed to create conversation for #{persona}: #{inspect(reason)}")
-    end
+    {:ok, _result} =
+      AgentBridge.submit_message(conversation, prompt, %{
+        "autonomous" => true,
+        "initiative_source" => true
+      })
+
+    :ok
+  rescue
+    err ->
+      Logger.warning(
+        "[Initiative] autonomous work failed for #{persona}: #{inspect(err)}"
+      )
+
+      :error
   end
 
   # --- Helpers ---
