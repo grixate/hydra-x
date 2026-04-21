@@ -4,7 +4,7 @@ import { api } from "@/lib/api";
 import { AgentPageHeader } from "@/components/agent/agent-page-header";
 import { AgentConversationPane } from "@/components/agent/agent-conversation-pane";
 import { AgentWorkFeed } from "@/components/agent/agent-work-feed";
-import { ResizablePanes } from "@/components/board/resizable-panes";
+import { ResizableLayout } from "@/components/layout/resizable-layout";
 
 const AGENT_CONFIG: Record<string, { label: string; description: string; icon: string }> = {
   researcher: { label: "Researcher", description: "Pattern-finding and evidence-backed synthesis", icon: "🔬" },
@@ -67,9 +67,10 @@ export function AgentPage() {
         stats={stats}
       />
 
-      <ResizablePanes
+      <ResizableLayout
         storageKey={`agent-${persona}`}
         defaultSplit={0.55}
+        bindGlobalShortcut={false}
         left={<AgentConversationPane projectId={pid} persona={persona} />}
         right={<AgentWorkFeed projectId={pid} persona={persona} />}
       />

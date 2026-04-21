@@ -6,6 +6,7 @@ defmodule HydraX.Product.ContinuousResearch do
 
   import Ecto.Query
 
+  alias HydraX.Product.AgentRules
   alias HydraX.Product.WatchTarget
   alias HydraX.Repo
 
@@ -67,10 +68,67 @@ defmodule HydraX.Product.ContinuousResearch do
     {:ok, %{checked: length(targets), results: results}}
   end
 
-  def assess_relevance(_project_id, _finding_text) do
-    # Placeholder for LLM-based relevance assessment.
-    # Will use project strategy context when LLM integration is wired in.
-    {:relevant, "Relevance assessment pending LLM integration"}
+  def assess_relevance(project_id, finding_text) when is_binary(finding_text) do
+    index = AgentRules.rules_index(project_id, "continuous_research")
+
+    cond do
+      AgentRules.ignored?(index, finding_text) ->
+        {:irrelevant, "matched ignore_pattern rule"}
+
+      true ->
+        # Placeholder for LLM-based relevance assessment.
+        # Will use project strategy context when LLM integration is wired in.
+        {:relevant, "Relevance assessment pending LLM integration"}
+    end
+  end
+
+  def assess_relevance(_project_id, _finding_text), do: {:relevant, "no finding text"}
+
+  @doc """
+  Filter + prioritise a list of findings (maps with at minimum `:text` or
+  `"text"` plus optional `:category`/`"category"`) using the agent's
+  configured rules.
+
+  - `mute_category` removes findings whose category matches.
+  - `ignore_pattern` removes findings whose text matches any pattern.
+  - `prioritize_category` bubbles matching findings to the front, stable
+    otherwise.
+  """
+  def apply_rules(project_id, findings) when is_list(findings) do
+    index = AgentRules.rules_index(project_id, "continuous_research")
+
+    if map_size(index) == 0 do
+      findings
+    else
+      findings
+      |> Enum.reject(&rule_rejects?(index, &1))
+      |> stable_sort_prioritized(index)
+    end
+  end
+
+  defp rule_rejects?(index, finding) do
+    category = finding[:category] || finding["category"]
+    text = finding[:text] || finding["text"] || ""
+
+    (category && AgentRules.muted?(index, category)) ||
+      AgentRules.ignored?(index, text)
+  end
+
+  defp stable_sort_prioritized(findings, index) do
+    prioritized = Map.get(index, "prioritize_category", MapSet.new())
+    if MapSet.size(prioritized) == 0, do: findings, else: do_prioritize(findings, prioritized)
+  end
+
+  defp do_prioritize(findings, prioritized) do
+    {hi, lo} =
+      findings
+      |> Enum.with_index()
+      |> Enum.split_with(fn {f, _i} ->
+        cat = f[:category] || f["category"]
+        cat && MapSet.member?(prioritized, to_string(cat))
+      end)
+
+    (hi ++ lo) |> Enum.map(&elem(&1, 0))
   end
 
   # -------------------------------------------------------------------

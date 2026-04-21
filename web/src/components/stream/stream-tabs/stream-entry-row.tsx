@@ -14,7 +14,7 @@ import type { LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn, relativeLabel } from "@/lib/utils";
 import { AGENTS_BY_ID, agentLabel } from "@/components/command-center/agents";
-import { dispatchChatDockAgentSwitch } from "@/components/chat/chat-dock";
+import { dispatchAgentChatPaneSwitch } from "@/components/chat/agent-chat-pane";
 import type { StreamTabItem } from "@/types";
 
 const KIND_ICON: Record<StreamTabItem["kind"], { icon: LucideIcon; tone: string }> = {
@@ -50,10 +50,8 @@ export function StreamEntryRow({ item, onResolved }: { item: StreamTabItem; onRe
 
   function handlePrimary() {
     if (!projectId) return;
-    // Anything with a live task routes to Command Center, filtered to
-    // its agent so the user can act immediately.
     if (item.source_task_id && item.actor_agent_id) {
-      navigate(`/projects/${projectId}/command-center?agent=${item.actor_agent_id}`);
+      navigate(`/projects/${projectId}/agents/${item.actor_agent_id}`);
       return;
     }
     if (item.stream_entry_id) {
@@ -67,7 +65,7 @@ export function StreamEntryRow({ item, onResolved }: { item: StreamTabItem; onRe
 
   function handleTalk() {
     if (!item.actor_agent_id) return;
-    dispatchChatDockAgentSwitch(item.actor_agent_id);
+    dispatchAgentChatPaneSwitch(item.actor_agent_id);
   }
 
   return (

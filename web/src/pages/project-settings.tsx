@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
-import type { WatchTarget, Constraint, Routine, KnowledgeEntry } from "@/types";
+import type { Constraint, Routine, KnowledgeEntry } from "@/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -21,7 +21,6 @@ export function SettingsPage() {
     <div className="space-y-8 p-6">
       <h1 className="text-xl font-semibold">Settings</h1>
       <IdentitySection />
-      <WatchTargetsSection projectId={pid} />
       <RoutinesSection projectId={pid} />
       <KnowledgeSection projectId={pid} />
       <BulkImportSection projectId={pid} />
@@ -60,114 +59,7 @@ function IdentitySection() {
 }
 
 // Usage section moved to standalone /usage page
-
-/* ───────────── Watch Targets ───────────── */
-
-function WatchTargetsSection({ projectId }: { projectId: number }) {
-  const [targets, setTargets] = useState<WatchTarget[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [targetType, setTargetType] = useState("competitor");
-  const [value, setValue] = useState("");
-  const [adding, setAdding] = useState(false);
-
-  useEffect(() => {
-    if (isNaN(projectId)) return;
-    api
-      .listWatchTargets(projectId)
-      .then(setTargets)
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, [projectId]);
-
-  const handleAdd = useCallback(async () => {
-    const v = value.trim();
-    if (!v || adding) return;
-    setAdding(true);
-    try {
-      const wt = await api.createWatchTarget(projectId, {
-        target_type: targetType,
-        value: v,
-      });
-      setTargets((prev) => [...prev, wt]);
-      setValue("");
-    } catch {}
-    setAdding(false);
-  }, [projectId, targetType, value, adding]);
-
-  const handleDelete = useCallback(
-    async (id: number) => {
-      try {
-        await api.deleteWatchTarget(projectId, id);
-        setTargets((prev) => prev.filter((t) => t.id !== id));
-      } catch {}
-    },
-    [projectId],
-  );
-
-  if (loading) return <SettingSkeleton title="Watch Targets" />;
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-sm">Watch Targets</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="flex gap-2">
-          <Select value={targetType} onValueChange={setTargetType}>
-            <SelectTrigger className="w-36">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="competitor">Competitor</SelectItem>
-              <SelectItem value="keyword">Keyword</SelectItem>
-              <SelectItem value="url">URL</SelectItem>
-            </SelectContent>
-          </Select>
-          <Input
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            placeholder="e.g. acme.com or 'product-led growth'"
-            className="flex-1"
-            onKeyDown={(e) => {
-              if (e.key === "Enter") handleAdd();
-            }}
-          />
-          <Button size="sm" onClick={handleAdd} disabled={!value.trim() || adding}>
-            <Plus className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-
-        {targets.length === 0 && (
-          <p className="text-sm text-muted-foreground">
-            No watch targets yet. Add competitors, keywords, or URLs to monitor.
-          </p>
-        )}
-
-        {targets.map((wt) => (
-          <div
-            key={wt.id}
-            className="flex items-center justify-between rounded-lg border px-3 py-2"
-          >
-            <div className="flex items-center gap-2">
-              <Badge variant="secondary" className="text-[9px]">
-                {wt.target_type}
-              </Badge>
-              <span className="text-sm">{wt.value}</span>
-            </div>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7 text-muted-foreground hover:text-destructive"
-              onClick={() => handleDelete(wt.id)}
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </Button>
-          </div>
-        ))}
-      </CardContent>
-    </Card>
-  );
-}
+// Watch Targets section moved to /watch page
 
 /* ───────────── Routines ───────────── */
 

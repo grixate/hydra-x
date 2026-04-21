@@ -3,14 +3,12 @@ import { useParams, useSearchParams } from "react-router-dom";
 import { Zap } from "lucide-react";
 
 import { AgentStatusStrip } from "@/components/command-center/agent-status-strip";
-import { FlowsZone } from "@/components/command-center/flows-zone";
 import { ProposalQueue } from "@/components/command-center/proposal-queue";
 import { ProposalReviewPanel } from "@/components/command-center/proposal-review-panel";
 import { TaskFilters, type TaskFilter } from "@/components/command-center/task-filters";
 import { TaskList } from "@/components/command-center/task-list";
 import { AGENTS } from "@/components/command-center/agents";
 import { useAgentTasks } from "@/hooks/use-agent-tasks";
-import { useFlows } from "@/hooks/use-flows";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { AgentTask, AgentTaskState } from "@/types";
 
@@ -164,8 +162,6 @@ export function CommandCenterPage() {
     dismissProposal,
   } = useAgentTasks(pid);
 
-  const { flows } = useFlows(pid);
-
   const visibleTasks = useMemo(() => {
     const lower = search.trim().toLowerCase();
     return tasks.filter((task) => {
@@ -219,7 +215,7 @@ export function CommandCenterPage() {
             onSelectAgent={setAgentFilter}
           />
 
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+          <div className="grid gap-4 @container lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
             <div className="flex flex-col gap-3 rounded-lg border bg-card p-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <TaskFilters
@@ -261,7 +257,6 @@ export function CommandCenterPage() {
             </div>
           </div>
 
-          <FlowsZone flows={flows} onAgentClick={(id) => setAgentFilter(id)} />
         </>
       )}
 

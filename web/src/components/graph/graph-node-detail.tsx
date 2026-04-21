@@ -3,6 +3,7 @@ import type { GraphData, GraphDataNode, SourceReference } from "@/types";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { NODE_COLORS } from "./graph-constants";
 import { api } from "@/lib/api";
 import {
@@ -98,29 +99,22 @@ export function GraphNodeDetail({
   const flags = graphData.flags.filter((f) => f.node_id === node.id);
   const color = NODE_COLORS[node.node_type] ?? NODE_COLORS.default;
 
-  // Position: near the node, avoiding edges and chat card area (bottom-right)
   const popoverWidth = 320;
   const popoverHeight = 400;
-  const chatCardRight = 420 + 32; // card width + padding
 
-  let left: number | undefined;
-  let right: number | undefined;
-  let top: number;
-
-  if (nodeScreenPosition.x < containerWidth / 2) {
-    // Node is in left half → popover to the right
-    left = nodeScreenPosition.x + 160;
-  } else {
-    // Node is in right half → popover to the left
+  let left: number;
+  const rightHalf = nodeScreenPosition.x >= containerWidth / 2;
+  if (rightHalf) {
     left = nodeScreenPosition.x - popoverWidth - 20;
+  } else {
+    left = nodeScreenPosition.x + 160;
   }
+  left = Math.max(16, Math.min(left, containerWidth - popoverWidth - 16));
 
-  // Avoid overlapping chat card in bottom-right
-  if (left + popoverWidth > containerWidth - chatCardRight && nodeScreenPosition.y > containerHeight * 0.4) {
-    left = Math.max(16, containerWidth - chatCardRight - popoverWidth - 16);
-  }
-
-  top = Math.max(60, Math.min(nodeScreenPosition.y - 40, containerHeight - popoverHeight - 20));
+  const top = Math.max(
+    60,
+    Math.min(nodeScreenPosition.y - 40, containerHeight - popoverHeight - 20),
+  );
 
   // Group upstream by type
   const upByType = groupByType(upstreamNodes);
@@ -270,56 +264,75 @@ export function GraphNodeDetail({
 
         {/* Actions */}
         <div className="mt-3 flex flex-wrap gap-1.5">
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-7 text-[11px]"
-            onClick={() => onOpenTrail(node.node_type, node.node_id)}
-          >
-            <Route className="mr-1 h-3 w-3" />
-            Open trail
-          </Button>
+          <Tooltip delayDuration={200}>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-[11px]"
+                onClick={() => onOpenTrail(node.node_type, node.node_id)}
+              >
+                <Route className="mr-1 h-3 w-3" />
+                Open trail
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>See where this node came from and what it influenced</TooltipContent>
+          </Tooltip>
           {onShowLineage && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-7 text-[11px]"
-              onClick={() => onShowLineage(node.id)}
-              title="Enter Lineage View (keyboard: L)"
-            >
-              <GitBranch className="mr-1 h-3 w-3" />
-              Lineage
-            </Button>
+            <Tooltip delayDuration={200}>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-[11px]"
+                  onClick={() => onShowLineage(node.id)}
+                >
+                  <GitBranch className="mr-1 h-3 w-3" />
+                  Lineage
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Isolate this chain — hide unrelated nodes (L)</TooltipContent>
+            </Tooltip>
           )}
-          <Button
-            variant={isInChatContext ? "default" : "outline"}
-            size="sm"
-            className="h-7 text-[11px]"
-            onClick={() => onChatAbout(node)}
-          >
-            {isInChatContext ? (
-              <>
-                <Check className="mr-1 h-3 w-3" />
-                In chat context
-              </>
-            ) : (
-              <>
-                <MessageSquare className="mr-1 h-3 w-3" />
-                Chat about this
-              </>
-            )}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-7 text-[11px]"
-            onClick={() =>
-              onHighlightConnections([node.id, ...connectedIds])
-            }
-          >
-            <Focus className="mr-1 h-3 w-3" />
-            Focus
-          </Button>
+          <Tooltip delayDuration={200}>
+            <TooltipTrigger asChild>
+              <Button
+                variant={isInChatContext ? "default" : "outline"}
+                size="sm"
+                className="h-7 text-[11px]"
+                onClick={() => onChatAbout(node)}
+              >
+                {isInChatContext ? (
+                  <>
+                    <Check className="mr-1 h-3 w-3" />
+                    In chat context
+                  </>
+                ) : (
+                  <>
+                    <MessageSquare className="mr-1 h-3 w-3" />
+                    Chat about this
+                  </>
+                )}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Add this node to the agent's context for the next message</TooltipContent>
+          </Tooltip>
+          <Tooltip delayDuration={200}>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-[11px]"
+                onClick={() =>
+                  onHighlightConnections([node.id, ...connectedIds])
+                }
+              >
+                <Focus className="mr-1 h-3 w-3" />
+                Focus
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Highlight this node's immediate neighbors</TooltipContent>
+          </Tooltip>
         </div>
       </CardContent>
     </Card>

@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { PanelLeftOpen, PanelRightOpen } from "lucide-react";
 
-interface ResizablePanesProps {
+interface ResizableLayoutProps {
   left: React.ReactNode;
   right: React.ReactNode;
   defaultSplit?: number;
@@ -10,9 +10,11 @@ interface ResizablePanesProps {
   storageKey?: string;
   rightCollapsed?: boolean;
   onRightCollapsedChange?: (collapsed: boolean) => void;
+  collapsedRail?: React.ReactNode;
+  bindGlobalShortcut?: boolean;
 }
 
-export function ResizablePanes({
+export function ResizableLayout({
   left,
   right,
   defaultSplit = 0.55,
@@ -21,7 +23,9 @@ export function ResizablePanes({
   storageKey,
   rightCollapsed: controlledCollapsed,
   onRightCollapsedChange,
-}: ResizablePanesProps) {
+  collapsedRail,
+  bindGlobalShortcut = true,
+}: ResizableLayoutProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [split, setSplit] = useState(() => {
     if (storageKey) {
@@ -36,14 +40,24 @@ export function ResizablePanes({
   );
   const prevSplitRef = useRef(split);
 
-  // Sync controlled collapsed state
+  // When storageKey changes (e.g. surface navigation), re-read the persisted
+  // split for the new key so each surface keeps its own width.
+  useEffect(() => {
+    if (!storageKey) return;
+    const saved = localStorage.getItem(`pane-split-${storageKey}`);
+    const next = saved ? parseFloat(saved) : defaultSplit;
+    if (Number.isFinite(next)) {
+      setSplit(next);
+      prevSplitRef.current = next;
+    }
+  }, [storageKey, defaultSplit]);
+
   useEffect(() => {
     if (controlledCollapsed !== undefined) {
       setCollapsed(controlledCollapsed ? "right" : null);
     }
   }, [controlledCollapsed]);
 
-  // Persist split
   useEffect(() => {
     if (storageKey && !collapsed) {
       localStorage.setItem(`pane-split-${storageKey}`, String(split));
@@ -120,35 +134,33 @@ export function ResizablePanes({
     }
   }, [collapsed, split, defaultSplit, onRightCollapsedChange]);
 
-  // Keyboard: Cmd+\ to toggle right pane
   useEffect(() => {
+    if (!bindGlobalShortcut) return;
     function onKeyDown(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.key === "\\") {
-        e.preventDefault();
-        if (collapsed === "right") {
-          setCollapsed(null);
-          onRightCollapsedChange?.(false);
-          setSplit(prevSplitRef.current || defaultSplit);
-        } else {
-          prevSplitRef.current = split;
-          setCollapsed("right");
-          onRightCollapsedChange?.(true);
-        }
+      const isToggle = (e.metaKey || e.ctrlKey) && (e.key === "j" || e.key === "J");
+      if (!isToggle) return;
+      e.preventDefault();
+      if (collapsed === "right") {
+        setCollapsed(null);
+        onRightCollapsedChange?.(false);
+        setSplit(prevSplitRef.current || defaultSplit);
+      } else {
+        prevSplitRef.current = split;
+        setCollapsed("right");
+        onRightCollapsedChange?.(true);
       }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [collapsed, split, defaultSplit, onRightCollapsedChange]);
+  }, [collapsed, split, defaultSplit, onRightCollapsedChange, bindGlobalShortcut]);
 
   const leftWidth = collapsed === "left" ? "0%" : collapsed === "right" ? "100%" : `${split * 100}%`;
   const rightWidth = collapsed === "right" ? "0%" : collapsed === "left" ? "100%" : `${(1 - split) * 100}%`;
 
-  // Use CSS transition for smooth collapse/expand, disabled during drag
   const transitionStyle = dragging ? "none" : "width 0.2s ease-out";
 
   return (
     <div ref={containerRef} className="relative flex h-full min-h-0">
-      {/* Left pane */}
       <div
         className="h-full overflow-hidden"
         style={{ width: leftWidth, transition: transitionStyle }}
@@ -158,21 +170,17 @@ export function ResizablePanes({
         </div>
       </div>
 
-      {/* Divider — thin line with centered pill handle */}
       {!collapsed && (
         <div
           className="relative w-4 shrink-0 cursor-col-resize flex items-center justify-center group"
           onMouseDown={handleMouseDown}
           onDoubleClick={handleDoubleClick}
         >
-          {/* Thin vertical line */}
           <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-border" />
-          {/* Pill handle */}
           <div className="relative z-10 h-8 w-1.5 rounded-full bg-border group-hover:bg-muted-foreground/40 group-active:bg-muted-foreground/60 transition-colors" />
         </div>
       )}
 
-      {/* Right pane */}
       <div
         className="h-full overflow-hidden"
         style={{ width: rightWidth, transition: transitionStyle }}
@@ -182,22 +190,37 @@ export function ResizablePanes({
         </div>
       </div>
 
-      {/* Restore tab when right pane collapsed */}
       {collapsed === "right" && (
-        <button
-          className="absolute right-0 top-1/2 -translate-y-1/2 rounded-l-md border border-r-0 bg-background p-1.5 text-muted-foreground hover:text-foreground transition-colors"
-          onClick={() => {
-            setCollapsed(null);
-            onRightCollapsedChange?.(false);
-            setSplit(prevSplitRef.current || defaultSplit);
-          }}
-          title="Show responses (⌘\)"
-        >
-          <PanelLeftOpen className="h-4 w-4" />
-        </button>
+        collapsedRail ? (
+          <div className="absolute right-0 top-0 bottom-0">
+            <button
+              type="button"
+              className="h-full"
+              onClick={() => {
+                setCollapsed(null);
+                onRightCollapsedChange?.(false);
+                setSplit(prevSplitRef.current || defaultSplit);
+              }}
+              title="Expand (⌘J)"
+            >
+              {collapsedRail}
+            </button>
+          </div>
+        ) : (
+          <button
+            className="absolute right-0 top-1/2 -translate-y-1/2 rounded-l-md border border-r-0 bg-background p-1.5 text-muted-foreground hover:text-foreground transition-colors"
+            onClick={() => {
+              setCollapsed(null);
+              onRightCollapsedChange?.(false);
+              setSplit(prevSplitRef.current || defaultSplit);
+            }}
+            title="Show right pane (⌘J)"
+          >
+            <PanelLeftOpen className="h-4 w-4" />
+          </button>
+        )
       )}
 
-      {/* Restore tab when left pane collapsed */}
       {collapsed === "left" && (
         <button
           className="absolute left-0 top-1/2 -translate-y-1/2 rounded-r-md border border-l-0 bg-background p-1.5 text-muted-foreground hover:text-foreground transition-colors"
@@ -206,7 +229,7 @@ export function ResizablePanes({
             onRightCollapsedChange?.(false);
             setSplit(prevSplitRef.current || defaultSplit);
           }}
-          title="Show canvas"
+          title="Show left pane"
         >
           <PanelRightOpen className="h-4 w-4" />
         </button>

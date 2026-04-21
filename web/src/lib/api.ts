@@ -39,6 +39,8 @@ import type {
   SourceReferenceSummary,
   Strategy,
   WatchTarget,
+  AgentRule,
+  Contradiction,
 } from "@/types";
 
 const API_PREFIX = import.meta.env.VITE_API_BASE ?? "/api/v1";
@@ -748,6 +750,24 @@ export const api = {
   deleteWatchTarget: (projectId: number, id: number) =>
     request<void>(`/projects/${projectId}/watch_targets/${id}`, { method: "DELETE" }),
 
+  // Agent rules (Coherence / Continuous Research tuning)
+  listAgentRules: (projectId: number, agentId: "coherence" | "continuous_research") =>
+    request<AgentRule[]>(`/projects/${projectId}/agent_rules?agent_id=${agentId}`),
+  createAgentRule: (
+    projectId: number,
+    payload: {
+      agent_id: "coherence" | "continuous_research";
+      rule_type: "mute_category" | "ignore_pattern" | "prioritize_category";
+      value: string;
+    },
+  ) =>
+    request<AgentRule>(`/projects/${projectId}/agent_rules`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  deleteAgentRule: (projectId: number, id: number) =>
+    request<void>(`/projects/${projectId}/agent_rules/${id}`, { method: "DELETE" }),
+
   // Routines
   listRoutines: (projectId: number) =>
     request<Routine[]>(`/projects/${projectId}/routines`),
@@ -943,6 +963,27 @@ export const api = {
 
   getContradictionBadges: (projectId: number) =>
     request<ContradictionBadge[]>(`/projects/${projectId}/contradictions/badges`),
+  listContradictions: (
+    projectId: number,
+    opts: { status?: string; min_severity?: string; limit?: number } = {},
+  ) => {
+    const qs = new URLSearchParams();
+    if (opts.status) qs.set("status", opts.status);
+    if (opts.min_severity) qs.set("min_severity", opts.min_severity);
+    if (opts.limit) qs.set("limit", String(opts.limit));
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return request<Contradiction[]>(`/projects/${projectId}/contradictions${suffix}`);
+  },
+  dismissContradiction: (projectId: number, id: number, reason?: string) =>
+    request<Contradiction>(`/projects/${projectId}/contradictions/${id}/dismiss`, {
+      method: "POST",
+      body: JSON.stringify(reason ? { reason } : {}),
+    }),
+  resolveContradiction: (projectId: number, id: number, reason?: string) =>
+    request<Contradiction>(`/projects/${projectId}/contradictions/${id}/resolve`, {
+      method: "POST",
+      body: JSON.stringify(reason ? { reason } : {}),
+    }),
   updateMentionIntent: (
     projectId: number,
     mentionId: number,

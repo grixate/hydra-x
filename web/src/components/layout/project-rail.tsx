@@ -52,9 +52,7 @@ export function ProjectRail() {
           H
         </div>
 
-        <div className="h-px w-6 bg-border my-1" />
-
-        {/* Project icons */}
+        {/* Project icons + create */}
         <div className="flex flex-1 flex-col items-center gap-2 overflow-y-auto">
           {sorted.map((project) => (
             <Tooltip key={project.id}>
@@ -62,7 +60,7 @@ export function ProjectRail() {
                 <button
                   onClick={() => navigate(`/projects/${project.id}`)}
                   className={cn(
-                    "relative flex h-9 w-9 items-center justify-center rounded-lg text-xs font-semibold transition-colors",
+                    "relative flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-xs font-semibold transition-colors",
                     activeId === project.id
                       ? "bg-primary text-primary-foreground"
                       : "bg-muted text-muted-foreground hover:bg-accent hover:text-accent-foreground",
@@ -81,24 +79,24 @@ export function ProjectRail() {
               </TooltipContent>
             </Tooltip>
           ))}
+
+          {/* Create new project — sits with the list and scrolls with it */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={() => navigate("/projects/new")}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-dashed border-muted-foreground/30 text-muted-foreground transition-colors hover:border-muted-foreground/60 hover:text-foreground"
+              >
+                <Plus className="h-4 w-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right" sideOffset={8}>
+              New project
+            </TooltipContent>
+          </Tooltip>
         </div>
 
         <div className="h-px w-6 bg-border my-1" />
-
-        {/* Create new project */}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              onClick={() => navigate("/projects/new")}
-              className="flex h-9 w-9 items-center justify-center rounded-lg border border-dashed border-muted-foreground/30 text-muted-foreground transition-colors hover:border-muted-foreground/60 hover:text-foreground"
-            >
-              <Plus className="h-4 w-4" />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="right" sideOffset={8}>
-            New project
-          </TooltipContent>
-        </Tooltip>
 
         {/* User avatar */}
         <Tooltip>

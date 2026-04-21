@@ -19,6 +19,7 @@ defmodule HydraX.Coherence do
   alias HydraX.Repo
   alias HydraX.Coherence.Contradiction
   alias HydraX.Coherence.ContradictionEvent
+  alias HydraX.Product.AgentRules
   alias HydraX.Product.PubSub, as: ProductPubSub
 
   @visible_statuses ~w(open under_review acknowledged_tension)
@@ -116,6 +117,14 @@ defmodule HydraX.Coherence do
       |> Map.put_new("last_confirmed_at", DateTime.utc_now())
       |> normalise_pair_order()
 
+    if filtered_by_rules?(attrs) do
+      {:error, :filtered}
+    else
+      do_record_detection(attrs)
+    end
+  end
+
+  defp do_record_detection(attrs) do
     case find_existing_pair(attrs) do
       nil ->
         case %Contradiction{} |> Contradiction.changeset(attrs) |> Repo.insert() do
@@ -175,6 +184,22 @@ defmodule HydraX.Coherence do
         end
     end
   end
+
+  # Apply coherence agent rules at detection time. `mute_category` is
+  # matched against the contradiction's `mode`; `ignore_pattern` is
+  # matched (case-insensitive substring) against the explanation text.
+  defp filtered_by_rules?(%{"project_id" => project_id} = attrs) when not is_nil(project_id) do
+    index = AgentRules.rules_index(project_id, "coherence")
+
+    cond do
+      map_size(index) == 0 -> false
+      AgentRules.muted?(index, attrs["mode"]) -> true
+      AgentRules.ignored?(index, attrs["explanation"] || "") -> true
+      true -> false
+    end
+  end
+
+  defp filtered_by_rules?(_attrs), do: false
 
   defp find_existing_pair(attrs) do
     Contradiction

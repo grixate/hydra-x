@@ -210,7 +210,7 @@ export function GraphSpotlight({
               className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
             />
             <kbd className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground font-mono">
-              ⌘K
+              ⌘/
             </kbd>
           </div>
 
@@ -368,7 +368,7 @@ function SpotlightRow({
   );
 }
 
-/** Trigger button — shows ⌘K badge */
+/** Trigger button — shows ⌘/ badge */
 export function SpotlightTrigger({ onClick }: { onClick: () => void }) {
   return (
     <button
@@ -377,7 +377,7 @@ export function SpotlightTrigger({ onClick }: { onClick: () => void }) {
       className="pointer-events-auto flex items-center gap-1.5 rounded-lg border bg-background/80 backdrop-blur-sm px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted/80"
     >
       <Search className="h-3.5 w-3.5" />
-      <kbd className="rounded bg-muted px-1 py-0.5 text-[10px] font-mono">⌘K</kbd>
+      <kbd className="rounded bg-muted px-1 py-0.5 text-[10px] font-mono">⌘/</kbd>
     </button>
   );
 }

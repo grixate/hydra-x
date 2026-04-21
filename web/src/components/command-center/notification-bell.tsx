@@ -175,7 +175,7 @@ export function NotificationBell() {
 
   function openTask(task: AttentionTask) {
     if (!pid) return;
-    navigate(`/projects/${pid}/command-center?agent=${task.agent_id}`);
+    navigate(`/projects/${pid}/agents/${task.agent_id}`);
   }
 
   async function markAllRead() {
@@ -190,15 +190,14 @@ export function NotificationBell() {
   if (!pid) return null;
 
   return (
-    <div className="fixed right-4 top-3 z-40">
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            variant="outline"
-            size="icon"
-            className="relative h-8 w-8 bg-background/80 backdrop-blur"
-            aria-label="Notifications"
-          >
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="relative h-7 w-7"
+          aria-label="Notifications"
+        >
             <Bell className="h-4 w-4" />
             {attentionCount > 0 ? (
               <span
@@ -264,8 +263,7 @@ export function NotificationBell() {
               </DropdownMenuItem>
             ))
           )}
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </div>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

@@ -37,12 +37,11 @@ import {
 import { GraphSmartViewSelector } from "./graph-smart-view-selector";
 import { GraphFilterChips } from "./graph-filter-chips";
 import { GraphViewModeToolbar, type GraphViewMode } from "./graph-view-mode-toolbar";
-import { computeLineage, layoutLineageChain } from "./graph-lineage";
+import { computeLineage, layoutLineageChainFromAnchor } from "./graph-lineage";
 import { composeView, type ComposedViewSpec } from "./graph-composed-views";
 import { MOTION } from "./graph-constants";
 import { GraphSpotlight, SpotlightTrigger } from "./graph-spotlight";
-import { UniversalInput } from "@/components/chat/universal-input";
-import { GraphChatCard } from "@/components/chat/chat-card";
+import { GraphChatProvider, type GraphCommand } from "@/components/chat/graph-chat-context";
 import { GraphNodeDetail } from "./graph-node-detail";
 import { WhyPanel } from "./why-panel";
 import { ConnectionDialog } from "./connection-dialog";
@@ -50,7 +49,6 @@ import { EdgeDetailPopover } from "./edge-detail-popover";
 import { FILTERABLE_NODE_TYPES } from "./graph-constants";
 import { applySmartView, type SmartView } from "./graph-smart-views";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { ChatTab } from "@/components/chat/chat-tabs";
 
 const nodeTypes = {
   graphNode: GraphCustomNode,
@@ -122,14 +120,6 @@ function GraphViewInner({ projectId }: { projectId: number }) {
   const [searchQuery, setSearchQuery] = useState("");
   const [activeSmartView, setActiveSmartView] = useState<SmartView | null>(null);
 
-  // Chat — multi-tab state
-  const [chatTabs, setChatTabs] = useState<ChatTab[]>([
-    { agent: "memory", conversationId: null, messages: [], unread: 0 },
-  ]);
-  const [activeTabIndex, setActiveTabIndex] = useState(0);
-  const [chatCardOpen, setChatCardOpen] = useState(false);
-  const [chatCardMinimized, setChatCardMinimized] = useState(false);
-
   // Layout mode
   const [layoutMode, setLayoutMode] = useState<LayoutMode>("structured");
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
@@ -155,7 +145,7 @@ function GraphViewInner({ projectId }: { projectId: number }) {
   // Spotlight
   const [spotlightOpen, setSpotlightOpen] = useState(false);
 
-  // ⌘K spotlight + ?/W Why-button shortcut (Stream B2.5).
+  // ⌘/ spotlight + ?/W Why-button shortcut (Stream B2.5).
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       // Ignore shortcuts while user is typing in an input.
@@ -164,7 +154,7 @@ function GraphViewInner({ projectId }: { projectId: number }) {
         target &&
         (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
 
-      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+      if ((e.metaKey || e.ctrlKey) && e.key === "/") {
         e.preventDefault();
         setSpotlightOpen((prev) => !prev);
         return;
@@ -213,8 +203,6 @@ function GraphViewInner({ projectId }: { projectId: number }) {
     x: number;
     y: number;
   } | null>(null);
-
-  const activeTab = chatTabs[activeTabIndex];
 
   // --- DATA FETCH ---
   const refreshGraphData = useCallback(async () => {
@@ -296,8 +284,43 @@ function GraphViewInner({ projectId }: { projectId: number }) {
     if (lineageTargetId && graphData.nodes.some((n) => n.id === lineageTargetId)) {
       const lineage = computeLineage(graphData.nodes, graphData.edges, lineageTargetId);
       chainIds = lineage.chainIds;
-      overridePositions = layoutLineageChain(lineage);
-    } else if (composedSpec) {
+      // Anchor the chain at the target's current laid-out position so the
+      // click doesn't teleport it across the canvas.
+      setNodes((prev) => {
+        const anchorNode = prev.find((n) => n.id === lineageTargetId);
+        const anchor = anchorNode ? anchorNode.position : { x: 0, y: 0 };
+        const positions = layoutLineageChainFromAnchor(lineage, anchor);
+
+        return prev
+          .filter((n) => {
+            if (n.type === "groupNode" || n.type === "summaryNode") return true;
+            return lineage.chainIds.has(n.id);
+          })
+          .map((n) => {
+            if (n.type === "groupNode" || n.type === "summaryNode") return n;
+            const overridden = positions.get(n.id);
+            return {
+              ...n,
+              ...(overridden ? { position: overridden } : {}),
+              data: {
+                ...n.data,
+                highlighted: false,
+                dimmed: false,
+                multiSelected: chatContextIds.includes(n.id),
+                previewing: n.id === previewNodeId,
+                inLineage: true,
+              },
+              style: {
+                ...(n.style as object),
+                transition: `transform ${MOTION.RESTRUCTURE_MOVE_MS}ms ${MOTION.EASE_IN_OUT}, opacity 180ms ease`,
+              },
+            };
+          });
+      });
+      return;
+    }
+
+    if (composedSpec) {
       const view = composeView(graphData.nodes, graphData.edges, composedSpec);
       chainIds = view.relevantIds;
       overridePositions = view.positions;
@@ -340,6 +363,16 @@ function GraphViewInner({ projectId }: { projectId: number }) {
       }),
     );
   }, [highlightedIds, chatContextIds, previewNodeId, lineageTargetId, composedSpec, graphData]);
+
+  // When lineage exits, re-run layout so off-chain nodes come back.
+  useEffect(() => {
+    if (lineageTargetId === null && graphData) {
+      layoutAndSetNodes(graphData, visibleTypes, highlightedIds, chatContextIds).then(() => {
+        setTimeout(() => fitView({ padding: 0.1, duration: 300 }), 50);
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lineageTargetId]);
 
   async function layoutAndSetNodes(
     data: GraphData,
@@ -502,115 +535,6 @@ function GraphViewInner({ projectId }: { projectId: number }) {
     });
   }, []);
 
-  // --- CHAT (multi-tab) ---
-  const handleChatSubmit = useCallback(
-    async (message: string, _agent: string, contextNodeIds: string[]) => {
-      if (!chatCardOpen) setChatCardOpen(true);
-      if (chatCardMinimized) setChatCardMinimized(false);
-
-      const now = new Date().toISOString();
-      // Add user message to active tab
-      setChatTabs((prev) => {
-        const next = [...prev];
-        next[activeTabIndex] = {
-          ...next[activeTabIndex],
-          messages: [...next[activeTabIndex].messages, { role: "user", content: message, timestamp: now }],
-          unread: 0,
-        };
-        return next;
-      });
-
-      // Send to API
-      try {
-        let convId = chatTabs[activeTabIndex].conversationId;
-        if (!convId) {
-          const conv = await api.createConversation(projectId, {
-            persona: chatTabs[activeTabIndex].agent,
-            title: "Graph exploration",
-          });
-          convId = conv.id;
-          setChatTabs((prev) => {
-            const next = [...prev];
-            next[activeTabIndex] = { ...next[activeTabIndex], conversationId: convId };
-            return next;
-          });
-        }
-
-        const result = await api.sendConversationMessage(projectId, convId, message);
-        const responseNow = new Date().toISOString();
-
-        if (result.response?.content) {
-          setChatTabs((prev) => {
-            const next = [...prev];
-            const isMinimized = chatCardMinimized;
-            next[activeTabIndex] = {
-              ...next[activeTabIndex],
-              messages: [
-                ...next[activeTabIndex].messages,
-                { role: "assistant", content: result.response.content!, timestamp: responseNow },
-              ],
-              unread: isMinimized ? next[activeTabIndex].unread + 1 : 0,
-            };
-            return next;
-          });
-        }
-      } catch {
-        const errorNow = new Date().toISOString();
-        setChatTabs((prev) => {
-          const next = [...prev];
-          next[activeTabIndex] = {
-            ...next[activeTabIndex],
-            messages: [
-              ...next[activeTabIndex].messages,
-              { role: "assistant", content: "Sorry, something went wrong.", timestamp: errorNow },
-            ],
-          };
-          return next;
-        });
-      }
-    },
-    [chatCardOpen, chatCardMinimized, activeTabIndex, chatTabs, projectId],
-  );
-
-  const handleAgentChange = useCallback(
-    (agent: string) => {
-      // Find existing tab for this agent or create one
-      const existingIdx = chatTabs.findIndex((t) => t.agent === agent);
-      if (existingIdx >= 0) {
-        setActiveTabIndex(existingIdx);
-      } else {
-        setChatTabs((prev) => [
-          ...prev,
-          { agent, conversationId: null, messages: [], unread: 0 },
-        ]);
-        setActiveTabIndex(chatTabs.length);
-      }
-    },
-    [chatTabs],
-  );
-
-  const handleAddTab = useCallback(
-    (agent: string) => {
-      setChatTabs((prev) => [
-        ...prev,
-        { agent, conversationId: null, messages: [], unread: 0 },
-      ]);
-      setActiveTabIndex(chatTabs.length);
-      if (!chatCardOpen) setChatCardOpen(true);
-      if (chatCardMinimized) setChatCardMinimized(false);
-    },
-    [chatTabs.length, chatCardOpen, chatCardMinimized],
-  );
-
-  const handleTabClick = useCallback((index: number) => {
-    setActiveTabIndex(index);
-    setChatTabs((prev) => {
-      const next = [...prev];
-      next[index] = { ...next[index], unread: 0 };
-      return next;
-    });
-  }, []);
-
   const handleGraphCommand = useCallback(
     (command: {
       type: string;
@@ -749,6 +673,19 @@ function GraphViewInner({ projectId }: { projectId: number }) {
       ? graphData.nodes.find((n) => n.id === pendingConnection.target)
       : null;
 
+  const graphChatValue = useMemo(
+    () => ({
+      contextNodes: chatContextNodes,
+      previewNode,
+      onClearContext: () => setChatContextIds([]),
+      onRemoveContext: (id: string) =>
+        setChatContextIds((prev) => prev.filter((i) => i !== id)),
+      onGraphCommand: (cmd: GraphCommand) =>
+        handleGraphCommand(cmd as Parameters<typeof handleGraphCommand>[0]),
+    }),
+    [chatContextNodes, previewNode, handleGraphCommand],
+  );
+
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center">
@@ -759,6 +696,7 @@ function GraphViewInner({ projectId }: { projectId: number }) {
 
   return (
     <LayoutControlsContext.Provider value={{ toggleGroup }}>
+    <GraphChatProvider value={graphChatValue}>
     <div ref={containerRef} className="relative h-full w-full overflow-hidden">
       <ArrowMarker />
 
@@ -837,32 +775,9 @@ function GraphViewInner({ projectId }: { projectId: number }) {
         <SpotlightTrigger onClick={() => setSpotlightOpen(true)} />
       </div>
 
-      {/* Chat input — bottom center */}
-      <UniversalInput
-        surface="graph"
-        projectId={projectId}
-        onSubmit={handleChatSubmit}
-        currentAgent={activeTab?.agent ?? "memory"}
-        onAgentChange={handleAgentChange}
-        selectedNodes={chatContextNodes}
-        previewNode={previewNode}
-        onClearSelection={() => setChatContextIds([])}
-        onRemoveNode={(id) => setChatContextIds((prev) => prev.filter((i) => i !== id))}
-      />
-
-      {/* Chat card — bottom right */}
-      {chatCardOpen && (
-        <GraphChatCard
-          tabs={chatTabs}
-          activeIndex={activeTabIndex}
-          minimized={chatCardMinimized}
-          onTabClick={handleTabClick}
-          onAddTab={handleAddTab}
-          onMinimize={() => setChatCardMinimized((prev) => !prev)}
-          onClose={() => setChatCardOpen(false)}
-          onGraphCommand={handleGraphCommand}
-        />
-      )}
+      {/* Chat is now hosted by the shared AgentChatPane in app-layout.tsx.
+          Graph-specific context (selected nodes, preview, onGraphCommand) is
+          exposed via <GraphChatProvider> at the outer component. */}
 
       {/* Node detail — anchored near node */}
       {previewNode && graphData && (
@@ -958,6 +873,7 @@ function GraphViewInner({ projectId }: { projectId: number }) {
         onSearch={handleSearch}
       />
     </div>
+    </GraphChatProvider>
     </LayoutControlsContext.Provider>
   );
 }

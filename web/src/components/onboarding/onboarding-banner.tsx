@@ -5,7 +5,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useOnboarding } from "@/hooks/use-onboarding";
-import { dispatchChatDockAgentSwitch } from "@/components/chat/chat-dock";
+import { dispatchAgentChatPaneSwitch } from "@/components/chat/agent-chat-pane";
 import { IdentityBootstrapDialog } from "@/components/onboarding/identity-bootstrap-dialog";
 import { showToast } from "@/components/ui/toast-notification";
 
@@ -19,9 +19,6 @@ export function OnboardingBanner({ surface }: { surface: "stream" | "graph" }) {
   const [busy, setBusy] = useState(false);
   const [identityOpen, setIdentityOpen] = useState(false);
 
-  // ChatDock is disabled on Graph in Cycle 1 — if the user starts from a
-  // Graph banner, hop to Stream first so the dock is present when we
-  // dispatch the agent-switch event.
   async function startConversation() {
     setBusy(true);
     try {
@@ -29,7 +26,7 @@ export function OnboardingBanner({ surface }: { surface: "stream" | "graph" }) {
       if (surface === "graph" && pid) {
         navigate(`/projects/${pid}/stream`);
       }
-      setTimeout(() => dispatchChatDockAgentSwitch("strategist"), 50);
+      setTimeout(() => dispatchAgentChatPaneSwitch("strategist"), 50);
     } finally {
       setBusy(false);
     }

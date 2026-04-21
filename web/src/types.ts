@@ -310,6 +310,39 @@ export type WatchTarget = {
   updated_at?: string;
 };
 
+export type AgentRule = {
+  id: number;
+  project_id: number;
+  agent_id: "coherence" | "continuous_research";
+  rule_type: "mute_category" | "ignore_pattern" | "prioritize_category";
+  value: string;
+  inserted_at?: string;
+  updated_at?: string;
+};
+
+export type Contradiction = {
+  id: number;
+  project_id: number;
+  shared_scope_id?: number | null;
+  mode: string;
+  node_a: { type: string; id: number; scope?: string | null };
+  node_b: { type: string; id: number; scope?: string | null };
+  explanation: string | null;
+  severity: "low" | "medium" | "high";
+  severity_reason?: string | null;
+  confidence?: number | null;
+  context_diff?: Record<string, unknown> | null;
+  suggested_resolutions?: unknown;
+  status: string;
+  status_reason?: string | null;
+  resolved_at?: string | null;
+  detected_at?: string | null;
+  last_confirmed_at?: string | null;
+  dismissed_count?: number | null;
+  inserted_at?: string;
+  updated_at?: string;
+};
+
 export type Constraint = {
   id: number;
   project_id: number;

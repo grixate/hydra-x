@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useLocation, useParams } from "react-router-dom";
-import { MessageSquare, X } from "lucide-react";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
+import type { Channel } from "phoenix";
+import { X } from "lucide-react";
 
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import { subscribeToProject } from "@/lib/project-channel";
 import { getSocket } from "@/lib/socket";
-import type { Channel } from "phoenix";
 import type { AgentTask, ProductConversation, ProductMessage } from "@/types";
 
 import { AGENTS, UniversalInput } from "./universal-input";
@@ -16,9 +16,9 @@ import { SurfaceSuggestionChips, type ChipSurface } from "./surface-suggestion-c
 import { OnboardingChips } from "@/components/onboarding/onboarding-chips";
 import { useOnboarding } from "@/hooks/use-onboarding";
 import { ProposalCard } from "@/components/command-center/proposal-card";
-import { useNavigate } from "react-router-dom";
+import { useGraphChatContext } from "./graph-chat-context";
 
-type ChatSurface =
+export type ChatSurface =
   | "stream"
   | "command_center"
   | "library"
@@ -29,36 +29,23 @@ type ChatSurface =
 
 type SurfaceConfig = {
   defaultAgent: string;
-  defaultExpanded: boolean;
   chipSurface: ChipSurface | null;
 };
 
-const SURFACE_CONFIG: Record<ChatSurface, SurfaceConfig> = {
-  stream: { defaultAgent: "strategist", defaultExpanded: false, chipSurface: "stream" },
-  command_center: { defaultAgent: "strategist", defaultExpanded: false, chipSurface: "command_center" },
-  library: { defaultAgent: "researcher", defaultExpanded: true, chipSurface: "library" },
-  graph: { defaultAgent: "strategist", defaultExpanded: true, chipSurface: "graph" },
-  board: { defaultAgent: "strategist", defaultExpanded: true, chipSurface: "board" },
-  agent: { defaultAgent: "strategist", defaultExpanded: true, chipSurface: null },
-  other: { defaultAgent: "strategist", defaultExpanded: false, chipSurface: null },
-};
-
-// Surfaces where ChatDock is the canonical chat primitive for Cycle 1.
-// Graph and Board still own their own chat integration (Cycle-2 migration).
-const DOCK_ENABLED: Record<ChatSurface, boolean> = {
-  stream: true,
-  command_center: true,
-  library: true,
-  agent: true,
-  graph: false,
-  board: false,
-  other: false,
+export const SURFACE_CONFIG: Record<ChatSurface, SurfaceConfig> = {
+  stream: { defaultAgent: "strategist", chipSurface: "stream" },
+  command_center: { defaultAgent: "strategist", chipSurface: "command_center" },
+  library: { defaultAgent: "researcher", chipSurface: "library" },
+  graph: { defaultAgent: "strategist", chipSurface: "graph" },
+  board: { defaultAgent: "strategist", chipSurface: "board" },
+  agent: { defaultAgent: "strategist", chipSurface: null },
+  other: { defaultAgent: "strategist", chipSurface: null },
 };
 
 const EMBEDDED_CHAT_EXTERNAL_REF = "chat_dock";
-const AGENT_SWITCH_EVENT = "chat-dock:switch-agent";
+const AGENT_SWITCH_EVENT = "agent-chat-pane:switch-agent";
 
-function classifySurface(pathname: string, projectId: string | undefined): ChatSurface {
+export function classifySurface(pathname: string, projectId: string | undefined): ChatSurface {
   if (!projectId) return "other";
   const base = `/projects/${projectId}`;
   if (pathname === base || pathname === `${base}/stream`) return "stream";
@@ -70,112 +57,98 @@ function classifySurface(pathname: string, projectId: string | undefined): ChatS
   return "other";
 }
 
-function storageKey(projectId: string, surface: ChatSurface) {
-  return `chat-dock:${projectId}:${surface}`;
+function agentStorageKey(projectId: string, surface: ChatSurface) {
+  return `agent-chat-pane:${projectId}:${surface}`;
 }
 
-function loadPersisted(projectId: string | undefined, surface: ChatSurface) {
+function loadPersistedAgent(projectId: string | undefined, surface: ChatSurface): string | null {
   if (!projectId) return null;
   try {
-    const raw = localStorage.getItem(storageKey(projectId, surface));
+    const raw = localStorage.getItem(agentStorageKey(projectId, surface));
     if (!raw) return null;
-    return JSON.parse(raw) as { expanded?: boolean; agent?: string };
+    return JSON.parse(raw).agent ?? null;
   } catch {
     return null;
   }
 }
 
-function persistChatState(projectId: string, surface: ChatSurface, next: { expanded: boolean; agent: string }) {
+function persistAgent(projectId: string, surface: ChatSurface, agent: string) {
   try {
-    localStorage.setItem(storageKey(projectId, surface), JSON.stringify(next));
+    localStorage.setItem(agentStorageKey(projectId, surface), JSON.stringify({ agent }));
   } catch {
-    // ignore quota errors
+    /* ignore */
   }
 }
 
-/**
- * Fired by a system-message row ("view" link) to switch the dock's active
- * agent tab to the mentioned target. Listened to inside `ChatDockInner`.
- */
-export function dispatchChatDockAgentSwitch(agent: string) {
+export function dispatchAgentChatPaneSwitch(agent: string) {
   if (typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent(AGENT_SWITCH_EVENT, { detail: { agent } }));
 }
 
-export function ChatDock() {
+export function AgentChatPane() {
   const { projectId } = useParams<{ projectId: string }>();
   const location = useLocation();
-
   const surface = classifySurface(location.pathname, projectId);
-  const enabled = DOCK_ENABLED[surface];
   const config = SURFACE_CONFIG[surface];
 
-  const persisted = useMemo(
-    () => loadPersisted(projectId, surface),
-    // Re-read when surface or project changes.
+  const persistedAgent = useMemo(
+    () => loadPersistedAgent(projectId, surface),
     [projectId, surface],
   );
 
-  const [expanded, setExpanded] = useState<boolean>(persisted?.expanded ?? config.defaultExpanded);
-  const [agent, setAgent] = useState<string>(persisted?.agent ?? config.defaultAgent);
+  const [agent, setAgent] = useState<string>(persistedAgent ?? config.defaultAgent);
 
-  // Reset state when surface flips (config/defaults may differ).
   useEffect(() => {
-    setExpanded(persisted?.expanded ?? config.defaultExpanded);
-    setAgent(persisted?.agent ?? config.defaultAgent);
+    setAgent(persistedAgent ?? config.defaultAgent);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [surface, projectId]);
 
-  // Persist per-(project, surface).
   useEffect(() => {
     if (!projectId) return;
-    persistChatState(projectId, surface, { expanded, agent });
-  }, [projectId, surface, expanded, agent]);
+    persistAgent(projectId, surface, agent);
+  }, [projectId, surface, agent]);
 
-  // Global agent-switch bridge — system-message rows fire an event to swap
-  // the active agent without needing to route through a context.
   useEffect(() => {
     function handler(event: Event) {
       const detail = (event as CustomEvent).detail as { agent?: string } | undefined;
       if (!detail?.agent) return;
       setAgent(detail.agent);
-      setExpanded(true);
     }
     window.addEventListener(AGENT_SWITCH_EVENT, handler);
     return () => window.removeEventListener(AGENT_SWITCH_EVENT, handler);
   }, []);
 
-  if (!projectId || !enabled) return null;
+  if (!projectId) {
+    return (
+      <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
+        Select a project to chat.
+      </div>
+    );
+  }
 
   return (
-    <ChatDockInner
+    <AgentChatPaneInner
       projectId={Number(projectId)}
       surface={surface}
       agent={agent}
-      expanded={expanded}
       chipSurface={config.chipSurface}
       onAgentChange={setAgent}
-      onToggleExpanded={() => setExpanded((value) => !value)}
     />
   );
 }
 
-function ChatDockInner({
+function AgentChatPaneInner({
   projectId,
   surface,
   agent,
-  expanded,
   chipSurface,
   onAgentChange,
-  onToggleExpanded,
 }: {
   projectId: number;
   surface: ChatSurface;
   agent: string;
-  expanded: boolean;
   chipSurface: ChipSurface | null;
   onAgentChange: (agent: string) => void;
-  onToggleExpanded: () => void;
 }) {
   const [conversation, setConversation] = useState<ProductConversation | null>(null);
   const [messages, setMessages] = useState<ProductMessage[]>([]);
@@ -189,7 +162,6 @@ function ChatDockInner({
   const channelRef = useRef<Channel | null>(null);
 
   useEffect(() => {
-    if (!expanded) return;
     let cancelled = false;
     setLoading(true);
     setMessages([]);
@@ -217,18 +189,14 @@ function ChatDockInner({
     return () => {
       cancelled = true;
     };
-  }, [projectId, agent, expanded]);
+  }, [projectId, agent]);
 
   useEffect(() => {
     if (!conversation) return;
-
     const socket = getSocket();
     const ch = socket.channel(`product_conversation:${conversation.id}`, {});
     ch.join();
 
-    // Backend pushes `stream_chunk` / `stream_done`. Keep the old
-    // `message_delta` / `message_complete` listeners too so any migration
-    // still lands on the same handlers.
     const onDelta = ({ delta }: { delta?: string }) => {
       if (delta) setStreamDelta((prev) => prev + delta);
     };
@@ -236,9 +204,6 @@ function ChatDockInner({
     ch.on("message_delta", onDelta);
 
     const onDone = async () => {
-      // Re-fetch the conversation to get the newly-persisted assistant
-      // message (server pushes `stream_done` with the conversation
-      // refreshed but we already load via getConversation for safety).
       try {
         const refreshed = await api.getConversation(projectId, conversation.id, { limit: 40 });
         setConversation(refreshed);
@@ -258,11 +223,8 @@ function ChatDockInner({
       ch.leave();
       channelRef.current = null;
     };
-  }, [conversation?.id]);
+  }, [conversation?.id, projectId]);
 
-  // Cross-thread system-message surfacing. Broadcast from the backend when
-  // e.g. one agent @-mentions another with intent=request_task — the source
-  // thread gets a "view" reference, the target gets the task.
   useEffect(() => {
     if (!conversation) return;
     const unsub = subscribeToProject(projectId, [
@@ -286,14 +248,8 @@ function ChatDockInner({
     el.scrollTop = el.scrollHeight;
   }, [messages.length, streamDelta]);
 
-  // B1.4 — surface open proposals from the active agent inline in the
-  // thread so the user can review without bouncing to the Command Center.
   useEffect(() => {
-    if (!expanded) return;
     let cancelled = false;
-
-    // Reset stale proposals from the previous agent so the user doesn't
-    // briefly see another agent's cards while this agent's list loads.
     setPendingProposals([]);
 
     api
@@ -331,7 +287,7 @@ function ChatDockInner({
       cancelled = true;
       unsub();
     };
-  }, [projectId, agent, expanded]);
+  }, [projectId, agent]);
 
   const handleSubmit = useCallback(
     async (text: string, targetAgent: string) => {
@@ -388,43 +344,27 @@ function ChatDockInner({
   const agentMeta = AGENTS.find((a) => a.slug === agent) ?? AGENTS[0];
   const AgentIcon = agentMeta.icon;
 
-  if (!expanded) {
-    return (
-      <aside className="flex w-10 shrink-0 flex-col items-center gap-2 border-l bg-card/40 py-2">
-        <button
-          type="button"
-          onClick={onToggleExpanded}
-          aria-label="Expand chat"
-          className="flex h-8 w-8 items-center justify-center rounded-md border bg-background text-muted-foreground transition-colors hover:text-foreground"
-        >
-          <MessageSquare className="h-4 w-4" />
-        </button>
-        <div
-          className="flex h-8 w-8 items-center justify-center rounded-md border bg-background text-muted-foreground"
-          title={agentMeta.label}
-        >
-          <AgentIcon className="h-4 w-4" />
-        </div>
-      </aside>
-    );
-  }
-
   return (
-    <aside className="flex w-[420px] shrink-0 flex-col border-l bg-background">
+    <aside className="flex h-full min-w-0 flex-col bg-background">
       <div className="flex items-center justify-between border-b px-3 py-2">
-        <div className="flex items-center gap-2">
-          <AgentIcon className="h-4 w-4 text-muted-foreground" />
-          <span className="text-sm font-medium">{agentMeta.label}</span>
-          <span className="text-[10px] uppercase tracking-widest text-muted-foreground">
+        <div className="flex items-center gap-2 min-w-0">
+          <AgentIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <span className="text-sm font-medium truncate">{agentMeta.label}</span>
+          <span className="text-[10px] uppercase tracking-widest text-muted-foreground truncate">
             {surface.replace(/_/g, " ")}
           </span>
         </div>
         <Button
           variant="ghost"
           size="icon"
-          className="h-7 w-7"
-          onClick={onToggleExpanded}
+          className="h-7 w-7 shrink-0"
+          onClick={() => {
+            window.dispatchEvent(
+              new KeyboardEvent("keydown", { key: "j", metaKey: true, bubbles: true }),
+            );
+          }}
           aria-label="Collapse chat"
+          title="Collapse (⌘J)"
         >
           <X className="h-4 w-4" />
         </Button>
@@ -441,7 +381,7 @@ function ChatDockInner({
               task={task}
               projectId={projectId}
               onReview={() =>
-                navigate(`/projects/${projectId}/command-center?agent=${task.agent_id}`)
+                navigate(`/projects/${projectId}/agents/${task.agent_id}`)
               }
               onDismiss={async () => {
                 await api.dismissProposal(projectId, task.id).catch(() => {});
@@ -489,10 +429,11 @@ function ChatDockInner({
         )}
       </div>
 
-      <DockChipsAndInput
+      <PaneChipsAndInput
         projectId={projectId}
         agent={agent}
         chipSurface={chipSurface}
+        surface={surface}
         onAgentChange={onAgentChange}
         onSubmit={handleSubmit}
       />
@@ -500,21 +441,25 @@ function ChatDockInner({
   );
 }
 
-function DockChipsAndInput({
+function PaneChipsAndInput({
   projectId,
   agent,
   chipSurface,
+  surface,
   onAgentChange,
   onSubmit,
 }: {
   projectId: number;
   agent: string;
   chipSurface: ChipSurface | null;
+  surface: ChatSurface;
   onAgentChange: (agent: string) => void;
   onSubmit: (text: string, agent: string) => void;
 }) {
   const { status: onboarding, skip, refresh } = useOnboarding(projectId);
   const [prefill, setPrefill] = useState<string>("");
+  const graphCtx = useGraphChatContext();
+  const isGraph = surface === "graph" && !!graphCtx;
 
   const showOnboardingChips =
     onboarding?.state === "pending" && agent === "strategist";
@@ -540,7 +485,8 @@ function DockChipsAndInput({
         />
       ) : null}
       <UniversalInput
-        surface="stream"
+        surface={isGraph ? "graph" : "stream"}
+        projectId={projectId}
         initialValue={prefill}
         onSubmit={(text, ag) => {
           onSubmit(text, ag);
@@ -548,6 +494,10 @@ function DockChipsAndInput({
         }}
         currentAgent={agent}
         onAgentChange={onAgentChange}
+        selectedNodes={isGraph ? graphCtx!.contextNodes : undefined}
+        previewNode={isGraph ? graphCtx!.previewNode : undefined}
+        onClearSelection={isGraph ? graphCtx!.onClearContext : undefined}
+        onRemoveNode={isGraph ? graphCtx!.onRemoveContext : undefined}
       />
     </div>
   );
@@ -579,7 +529,7 @@ function ChatMessageRow({
               <button
                 type="button"
                 className="font-medium text-foreground underline decoration-dotted"
-                onClick={() => dispatchChatDockAgentSwitch(targetAgent)}
+                onClick={() => dispatchAgentChatPaneSwitch(targetAgent)}
               >
                 view
               </button>
@@ -600,3 +550,4 @@ function ChatMessageRow({
     />
   );
 }
+

@@ -210,6 +210,18 @@ a {
   .graph-wip::after {
     animation: none;
   }
+  .agent-working-border {
+    animation: none;
+  }
 }
 
+/* Animated border for the collapsed agent chat rail when any agent is
+   actively working. Subtle pulse of the border color. */
+@keyframes agent-border-pulse {
+  0%, 100% { border-color: var(--border); box-shadow: none; }
+  50% { border-color: var(--ring); box-shadow: 0 0 0 1px var(--ring); }
+}
 
+.agent-working-border {
+  animation: agent-border-pulse 2.4s ease-in-out infinite;
+}

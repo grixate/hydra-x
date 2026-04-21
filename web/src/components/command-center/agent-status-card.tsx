@@ -54,9 +54,9 @@ export function AgentStatusCard({
         selected && "border-primary bg-primary/5",
       )}
     >
-      <div className="flex w-full items-center gap-2">
-        <agent.icon className="h-4 w-4 shrink-0 text-muted-foreground" />
-        <span className="truncate text-sm font-medium">{agent.label}</span>
+      <div className="flex w-full flex-wrap items-start gap-x-2 gap-y-1">
+        <agent.icon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+        <span className="text-sm font-medium break-words">{agent.label}</span>
         {activeCount > 1 ? (
           <span className="ml-auto shrink-0 rounded-full bg-muted px-1.5 text-[10px] tabular-nums text-muted-foreground">
             {activeCount}

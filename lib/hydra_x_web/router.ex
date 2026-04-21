@@ -208,6 +208,11 @@ defmodule HydraXWeb.Router do
     post "/projects/:project_id/watch_targets", WatchTargetAPIController, :create
     delete "/projects/:project_id/watch_targets/:id", WatchTargetAPIController, :delete
 
+    # Agent rules (Coherence + Continuous Research tuning)
+    get "/projects/:project_id/agent_rules", AgentRuleAPIController, :index
+    post "/projects/:project_id/agent_rules", AgentRuleAPIController, :create
+    delete "/projects/:project_id/agent_rules/:id", AgentRuleAPIController, :delete
+
     # Product simulations
     get "/projects/:project_id/simulations", SimulationAPIController, :index
     post "/projects/:project_id/simulations", SimulationAPIController, :create

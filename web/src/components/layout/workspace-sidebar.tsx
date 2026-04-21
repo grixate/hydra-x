@@ -24,7 +24,8 @@ import {
   Radar,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { dispatchChatDockAgentSwitch } from "@/components/chat/chat-dock";
+import { dispatchAgentChatPaneSwitch } from "@/components/chat/agent-chat-pane";
+import { NotificationBell } from "@/components/command-center/notification-bell";
 
 type NavItem = {
   path: string;
@@ -137,14 +138,15 @@ export function WorkspaceSidebar() {
 
 
   return (
-    <aside className="flex w-[220px] shrink-0 flex-col border-r bg-sidebar-background">
+    <aside className="flex h-full min-h-0 w-[220px] shrink-0 flex-col border-r bg-sidebar-background">
       {/* Project name header */}
-      <div className="flex items-center gap-2 px-4 py-3">
+      <div className="flex items-center justify-between gap-2 px-4 py-3">
         <span className="text-sm font-semibold truncate">{projectName}</span>
+        <NotificationBell />
       </div>
       <Separator />
 
-      <ScrollArea className="flex-1">
+      <ScrollArea className="flex-1 min-h-0">
         {/* Surfaces */}
         <nav className="space-y-0.5 px-2 py-3">
           {surfaces.map((item) => (
@@ -190,8 +192,8 @@ export function WorkspaceSidebar() {
                 key={agent.persona}
                 agent={agent}
                 status={agentStatuses.get(agent.persona)}
-                onSingleClick={() => pid && navigate(`${base}/command-center?agent=${agent.persona}`)}
-                onDoubleClick={() => dispatchChatDockAgentSwitch(agent.persona)}
+                onSingleClick={() => pid && navigate(`${base}/agents/${agent.persona}`)}
+                onDoubleClick={() => dispatchAgentChatPaneSwitch(agent.persona)}
                 muted={false}
               />
             ))}
@@ -211,8 +213,15 @@ export function WorkspaceSidebar() {
                 key={agent.persona}
                 agent={agent}
                 status={agentStatuses.get(agent.persona)}
-                onSingleClick={() => pid && navigate(`${base}/command-center?agent=${agent.persona}`)}
-                onDoubleClick={() => dispatchChatDockAgentSwitch(agent.persona)}
+                onSingleClick={() =>
+                  pid &&
+                  navigate(
+                    agent.persona === "continuous_research"
+                      ? `${base}/watch`
+                      : `${base}/coherence`,
+                  )
+                }
+                onDoubleClick={() => dispatchAgentChatPaneSwitch(agent.persona)}
                 muted
               />
             ))}
@@ -324,13 +333,13 @@ function SidebarAgentRow({
     >
       <div className="flex items-center gap-2">
         <agent.icon className="h-4 w-4 shrink-0" />
-        <span className="truncate">{agent.label}</span>
-        <span className={cn("ml-auto h-1.5 w-1.5 shrink-0 rounded-full", STATE_DOT[state] ?? STATE_DOT.idle)} />
+        <span className="flex-1 truncate">{agent.label}</span>
         {ready > 0 ? (
           <Badge variant="default" className="h-4 min-w-4 px-1 text-[9px]">
             {ready}
           </Badge>
         ) : null}
+        <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", STATE_DOT[state] ?? STATE_DOT.idle)} />
       </div>
       {hasActivity ? (
         <span className="truncate pl-6 text-[10px] text-muted-foreground/70">{summary}</span>

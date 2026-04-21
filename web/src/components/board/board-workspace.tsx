@@ -4,11 +4,8 @@ import "@xyflow/react/dist/style.css";
 
 import { useBoardSession } from "@/hooks/use-board-session";
 import { useBoardPresence } from "@/hooks/use-board-presence";
-import { useChatState } from "@/hooks/use-chat-state";
 import { BoardSessionHeader } from "./board-session-header";
 import { BoardCanvasPane } from "./board-canvas-pane";
-import { BoardResponsePane } from "./board-response-pane";
-import { ResizablePanes } from "./resizable-panes";
 import { BatchPromoteDialog } from "./batch-promote-dialog";
 
 type BoardWorkspaceInnerProps = {
@@ -30,14 +27,11 @@ function BoardWorkspaceInner({ projectId, sessionId }: BoardWorkspaceInnerProps)
   } = useBoardSession(projectId, sessionId);
 
   const { participants, cursors, typingUsers, sendCursorPosition } = useBoardPresence(channel);
-  const chatState = useChatState(projectId, "strategist");
 
   const [showPromoteDialog, setShowPromoteDialog] = useState(false);
-  const [rightCollapsed, setRightCollapsed] = useState(false);
 
   const draftCount = boardNodes.filter((n) => n.status === "draft").length;
 
-  // Highlight a node on the canvas when clicked in the response pane
   const handleHighlightNode = useCallback((_nodeType: string, _nodeId: number) => {
     // TODO: implement canvas node highlighting + zoom-to-fit
   }, []);
@@ -61,39 +55,22 @@ function BoardWorkspaceInner({ projectId, sessionId }: BoardWorkspaceInnerProps)
         onPushToGraph={() => setShowPromoteDialog(true)}
       />
 
-      <ResizablePanes
-        storageKey={`board-${sessionId}`}
-        defaultSplit={0.55}
-        rightCollapsed={rightCollapsed}
-        onRightCollapsedChange={setRightCollapsed}
-        left={
-          <BoardCanvasPane
-            projectId={projectId}
-            sessionId={sessionId}
-            session={session}
-            flowNodes={flowNodes}
-            flowEdges={flowEdges}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            participants={participants}
-            cursors={cursors}
-            typingUsers={typingUsers}
-            sendCursorPosition={sendCursorPosition}
-            onChatSubmit={chatState.handleChatSubmit}
-            currentAgent={chatState.activeTab?.agent ?? "strategist"}
-            onAgentChange={chatState.handleAgentChange}
-          />
-        }
-        right={
-          <BoardResponsePane
-            projectId={projectId}
-            sessionId={sessionId}
-            chatState={chatState}
-            onCollapse={() => setRightCollapsed(true)}
-            onHighlightNode={handleHighlightNode}
-          />
-        }
-      />
+      <div className="flex-1 min-h-0">
+        <BoardCanvasPane
+          projectId={projectId}
+          sessionId={sessionId}
+          session={session}
+          flowNodes={flowNodes}
+          flowEdges={flowEdges}
+          onNodesChange={onNodesChange}
+          onEdgesChange={onEdgesChange}
+          participants={participants}
+          cursors={cursors}
+          typingUsers={typingUsers}
+          sendCursorPosition={sendCursorPosition}
+          onHighlightNode={handleHighlightNode}
+        />
+      </div>
 
       <BatchPromoteDialog
         projectId={projectId}

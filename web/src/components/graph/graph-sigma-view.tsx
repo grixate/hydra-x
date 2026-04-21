@@ -63,10 +63,10 @@ export function GraphSigmaView({ projectId }: { projectId: number }) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [overlayPos, setOverlayPos] = useState<{ x: number; y: number } | null>(null);
 
-  // ⌘K spotlight
+  // ⌘/ spotlight (⌘J reserved for global chat toggle)
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+      if ((e.metaKey || e.ctrlKey) && e.key === "/") {
         e.preventDefault();
         setSpotlightOpen((p) => !p);
       }

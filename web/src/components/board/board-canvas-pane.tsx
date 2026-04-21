@@ -14,7 +14,6 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 import type { BoardSession, BoardPresenceUser } from "@/types";
 import { api } from "@/lib/api";
-import { UniversalInput } from "@/components/chat/universal-input";
 import { BoardCustomNode } from "./board-custom-node";
 import { BoardCustomEdge } from "./board-custom-edge";
 import { BoardSourceNode } from "./board-source-node";
@@ -48,9 +47,7 @@ interface BoardCanvasPaneProps {
   cursors: Map<string, { x: number; y: number }>;
   typingUsers: Set<string>;
   sendCursorPosition: (pos: { x: number; y: number }) => void;
-  onChatSubmit: (message: string, agent: string, contextNodeIds: string[]) => Promise<void>;
-  currentAgent: string;
-  onAgentChange: (agent: string) => void;
+  onHighlightNode?: (nodeType: string, nodeId: number) => void;
 }
 
 export function BoardCanvasPane({
@@ -65,9 +62,6 @@ export function BoardCanvasPane({
   cursors,
   typingUsers,
   sendCursorPosition,
-  onChatSubmit,
-  currentAgent,
-  onAgentChange,
 }: BoardCanvasPaneProps) {
   const { screenToFlowPosition } = useReactFlow();
   const [dragOver, setDragOver] = useState(false);
@@ -252,14 +246,6 @@ export function BoardCanvasPane({
           </motion.div>
         )}
       </AnimatePresence>
-
-      <UniversalInput
-        surface="board"
-        projectId={projectId}
-        onSubmit={onChatSubmit}
-        currentAgent={currentAgent}
-        onAgentChange={onAgentChange}
-      />
 
       {/* Drop zone overlay */}
       {dragOver && (

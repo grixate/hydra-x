@@ -14,6 +14,8 @@ import { SimulationConfigurePage } from "@/pages/simulation-configure-page";
 import { SimulationDetailPage } from "@/pages/simulation-detail-page";
 import { AgentPage } from "@/pages/agent-page";
 import { SettingsPage } from "@/pages/project-settings";
+import { CoherencePage } from "@/pages/coherence-page";
+import { WatchPage } from "@/pages/watch-page";
 import { BulkImportPage } from "@/pages/bulk-import-page";
 import { UsagePage } from "@/pages/usage-page";
 import { LibraryPage } from "@/pages/library-page";
@@ -35,6 +37,8 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           <Route path="board" element={<BoardPage />} />
           <Route path="board/:sessionId" element={<BoardPage />} />
           <Route path="tasks" element={<TasksPage />} />
+          <Route path="coherence" element={<CoherencePage />} />
+          <Route path="watch" element={<WatchPage />} />
           <Route path="simulation" element={<SimulationPage />} />
           <Route path="simulation/new" element={<SimulationConfigurePage />} />
           <Route path="simulation/:simId" element={<SimulationDetailPage />} />

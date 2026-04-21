@@ -49,6 +49,52 @@ function removeById(list: AgentTask[], id: number): AgentTask[] {
 
 const TERMINAL_STATES = new Set(["completed", "rejected", "cancelled", "failed"]);
 
+function readSeedCount(): number {
+  if (typeof window === "undefined") return 0;
+  const n = Number(new URLSearchParams(window.location.search).get("seed"));
+  return Number.isFinite(n) && n > 0 ? Math.min(n, 50) : 0;
+}
+
+const SEED_AGENTS = [
+  "researcher",
+  "strategist",
+  "architect",
+  "designer",
+  "memory_agent",
+  "coherence",
+  "continuous_research",
+];
+const SEED_STATES: AgentTask["state"][] = [
+  "running",
+  "waiting_for_input",
+  "blocked",
+  "completed",
+  "running",
+];
+
+function generateSeedTasks(count: number): AgentTask[] {
+  const now = Date.now();
+  return Array.from({ length: count }, (_, i) => {
+    const agent = SEED_AGENTS[i % SEED_AGENTS.length];
+    const state = SEED_STATES[i % SEED_STATES.length];
+    const iso = new Date(now - i * 1000 * 60 * 7).toISOString();
+    return {
+      id: -(i + 1),
+      project_id: 0,
+      agent_id: agent,
+      title: `Seed task ${i + 1} — ${agent.replace(/_/g, " ")}`,
+      state,
+      prompt: "",
+      summary: `Fake dev task ${i + 1} for layout testing. State: ${state.replace(/_/g, " ")}.`,
+      refinement: null,
+      last_state_change_at: iso,
+      inserted_at: iso,
+      updated_at: iso,
+      proposal_items: [],
+    } as unknown as AgentTask;
+  });
+}
+
 export function useAgentTasks(projectId: number | null): UseAgentTasksResult {
   const [tasks, setTasks] = useState<AgentTask[]>([]);
   const [statuses, setStatuses] = useState<AgentStatusSnapshot[]>([]);
@@ -90,6 +136,8 @@ export function useAgentTasks(projectId: number | null): UseAgentTasksResult {
     setTasks([]);
     setStatuses([]);
 
+    const seedCount = readSeedCount();
+
     let cancelled = false;
     setLoading(true);
 
@@ -99,7 +147,8 @@ export function useAgentTasks(projectId: number | null): UseAgentTasksResult {
     ])
       .then(([taskList, statusList]) => {
         if (cancelled) return;
-        setTasks(taskList);
+        const merged = seedCount > 0 ? [...generateSeedTasks(seedCount), ...taskList] : taskList;
+        setTasks(merged);
         setStatuses(
           statusList.map((entry) => ({
             persona: entry.persona,

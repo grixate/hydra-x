@@ -70,16 +70,17 @@ function bfs(start: string, adj: Map<string, string[]>): Map<string, number> {
   return result;
 }
 
-// Arrange chain vertically: target centered at y=0, ancestors above at
-// negative y (by depth), descendants below at positive y.
-// Returns a map of id → { x, y } for all chain nodes. Target x=0; siblings
-// at the same depth spread horizontally.
-export function layoutLineageChain(
+// Arrange chain vertically: target stays at the given anchor, ancestors
+// above at negative y (by depth), descendants below at positive y. Returns
+// a map of id → { x, y } for all chain nodes. Siblings at the same depth
+// spread horizontally around the anchor x.
+export function layoutLineageChainFromAnchor(
   lineage: LineageResult,
+  anchor: { x: number; y: number },
   nodeSpacing = { x: 320, y: 170 },
 ): Map<string, { x: number; y: number }> {
   const positions = new Map<string, { x: number; y: number }>();
-  positions.set(lineage.targetId, { x: 0, y: 0 });
+  positions.set(lineage.targetId, { x: anchor.x, y: anchor.y });
 
   // Group by depth
   const byDepth = new Map<number, string[]>();
@@ -97,11 +98,19 @@ export function layoutLineageChain(
     const totalWidth = (count - 1) * nodeSpacing.x;
     ids.forEach((id, i) => {
       positions.set(id, {
-        x: i * nodeSpacing.x - totalWidth / 2,
-        y: depth * nodeSpacing.y,
+        x: anchor.x + i * nodeSpacing.x - totalWidth / 2,
+        y: anchor.y + depth * nodeSpacing.y,
       });
     });
   }
 
   return positions;
+}
+
+// Backwards-compatible wrapper: anchor at origin.
+export function layoutLineageChain(
+  lineage: LineageResult,
+  nodeSpacing = { x: 320, y: 170 },
+): Map<string, { x: number; y: number }> {
+  return layoutLineageChainFromAnchor(lineage, { x: 0, y: 0 }, nodeSpacing);
 }
