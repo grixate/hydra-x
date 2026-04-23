@@ -35,6 +35,9 @@ function getSuggestions(nodes: GraphDataNode[], defaults?: string[]): string[] {
   ];
 }
 
+// Row is flex-wrap; when the pane is too narrow, overflowing chips wrap to
+// row 2 (and beyond) which is clipped by max-height. Only fully-fitting chips
+// on row 1 remain visible — no JS measurement needed.
 export function ChatSuggestions({
   selectedNodes,
   onSelect,
@@ -43,17 +46,19 @@ export function ChatSuggestions({
   const suggestions = getSuggestions(selectedNodes, defaultSuggestions);
 
   return (
-    <div className="flex gap-1.5 overflow-x-auto px-4 py-2">
-      {suggestions.map((s) => (
-        <button
-          key={s}
-          type="button"
-          onClick={() => onSelect(s)}
-          className="shrink-0 rounded-full border bg-background/80 px-3 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-        >
-          {s}
-        </button>
-      ))}
+    <div className="max-h-[34px] overflow-hidden">
+      <div className="flex flex-wrap gap-1 px-3 py-2">
+        {suggestions.map((s) => (
+          <button
+            key={s}
+            type="button"
+            onClick={() => onSelect(s)}
+            className="shrink-0 rounded-full border bg-background/80 px-2.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            {s}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

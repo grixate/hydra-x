@@ -62,6 +62,10 @@ interface UniversalInputProps {
   onClearSelection?: () => void;
   onRemoveNode?: (nodeId: string) => void;
   initialValue?: string;
+  // When true, render flush inside a container (e.g. the chat pane) — no
+  // floating position, no shadow, no rounded card chrome. The parent owns
+  // the outer border/separator.
+  docked?: boolean;
 }
 
 export function UniversalInput({
@@ -75,6 +79,7 @@ export function UniversalInput({
   onClearSelection,
   onRemoveNode,
   initialValue,
+  docked = false,
 }: UniversalInputProps) {
   const defaults = SURFACE_DEFAULTS[surface];
   const agent = currentAgent ?? defaults.agent;
@@ -143,9 +148,16 @@ export function UniversalInput({
   // Show surface-specific suggestions when no context, or context-based when nodes selected
   const showSuggestions = !hasText;
 
+  const outerClass = docked
+    ? "px-3 py-3"
+    : "absolute bottom-6 left-1/2 z-10 w-full max-w-2xl -translate-x-1/2 px-4";
+  const innerClass = docked
+    ? "rounded-2xl border bg-background overflow-hidden transition-colors focus-within:border-foreground/20"
+    : "rounded-2xl border bg-background shadow-lg transition-all duration-200 overflow-hidden";
+
   return (
-    <div className="absolute bottom-6 left-1/2 z-10 w-full max-w-2xl -translate-x-1/2 px-4">
-      <div className="rounded-2xl border bg-background shadow-lg transition-all duration-200 overflow-hidden">
+    <div className={outerClass}>
+      <div className={innerClass}>
         {/* Context bar */}
         {showContextBar && (
           <ChatContextBar

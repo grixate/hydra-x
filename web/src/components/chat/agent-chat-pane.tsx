@@ -12,7 +12,7 @@ import type { AgentTask, ProductConversation, ProductMessage } from "@/types";
 
 import { AGENTS, UniversalInput } from "./universal-input";
 import { BoardChatMessage } from "@/components/board/board-chat-message";
-import { SurfaceSuggestionChips, type ChipSurface } from "./surface-suggestion-chips";
+import type { ChipSurface } from "./surface-suggestion-chips";
 import { OnboardingChips } from "@/components/onboarding/onboarding-chips";
 import { useOnboarding } from "@/hooks/use-onboarding";
 import { ProposalCard } from "@/components/command-center/proposal-card";
@@ -444,7 +444,6 @@ function AgentChatPaneInner({
 function PaneChipsAndInput({
   projectId,
   agent,
-  chipSurface,
   surface,
   onAgentChange,
   onSubmit,
@@ -470,18 +469,12 @@ function PaneChipsAndInput({
   }
 
   return (
-    <div className="relative border-t">
+    <div className="relative">
       {showOnboardingChips ? (
         <OnboardingChips
           onPrefill={(text) => setPrefill(text)}
           onSend={(text) => onSubmit(text, agent)}
           onSkip={handleSkip}
-        />
-      ) : chipSurface ? (
-        <SurfaceSuggestionChips
-          projectId={String(projectId)}
-          surface={chipSurface}
-          onSelect={(prompt) => onSubmit(prompt, agent)}
         />
       ) : null}
       <UniversalInput
@@ -498,6 +491,7 @@ function PaneChipsAndInput({
         previewNode={isGraph ? graphCtx!.previewNode : undefined}
         onClearSelection={isGraph ? graphCtx!.onClearContext : undefined}
         onRemoveNode={isGraph ? graphCtx!.onRemoveContext : undefined}
+        docked
       />
     </div>
   );
