@@ -253,30 +253,100 @@ defmodule HydraX.Product.Graph do
         do: [to_string(node_type)],
         else: @traversable_node_types -- ["signal", "source"]
 
-    Enum.flat_map(types, fn type ->
-      case base_query_for(type) do
-        nil ->
-          []
+    # Primitive-keyed path: any substrate node whose primitive is one
+    # that *should* participate in the graph. Evidence-extending nodes
+    # (like sources) can reasonably be dangling; exclude them.
+    substrate_orphans =
+      if node_type do
+        substrate_orphans_for_type(project_id, to_string(node_type))
+      else
+        substrate_orphans_for_primitives(project_id, ~w(claim entity artifact activity))
+      end
 
-        query ->
-          node_ids_with_incoming =
-            GraphEdge
-            |> where([e], e.project_id == ^project_id and e.to_node_type == ^type)
-            |> select([e], e.to_node_id)
-            |> Repo.all()
-            |> MapSet.new()
+    # Legacy-typed node orphans (vision, etc.) — keep the per-type loop
+    # until those schemas also move onto the substrate.
+    legacy_types =
+      types
+      |> Enum.reject(fn t -> substrate_type?(t) end)
 
-          all_nodes =
+    legacy_orphans =
+      Enum.flat_map(legacy_types, fn type ->
+        case base_query_for(type) do
+          nil ->
+            []
+
+          query ->
+            node_ids_with_incoming =
+              GraphEdge
+              |> where([e], e.project_id == ^project_id and e.to_node_type == ^type)
+              |> select([e], e.to_node_id)
+              |> Repo.all()
+              |> MapSet.new()
+
             query
             |> where([r], r.project_id == ^project_id)
             |> select([r], {r.id, r.title})
             |> Repo.all()
+            |> Enum.reject(fn {id, _title} -> MapSet.member?(node_ids_with_incoming, id) end)
+            |> Enum.map(fn {id, title} -> %{node_type: type, node_id: id, title: title} end)
+        end
+      end)
 
-          all_nodes
-          |> Enum.reject(fn {id, _title} -> MapSet.member?(node_ids_with_incoming, id) end)
-          |> Enum.map(fn {id, title} -> %{node_type: type, node_id: id, title: title} end)
-      end
+    substrate_orphans ++ legacy_orphans
+  end
+
+  defp substrate_orphans_for_type(project_id, type_key) do
+    from(n in GraphNode,
+      where: n.project_id == ^project_id and n.type_key == ^type_key
+    )
+    |> filter_orphans_with_inbound(project_id)
+  end
+
+  defp substrate_orphans_for_primitives(project_id, primitives) do
+    from(n in GraphNode,
+      where:
+        n.project_id == ^project_id and n.extends_primitive in ^primitives and
+          is_nil(n.archived_at)
+    )
+    |> filter_orphans_with_inbound(project_id)
+  end
+
+  defp filter_orphans_with_inbound(node_query, project_id) do
+    # Nodes with at least one inbound edge in either edge table.
+    node_ids_with_inbound_substrate =
+      from(r in HydraX.Graph.NodeRelationship,
+        where: r.project_id == ^project_id,
+        select: r.to_node_id
+      )
+      |> Repo.all()
+      |> MapSet.new()
+
+    # Legacy polymorphic edges still exist and can terminate at
+    # substrate rows by integer id. Include those as inbound signal too.
+    legacy_inbound =
+      from(e in GraphEdge,
+        where: e.project_id == ^project_id,
+        select: e.to_node_id
+      )
+      |> Repo.all()
+      |> MapSet.new()
+
+    with_inbound = MapSet.union(node_ids_with_inbound_substrate, legacy_inbound)
+
+    node_query
+    |> select([n], {n.id, n.title, n.type_key})
+    |> Repo.all()
+    |> Enum.reject(fn {id, _title, _type_key} -> MapSet.member?(with_inbound, id) end)
+    |> Enum.map(fn {id, title, type_key} ->
+      %{node_type: type_key, node_id: id, title: title}
     end)
+  end
+
+  defp substrate_type?(type) do
+    case schema_for(type) do
+      GraphNode -> true
+      _ -> false
+    end
   end
 
   def density_report(project_id) do

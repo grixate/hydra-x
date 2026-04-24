@@ -409,21 +409,44 @@ defmodule HydraX.Coherence.DetectionService do
   end
 
   defp candidate_project_nodes(project_id, node_type, node_id) do
-    # Cycle 2 minimum: naive — fetch up to N recent project-scope nodes
-    # of meaningful types. Future cycles will use embeddings to pre-filter.
-    Enum.flat_map(
-      ["insight", "decision", "requirement", "strategy", "vision"],
-      fn type ->
-        {:ok, records} = fetch_project_nodes(project_id, type)
+    # Primitive-keyed: fetch any claim-extending substrate node plus
+    # still-typed `vision` records. Spec §9 — contradiction detection
+    # is domain-neutral and operates on the `claim` primitive.
+    substrate_candidates(project_id, node_type, node_id) ++
+      vision_candidates(project_id, node_type, node_id)
+  end
 
-        records
-        |> Enum.reject(fn r ->
-          to_string(type) == to_string(node_type) and r.id == to_int(node_id)
-        end)
-        |> Enum.take(@max_candidates)
-        |> Enum.map(fn r -> {type, r.id, r} end)
-      end
+  defp substrate_candidates(project_id, node_type, node_id) do
+    import Ecto.Query
+
+    from(n in HydraX.Graph.Node,
+      where:
+        n.project_id == ^project_id and n.extends_primitive == "claim" and
+          is_nil(n.archived_at)
     )
+    |> order_by([n], desc: n.updated_at)
+    |> limit(^(@max_candidates * 2))
+    |> Repo.all()
+    |> Enum.reject(fn n ->
+      to_string(n.type_key) == to_string(node_type) and n.id == to_int(node_id)
+    end)
+    |> Enum.take(@max_candidates)
+    |> Enum.map(fn n -> {n.type_key, n.id, n} end)
+  end
+
+  defp vision_candidates(project_id, node_type, node_id) do
+    import Ecto.Query
+
+    HydraX.Product.Vision
+    |> where([r], r.project_id == ^project_id)
+    |> order_by([r], desc: r.updated_at)
+    |> limit(^(@max_candidates * 2))
+    |> Repo.all()
+    |> Enum.reject(fn r ->
+      to_string(node_type) == "vision" and r.id == to_int(node_id)
+    end)
+    |> Enum.take(@max_candidates)
+    |> Enum.map(fn r -> {"vision", r.id, r} end)
   end
 
   defp fetch_project_nodes(project_id, type) do
@@ -431,23 +454,11 @@ defmodule HydraX.Coherence.DetectionService do
 
     query =
       case type do
-        "insight" ->
-          from n in HydraX.Graph.Node, where: n.type_key == "insight"
-
-        "decision" ->
-          from n in HydraX.Graph.Node, where: n.type_key == "decision"
-
-        "strategy" ->
-          from n in HydraX.Graph.Node, where: n.type_key == "strategy"
-
-        "requirement" ->
-          from n in HydraX.Graph.Node, where: n.type_key == "requirement"
-
         "vision" ->
           HydraX.Product.Vision
 
-        _ ->
-          nil
+        type_key ->
+          from n in HydraX.Graph.Node, where: n.type_key == ^type_key
       end
 
     if query do
