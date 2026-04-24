@@ -6,7 +6,7 @@ defmodule HydraX.Product.Stream do
   import Ecto.Query
 
   alias HydraX.Product.Graph
-  alias HydraX.Product.GraphEdge
+  alias HydraX.Graph.NodeRelationship
   alias HydraX.Product.GraphFlag
   alias HydraX.Graph.Node, as: GraphNode
   alias HydraX.Product.SimulationNode
@@ -458,7 +458,7 @@ defmodule HydraX.Product.Stream do
 
   defp connection_counts(project_id, node_type, node_id) do
     outgoing =
-      GraphEdge
+      NodeRelationship
       |> where(
         [e],
         e.project_id == ^project_id and e.from_node_type == ^node_type and
@@ -469,7 +469,7 @@ defmodule HydraX.Product.Stream do
       |> Repo.all()
 
     incoming =
-      GraphEdge
+      NodeRelationship
       |> where(
         [e],
         e.project_id == ^project_id and e.to_node_type == ^node_type and e.to_node_id == ^node_id

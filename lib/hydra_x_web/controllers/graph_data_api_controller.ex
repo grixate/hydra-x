@@ -80,7 +80,7 @@ defmodule HydraXWeb.GraphDataAPIController do
               id: e.id,
               source: source,
               target: target,
-              kind: e.kind,
+              kind: e.type_key,
               weight: e.weight
             }
             | acc

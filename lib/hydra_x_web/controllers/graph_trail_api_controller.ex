@@ -4,7 +4,7 @@ defmodule HydraXWeb.GraphTrailAPIController do
   import Ecto.Query
 
   alias HydraX.Product.Graph
-  alias HydraX.Product.GraphEdge
+  alias HydraX.Graph.NodeRelationship, as: GraphEdge
   alias HydraX.Repo
 
   action_fallback HydraXWeb.ProjectAPIFallbackController
@@ -152,7 +152,7 @@ defmodule HydraXWeb.GraphTrailAPIController do
         e.project_id == ^project_id and
           e.to_node_type == ^to_string(node_type) and
           e.to_node_id == ^node_id and
-          e.kind == "constrains"
+          e.type_key == "constrains"
       )
       |> Repo.all()
 

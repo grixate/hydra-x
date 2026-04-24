@@ -14,7 +14,6 @@ defmodule HydraX.Product do
   alias HydraX.Product.BoardNode
   alias HydraX.Product.BoardSession
   alias HydraX.Product.Citations
-  alias HydraX.Product.GraphEdge
   alias HydraX.Product.GraphFlag
   alias HydraX.Graph.Domains
   alias HydraX.Graph.Node, as: GraphNode
@@ -1191,7 +1190,7 @@ defmodule HydraX.Product do
     kind = Keyword.get(opts, :kind)
     node_type = Keyword.get(opts, :node_type)
 
-    GraphEdge
+    HydraX.Graph.NodeRelationship
     |> where([e], e.project_id == ^project_id)
     |> maybe_filter_edge_kind(kind)
     |> maybe_filter_edge_node_type(node_type)
@@ -1199,18 +1198,37 @@ defmodule HydraX.Product do
     |> Repo.all()
   end
 
-  def get_graph_edge!(id), do: Repo.get!(GraphEdge, id)
+  def get_graph_edge!(id), do: Repo.get!(HydraX.Graph.NodeRelationship, id)
 
   def create_graph_edge(attrs) when is_map(attrs) do
     attrs = HydraX.Runtime.Helpers.normalize_string_keys(attrs)
 
-    %GraphEdge{}
-    |> GraphEdge.changeset(attrs)
+    # Translate legacy {kind, metadata} shape to substrate {type_key,
+    # attributes} expected by NodeRelationship.
+    attrs =
+      attrs
+      |> Map.put_new("type_key", attrs["kind"])
+      |> Map.put_new("attributes", attrs["metadata"] || %{})
+      |> Map.put_new("domain_id", default_graph_domain_id())
+
+    %HydraX.Graph.NodeRelationship{}
+    |> HydraX.Graph.NodeRelationship.changeset(attrs)
     |> Repo.insert()
   end
 
-  def delete_graph_edge(%GraphEdge{} = edge) do
+  def delete_graph_edge(%HydraX.Graph.NodeRelationship{} = edge) do
     Repo.delete(edge)
+  end
+
+  defp default_graph_domain_id do
+    case HydraX.Graph.Domains.get_domain_by_slug("product_development") do
+      %{id: id} ->
+        id
+
+      nil ->
+        {:ok, %{id: id}} = HydraX.Graph.Domains.ProductDevelopment.seed()
+        id
+    end
   end
 
   @doc """
@@ -1276,7 +1294,7 @@ defmodule HydraX.Product do
           from_id: e.from_node_id,
           to_type: e.to_node_type,
           to_id: e.to_node_id,
-          kind: e.kind,
+          kind: e.type_key,
           weight: e.weight
         }
       end)
@@ -2857,7 +2875,7 @@ defmodule HydraX.Product do
   defp maybe_filter_edge_kind(query, ""), do: query
 
   defp maybe_filter_edge_kind(query, kind) do
-    where(query, [e], e.kind == ^to_string(kind))
+    where(query, [e], e.type_key == ^to_string(kind))
   end
 
   defp maybe_filter_edge_node_type(query, nil), do: query

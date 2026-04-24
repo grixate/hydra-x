@@ -4,7 +4,7 @@ defmodule HydraX.Product.Tools.HistorySearch do
   import Ecto.Query
 
   alias HydraX.Product.Graph
-  alias HydraX.Product.GraphEdge
+  alias HydraX.Graph.NodeRelationship
   alias HydraX.Repo
 
   @impl true
@@ -42,24 +42,24 @@ defmodule HydraX.Product.Tools.HistorySearch do
 
       # Find supersedes chain (older versions)
       superseded_by =
-        GraphEdge
+        NodeRelationship
         |> where(
           [e],
           e.project_id == ^project_id and
             e.to_node_type == ^node_type and
             e.to_node_id == ^node_id and
-            e.kind == "supersedes"
+            e.type_key == "supersedes"
         )
         |> Repo.all()
 
       supersedes =
-        GraphEdge
+        NodeRelationship
         |> where(
           [e],
           e.project_id == ^project_id and
             e.from_node_type == ^node_type and
             e.from_node_id == ^node_id and
-            e.kind == "supersedes"
+            e.type_key == "supersedes"
         )
         |> Repo.all()
 

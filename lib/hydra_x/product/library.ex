@@ -30,7 +30,7 @@ defmodule HydraX.Product.Library do
 
   alias HydraX.Graph.Node, as: GraphNode
   alias HydraX.Product
-  alias HydraX.Product.GraphEdge
+  alias HydraX.Graph.NodeRelationship, as: GraphEdge
   alias HydraX.Product.SourceReference
   alias HydraX.Repo
 
@@ -586,11 +586,11 @@ defmodule HydraX.Product.Library do
       {node_type, node_id, relationship} =
         cond do
           edge.from_node_type in ["source", "signal"] ->
-            {edge.to_node_type, edge.to_node_id, edge_kind_to_relationship(edge.kind, :outgoing)}
+            {edge.to_node_type, edge.to_node_id, edge_kind_to_relationship(edge.type_key, :outgoing)}
 
           edge.to_node_type in ["source", "signal"] ->
             {edge.from_node_type, edge.from_node_id,
-             edge_kind_to_relationship(edge.kind, :incoming)}
+             edge_kind_to_relationship(edge.type_key, :incoming)}
         end
 
       reference(source.project_id, source.id, node_type, node_id, %{

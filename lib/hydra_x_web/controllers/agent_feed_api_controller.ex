@@ -158,7 +158,7 @@ defmodule HydraXWeb.AgentFeedAPIController do
   end
 
   defp count_edges(project_id, node_type, node_id, :upstream) do
-    HydraX.Product.GraphEdge
+    HydraX.Graph.NodeRelationship
     |> where(
       [e],
       e.project_id == ^project_id and
@@ -169,7 +169,7 @@ defmodule HydraXWeb.AgentFeedAPIController do
   end
 
   defp count_edges(project_id, node_type, node_id, :downstream) do
-    HydraX.Product.GraphEdge
+    HydraX.Graph.NodeRelationship
     |> where(
       [e],
       e.project_id == ^project_id and

@@ -473,7 +473,7 @@ defmodule HydraX.Product.Initiative do
   defp run_check(project_id, "architect", :check_unspecified_requirements) do
     # Requirements that have no architecture node edges
     req_ids_with_arch =
-      HydraX.Product.GraphEdge
+      HydraX.Graph.NodeRelationship
       |> where(
         [e],
         e.project_id == ^project_id and
@@ -550,7 +550,7 @@ defmodule HydraX.Product.Initiative do
 
   defp run_check(project_id, "designer", :check_undesigned_requirements) do
     req_ids_with_design =
-      HydraX.Product.GraphEdge
+      HydraX.Graph.NodeRelationship
       |> where(
         [e],
         e.project_id == ^project_id and
@@ -787,7 +787,7 @@ defmodule HydraX.Product.Initiative do
 
   defp find_insights_without_decisions(project_id) do
     insights_with_decisions =
-      HydraX.Product.GraphEdge
+      HydraX.Graph.NodeRelationship
       |> where(
         [e],
         e.project_id == ^project_id and

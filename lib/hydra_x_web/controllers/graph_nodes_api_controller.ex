@@ -48,7 +48,7 @@ defmodule HydraXWeb.GraphNodesAPIController do
           id: "edge-#{e.id}",
           source: "#{e.from_node_type}-#{e.from_node_id}",
           target: "#{e.to_node_type}-#{e.to_node_id}",
-          kind: e.kind,
+          kind: e.type_key,
           weight: e.weight
         }
       end)

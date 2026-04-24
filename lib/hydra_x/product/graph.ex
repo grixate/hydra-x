@@ -7,9 +7,9 @@ defmodule HydraX.Product.Graph do
 
   import Ecto.Query
 
-  alias HydraX.Product.GraphEdge
-  alias HydraX.Product.GraphFlag
   alias HydraX.Graph.Node, as: GraphNode
+  alias HydraX.Graph.NodeRelationship
+  alias HydraX.Product.GraphFlag
   alias HydraX.Repo
 
   @node_type_to_schema %{
@@ -36,34 +36,45 @@ defmodule HydraX.Product.Graph do
   # Edge operations
   # -------------------------------------------------------------------
 
+  @doc """
+  Create an edge between two nodes. Endpoint (type, id) pairs remain
+  in the call signature for caller compatibility; storage routes to
+  `node_relationships`.
+
+  The edge's `type_key` (relationship type) equals the former `kind`.
+  `metadata` becomes `attributes`. `from_node_type`/`to_node_type` are
+  denormalized on the row so readers can filter without a join.
+  """
   def link_nodes(project_id, from_type, from_id, to_type, to_id, kind, opts \\ []) do
+    domain_id = default_domain_id()
+
     attrs = %{
-      "project_id" => project_id,
-      "from_node_type" => to_string(from_type),
-      "from_node_id" => from_id,
-      "to_node_type" => to_string(to_type),
-      "to_node_id" => to_id,
-      "kind" => to_string(kind),
-      "weight" => Keyword.get(opts, :weight, 1.0),
-      "metadata" => Keyword.get(opts, :metadata, %{})
+      domain_id: domain_id,
+      project_id: project_id,
+      type_key: to_string(kind),
+      from_node_id: from_id,
+      to_node_id: to_id,
+      from_node_type: substrate_type_for(from_type),
+      to_node_type: substrate_type_for(to_type),
+      weight: Keyword.get(opts, :weight, 1.0),
+      attributes: Keyword.get(opts, :metadata, %{})
     }
 
-    %GraphEdge{}
-    |> GraphEdge.changeset(attrs)
+    %NodeRelationship{}
+    |> NodeRelationship.changeset(attrs)
     |> Repo.insert()
   end
 
   def unlink_nodes(project_id, from_type, from_id, to_type, to_id, kind) do
     query =
-      GraphEdge
-      |> where(
-        [e],
-        e.project_id == ^project_id and
-          e.from_node_type == ^to_string(from_type) and
-          e.from_node_id == ^from_id and
-          e.to_node_type == ^to_string(to_type) and
-          e.to_node_id == ^to_id and
-          e.kind == ^to_string(kind)
+      from(r in NodeRelationship,
+        where:
+          r.project_id == ^project_id and
+            r.from_node_type == ^substrate_type_for(from_type) and
+            r.from_node_id == ^from_id and
+            r.to_node_type == ^substrate_type_for(to_type) and
+            r.to_node_id == ^to_id and
+            r.type_key == ^to_string(kind)
       )
 
     case Repo.one(query) do
@@ -75,29 +86,59 @@ defmodule HydraX.Product.Graph do
   def edges_from(project_id, node_type, node_id, opts \\ []) do
     kind = Keyword.get(opts, :kind)
 
-    GraphEdge
-    |> where(
-      [e],
-      e.project_id == ^project_id and
-        e.from_node_type == ^to_string(node_type) and
-        e.from_node_id == ^node_id
+    from(r in NodeRelationship,
+      where:
+        r.project_id == ^project_id and
+          r.from_node_type == ^substrate_type_for(node_type) and
+          r.from_node_id == ^node_id
     )
     |> maybe_filter_kind(kind)
     |> Repo.all()
+    |> Enum.map(&edge_facade/1)
   end
 
   def edges_to(project_id, node_type, node_id, opts \\ []) do
     kind = Keyword.get(opts, :kind)
 
-    GraphEdge
-    |> where(
-      [e],
-      e.project_id == ^project_id and
-        e.to_node_type == ^to_string(node_type) and
-        e.to_node_id == ^node_id
+    from(r in NodeRelationship,
+      where:
+        r.project_id == ^project_id and
+          r.to_node_type == ^substrate_type_for(node_type) and
+          r.to_node_id == ^node_id
     )
     |> maybe_filter_kind(kind)
     |> Repo.all()
+    |> Enum.map(&edge_facade/1)
+  end
+
+  # Return a map with the legacy edge-shape field names so readers
+  # that expect `.kind`, `.metadata` keep working while we finish the
+  # shape-migration.
+  defp edge_facade(%NodeRelationship{} = r) do
+    %{
+      id: r.id,
+      project_id: r.project_id,
+      from_node_type: r.from_node_type,
+      from_node_id: r.from_node_id,
+      to_node_type: r.to_node_type,
+      to_node_id: r.to_node_id,
+      kind: r.type_key,
+      weight: r.weight,
+      metadata: r.attributes || %{},
+      inserted_at: r.inserted_at,
+      updated_at: r.updated_at
+    }
+  end
+
+  defp default_domain_id do
+    case HydraX.Graph.Domains.get_domain_by_slug("product_development") do
+      %HydraX.Graph.Domain{id: id} ->
+        id
+
+      nil ->
+        {:ok, %{id: id}} = HydraX.Graph.Domains.ProductDevelopment.seed()
+        id
+    end
   end
 
   # -------------------------------------------------------------------
@@ -160,11 +201,11 @@ defmodule HydraX.Product.Graph do
 
   defp maybe_filter_kind(query, kinds) when is_list(kinds) do
     string_kinds = Enum.map(kinds, &to_string/1)
-    where(query, [e], e.kind in ^string_kinds)
+    where(query, [r], r.type_key in ^string_kinds)
   end
 
   defp maybe_filter_kind(query, kind) do
-    where(query, [e], e.kind == ^to_string(kind))
+    where(query, [r], r.type_key == ^to_string(kind))
   end
 
   # -------------------------------------------------------------------
@@ -296,9 +337,10 @@ defmodule HydraX.Product.Graph do
 
           query ->
             node_ids_with_incoming =
-              GraphEdge
-              |> where([e], e.project_id == ^project_id and e.to_node_type == ^type)
-              |> select([e], e.to_node_id)
+              from(r in NodeRelationship,
+                where: r.project_id == ^project_id and r.to_node_type == ^type,
+                select: r.to_node_id
+              )
               |> Repo.all()
               |> MapSet.new()
 
@@ -331,26 +373,13 @@ defmodule HydraX.Product.Graph do
   end
 
   defp filter_orphans_with_inbound(node_query, project_id) do
-    # Nodes with at least one inbound edge in either edge table.
-    node_ids_with_inbound_substrate =
-      from(r in HydraX.Graph.NodeRelationship,
+    with_inbound =
+      from(r in NodeRelationship,
         where: r.project_id == ^project_id,
         select: r.to_node_id
       )
       |> Repo.all()
       |> MapSet.new()
-
-    # Legacy polymorphic edges still exist and can terminate at
-    # substrate rows by integer id. Include those as inbound signal too.
-    legacy_inbound =
-      from(e in GraphEdge,
-        where: e.project_id == ^project_id,
-        select: e.to_node_id
-      )
-      |> Repo.all()
-      |> MapSet.new()
-
-    with_inbound = MapSet.union(node_ids_with_inbound_substrate, legacy_inbound)
 
     node_query
     |> select([n], {n.id, n.title, n.type_key})
@@ -379,8 +408,9 @@ defmodule HydraX.Product.Graph do
         end
 
       outgoing =
-        GraphEdge
-        |> where([e], e.project_id == ^project_id and e.from_node_type == ^type)
+        from(r in NodeRelationship,
+          where: r.project_id == ^project_id and r.from_node_type == ^type
+        )
         |> Repo.aggregate(:count)
 
       avg_outgoing = if count > 0, do: outgoing / count, else: 0.0

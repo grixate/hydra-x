@@ -22,6 +22,12 @@ defmodule HydraX.Graph.NodeRelationship do
     field :attributes, :map, default: %{}
     field :created_by_agent_id, :string
 
+    # Denormalized from the referenced nodes' type_keys. Populated at
+    # write time so readers that filter by endpoint type (graph
+    # traversal, ProductPayload, etc.) don't need a join.
+    field :from_node_type, :string
+    field :to_node_type, :string
+
     belongs_to :domain, Domain
     belongs_to :project, HydraX.Product.Project
     belongs_to :from_node, Node
@@ -39,6 +45,8 @@ defmodule HydraX.Graph.NodeRelationship do
       :extends_primitive,
       :from_node_id,
       :to_node_id,
+      :from_node_type,
+      :to_node_type,
       :weight,
       :attributes,
       :created_by_agent_id
@@ -80,8 +88,28 @@ defmodule HydraX.Graph.NodeRelationship do
       {:ok, type_def} ->
         changeset
         |> maybe_denormalize_primitive(type_def)
+        |> denormalize_endpoint_types()
         |> validate_endpoint_types(type_def)
         |> validate_attributes_against_schema(type_def)
+    end
+  end
+
+  defp denormalize_endpoint_types(changeset) do
+    changeset
+    |> denormalize_endpoint_type(:from_node_id, :from_node_type)
+    |> denormalize_endpoint_type(:to_node_id, :to_node_type)
+  end
+
+  defp denormalize_endpoint_type(changeset, id_field, type_field) do
+    if is_nil(get_field(changeset, type_field)) do
+      node_id = get_field(changeset, id_field)
+
+      case node_id && Repo.get(Node, node_id) do
+        %Node{type_key: type_key} -> put_change(changeset, type_field, type_key)
+        _ -> changeset
+      end
+    else
+      changeset
     end
   end
 

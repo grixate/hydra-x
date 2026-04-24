@@ -273,7 +273,7 @@ defmodule HydraX.Product.SimulationBridge do
 
   defp linked_requirements(project_id, design_node_ids) do
     edges =
-      HydraX.Product.GraphEdge
+      HydraX.Graph.NodeRelationship
       |> where(
         [e],
         e.project_id == ^project_id and
