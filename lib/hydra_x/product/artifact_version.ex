@@ -9,7 +9,7 @@ defmodule HydraX.Product.ArtifactVersion do
     field :updated_by, :string
     field :metadata, :map, default: %{}
 
-    belongs_to :artifact, HydraX.Product.Artifact
+    belongs_to :artifact, HydraX.Graph.Node, foreign_key: :artifact_id
 
     timestamps(type: :utc_datetime_usec)
   end

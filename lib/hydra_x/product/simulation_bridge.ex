@@ -7,9 +7,9 @@ defmodule HydraX.Product.SimulationBridge do
   import Ecto.Query
   require Logger
 
+  alias HydraX.Graph.Node, as: GraphNode
   alias HydraX.Product
   alias HydraX.Product.Graph
-  alias HydraX.Product.Insight
   alias HydraX.Product.SimulationNode
   alias HydraX.Repo
 
@@ -19,8 +19,12 @@ defmodule HydraX.Product.SimulationBridge do
 
   def build_archetypes_from_insights(project_id) do
     insights =
-      Insight
-      |> where([i], i.project_id == ^project_id and i.status in ["accepted", "draft"])
+      GraphNode
+      |> where(
+        [i],
+        i.project_id == ^project_id and i.type_key == "insight" and
+          i.status in ["accepted", "draft"]
+      )
       |> Repo.all()
 
     archetypes =
@@ -43,9 +47,10 @@ defmodule HydraX.Product.SimulationBridge do
       |> Enum.filter(fn d -> d.id in design_node_ids end)
 
     scenario = %{
-      design_nodes: Enum.map(design_nodes, fn d ->
-        %{id: d.id, title: d.title, type: d.node_type, body: d.body}
-      end),
+      design_nodes:
+        Enum.map(design_nodes, fn d ->
+          %{id: d.id, title: d.title, type: d.node_type, body: d.body}
+        end),
       requirements: linked_requirements(project_id, design_node_ids)
     }
 
@@ -258,11 +263,11 @@ defmodule HydraX.Product.SimulationBridge do
   # -------------------------------------------------------------------
 
   defp extract_traits_from_insight(insight) do
-    # Simple trait extraction based on insight metadata
-    metadata = insight.metadata || %{}
+    attributes = insight.attributes || %{}
+
     %{
-      type: Map.get(metadata, "insight_type", "general"),
-      confidence: Map.get(metadata, "confidence", "medium")
+      type: Map.get(attributes, "insight_type", "general"),
+      confidence: Map.get(attributes, "confidence", "medium")
     }
   end
 

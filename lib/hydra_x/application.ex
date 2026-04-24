@@ -19,6 +19,7 @@ defmodule HydraX.Application do
         {Registry, keys: :unique, name: HydraX.Product.InitiativeRegistry},
         {Registry, keys: :duplicate, name: HydraX.Agent.HookRegistry},
         {Phoenix.PubSub, name: HydraX.PubSub},
+        HydraX.Graph.SchemaRegistry,
         HydraXWeb.BoardPresence,
         {Task.Supervisor, name: HydraX.TaskSupervisor},
         HydraX.Simulation.Registry,

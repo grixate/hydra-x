@@ -3,26 +3,10 @@ defmodule HydraX.Product.Tools.GraphQuery do
 
   import Ecto.Query
 
-  alias HydraX.Product.ArchitectureNode
-  alias HydraX.Product.Decision
-  alias HydraX.Product.DesignNode
-  alias HydraX.Product.Insight
-  alias HydraX.Product.Learning
-  alias HydraX.Product.Requirement
-  alias HydraX.Product.Strategy
-  alias HydraX.Product.Task, as: ProductTask
+  alias HydraX.Product.Graph, as: ProductGraph
   alias HydraX.Repo
 
-  @searchable_types %{
-    "insight" => Insight,
-    "decision" => Decision,
-    "strategy" => Strategy,
-    "requirement" => Requirement,
-    "design_node" => DesignNode,
-    "architecture_node" => ArchitectureNode,
-    "task" => ProductTask,
-    "learning" => Learning
-  }
+  @searchable_types ~w(insight decision strategy requirement design_node architecture_node task learning)
 
   @impl true
   def name, do: "graph_query"
@@ -64,13 +48,16 @@ defmodule HydraX.Product.Tools.GraphQuery do
 
       types =
         if type_filter && type_filter != [],
-          do: Map.take(@searchable_types, Enum.map(type_filter, &to_string/1)),
+          do: Enum.filter(Enum.map(type_filter, &to_string/1), &(&1 in @searchable_types)),
           else: @searchable_types
 
       results =
         types
-        |> Enum.flat_map(fn {type_name, schema} ->
-          search_type(schema, project_id, query_text, type_name)
+        |> Enum.flat_map(fn type_name ->
+          case ProductGraph.base_query_for(type_name) do
+            nil -> []
+            query -> search_type(query, project_id, query_text, type_name)
+          end
         end)
         |> Enum.sort_by(fn r -> r.rank end, :desc)
         |> Enum.take(limit)
@@ -95,8 +82,13 @@ defmodule HydraX.Product.Tools.GraphQuery do
           ^query_text
         )
       )
-      |> select([r], {r, fragment("ts_rank(search_vector, websearch_to_tsquery('english', ?))", ^query_text)})
-      |> order_by([r], desc: fragment("ts_rank(search_vector, websearch_to_tsquery('english', ?))", ^query_text))
+      |> select(
+        [r],
+        {r, fragment("ts_rank(search_vector, websearch_to_tsquery('english', ?))", ^query_text)}
+      )
+      |> order_by([r],
+        desc: fragment("ts_rank(search_vector, websearch_to_tsquery('english', ?))", ^query_text)
+      )
       |> limit(5)
       |> Repo.all()
       |> Enum.map(fn {record, rank} ->
@@ -137,13 +129,17 @@ defmodule HydraX.Product.Tools.GraphQuery do
 
   defp extract_project_id(params) do
     case params[:project_id] || params["project_id"] do
-      value when is_integer(value) -> {:ok, value}
+      value when is_integer(value) ->
+        {:ok, value}
+
       value when is_binary(value) ->
         case Integer.parse(value) do
           {integer, ""} -> {:ok, integer}
           _ -> {:error, :product_project_context_required}
         end
-      _ -> {:error, :product_project_context_required}
+
+      _ ->
+        {:error, :product_project_context_required}
     end
   end
 end

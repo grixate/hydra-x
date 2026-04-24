@@ -1,9 +1,8 @@
 defmodule HydraXWeb.ProductPayload do
   @moduledoc false
 
-  alias HydraX.Product.Insight
+  alias HydraX.Graph.Node, as: GraphNode
   alias HydraX.Product.Project
-  alias HydraX.Product.Requirement
   alias HydraX.Product.Source
 
   def project_json(%Project{} = project) do
@@ -65,14 +64,14 @@ defmodule HydraXWeb.ProductPayload do
     }
   end
 
-  def insight_json(%Insight{} = insight) do
+  def insight_json(%GraphNode{type_key: "insight"} = insight) do
     %{
       id: insight.id,
       project_id: insight.project_id,
       title: insight.title,
       body: insight.body,
       status: insight.status,
-      metadata: insight.metadata || %{},
+      metadata: insight.attributes || %{},
       evidence:
         Enum.map(loaded_assoc(insight, :insight_evidence), fn evidence ->
           %{
@@ -105,17 +104,19 @@ defmodule HydraXWeb.ProductPayload do
     }
   end
 
-  def requirement_json(%Requirement{} = requirement) do
+  def requirement_json(%GraphNode{type_key: "requirement"} = requirement) do
+    attrs = requirement.attributes || %{}
+
     %{
       id: requirement.id,
       project_id: requirement.project_id,
       title: requirement.title,
       body: requirement.body,
       status: requirement.status,
-      grounded: requirement.grounded,
-      metadata: requirement.metadata || %{},
+      grounded: Map.get(attrs, "grounded", false),
+      metadata: attrs,
       insights:
-        Enum.map(loaded_assoc(requirement, :requirement_insights), fn link ->
+        Enum.map(loaded_assoc(requirement, :linked_requirement_insights), fn link ->
           insight = link.insight
 
           %{
@@ -163,58 +164,64 @@ defmodule HydraXWeb.ProductPayload do
     }
   end
 
-  def decision_json(%HydraX.Product.Decision{} = d) do
+  def decision_json(%GraphNode{type_key: "decision"} = d) do
+    attrs = d.attributes || %{}
+
     %{
       id: d.id,
       project_id: d.project_id,
       title: d.title,
       body: d.body,
       status: d.status,
-      decided_by: d.decided_by,
-      decided_at: d.decided_at,
-      alternatives_considered: d.alternatives_considered || [],
-      metadata: d.metadata || %{},
+      decided_by: Map.get(attrs, "decided_by"),
+      decided_at: Map.get(attrs, "decided_at"),
+      alternatives_considered: Map.get(attrs, "alternatives_considered", []),
+      metadata: attrs,
       inserted_at: d.inserted_at,
       updated_at: d.updated_at
     }
   end
 
-  def strategy_json(%HydraX.Product.Strategy{} = s) do
+  def strategy_json(%GraphNode{type_key: "strategy"} = s) do
     %{
       id: s.id,
       project_id: s.project_id,
       title: s.title,
       body: s.body,
       status: s.status,
-      metadata: s.metadata || %{},
+      metadata: s.attributes || %{},
       inserted_at: s.inserted_at,
       updated_at: s.updated_at
     }
   end
 
-  def design_node_json(%HydraX.Product.DesignNode{} = d) do
+  def design_node_json(%GraphNode{type_key: "design_node"} = d) do
+    attrs = d.attributes || %{}
+
     %{
       id: d.id,
       project_id: d.project_id,
       title: d.title,
       body: d.body,
-      node_type: d.node_type,
+      node_type: Map.get(attrs, "node_type"),
       status: d.status,
-      metadata: d.metadata || %{},
+      metadata: attrs,
       inserted_at: d.inserted_at,
       updated_at: d.updated_at
     }
   end
 
-  def architecture_node_json(%HydraX.Product.ArchitectureNode{} = a) do
+  def architecture_node_json(%GraphNode{type_key: "architecture_node"} = a) do
+    attrs = a.attributes || %{}
+
     %{
       id: a.id,
       project_id: a.project_id,
       title: a.title,
       body: a.body,
-      node_type: a.node_type,
+      node_type: Map.get(attrs, "node_type"),
       status: a.status,
-      metadata: a.metadata || %{},
+      metadata: attrs,
       inserted_at: a.inserted_at,
       updated_at: a.updated_at
     }
@@ -281,16 +288,18 @@ defmodule HydraXWeb.ProductPayload do
     }
   end
 
-  def constraint_json(%HydraX.Product.Constraint{} = c) do
+  def constraint_json(%GraphNode{type_key: "constraint"} = c) do
+    attrs = c.attributes || %{}
+
     %{
       id: c.id,
       project_id: c.project_id,
       title: c.title,
       body: c.body,
-      scope: c.scope,
-      enforcement: c.enforcement,
+      scope: Map.get(attrs, "reach_scope", "global"),
+      enforcement: Map.get(attrs, "enforcement", "strict"),
       status: c.status,
-      metadata: c.metadata || %{},
+      metadata: attrs,
       inserted_at: c.inserted_at,
       updated_at: c.updated_at
     }
@@ -395,11 +404,28 @@ defmodule HydraXWeb.ProductPayload do
     }
 
     cond do
-      Map.has_key?(node, :node_type) -> Map.put(base, :node_type, node.node_type)
-      Map.has_key?(node, :priority) -> Map.merge(base, %{priority: node.priority, assignee: node.assignee, effort_estimate: node.effort_estimate})
-      Map.has_key?(node, :decided_by) -> Map.merge(base, %{decided_by: node.decided_by, decided_at: node.decided_at, alternatives_considered: node.alternatives_considered})
-      Map.has_key?(node, :learning_type) -> Map.put(base, :learning_type, node.learning_type)
-      true -> base
+      Map.has_key?(node, :node_type) ->
+        Map.put(base, :node_type, node.node_type)
+
+      Map.has_key?(node, :priority) ->
+        Map.merge(base, %{
+          priority: node.priority,
+          assignee: node.assignee,
+          effort_estimate: node.effort_estimate
+        })
+
+      Map.has_key?(node, :decided_by) ->
+        Map.merge(base, %{
+          decided_by: node.decided_by,
+          decided_at: node.decided_at,
+          alternatives_considered: node.alternatives_considered
+        })
+
+      Map.has_key?(node, :learning_type) ->
+        Map.put(base, :learning_type, node.learning_type)
+
+      true ->
+        base
     end
   end
 
@@ -496,18 +522,20 @@ defmodule HydraXWeb.ProductPayload do
     }
   end
 
-  def artifact_json(%HydraX.Product.Artifact{} = artifact) do
+  def artifact_json(%GraphNode{type_key: "artifact"} = artifact) do
+    attrs = artifact.attributes || %{}
+
     %{
       id: artifact.id,
       project_id: artifact.project_id,
       title: artifact.title,
-      artifact_type: artifact.artifact_type,
+      artifact_type: Map.get(attrs, "artifact_type"),
       body: artifact.body,
-      owner_persona: artifact.owner_persona,
+      owner_persona: Map.get(attrs, "owner_persona"),
       status: artifact.status,
-      version: artifact.version,
-      last_updated_by: artifact.last_updated_by,
-      metadata: artifact.metadata || %{},
+      version: artifact.lock_version,
+      last_updated_by: Map.get(attrs, "last_updated_by"),
+      metadata: attrs,
       inserted_at: artifact.inserted_at,
       updated_at: artifact.updated_at
     }

@@ -67,7 +67,10 @@ defmodule HydraX.Coherence.DetectionService do
 
   def detect_in_project(project_id, node_type, node_id) do
     target = load_project_node(node_type, node_id)
-    if is_nil(target), do: :skip, else: do_detect_in_project(project_id, target, node_type, node_id)
+
+    if is_nil(target),
+      do: :skip,
+      else: do_detect_in_project(project_id, target, node_type, node_id)
   end
 
   defp do_detect_in_project(project_id, target, node_type, node_id) do
@@ -105,7 +108,10 @@ defmodule HydraX.Coherence.DetectionService do
   """
   def detect_cross_project(project_id, node_type, node_id) do
     target = load_project_node(node_type, node_id)
-    if is_nil(target), do: :skip, else: do_detect_cross_project(project_id, target, node_type, node_id)
+
+    if is_nil(target),
+      do: :skip,
+      else: do_detect_cross_project(project_id, target, node_type, node_id)
   end
 
   defp do_detect_cross_project(project_id, target, node_type, node_id) do
@@ -315,7 +321,8 @@ defmodule HydraX.Coherence.DetectionService do
                 {:ok,
                  %{
                    confidence: normalise(conf, "medium", ["low", "medium", "high"]),
-                   severity: normalise(data["severity"] || "medium", "medium", ["low", "medium", "high"]),
+                   severity:
+                     normalise(data["severity"] || "medium", "medium", ["low", "medium", "high"]),
                    explanation: exp,
                    suggested_resolutions: data["suggested_resolutions"] || []
                  }}
@@ -325,14 +332,26 @@ defmodule HydraX.Coherence.DetectionService do
                   "[Coherence] YES without required fields, keys=#{inspect(Map.keys(partial))}"
                 )
 
-                {:ok, %{confidence: "medium", severity: "medium", explanation: trimmed, suggested_resolutions: []}}
+                {:ok,
+                 %{
+                   confidence: "medium",
+                   severity: "medium",
+                   explanation: trimmed,
+                   suggested_resolutions: []
+                 }}
 
               {:error, reason} ->
                 Logger.info(
                   "[Coherence] YES with malformed JSON: #{inspect(reason)} — accepting with medium confidence"
                 )
 
-                {:ok, %{confidence: "medium", severity: "medium", explanation: trimmed, suggested_resolutions: []}}
+                {:ok,
+                 %{
+                   confidence: "medium",
+                   severity: "medium",
+                   explanation: trimmed,
+                   suggested_resolutions: []
+                 }}
             end
 
           nil ->
@@ -358,7 +377,8 @@ defmodule HydraX.Coherence.DetectionService do
   end
 
   defp maybe_record(verdict, base_attrs) do
-    if Map.get(@confidence_rank, verdict.confidence, 0) < Map.get(@confidence_rank, @min_confidence, 2) do
+    if Map.get(@confidence_rank, verdict.confidence, 0) <
+         Map.get(@confidence_rank, @min_confidence, 2) do
       :below_threshold
     else
       Coherence.record_detection(
@@ -407,21 +427,32 @@ defmodule HydraX.Coherence.DetectionService do
   end
 
   defp fetch_project_nodes(project_id, type) do
-    schema =
+    import Ecto.Query
+
+    query =
       case type do
-        "insight" -> HydraX.Product.Insight
-        "decision" -> HydraX.Product.Decision
-        "requirement" -> HydraX.Product.Requirement
-        "strategy" -> HydraX.Product.Strategy
-        "vision" -> HydraX.Product.Vision
-        _ -> nil
+        "insight" ->
+          from n in HydraX.Graph.Node, where: n.type_key == "insight"
+
+        "decision" ->
+          from n in HydraX.Graph.Node, where: n.type_key == "decision"
+
+        "strategy" ->
+          from n in HydraX.Graph.Node, where: n.type_key == "strategy"
+
+        "requirement" ->
+          from n in HydraX.Graph.Node, where: n.type_key == "requirement"
+
+        "vision" ->
+          HydraX.Product.Vision
+
+        _ ->
+          nil
       end
 
-    if schema do
-      import Ecto.Query
-
+    if query do
       records =
-        schema
+        query
         |> where([r], r.project_id == ^project_id)
         |> order_by([r], desc: r.updated_at)
         |> limit(^(@max_candidates * 2))
@@ -454,7 +485,8 @@ defmodule HydraX.Coherence.DetectionService do
     import Ecto.Query
 
     from(p in HydraX.Product.Project,
-      join: w in HydraX.Accounts.Workspace, on: w.id == p.workspace_id,
+      join: w in HydraX.Accounts.Workspace,
+      on: w.id == p.workspace_id,
       where: w.created_by_user_id == ^owner_user_id
     )
     |> Repo.all()

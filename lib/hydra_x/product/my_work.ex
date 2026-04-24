@@ -8,9 +8,7 @@ defmodule HydraX.Product.MyWork do
   alias HydraX.Product.BoardNode
   alias HydraX.Product.BoardSession
   alias HydraX.Product.GraphFlag
-  alias HydraX.Product.Insight
-  alias HydraX.Product.Decision
-  alias HydraX.Product.Requirement
+  alias HydraX.Graph.Node, as: GraphNode
   alias HydraX.Product.Routine
   alias HydraX.Product.Task, as: ProductTask
   alias HydraX.Repo
@@ -70,8 +68,11 @@ defmodule HydraX.Product.MyWork do
 
   defp draft_graph_nodes(project_id) do
     draft_insights =
-      Insight
-      |> where([i], i.project_id == ^project_id and i.status == "draft")
+      GraphNode
+      |> where(
+        [i],
+        i.project_id == ^project_id and i.type_key == "insight" and i.status == "draft"
+      )
       |> order_by([i], desc: i.inserted_at)
       |> limit(10)
       |> Repo.all()
@@ -88,8 +89,11 @@ defmodule HydraX.Product.MyWork do
       end)
 
     draft_decisions =
-      Decision
-      |> where([d], d.project_id == ^project_id and d.status == "draft")
+      GraphNode
+      |> where(
+        [d],
+        d.project_id == ^project_id and d.type_key == "decision" and d.status == "draft"
+      )
       |> order_by([d], desc: d.inserted_at)
       |> limit(10)
       |> Repo.all()
@@ -106,8 +110,11 @@ defmodule HydraX.Product.MyWork do
       end)
 
     draft_requirements =
-      Requirement
-      |> where([r], r.project_id == ^project_id and r.status == "draft")
+      GraphNode
+      |> where(
+        [r],
+        r.project_id == ^project_id and r.type_key == "requirement" and r.status == "draft"
+      )
       |> order_by([r], desc: r.inserted_at)
       |> limit(10)
       |> Repo.all()

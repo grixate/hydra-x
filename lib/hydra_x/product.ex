@@ -9,19 +9,16 @@ defmodule HydraX.Product do
   alias HydraX.Embeddings
   alias HydraX.Ingest.Parser
   alias HydraX.Memory
-  alias HydraX.Product.ArchitectureNode
-  alias HydraX.Product.Artifact
   alias HydraX.Product.ArtifactVersion
   alias HydraX.Product.BoardEdge
   alias HydraX.Product.BoardNode
   alias HydraX.Product.BoardSession
   alias HydraX.Product.Citations
-  alias HydraX.Product.Constraint
-  alias HydraX.Product.Decision
-  alias HydraX.Product.DesignNode
   alias HydraX.Product.GraphEdge
   alias HydraX.Product.GraphFlag
-  alias HydraX.Product.Insight
+  alias HydraX.Graph.Domains
+  alias HydraX.Graph.Node, as: GraphNode
+  alias HydraX.Graph.Nodes, as: GraphNodes
   alias HydraX.Product.InsightEvidence
   alias HydraX.Product.Onboarding
   alias HydraX.Product.KnowledgeEntry
@@ -30,13 +27,11 @@ defmodule HydraX.Product do
   alias HydraX.Product.ProductConversation
   alias HydraX.Product.ProductMessage
   alias HydraX.Product.PubSub, as: ProductPubSub
-  alias HydraX.Product.Requirement
   alias HydraX.Product.RequirementInsight
   alias HydraX.Product.Routine
   alias HydraX.Product.RoutineRun
   alias HydraX.Product.Source
   alias HydraX.Product.SourceChunk
-  alias HydraX.Product.Strategy
   alias HydraX.Product.Task, as: ProductTask
   alias HydraX.Product.TaskFeedback
   alias HydraX.Product.WorkspaceScaffold
@@ -110,11 +105,11 @@ defmodule HydraX.Product do
 
     %{
       sources: count_project_records(Source, project_id),
-      insights: count_project_records(Insight, project_id),
-      requirements: count_project_records(Requirement, project_id),
+      insights: count_insight_nodes(project_id),
+      requirements: count_type_key_nodes(project_id, "requirement", :all),
       conversations: count_project_records(ProductConversation, project_id),
-      decisions: count_project_records(Decision, project_id),
-      strategies: count_project_records(Strategy, project_id),
+      decisions: count_type_key_nodes(project_id, "decision", :all),
+      strategies: count_type_key_nodes(project_id, "strategy", :all),
       design_nodes: count_project_records(DesignNode, project_id),
       architecture_nodes: count_project_records(ArchitectureNode, project_id),
       tasks: count_project_records(ProductTask, project_id),
@@ -168,6 +163,7 @@ defmodule HydraX.Product do
           case Onboarding.setup_project!(project) do
             {:ok, %{session_id: sid, conversation_id: cid}} ->
               %{onboarding_session_id: sid, onboarding_conversation_id: cid}
+
             _ ->
               %{}
           end
@@ -361,22 +357,27 @@ defmodule HydraX.Product do
     status = Keyword.get(opts, :status)
     search = Keyword.get(opts, :search)
 
-    Insight
-    |> where([insight], insight.project_id == ^project_id)
-    |> maybe_filter_product_record_status(status)
+    query =
+      from(n in GraphNode,
+        where: n.project_id == ^project_id and n.type_key == "insight" and is_nil(n.archived_at)
+      )
+
+    query
+    |> maybe_filter_insight_status(status)
     |> maybe_filter_insight_search(search)
     |> preload(^insight_preloads())
-    |> order_by([insight], desc: insight.updated_at)
+    |> order_by([n], desc: n.updated_at)
     |> Repo.all()
   end
 
   def get_project_insight!(project_or_id, insight_id) do
     project_id = project_id(project_or_id)
 
-    Insight
-    |> where(
-      [insight],
-      insight.project_id == ^project_id and insight.id == ^parse_integer(insight_id)
+    from(n in GraphNode,
+      where:
+        n.project_id == ^project_id and
+          n.id == ^parse_integer(insight_id) and
+          n.type_key == "insight"
     )
     |> preload(^insight_preloads())
     |> Repo.one!()
@@ -398,25 +399,25 @@ defmodule HydraX.Product do
     else
       case load_project_chunks(project.id, evidence_chunk_ids) do
         {:ok, chunks} ->
+          domain = product_domain!()
+
           Repo.transaction(fn ->
+            node_attrs = %{
+              type_key: "insight",
+              title: attrs["title"],
+              body: attrs["body"],
+              status: attrs["status"] || "draft",
+              attributes:
+                Map.put(attrs["metadata"] || %{}, "evidence_chunk_ids", evidence_chunk_ids)
+            }
+
             insight =
-              %Insight{}
-              |> Insight.changeset(%{
-                "project_id" => project.id,
-                "title" => attrs["title"],
-                "body" => attrs["body"],
-                "status" => attrs["status"] || "draft",
-                "metadata" =>
-                  Map.put(attrs["metadata"] || %{}, "evidence_chunk_ids", evidence_chunk_ids)
-              })
-              |> Repo.insert()
-              |> case do
-                {:ok, insight} -> insight
+              case GraphNodes.create_node(domain, project.id, node_attrs) do
+                {:ok, node} -> node
                 {:error, changeset} -> Repo.rollback(changeset)
               end
 
             persist_insight_evidence!(insight, chunks, attrs["evidence_quotes"] || %{})
-
             Repo.preload(insight, insight_preloads())
           end)
           |> unwrap_transaction()
@@ -428,17 +429,23 @@ defmodule HydraX.Product do
     end
   end
 
-  def delete_insight(%Insight{} = insight) do
+  def delete_insight(%GraphNode{type_key: "insight"} = insight) do
     insight
     |> Repo.delete()
     |> maybe_broadcast_project_record("insight.deleted")
     |> maybe_notify_propagation("insight", :deleted)
   end
 
-  def update_insight(%Insight{} = insight, attrs) when is_map(attrs) do
+  def update_insight(%GraphNode{type_key: "insight"} = insight, attrs) when is_map(attrs) do
     attrs = normalize_product_record_attrs(attrs)
     evidence_chunk_ids = normalize_integer_list(Map.get(attrs, "evidence_chunk_ids"))
-    existing_chunk_ids = Enum.map(insight.insight_evidence || [], & &1.source_chunk_id)
+
+    existing_chunk_ids =
+      case insight.insight_evidence do
+        %Ecto.Association.NotLoaded{} -> insight_evidence_chunk_ids(insight.id)
+        list when is_list(list) -> Enum.map(list, & &1.source_chunk_id)
+        _ -> []
+      end
 
     desired_chunk_ids =
       if Map.has_key?(attrs, "evidence_chunk_ids"),
@@ -457,20 +464,21 @@ defmodule HydraX.Product do
       case load_project_chunks(insight.project_id, desired_chunk_ids) do
         {:ok, chunks} ->
           Repo.transaction(fn ->
+            merged_attributes =
+              (insight.attributes || %{})
+              |> Map.merge(attrs["metadata"] || %{})
+              |> Map.put("evidence_chunk_ids", desired_chunk_ids)
+
+            node_attrs = %{
+              title: attrs["title"] || insight.title,
+              body: attrs["body"] || insight.body,
+              status: attrs["status"] || insight.status,
+              attributes: merged_attributes
+            }
+
             updated =
-              insight
-              |> Insight.changeset(%{
-                "title" => attrs["title"] || insight.title,
-                "body" => attrs["body"] || insight.body,
-                "status" => attrs["status"] || insight.status,
-                "metadata" =>
-                  (insight.metadata || %{})
-                  |> Map.merge(attrs["metadata"] || %{})
-                  |> Map.put("evidence_chunk_ids", desired_chunk_ids)
-              })
-              |> Repo.update()
-              |> case do
-                {:ok, updated} -> updated
+              case GraphNodes.update_node(insight, node_attrs) do
+                {:ok, n} -> n
                 {:error, changeset} -> Repo.rollback(changeset)
               end
 
@@ -492,29 +500,53 @@ defmodule HydraX.Product do
     end
   end
 
+  defp insight_evidence_chunk_ids(insight_id) do
+    Repo.all(
+      from e in InsightEvidence,
+        where: e.insight_id == ^insight_id,
+        select: e.source_chunk_id
+    )
+  end
+
+  defp product_domain! do
+    case Domains.get_domain_by_slug("product_development") do
+      nil ->
+        {:ok, domain} = HydraX.Graph.Domains.ProductDevelopment.seed()
+        domain
+
+      domain ->
+        domain
+    end
+  end
+
+  defp maybe_filter_insight_status(query, nil), do: query
+  defp maybe_filter_insight_status(query, ""), do: query
+  defp maybe_filter_insight_status(query, status), do: where(query, [n], n.status == ^status)
+
   def list_requirements(project_or_id, opts \\ []) do
     project_id = project_id(project_or_id)
     status = Keyword.get(opts, :status)
     grounded = Keyword.get(opts, :grounded)
     search = Keyword.get(opts, :search)
 
-    Requirement
-    |> where([requirement], requirement.project_id == ^project_id)
+    from(n in GraphNode,
+      where: n.project_id == ^project_id and n.type_key == "requirement" and is_nil(n.archived_at)
+    )
     |> maybe_filter_product_record_status(status)
     |> maybe_filter_requirement_grounded(grounded)
     |> maybe_filter_requirement_search(search)
     |> preload(^requirement_preloads())
-    |> order_by([requirement], desc: requirement.updated_at)
+    |> order_by([r], desc: r.updated_at)
     |> Repo.all()
   end
 
   def get_project_requirement!(project_or_id, requirement_id) do
     project_id = project_id(project_or_id)
 
-    Requirement
-    |> where(
-      [requirement],
-      requirement.project_id == ^project_id and requirement.id == ^parse_integer(requirement_id)
+    from(n in GraphNode,
+      where:
+        n.project_id == ^project_id and n.id == ^parse_integer(requirement_id) and
+          n.type_key == "requirement"
     )
     |> preload(^requirement_preloads())
     |> Repo.one!()
@@ -540,24 +572,24 @@ defmodule HydraX.Product do
            )}
         else
           Repo.transaction(fn ->
+            node_attrs = %{
+              type_key: "requirement",
+              title: attrs["title"],
+              body: attrs["body"],
+              status: status,
+              attributes:
+                (attrs["metadata"] || %{})
+                |> Map.put("grounded", grounded)
+                |> Map.put("insight_ids", insight_ids)
+            }
+
             requirement =
-              %Requirement{}
-              |> Requirement.changeset(%{
-                "project_id" => project.id,
-                "title" => attrs["title"],
-                "body" => attrs["body"],
-                "status" => status,
-                "grounded" => grounded,
-                "metadata" => Map.put(attrs["metadata"] || %{}, "insight_ids", insight_ids)
-              })
-              |> Repo.insert()
-              |> case do
-                {:ok, requirement} -> requirement
+              case GraphNodes.create_node(product_domain!(), project.id, node_attrs) do
+                {:ok, node} -> node
                 {:error, changeset} -> Repo.rollback(changeset)
               end
 
             persist_requirement_insights!(requirement, insights)
-
             Repo.preload(requirement, requirement_preloads())
           end)
           |> unwrap_transaction()
@@ -569,9 +601,16 @@ defmodule HydraX.Product do
     end
   end
 
-  def update_requirement(%Requirement{} = requirement, attrs) when is_map(attrs) do
+  def update_requirement(%GraphNode{type_key: "requirement"} = requirement, attrs)
+      when is_map(attrs) do
     attrs = normalize_product_record_attrs(attrs)
-    existing_insight_ids = Enum.map(requirement.requirement_insights || [], & &1.insight_id)
+
+    existing_insight_ids =
+      case requirement.linked_requirement_insights do
+        %Ecto.Association.NotLoaded{} -> linked_insight_ids(requirement.id)
+        list when is_list(list) -> Enum.map(list, & &1.insight_id)
+        _ -> []
+      end
 
     insight_ids =
       if Map.has_key?(attrs, "insight_ids"),
@@ -593,21 +632,22 @@ defmodule HydraX.Product do
            )}
         else
           Repo.transaction(fn ->
+            merged_attributes =
+              (requirement.attributes || %{})
+              |> Map.merge(attrs["metadata"] || %{})
+              |> Map.put("grounded", grounded)
+              |> Map.put("insight_ids", insight_ids)
+
+            node_attrs = %{
+              title: attrs["title"] || requirement.title,
+              body: attrs["body"] || requirement.body,
+              status: status,
+              attributes: merged_attributes
+            }
+
             updated =
-              requirement
-              |> Requirement.changeset(%{
-                "title" => attrs["title"] || requirement.title,
-                "body" => attrs["body"] || requirement.body,
-                "status" => status,
-                "grounded" => grounded,
-                "metadata" =>
-                  (requirement.metadata || %{})
-                  |> Map.merge(attrs["metadata"] || %{})
-                  |> Map.put("insight_ids", insight_ids)
-              })
-              |> Repo.update()
-              |> case do
-                {:ok, updated} -> updated
+              case GraphNodes.update_node(requirement, node_attrs) do
+                {:ok, n} -> n
                 {:error, changeset} -> Repo.rollback(changeset)
               end
 
@@ -629,11 +669,19 @@ defmodule HydraX.Product do
     end
   end
 
-  def delete_requirement(%Requirement{} = requirement) do
+  def delete_requirement(%GraphNode{type_key: "requirement"} = requirement) do
     requirement
     |> Repo.delete()
     |> maybe_broadcast_project_record("requirement.deleted")
     |> maybe_notify_propagation("requirement", :deleted)
+  end
+
+  defp linked_insight_ids(requirement_id) do
+    Repo.all(
+      from ri in RequirementInsight,
+        where: ri.requirement_id == ^requirement_id,
+        select: ri.insight_id
+    )
   end
 
   # -------------------------------------------------------------------
@@ -645,50 +693,88 @@ defmodule HydraX.Product do
     status = Keyword.get(opts, :status)
     search = Keyword.get(opts, :search)
 
-    Decision
-    |> where([d], d.project_id == ^project_id)
+    from(n in GraphNode,
+      where: n.project_id == ^project_id and n.type_key == "decision" and is_nil(n.archived_at)
+    )
     |> maybe_filter_product_record_status(status)
     |> maybe_filter_title_body_search(search)
     |> order_by([d], desc: d.updated_at)
     |> Repo.all()
   end
 
-  def get_decision!(id), do: Repo.get!(Decision, id)
+  def get_decision!(id) do
+    Repo.one!(from n in GraphNode, where: n.id == ^id and n.type_key == "decision")
+  end
 
   def get_project_decision!(project_or_id, id) do
     project_id = project_id(project_or_id)
 
-    Decision
-    |> where([d], d.project_id == ^project_id and d.id == ^parse_integer(id))
-    |> Repo.one!()
+    Repo.one!(
+      from n in GraphNode,
+        where:
+          n.project_id == ^project_id and n.id == ^parse_integer(id) and
+            n.type_key == "decision"
+    )
   end
 
   def create_decision(project_or_id, attrs) when is_map(attrs) do
     project_id = project_id(project_or_id)
     attrs = normalize_product_record_attrs(attrs)
 
-    %Decision{}
-    |> Decision.changeset(Map.put(attrs, "project_id", project_id))
-    |> Repo.insert()
+    node_attrs = %{
+      type_key: "decision",
+      title: attrs["title"],
+      body: attrs["body"],
+      status: attrs["status"] || "active",
+      attributes: decision_attributes(attrs)
+    }
+
+    GraphNodes.create_node(product_domain!(), project_id, node_attrs)
     |> maybe_broadcast_project_record("decision.created")
     |> maybe_notify_coherence("decision", :created)
   end
 
-  def update_decision(%Decision{} = decision, attrs) when is_map(attrs) do
+  def update_decision(%GraphNode{type_key: "decision"} = decision, attrs) when is_map(attrs) do
     attrs = normalize_product_record_attrs(attrs)
 
-    decision
-    |> Decision.changeset(attrs)
-    |> Repo.update()
+    merged_attributes =
+      (decision.attributes || %{})
+      |> Map.merge(attrs["metadata"] || %{})
+      |> Map.merge(decision_attributes(attrs))
+
+    node_attrs = %{
+      title: attrs["title"] || decision.title,
+      body: attrs["body"] || decision.body,
+      status: attrs["status"] || decision.status,
+      attributes: merged_attributes
+    }
+
+    GraphNodes.update_node(decision, node_attrs)
     |> maybe_broadcast_project_record("decision.updated")
     |> maybe_notify_propagation("decision", :updated)
   end
 
-  def delete_decision(%Decision{} = decision) do
+  def delete_decision(%GraphNode{type_key: "decision"} = decision) do
     decision
     |> Repo.delete()
     |> maybe_broadcast_project_record("decision.deleted")
     |> maybe_notify_propagation("decision", :deleted)
+  end
+
+  defp decision_attributes(attrs) do
+    base = attrs["metadata"] || %{}
+
+    Enum.reduce(
+      [
+        {"alternatives_considered", attrs["alternatives_considered"]},
+        {"decided_by", attrs["decided_by"]},
+        {"decided_at", attrs["decided_at"]},
+        {"rationale", attrs["rationale"]},
+        {"reversibility", attrs["reversibility"]}
+      ],
+      base,
+      fn {k, v}, acc -> if is_nil(v), do: acc, else: Map.put(acc, k, v) end
+    )
   end
 
   # -------------------------------------------------------------------
@@ -700,46 +786,63 @@ defmodule HydraX.Product do
     status = Keyword.get(opts, :status)
     search = Keyword.get(opts, :search)
 
-    Strategy
-    |> where([s], s.project_id == ^project_id)
+    from(n in GraphNode,
+      where: n.project_id == ^project_id and n.type_key == "strategy" and is_nil(n.archived_at)
+    )
     |> maybe_filter_product_record_status(status)
     |> maybe_filter_title_body_search(search)
     |> order_by([s], desc: s.updated_at)
     |> Repo.all()
   end
 
-  def get_strategy!(id), do: Repo.get!(Strategy, id)
+  def get_strategy!(id) do
+    Repo.one!(from n in GraphNode, where: n.id == ^id and n.type_key == "strategy")
+  end
 
   def get_project_strategy!(project_or_id, id) do
     project_id = project_id(project_or_id)
 
-    Strategy
-    |> where([s], s.project_id == ^project_id and s.id == ^parse_integer(id))
-    |> Repo.one!()
+    Repo.one!(
+      from n in GraphNode,
+        where:
+          n.project_id == ^project_id and n.id == ^parse_integer(id) and
+            n.type_key == "strategy"
+    )
   end
 
   def create_strategy(project_or_id, attrs) when is_map(attrs) do
     project_id = project_id(project_or_id)
     attrs = normalize_product_record_attrs(attrs)
 
-    %Strategy{}
-    |> Strategy.changeset(Map.put(attrs, "project_id", project_id))
-    |> Repo.insert()
+    node_attrs = %{
+      type_key: "strategy",
+      title: attrs["title"],
+      body: attrs["body"],
+      status: attrs["status"] || "active",
+      attributes: attrs["metadata"] || %{}
+    }
+
+    GraphNodes.create_node(product_domain!(), project_id, node_attrs)
     |> maybe_broadcast_project_record("strategy.created")
     |> maybe_notify_coherence("strategy", :created)
   end
 
-  def update_strategy(%Strategy{} = strategy, attrs) when is_map(attrs) do
+  def update_strategy(%GraphNode{type_key: "strategy"} = strategy, attrs) when is_map(attrs) do
     attrs = normalize_product_record_attrs(attrs)
 
-    strategy
-    |> Strategy.changeset(attrs)
-    |> Repo.update()
+    merged_attributes = Map.merge(strategy.attributes || %{}, attrs["metadata"] || %{})
+
+    GraphNodes.update_node(strategy, %{
+      title: attrs["title"] || strategy.title,
+      body: attrs["body"] || strategy.body,
+      status: attrs["status"] || strategy.status,
+      attributes: merged_attributes
+    })
     |> maybe_broadcast_project_record("strategy.updated")
     |> maybe_notify_propagation("strategy", :updated)
   end
 
-  def delete_strategy(%Strategy{} = strategy) do
+  def delete_strategy(%GraphNode{type_key: "strategy"} = strategy) do
     strategy
     |> Repo.delete()
     |> maybe_broadcast_project_record("strategy.deleted")
@@ -751,111 +854,143 @@ defmodule HydraX.Product do
   # -------------------------------------------------------------------
 
   def list_design_nodes(project_or_id, opts \\ []) do
-    project_id = project_id(project_or_id)
-    status = Keyword.get(opts, :status)
-    node_type = Keyword.get(opts, :node_type)
-    search = Keyword.get(opts, :search)
-
-    DesignNode
-    |> where([d], d.project_id == ^project_id)
-    |> maybe_filter_product_record_status(status)
-    |> maybe_filter_node_type(node_type)
-    |> maybe_filter_title_body_search(search)
-    |> order_by([d], desc: d.updated_at)
-    |> Repo.all()
+    list_node_typed(project_or_id, "design_node", opts)
   end
 
-  def get_design_node!(id), do: Repo.get!(DesignNode, id)
+  def get_design_node!(id), do: get_node_typed!(id, "design_node")
 
-  def get_project_design_node!(project_or_id, id) do
-    project_id = project_id(project_or_id)
+  def get_project_design_node!(project_or_id, id),
+    do: get_project_node_typed!(project_or_id, id, "design_node")
 
-    DesignNode
-    |> where([d], d.project_id == ^project_id and d.id == ^parse_integer(id))
-    |> Repo.one!()
-  end
+  def create_design_node(project_or_id, attrs),
+    do: create_node_typed(project_or_id, "design_node", attrs, "design_node.created")
 
-  def create_design_node(project_or_id, attrs) when is_map(attrs) do
-    project_id = project_id(project_or_id)
-    attrs = normalize_product_record_attrs(attrs)
+  def update_design_node(%GraphNode{type_key: "design_node"} = node, attrs),
+    do: update_node_typed(node, attrs, "design_node.updated", propagate: "design_node")
 
-    %DesignNode{}
-    |> DesignNode.changeset(Map.put(attrs, "project_id", project_id))
-    |> Repo.insert()
-    |> maybe_broadcast_project_record("design_node.created")
-  end
-
-  def update_design_node(%DesignNode{} = node, attrs) when is_map(attrs) do
-    attrs = normalize_product_record_attrs(attrs)
-
-    node
-    |> DesignNode.changeset(attrs)
-    |> Repo.update()
-    |> maybe_broadcast_project_record("design_node.updated")
-    |> maybe_notify_propagation("design_node", :updated)
-  end
-
-  def delete_design_node(%DesignNode{} = node) do
-    node
-    |> Repo.delete()
-    |> maybe_broadcast_project_record("design_node.deleted")
-    |> maybe_notify_propagation("design_node", :deleted)
-  end
+  def delete_design_node(%GraphNode{type_key: "design_node"} = node),
+    do: delete_node_typed(node, "design_node.deleted", propagate: "design_node")
 
   # -------------------------------------------------------------------
   # Architecture Nodes
   # -------------------------------------------------------------------
 
   def list_architecture_nodes(project_or_id, opts \\ []) do
+    list_node_typed(project_or_id, "architecture_node", opts)
+  end
+
+  def get_architecture_node!(id), do: get_node_typed!(id, "architecture_node")
+
+  def get_project_architecture_node!(project_or_id, id),
+    do: get_project_node_typed!(project_or_id, id, "architecture_node")
+
+  def create_architecture_node(project_or_id, attrs),
+    do: create_node_typed(project_or_id, "architecture_node", attrs, "architecture_node.created")
+
+  def update_architecture_node(%GraphNode{type_key: "architecture_node"} = node, attrs),
+    do:
+      update_node_typed(node, attrs, "architecture_node.updated", propagate: "architecture_node")
+
+  def delete_architecture_node(%GraphNode{type_key: "architecture_node"} = node),
+    do: delete_node_typed(node, "architecture_node.deleted", propagate: "architecture_node")
+
+  # Shared helpers for simple substrate-backed node types.
+  # Domain-specific discriminators (design_node's `node_type`) live in
+  # `attributes` — callers pass them through `attrs["node_type"]`.
+
+  defp list_node_typed(project_or_id, type_key, opts) do
     project_id = project_id(project_or_id)
     status = Keyword.get(opts, :status)
     node_type = Keyword.get(opts, :node_type)
     search = Keyword.get(opts, :search)
 
-    ArchitectureNode
-    |> where([a], a.project_id == ^project_id)
+    from(n in GraphNode,
+      where: n.project_id == ^project_id and n.type_key == ^type_key and is_nil(n.archived_at)
+    )
     |> maybe_filter_product_record_status(status)
-    |> maybe_filter_node_type(node_type)
+    |> maybe_filter_node_type_attribute(node_type)
     |> maybe_filter_title_body_search(search)
-    |> order_by([a], a.updated_at)
+    |> order_by([n], desc: n.updated_at)
     |> Repo.all()
   end
 
-  def get_architecture_node!(id), do: Repo.get!(ArchitectureNode, id)
-
-  def get_project_architecture_node!(project_or_id, id) do
-    project_id = project_id(project_or_id)
-
-    ArchitectureNode
-    |> where([a], a.project_id == ^project_id and a.id == ^parse_integer(id))
-    |> Repo.one!()
+  defp get_node_typed!(id, type_key) do
+    Repo.one!(from n in GraphNode, where: n.id == ^id and n.type_key == ^type_key)
   end
 
-  def create_architecture_node(project_or_id, attrs) when is_map(attrs) do
+  defp get_project_node_typed!(project_or_id, id, type_key) do
+    project_id = project_id(project_or_id)
+
+    Repo.one!(
+      from n in GraphNode,
+        where:
+          n.project_id == ^project_id and n.id == ^parse_integer(id) and
+            n.type_key == ^type_key
+    )
+  end
+
+  defp create_node_typed(project_or_id, type_key, attrs, event) do
     project_id = project_id(project_or_id)
     attrs = normalize_product_record_attrs(attrs)
 
-    %ArchitectureNode{}
-    |> ArchitectureNode.changeset(Map.put(attrs, "project_id", project_id))
-    |> Repo.insert()
-    |> maybe_broadcast_project_record("architecture_node.created")
+    merged_attributes =
+      case attrs["node_type"] do
+        nil -> attrs["metadata"] || %{}
+        nt -> Map.put(attrs["metadata"] || %{}, "node_type", nt)
+      end
+
+    node_attrs = %{
+      type_key: type_key,
+      title: attrs["title"],
+      body: attrs["body"],
+      status: attrs["status"] || "active",
+      attributes: merged_attributes
+    }
+
+    GraphNodes.create_node(product_domain!(), project_id, node_attrs)
+    |> maybe_broadcast_project_record(event)
   end
 
-  def update_architecture_node(%ArchitectureNode{} = node, attrs) when is_map(attrs) do
+  defp update_node_typed(node, attrs, event, opts) do
     attrs = normalize_product_record_attrs(attrs)
 
-    node
-    |> ArchitectureNode.changeset(attrs)
-    |> Repo.update()
-    |> maybe_broadcast_project_record("architecture_node.updated")
-    |> maybe_notify_propagation("architecture_node", :updated)
+    incoming_attributes =
+      case attrs["node_type"] do
+        nil -> attrs["metadata"] || %{}
+        nt -> Map.put(attrs["metadata"] || %{}, "node_type", nt)
+      end
+
+    merged_attributes = Map.merge(node.attributes || %{}, incoming_attributes)
+
+    result =
+      GraphNodes.update_node(node, %{
+        title: attrs["title"] || node.title,
+        body: attrs["body"] || node.body,
+        status: attrs["status"] || node.status,
+        attributes: merged_attributes
+      })
+      |> maybe_broadcast_project_record(event)
+
+    case Keyword.get(opts, :propagate) do
+      nil -> result
+      type -> maybe_notify_propagation(result, type, :updated)
+    end
   end
 
-  def delete_architecture_node(%ArchitectureNode{} = node) do
-    node
-    |> Repo.delete()
-    |> maybe_broadcast_project_record("architecture_node.deleted")
-    |> maybe_notify_propagation("architecture_node", :deleted)
+  defp delete_node_typed(node, event, opts) do
+    result = node |> Repo.delete() |> maybe_broadcast_project_record(event)
+
+    case Keyword.get(opts, :propagate) do
+      nil -> result
+      type -> maybe_notify_propagation(result, type, :deleted)
+    end
+  end
+
+  defp maybe_filter_node_type_attribute(query, nil), do: query
+  defp maybe_filter_node_type_attribute(query, ""), do: query
+
+  defp maybe_filter_node_type_attribute(query, node_type) do
+    where(query, [n], fragment("?->>'node_type' = ?", n.attributes, ^to_string(node_type)))
   end
 
   # -------------------------------------------------------------------
@@ -1116,41 +1251,80 @@ defmodule HydraX.Product do
     project_id = project_id(project_or_id)
     status = Keyword.get(opts, :status)
 
-    Constraint
-    |> where([c], c.project_id == ^project_id)
+    from(n in GraphNode,
+      where: n.project_id == ^project_id and n.type_key == "constraint" and is_nil(n.archived_at)
+    )
     |> maybe_filter_product_record_status(status)
     |> order_by([c], desc: c.updated_at)
     |> Repo.all()
   end
 
-  def get_constraint!(id), do: Repo.get!(Constraint, id)
+  def get_constraint!(id) do
+    Repo.one!(from n in GraphNode, where: n.id == ^id and n.type_key == "constraint")
+  end
 
   def get_project_constraint!(project_or_id, id) do
     project_id = project_id(project_or_id)
-    Constraint |> where([c], c.project_id == ^project_id and c.id == ^parse_integer(id)) |> Repo.one!()
+
+    Repo.one!(
+      from n in GraphNode,
+        where:
+          n.project_id == ^project_id and n.id == ^parse_integer(id) and
+            n.type_key == "constraint"
+    )
   end
 
   def create_constraint(project_or_id, attrs) when is_map(attrs) do
     project_id = project_id(project_or_id)
     attrs = normalize_product_record_attrs(attrs)
 
-    %Constraint{}
-    |> Constraint.changeset(Map.put(attrs, "project_id", project_id))
-    |> Repo.insert()
+    node_attrs = %{
+      type_key: "constraint",
+      title: attrs["title"],
+      body: attrs["body"],
+      status: attrs["status"] || "active",
+      attributes: constraint_attributes(attrs)
+    }
+
+    GraphNodes.create_node(product_domain!(), project_id, node_attrs)
     |> maybe_broadcast_project_record("constraint.created")
   end
 
-  def update_constraint(%Constraint{} = constraint, attrs) when is_map(attrs) do
+  def update_constraint(%GraphNode{type_key: "constraint"} = constraint, attrs)
+      when is_map(attrs) do
     attrs = normalize_product_record_attrs(attrs)
 
-    constraint
-    |> Constraint.changeset(attrs)
-    |> Repo.update()
+    merged_attributes =
+      (constraint.attributes || %{})
+      |> Map.merge(attrs["metadata"] || %{})
+      |> Map.merge(constraint_attributes(attrs))
+
+    GraphNodes.update_node(constraint, %{
+      title: attrs["title"] || constraint.title,
+      body: attrs["body"] || constraint.body,
+      status: attrs["status"] || constraint.status,
+      attributes: merged_attributes
+    })
     |> maybe_broadcast_project_record("constraint.updated")
   end
 
-  def delete_constraint(%Constraint{} = constraint) do
+  def delete_constraint(%GraphNode{type_key: "constraint"} = constraint) do
     constraint |> Repo.delete() |> maybe_broadcast_project_record("constraint.deleted")
+  end
+
+  defp constraint_attributes(attrs) do
+    base = attrs["metadata"] || %{}
+
+    # The legacy `scope` and `enforcement` fields live in attributes now —
+    # the substrate's `scope` is memory scope (project/shared) not reach.
+    Enum.reduce(
+      [
+        {"reach_scope", attrs["scope"]},
+        {"enforcement", attrs["enforcement"]}
+      ],
+      base,
+      fn {k, v}, acc -> if is_nil(v), do: acc, else: Map.put(acc, k, v) end
+    )
   end
 
   # -------------------------------------------------------------------
@@ -1172,7 +1346,10 @@ defmodule HydraX.Product do
 
   def get_project_routine!(project_or_id, id) do
     project_id = project_id(project_or_id)
-    Routine |> where([r], r.project_id == ^project_id and r.id == ^parse_integer(id)) |> Repo.one!()
+
+    Routine
+    |> where([r], r.project_id == ^project_id and r.id == ^parse_integer(id))
+    |> Repo.one!()
   end
 
   def create_routine(project_or_id, attrs) when is_map(attrs) do
@@ -1192,10 +1369,12 @@ defmodule HydraX.Product do
   def delete_routine(%Routine{} = routine), do: Repo.delete(routine)
 
   def list_routine_runs(routine_or_id, opts \\ []) do
-    routine_id = case routine_or_id do
-      %Routine{id: id} -> id
-      id -> parse_integer(id)
-    end
+    routine_id =
+      case routine_or_id do
+        %Routine{id: id} -> id
+        id -> parse_integer(id)
+      end
+
     limit = Keyword.get(opts, :limit, 20)
 
     RoutineRun
@@ -1228,10 +1407,12 @@ defmodule HydraX.Product do
       if persona do
         p = to_string(persona)
 
-        where(query, [k],
+        where(
+          query,
+          [k],
           ^p in k.assigned_personas or
-          fragment("? = ANY(?)", "all", k.assigned_personas) or
-          k.assigned_personas == ^[]
+            fragment("? = ANY(?)", "all", k.assigned_personas) or
+            k.assigned_personas == ^[]
         )
       else
         query
@@ -1244,7 +1425,10 @@ defmodule HydraX.Product do
 
   def get_project_knowledge_entry!(project_or_id, id) do
     project_id = project_id(project_or_id)
-    KnowledgeEntry |> where([k], k.project_id == ^project_id and k.id == ^parse_integer(id)) |> Repo.one!()
+
+    KnowledgeEntry
+    |> where([k], k.project_id == ^project_id and k.id == ^parse_integer(id))
+    |> Repo.one!()
   end
 
   def create_knowledge_entry(project_or_id, attrs) when is_map(attrs) do
@@ -1334,10 +1518,11 @@ defmodule HydraX.Product do
   # -------------------------------------------------------------------
 
   def list_task_feedback(task_or_id) do
-    task_id = case task_or_id do
-      %{id: id} -> id
-      id -> parse_integer(id)
-    end
+    task_id =
+      case task_or_id do
+        %{id: id} -> id
+        id -> parse_integer(id)
+      end
 
     TaskFeedback
     |> where([f], f.task_id == ^task_id)
@@ -1346,10 +1531,12 @@ defmodule HydraX.Product do
   end
 
   def create_task_feedback(task_or_id, attrs) when is_map(attrs) do
-    task_id = case task_or_id do
-      %{id: id} -> id
-      id -> parse_integer(id)
-    end
+    task_id =
+      case task_or_id do
+        %{id: id} -> id
+        id -> parse_integer(id)
+      end
+
     attrs = HydraX.Runtime.Helpers.normalize_string_keys(attrs)
 
     %TaskFeedback{}
@@ -1453,6 +1640,7 @@ defmodule HydraX.Product do
       {:ok, event} ->
         # Find project_id from session for broadcast
         session = get_board_session!(event.board_session_id)
+
         ProductPubSub.broadcast_project_event(
           session.project_id,
           "board_session_event.created",
@@ -1495,7 +1683,9 @@ defmodule HydraX.Product do
         )
 
         # Record session event
-        event_type = if node.node_type == "source_ref", do: "source_uploaded", else: "node_created"
+        event_type =
+          if node.node_type == "source_ref", do: "source_uploaded", else: "node_created"
+
         create_board_session_event(session.id, %{
           "event_type" => event_type,
           "actor_type" => if(node.created_by == "human", do: "human", else: "agent"),
@@ -1748,8 +1938,8 @@ defmodule HydraX.Product do
 
   defp persona_prompt_context(project_id, "strategist") do
     """
-    Active insights: #{count_active_nodes(project_id, Insight)}
-    Active decisions: #{count_active_nodes(project_id, Decision)}
+    Active insights: #{count_insight_nodes(project_id)}
+    Active decisions: #{count_type_key_nodes(project_id, "decision")}
     When creating requirements, always link to supporting insights.
     When making decisions, record them with decision_create including alternatives considered.
     """
@@ -1757,7 +1947,7 @@ defmodule HydraX.Product do
 
   defp persona_prompt_context(project_id, "architect") do
     """
-    Active requirements: #{count_active_nodes(project_id, Requirement)}
+    Active requirements: #{count_type_key_nodes(project_id, "requirement")}
     Architecture nodes: #{count_active_nodes(project_id, ArchitectureNode)}
     Always link architecture decisions to the requirements they serve.
     """
@@ -1765,7 +1955,7 @@ defmodule HydraX.Product do
 
   defp persona_prompt_context(project_id, "designer") do
     """
-    Active requirements: #{count_active_nodes(project_id, Requirement)}
+    Active requirements: #{count_type_key_nodes(project_id, "requirement")}
     Design nodes: #{count_active_nodes(project_id, DesignNode)}
     Check pattern_check before creating new interaction patterns.
     """
@@ -1775,10 +1965,10 @@ defmodule HydraX.Product do
     """
     You have read-only access to the product graph. You NEVER create or modify nodes.
     Graph summary:
-    - Insights: #{count_active_nodes(project_id, Insight)}
-    - Decisions: #{count_active_nodes(project_id, Decision)}
-    - Strategies: #{count_active_nodes(project_id, Strategy)}
-    - Requirements: #{count_active_nodes(project_id, Requirement)}
+    - Insights: #{count_insight_nodes(project_id)}
+    - Decisions: #{count_type_key_nodes(project_id, "decision")}
+    - Strategies: #{count_type_key_nodes(project_id, "strategy")}
+    - Requirements: #{count_type_key_nodes(project_id, "requirement")}
     - Architecture nodes: #{count_active_nodes(project_id, ArchitectureNode)}
     - Design nodes: #{count_active_nodes(project_id, DesignNode)}
     Use graph_query and trail_trace to find information. Cite specific nodes in your answers.
@@ -2503,8 +2693,15 @@ defmodule HydraX.Product do
 
   defp maybe_filter_requirement_grounded(query, grounded) do
     case normalize_boolean_filter(grounded) do
-      nil -> query
-      value -> where(query, [requirement], requirement.grounded == ^value)
+      nil ->
+        query
+
+      value ->
+        where(
+          query,
+          [r],
+          fragment("(?->>'grounded')::boolean = ?", r.attributes, ^value)
+        )
     end
   end
 
@@ -2574,8 +2771,11 @@ defmodule HydraX.Product do
 
   defp load_project_insights(project_id, insight_ids) do
     insights =
-      Insight
-      |> where([insight], insight.project_id == ^project_id and insight.id in ^insight_ids)
+      from(n in GraphNode,
+        where:
+          n.project_id == ^project_id and n.id in ^insight_ids and
+            n.type_key == "insight"
+      )
       |> preload(^insight_preloads())
       |> Repo.all()
 
@@ -2673,7 +2873,7 @@ defmodule HydraX.Product do
   end
 
   defp grounded_insight?(insight) do
-    (insight.insight_evidence || []) != []
+    associated_list(insight.insight_evidence) != []
   end
 
   defp sort_by_ids(records, ids) do
@@ -2699,26 +2899,29 @@ defmodule HydraX.Product do
   defp normalize_integer_list(_values), do: []
 
   defp insight_error_changeset(project_id, attrs, field, message) do
-    %Insight{}
-    |> Insight.changeset(%{
-      "project_id" => project_id,
-      "title" => attrs["title"],
-      "body" => attrs["body"],
-      "status" => attrs["status"] || "draft",
-      "metadata" => attrs["metadata"] || %{}
+    %GraphNode{}
+    |> GraphNode.changeset(%{
+      project_id: project_id,
+      domain_id: product_domain!().id,
+      type_key: "insight",
+      title: attrs["title"],
+      body: attrs["body"],
+      status: attrs["status"] || "draft",
+      attributes: attrs["metadata"] || %{}
     })
     |> Ecto.Changeset.add_error(product_error_field(field), message)
   end
 
   defp requirement_error_changeset(project_id, attrs, field, message) do
-    %Requirement{}
-    |> Requirement.changeset(%{
-      "project_id" => project_id,
-      "title" => attrs["title"],
-      "body" => attrs["body"],
-      "status" => attrs["status"] || "draft",
-      "grounded" => false,
-      "metadata" => attrs["metadata"] || %{}
+    %GraphNode{}
+    |> GraphNode.changeset(%{
+      project_id: project_id,
+      domain_id: product_domain!().id,
+      type_key: "requirement",
+      title: attrs["title"],
+      body: attrs["body"],
+      status: attrs["status"] || "draft",
+      attributes: Map.put(attrs["metadata"] || %{}, "grounded", false)
     })
     |> Ecto.Changeset.add_error(product_error_field(field), message)
   end
@@ -3037,9 +3240,9 @@ defmodule HydraX.Product do
       title: insight.title,
       body: insight.body,
       status: insight.status,
-      metadata: insight.metadata || %{},
+      metadata: insight.attributes || %{},
       evidence:
-        Enum.map(insight.insight_evidence || [], fn evidence ->
+        Enum.map(associated_list(insight.insight_evidence), fn evidence ->
           %{
             id: evidence.id,
             source_chunk_id: evidence.source_chunk_id,
@@ -3058,30 +3261,34 @@ defmodule HydraX.Product do
               )
           }
         end),
-      requirement_ids: Enum.map(insight.requirement_insights || [], & &1.requirement_id),
+      requirement_ids:
+        Enum.map(associated_list(insight.requirement_insights), & &1.requirement_id),
       inserted_at: insight.inserted_at,
       updated_at: insight.updated_at
     }
   end
 
   defp requirement_export_json(requirement) do
+    attrs = requirement.attributes || %{}
+
     %{
       id: requirement.id,
       project_id: requirement.project_id,
       title: requirement.title,
       body: requirement.body,
       status: requirement.status,
-      grounded: requirement.grounded,
-      metadata: requirement.metadata || %{},
+      grounded: Map.get(attrs, "grounded", false),
+      metadata: attrs,
       insights:
-        Enum.map(requirement.requirement_insights || [], fn link ->
+        Enum.map(associated_list(requirement.linked_requirement_insights), fn link ->
           insight = link.insight
 
           %{
             id: insight.id,
             title: insight.title,
             status: insight.status,
-            evidence_chunk_ids: Enum.map(insight.insight_evidence || [], & &1.source_chunk_id)
+            evidence_chunk_ids:
+              Enum.map(associated_list(insight.insight_evidence), & &1.source_chunk_id)
           }
         end),
       inserted_at: requirement.inserted_at,
@@ -3177,7 +3384,7 @@ defmodule HydraX.Product do
   defp render_requirement_export_lines(requirements) do
     Enum.flat_map(requirements, fn requirement ->
       [
-        "- [#{requirement.id}] #{requirement.title} status=#{requirement.status} grounded=#{if(requirement.grounded, do: "yes", else: "no")} insights=#{length(requirement.insights)}",
+        "- [#{requirement.id}] #{requirement.title} status=#{requirement.status} grounded=#{if(requirement.grounded, do: "yes", else: "no")} insights=#{length(requirement.insights || [])}",
         "  #{requirement.body}"
       ]
     end)
@@ -3335,6 +3542,32 @@ defmodule HydraX.Product do
     |> Repo.aggregate(:count, :id)
   end
 
+  defp associated_list(%Ecto.Association.NotLoaded{}), do: []
+  defp associated_list(nil), do: []
+  defp associated_list(list) when is_list(list), do: list
+
+  defp count_insight_nodes(project_id) do
+    count_type_key_nodes(project_id, "insight")
+  end
+
+  defp count_type_key_nodes(project_id, type_key, mode \\ :active)
+
+  defp count_type_key_nodes(project_id, type_key, :active) do
+    from(n in GraphNode,
+      where:
+        n.project_id == ^project_id and n.type_key == ^type_key and
+          n.status in ["active", "accepted", "draft"]
+    )
+    |> Repo.aggregate(:count, :id)
+  end
+
+  defp count_type_key_nodes(project_id, type_key, :all) do
+    from(n in GraphNode,
+      where: n.project_id == ^project_id and n.type_key == ^type_key
+    )
+    |> Repo.aggregate(:count, :id)
+  end
+
   # -------------------------------------------------------------------
   # Artifacts
   # -------------------------------------------------------------------
@@ -3345,17 +3578,30 @@ defmodule HydraX.Product do
     artifact_type = Keyword.get(opts, :artifact_type)
     search = Keyword.get(opts, :search)
 
-    Artifact
-    |> where([a], a.project_id == ^project_id)
+    from(n in GraphNode,
+      where: n.project_id == ^project_id and n.type_key == "artifact" and is_nil(n.archived_at)
+    )
     |> then(fn q ->
       if status, do: where(q, [a], a.status == ^status), else: q
     end)
     |> then(fn q ->
-      if artifact_type, do: where(q, [a], a.artifact_type == ^artifact_type), else: q
+      if artifact_type,
+        do:
+          where(
+            q,
+            [a],
+            fragment("?->>'artifact_type' = ?", a.attributes, ^to_string(artifact_type))
+          ),
+        else: q
     end)
     |> then(fn q ->
       if search && search != "" do
-        escaped = search |> String.replace("\\", "\\\\") |> String.replace("%", "\\%") |> String.replace("_", "\\_")
+        escaped =
+          search
+          |> String.replace("\\", "\\\\")
+          |> String.replace("%", "\\%")
+          |> String.replace("_", "\\_")
+
         where(q, [a], ilike(a.title, ^"%#{escaped}%"))
       else
         q
@@ -3368,23 +3614,35 @@ defmodule HydraX.Product do
   def get_artifact!(project_or_id, artifact_id) do
     project_id = project_id(project_or_id)
 
-    Artifact
-    |> where([a], a.project_id == ^project_id and a.id == ^artifact_id)
-    |> Repo.one!()
+    Repo.one!(
+      from n in GraphNode,
+        where: n.project_id == ^project_id and n.id == ^artifact_id and n.type_key == "artifact"
+    )
   end
 
   def create_artifact(project_or_id, attrs) do
     project_id = project_id(project_or_id)
+    attrs = HydraX.Runtime.Helpers.normalize_string_keys(attrs)
 
-    attrs =
-      attrs
-      |> HydraX.Runtime.Helpers.normalize_string_keys()
-      |> Map.put("project_id", project_id)
+    artifact_attributes =
+      (attrs["metadata"] || %{})
+      |> Map.merge(%{
+        "artifact_type" => attrs["artifact_type"],
+        "owner_persona" => attrs["owner_persona"],
+        "last_updated_by" => attrs["last_updated_by"]
+      })
+      |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+      |> Map.new()
 
-    %Artifact{}
-    |> Artifact.changeset(attrs)
-    |> Repo.insert()
-    |> case do
+    node_attrs = %{
+      type_key: "artifact",
+      title: attrs["title"],
+      body: attrs["body"],
+      status: attrs["status"] || "active",
+      attributes: artifact_attributes
+    }
+
+    case GraphNodes.create_node(product_domain!(), project_id, node_attrs) do
       {:ok, artifact} ->
         ProductPubSub.broadcast_project_event(project_id, "artifact.created", artifact)
         {:ok, artifact}
@@ -3396,7 +3654,8 @@ defmodule HydraX.Product do
 
   @doc """
   Updates an artifact body, creating a version snapshot of the previous content.
-  Uses Ecto.Multi for atomicity. The artifact's version field provides optimistic locking.
+  Uses Ecto.Multi for atomicity. The substrate's `lock_version` provides
+  optimistic locking and doubles as the current version number.
   """
   def update_artifact(project_or_id, artifact_id, attrs) do
     project_id = project_id(project_or_id)
@@ -3406,20 +3665,17 @@ defmodule HydraX.Product do
     updated_by = Map.get(attrs, "last_updated_by", "system")
     change_summary = Map.get(attrs, "change_summary")
 
-    # Merge change_summary into metadata so stream can access it
-    current_metadata = artifact.metadata || %{}
-    merged_metadata = Map.merge(current_metadata, %{"last_change_summary" => change_summary})
-
-    update_attrs =
-      attrs
+    merged_attributes =
+      (artifact.attributes || %{})
+      |> Map.merge(attrs["metadata"] || %{})
       |> Map.put("last_updated_by", updated_by)
-      |> Map.put("metadata", merged_metadata)
+      |> Map.put("last_change_summary", change_summary)
 
     Ecto.Multi.new()
     |> Ecto.Multi.insert(:version, fn _changes ->
       ArtifactVersion.changeset(%ArtifactVersion{}, %{
         "artifact_id" => artifact.id,
-        "version" => artifact.version,
+        "version" => artifact.lock_version,
         "body" => artifact.body,
         "change_summary" => change_summary,
         "updated_by" => updated_by,
@@ -3427,8 +3683,12 @@ defmodule HydraX.Product do
       })
     end)
     |> Ecto.Multi.update(:artifact, fn _changes ->
-      # optimistic_lock(:version) adds WHERE version = current AND auto-increments
-      Artifact.update_changeset(artifact, update_attrs)
+      GraphNode.transition_changeset(artifact, %{
+        title: attrs["title"] || artifact.title,
+        body: attrs["body"] || artifact.body,
+        status: attrs["status"] || artifact.status,
+        attributes: merged_attributes
+      })
     end)
     |> Repo.transaction()
     |> case do
@@ -3488,7 +3748,8 @@ defmodule HydraX.Product do
       %{
         "title" => "Project Summary",
         "artifact_type" => "project_summary",
-        "body" => "# #{project.name}\n\nProject summary will be maintained as the product graph evolves.",
+        "body" =>
+          "# #{project.name}\n\nProject summary will be maintained as the product graph evolves.",
         "owner_persona" => "memory_agent",
         "last_updated_by" => "system"
       },
@@ -3502,9 +3763,7 @@ defmodule HydraX.Product do
     ]
 
     Enum.each(defaults, fn attrs ->
-      %Artifact{}
-      |> Artifact.changeset(Map.put(attrs, "project_id", project.id))
-      |> Repo.insert!()
+      {:ok, _} = create_artifact(project.id, attrs)
     end)
   end
 

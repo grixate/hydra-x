@@ -3,7 +3,6 @@ defmodule HydraXWeb.ProductRealtimePayload do
 
   alias HydraX.Product.ProductConversation
   alias HydraX.Product.ProductMessage
-  alias HydraX.Product.Requirement
   alias HydraX.Product.Source
   alias HydraXWeb.ProductConversationPayload
   alias HydraXWeb.ProductPayload
@@ -40,12 +39,12 @@ defmodule HydraXWeb.ProductRealtimePayload do
     |> Map.new()
   end
 
-  def project_event_json(event, %HydraX.Product.Insight{} = insight)
+  def project_event_json(event, %HydraX.Graph.Node{type_key: "insight"} = insight)
       when event in ["insight.created", "insight.updated", "insight.deleted"] do
     %{insight: ProductPayload.insight_json(insight)}
   end
 
-  def project_event_json(event, %Requirement{} = requirement)
+  def project_event_json(event, %HydraX.Graph.Node{type_key: "requirement"} = requirement)
       when event in ["requirement.created", "requirement.updated", "requirement.deleted"] do
     %{requirement: ProductPayload.requirement_json(requirement)}
   end

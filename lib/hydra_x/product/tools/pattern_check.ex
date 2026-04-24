@@ -2,7 +2,7 @@ defmodule HydraX.Product.Tools.PatternCheck do
   @behaviour HydraX.Tool
 
   import Ecto.Query
-  alias HydraX.Product.DesignNode
+  alias HydraX.Graph.Node, as: GraphNode
   alias HydraX.Repo
 
   @impl true
@@ -39,8 +39,8 @@ defmodule HydraX.Product.Tools.PatternCheck do
       term = "%#{String.trim(query)}%"
 
       results =
-        DesignNode
-        |> where([d], d.project_id == ^project_id)
+        GraphNode
+        |> where([d], d.project_id == ^project_id and d.type_key == "design_node")
         |> where([d], ilike(d.title, ^term) or ilike(d.body, ^term))
         |> order_by([d], desc: d.updated_at)
         |> limit(^limit)
@@ -49,7 +49,7 @@ defmodule HydraX.Product.Tools.PatternCheck do
           %{
             id: node.id,
             title: node.title,
-            node_type: node.node_type,
+            node_type: Map.get(node.attributes || %{}, "node_type"),
             status: node.status,
             body_preview: String.slice(node.body || "", 0, 200)
           }
@@ -60,19 +60,25 @@ defmodule HydraX.Product.Tools.PatternCheck do
   end
 
   @impl true
-  def result_summary(%{similar_patterns: patterns}), do: "found #{length(patterns)} similar patterns"
+  def result_summary(%{similar_patterns: patterns}),
+    do: "found #{length(patterns)} similar patterns"
+
   def result_summary(%{error: error}) when is_binary(error), do: error
   def result_summary(payload), do: inspect(payload, limit: 8, printable_limit: 120)
 
   defp extract_project_id(params) do
     case params[:project_id] || params["project_id"] do
-      value when is_integer(value) -> {:ok, value}
+      value when is_integer(value) ->
+        {:ok, value}
+
       value when is_binary(value) ->
         case Integer.parse(value) do
           {integer, ""} -> {:ok, integer}
           _ -> {:error, :product_project_context_required}
         end
-      _ -> {:error, :product_project_context_required}
+
+      _ ->
+        {:error, :product_project_context_required}
     end
   end
 end

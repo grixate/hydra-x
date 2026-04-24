@@ -7,34 +7,28 @@ defmodule HydraX.Product.Graph do
 
   import Ecto.Query
 
-  alias HydraX.Product.ArchitectureNode
-  alias HydraX.Product.Constraint
-  alias HydraX.Product.Decision
-  alias HydraX.Product.DesignNode
   alias HydraX.Product.GraphEdge
   alias HydraX.Product.GraphFlag
-  alias HydraX.Product.Insight
+  alias HydraX.Graph.Node, as: GraphNode
   alias HydraX.Product.KnowledgeEntry
   alias HydraX.Product.Learning
-  alias HydraX.Product.Requirement
   alias HydraX.Product.Routine
   alias HydraX.Product.Source
-  alias HydraX.Product.Strategy
   alias HydraX.Product.Task, as: ProductTask
   alias HydraX.Repo
 
   @node_type_to_schema %{
     "signal" => Source,
     "source" => Source,
-    "insight" => Insight,
-    "decision" => Decision,
-    "strategy" => Strategy,
-    "requirement" => Requirement,
-    "design_node" => DesignNode,
-    "architecture_node" => ArchitectureNode,
+    "insight" => GraphNode,
+    "decision" => GraphNode,
+    "strategy" => GraphNode,
+    "requirement" => GraphNode,
+    "design_node" => GraphNode,
+    "architecture_node" => GraphNode,
     "task" => ProductTask,
     "learning" => Learning,
-    "constraint" => Constraint,
+    "constraint" => GraphNode,
     "routine" => Routine,
     "knowledge_entry" => KnowledgeEntry
   }
@@ -198,6 +192,7 @@ defmodule HydraX.Product.Graph do
   def resolve_node(node_type, node_id) do
     case schema_for(node_type) do
       nil -> {:error, :unknown_node_type}
+      GraphNode -> {:ok, fetch_substrate_node(node_type, node_id)}
       schema -> {:ok, Repo.get(schema, node_id)}
     end
   end
@@ -210,6 +205,12 @@ defmodule HydraX.Product.Graph do
         nil ->
           []
 
+        GraphNode ->
+          GraphNode
+          |> where([n], n.id in ^ids and n.type_key == ^to_string(type))
+          |> Repo.all()
+          |> Enum.map(fn record -> {type, record.id, record} end)
+
         schema ->
           schema
           |> where([r], r.id in ^ids)
@@ -219,7 +220,30 @@ defmodule HydraX.Product.Graph do
     end)
   end
 
+  defp fetch_substrate_node(node_type, node_id) do
+    Repo.one(
+      from n in GraphNode,
+        where: n.id == ^node_id and n.type_key == ^to_string(node_type)
+    )
+  end
+
   def schema_for(node_type), do: Map.get(@node_type_to_schema, to_string(node_type))
+
+  @doc """
+  Base query for a node type. Returns an Ecto queryable that already
+  filters by `type_key` for substrate-backed types (the `nodes` table
+  stores many types side-by-side), or the typed schema module unchanged
+  for legacy types.
+  """
+  def base_query_for(node_type) do
+    type_str = to_string(node_type)
+
+    case schema_for(type_str) do
+      nil -> nil
+      GraphNode -> from(n in GraphNode, where: n.type_key == ^type_str)
+      schema -> schema
+    end
+  end
 
   def node_types, do: @traversable_node_types
 
@@ -234,11 +258,11 @@ defmodule HydraX.Product.Graph do
         else: @traversable_node_types -- ["signal", "source"]
 
     Enum.flat_map(types, fn type ->
-      case schema_for(type) do
+      case base_query_for(type) do
         nil ->
           []
 
-        schema ->
+        query ->
           node_ids_with_incoming =
             GraphEdge
             |> where([e], e.project_id == ^project_id and e.to_node_type == ^type)
@@ -247,7 +271,7 @@ defmodule HydraX.Product.Graph do
             |> MapSet.new()
 
           all_nodes =
-            schema
+            query
             |> where([r], r.project_id == ^project_id)
             |> select([r], {r.id, r.title})
             |> Repo.all()
@@ -264,9 +288,9 @@ defmodule HydraX.Product.Graph do
 
     Enum.into(types, %{}, fn type ->
       count =
-        case schema_for(type) do
+        case base_query_for(type) do
           nil -> 0
-          schema -> schema |> where([r], r.project_id == ^project_id) |> Repo.aggregate(:count)
+          query -> query |> where([r], r.project_id == ^project_id) |> Repo.aggregate(:count)
         end
 
       outgoing =
@@ -291,12 +315,12 @@ defmodule HydraX.Product.Graph do
         else: @traversable_node_types -- ["signal", "source"]
 
     Enum.flat_map(types, fn type ->
-      case schema_for(type) do
+      case base_query_for(type) do
         nil ->
           []
 
-        schema ->
-          schema
+        query ->
+          query
           |> where([r], r.project_id == ^project_id and r.updated_at < ^cutoff)
           |> select([r], {r.id, r.title, r.updated_at})
           |> Repo.all()

@@ -1,8 +1,8 @@
 defmodule HydraXWeb.DesignNodeAPIController do
   use HydraXWeb, :controller
 
+  alias HydraX.Graph.Node, as: GraphNode
   alias HydraX.Product
-  alias HydraX.Product.DesignNode
   alias HydraXWeb.ProductPayload
 
   action_fallback HydraXWeb.ProjectAPIFallbackController
@@ -25,21 +25,23 @@ defmodule HydraXWeb.DesignNodeAPIController do
   end
 
   def create(conn, %{"project_id" => project_id, "design_node" => params}) do
-    with {:ok, %DesignNode{} = node} <- Product.create_design_node(project_id, params) do
+    with {:ok, %GraphNode{} = node} <- Product.create_design_node(project_id, params) do
       conn |> put_status(:created) |> json(%{data: ProductPayload.design_node_json(node)})
     end
   end
 
   def update(conn, %{"project_id" => project_id, "id" => id, "design_node" => params}) do
     node = Product.get_project_design_node!(project_id, id)
-    with {:ok, %DesignNode{} = updated} <- Product.update_design_node(node, params) do
+
+    with {:ok, %GraphNode{} = updated} <- Product.update_design_node(node, params) do
       json(conn, %{data: ProductPayload.design_node_json(updated)})
     end
   end
 
   def delete(conn, %{"project_id" => project_id, "id" => id}) do
     node = Product.get_project_design_node!(project_id, id)
-    with {:ok, %DesignNode{}} <- Product.delete_design_node(node) do
+
+    with {:ok, %GraphNode{}} <- Product.delete_design_node(node) do
       send_resp(conn, :no_content, "")
     end
   end

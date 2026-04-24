@@ -1,8 +1,8 @@
 defmodule HydraXWeb.StrategyAPIController do
   use HydraXWeb, :controller
 
+  alias HydraX.Graph.Node, as: GraphNode
   alias HydraX.Product
-  alias HydraX.Product.Strategy
   alias HydraXWeb.ProductPayload
 
   action_fallback HydraXWeb.ProjectAPIFallbackController
@@ -24,21 +24,23 @@ defmodule HydraXWeb.StrategyAPIController do
   end
 
   def create(conn, %{"project_id" => project_id, "strategy" => params}) do
-    with {:ok, %Strategy{} = strategy} <- Product.create_strategy(project_id, params) do
+    with {:ok, %GraphNode{} = strategy} <- Product.create_strategy(project_id, params) do
       conn |> put_status(:created) |> json(%{data: ProductPayload.strategy_json(strategy)})
     end
   end
 
   def update(conn, %{"project_id" => project_id, "id" => id, "strategy" => params}) do
     strategy = Product.get_project_strategy!(project_id, id)
-    with {:ok, %Strategy{} = updated} <- Product.update_strategy(strategy, params) do
+
+    with {:ok, %GraphNode{} = updated} <- Product.update_strategy(strategy, params) do
       json(conn, %{data: ProductPayload.strategy_json(updated)})
     end
   end
 
   def delete(conn, %{"project_id" => project_id, "id" => id}) do
     strategy = Product.get_project_strategy!(project_id, id)
-    with {:ok, %Strategy{}} <- Product.delete_strategy(strategy) do
+
+    with {:ok, %GraphNode{}} <- Product.delete_strategy(strategy) do
       send_resp(conn, :no_content, "")
     end
   end
