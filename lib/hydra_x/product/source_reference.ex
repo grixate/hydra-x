@@ -32,7 +32,7 @@ defmodule HydraX.Product.SourceReference do
     field :metadata, :map, default: %{}
 
     belongs_to :project, HydraX.Product.Project
-    belongs_to :source, HydraX.Product.Source
+    belongs_to :source, HydraX.Graph.Node, foreign_key: :source_id
 
     timestamps(type: :utc_datetime_usec, updated_at: false)
   end

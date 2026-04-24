@@ -10,12 +10,11 @@ defmodule HydraX.Product.Graph do
   alias HydraX.Product.GraphEdge
   alias HydraX.Product.GraphFlag
   alias HydraX.Graph.Node, as: GraphNode
-  alias HydraX.Product.Source
   alias HydraX.Repo
 
   @node_type_to_schema %{
-    "signal" => Source,
-    "source" => Source,
+    "signal" => GraphNode,
+    "source" => GraphNode,
     "insight" => GraphNode,
     "decision" => GraphNode,
     "strategy" => GraphNode,
@@ -202,8 +201,10 @@ defmodule HydraX.Product.Graph do
           []
 
         GraphNode ->
+          substrate_type = substrate_type_for(type)
+
           GraphNode
-          |> where([n], n.id in ^ids and n.type_key == ^to_string(type))
+          |> where([n], n.id in ^ids and n.type_key == ^substrate_type)
           |> Repo.all()
           |> Enum.map(fn record -> {type, record.id, record} end)
 
@@ -217,9 +218,11 @@ defmodule HydraX.Product.Graph do
   end
 
   defp fetch_substrate_node(node_type, node_id) do
+    substrate_type = substrate_type_for(node_type)
+
     Repo.one(
       from n in GraphNode,
-        where: n.id == ^node_id and n.type_key == ^to_string(node_type)
+        where: n.id == ^node_id and n.type_key == ^substrate_type
     )
   end
 
@@ -235,13 +238,29 @@ defmodule HydraX.Product.Graph do
     type_str = to_string(node_type)
 
     case schema_for(type_str) do
-      nil -> nil
-      GraphNode -> from(n in GraphNode, where: n.type_key == ^type_str)
-      schema -> schema
+      nil ->
+        nil
+
+      GraphNode ->
+        # "signal" is a legacy alias for the "source" type_key.
+        substrate_type = if type_str == "signal", do: "source", else: type_str
+        from(n in GraphNode, where: n.type_key == ^substrate_type)
+
+      schema ->
+        schema
     end
   end
 
   def node_types, do: @traversable_node_types
+
+  # "signal" is a legacy display-layer alias for "source" — the
+  # substrate stores both as type_key="source".
+  defp substrate_type_for(type) do
+    case to_string(type) do
+      "signal" -> "source"
+      other -> other
+    end
+  end
 
   # -------------------------------------------------------------------
   # Health checks

@@ -3,7 +3,6 @@ defmodule HydraXWeb.ProductRealtimePayload do
 
   alias HydraX.Product.ProductConversation
   alias HydraX.Product.ProductMessage
-  alias HydraX.Product.Source
   alias HydraXWeb.ProductConversationPayload
   alias HydraXWeb.ProductPayload
 
@@ -19,7 +18,7 @@ defmodule HydraXWeb.ProductRealtimePayload do
     %{project: ProductPayload.project_json(project)}
   end
 
-  def project_event_json(event, %Source{} = source)
+  def project_event_json(event, %HydraX.Graph.Node{type_key: "source"} = source)
       when event in ["source.created", "source.updated", "source.deleted"] do
     %{source: ProductPayload.source_json(source)}
   end

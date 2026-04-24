@@ -3,7 +3,6 @@ defmodule HydraXWeb.ProductPayload do
 
   alias HydraX.Graph.Node, as: GraphNode
   alias HydraX.Product.Project
-  alias HydraX.Product.Source
 
   def project_json(%Project{} = project) do
     %{
@@ -23,7 +22,9 @@ defmodule HydraXWeb.ProductPayload do
     }
   end
 
-  def source_json(%Source{} = source, include_chunks? \\ false) do
+  def source_json(%GraphNode{type_key: "source"} = source, include_chunks? \\ false) do
+    attrs = source.attributes || %{}
+
     chunks =
       if include_chunks? do
         source
@@ -48,17 +49,17 @@ defmodule HydraXWeb.ProductPayload do
       id: source.id,
       project_id: source.project_id,
       title: source.title,
-      source_type: source.source_type,
-      external_ref: source.external_ref,
-      processing_status: source.processing_status,
-      content: source.content,
-      metadata: source.metadata || %{},
+      source_type: Map.get(attrs, "source_type"),
+      external_ref: Map.get(attrs, "external_ref"),
+      processing_status: source.status,
+      content: source.body,
+      metadata: attrs,
       source_chunk_count: length(loaded_assoc(source, :source_chunks)),
       chunks: chunks,
       # Source-as-Data (Cycle 3)
-      promoted_to_graph: Map.get(source, :promoted_to_graph, false),
-      promoted_at: Map.get(source, :promoted_at),
-      archived_at: Map.get(source, :archived_at),
+      promoted_to_graph: Map.get(attrs, "promoted_to_graph", false),
+      promoted_at: Map.get(attrs, "promoted_at"),
+      archived_at: source.archived_at,
       inserted_at: source.inserted_at,
       updated_at: source.updated_at
     }

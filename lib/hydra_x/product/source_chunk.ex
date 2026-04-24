@@ -10,7 +10,7 @@ defmodule HydraX.Product.SourceChunk do
     field :embedding, Pgvector.Ecto.Vector
 
     belongs_to :project, HydraX.Product.Project
-    belongs_to :source, HydraX.Product.Source
+    belongs_to :source, HydraX.Graph.Node, foreign_key: :source_id
 
     has_many :insight_evidence, HydraX.Product.InsightEvidence
 

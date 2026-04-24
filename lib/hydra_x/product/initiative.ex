@@ -396,10 +396,11 @@ defmodule HydraX.Product.Initiative do
 
   defp run_check(project_id, "researcher", :check_unprocessed_sources) do
     unprocessed =
-      HydraX.Product.Source
+      HydraX.Graph.Node
       |> where(
         [s],
-        s.project_id == ^project_id and s.processing_status in ["pending", "uploaded"]
+        s.project_id == ^project_id and s.type_key == "source" and
+          s.status in ["pending", "uploaded"]
       )
       |> Repo.aggregate(:count)
 

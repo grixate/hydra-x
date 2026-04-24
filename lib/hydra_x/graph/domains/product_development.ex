@@ -222,13 +222,15 @@ defmodule HydraX.Graph.Domains.ProductDevelopment do
         display_name: "Source",
         description: "A grounded piece of evidence — a document, web page, citation.",
         extends: "evidence",
-        status_vocabulary: ~w(candidate confirmed archived disputed),
+        status_vocabulary: ~w(pending processing completed failed),
         attribute_schema: %{
           "type" => "object",
           "properties" => %{
-            "url" => %{"type" => "string"},
-            "chunks_ref" => %{"type" => "string"},
-            "citation_metadata" => %{"type" => "object"}
+            "source_type" => %{"type" => "string"},
+            "external_ref" => %{"type" => "string"},
+            "reviewed_at" => %{"type" => "string"},
+            "promoted_to_graph" => %{"type" => "boolean"},
+            "promoted_at" => %{"type" => "string"}
           }
         },
         icon: "hero-book-open",

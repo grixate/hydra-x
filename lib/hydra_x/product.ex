@@ -27,7 +27,6 @@ defmodule HydraX.Product do
   alias HydraX.Product.PubSub, as: ProductPubSub
   alias HydraX.Product.RequirementInsight
   alias HydraX.Product.RoutineRun
-  alias HydraX.Product.Source
   alias HydraX.Product.SourceChunk
   alias HydraX.Product.TaskFeedback
   alias HydraX.Product.WorkspaceScaffold
@@ -100,7 +99,7 @@ defmodule HydraX.Product do
     project_id = project_id(project_or_id)
 
     %{
-      sources: count_project_records(Source, project_id),
+      sources: count_type_key_nodes(project_id, "source", :all),
       insights: count_insight_nodes(project_id),
       requirements: count_type_key_nodes(project_id, "requirement", :all),
       conversations: count_project_records(ProductConversation, project_id),
@@ -214,8 +213,9 @@ defmodule HydraX.Product do
     source_type = Keyword.get(opts, :source_type)
     search = Keyword.get(opts, :search)
 
-    Source
-    |> where([source], source.project_id == ^project_id)
+    from(n in GraphNode,
+      where: n.project_id == ^project_id and n.type_key == "source"
+    )
     |> maybe_filter_source_processing_status(processing_status)
     |> maybe_filter_source_type(source_type)
     |> maybe_filter_source_search(search)
@@ -225,25 +225,26 @@ defmodule HydraX.Product do
   end
 
   def get_source!(id) do
-    Source
+    from(n in GraphNode, where: n.id == ^id and n.type_key == "source")
     |> preload([:source_chunks])
-    |> Repo.get!(id)
+    |> Repo.one!()
   end
 
   def get_project_source!(project_or_id, id) do
     project_id = project_id(project_or_id)
 
-    Source
-    |> where([source], source.project_id == ^project_id and source.id == ^id)
+    from(n in GraphNode,
+      where: n.project_id == ^project_id and n.id == ^id and n.type_key == "source"
+    )
     |> preload([:source_chunks])
     |> Repo.one!()
   end
 
-  def change_source(source \\ %Source{}, attrs \\ %{}) do
-    Source.changeset(source, normalize_source_attrs(attrs))
+  def change_source(source \\ %GraphNode{type_key: "source"}, attrs \\ %{}) do
+    GraphNode.changeset(source, source_node_attrs(source, normalize_source_attrs(attrs)))
   end
 
-  def delete_source(%Source{} = source) do
+  def delete_source(%GraphNode{type_key: "source"} = source) do
     case Repo.delete(source) do
       {:ok, deleted} ->
         ProductPubSub.broadcast_project_event(deleted.project_id, "source.deleted", deleted)
@@ -260,19 +261,24 @@ defmodule HydraX.Product do
     attrs = normalize_source_attrs(attrs)
 
     with {:ok, parsed} <- parse_source_payload(attrs) do
+      # Assemble attribute map for substrate storage.
       source_attrs =
         attrs
         |> Map.drop(["upload"])
-        |> Map.put("project_id", project.id)
         |> Map.put("source_type", parsed.source_type)
         |> Map.put("content", parsed.content)
         |> Map.put("processing_status", "processing")
         |> Map.put("metadata", parsed.metadata)
 
-      with {:ok, source} <-
-             %Source{}
-             |> Source.changeset(source_attrs)
-             |> Repo.insert() do
+      node_attrs = %{
+        type_key: "source",
+        title: source_attrs["title"],
+        body: source_attrs["content"],
+        status: source_attrs["processing_status"],
+        attributes: source_attributes(source_attrs)
+      }
+
+      with {:ok, source} <- GraphNodes.create_node(product_domain!(), project.id, node_attrs) do
         ProductPubSub.broadcast_project_event(project.id, "source.created", source)
 
         ProductPubSub.broadcast_source_progress(source, "progress", %{
@@ -1227,10 +1233,15 @@ defmodule HydraX.Product do
 
               # Source-as-Data: hide non-promoted sources from the default
               # graph (spec §3). They remain queryable via the Library API.
+              # `promoted_to_graph` now lives in attributes for substrate
+              # source nodes; `archived_at` is still a top-level column.
               base =
                 if type in ["source", "signal"] do
                   base
-                  |> where([r], r.promoted_to_graph == true)
+                  |> where(
+                    [r],
+                    fragment("(?->>'promoted_to_graph')::boolean = true", r.attributes)
+                  )
                   |> where([r], is_nil(r.archived_at))
                 else
                   base
@@ -1245,7 +1256,7 @@ defmodule HydraX.Product do
                   title: Map.get(record, :title, ""),
                   body: Map.get(record, :body, ""),
                   status: Map.get(record, :status, "") || "active",
-                  metadata: Map.get(record, :metadata, %{}) || %{},
+                  metadata: Map.get(record, :attributes, %{}) || %{},
                   inserted_at: Map.get(record, :inserted_at),
                   updated_at: Map.get(record, :updated_at)
                 }
@@ -2450,14 +2461,51 @@ defmodule HydraX.Product do
   end
 
   defp source_error_changeset(project, attrs, reason) do
-    attrs =
-      attrs
-      |> Map.drop(["upload"])
-      |> Map.put("project_id", project.id)
+    attrs = Map.drop(attrs, ["upload"])
 
-    %Source{}
-    |> Source.changeset(attrs)
-    |> Ecto.Changeset.add_error(:content, source_error_message(reason))
+    %GraphNode{}
+    |> GraphNode.changeset(%{
+      project_id: project.id,
+      domain_id: product_domain!().id,
+      type_key: "source",
+      title: attrs["title"],
+      body: attrs["content"],
+      status: attrs["processing_status"] || "failed",
+      attributes: source_attributes(attrs)
+    })
+    |> Ecto.Changeset.add_error(:body, source_error_message(reason))
+  end
+
+  defp source_attributes(attrs) do
+    # Fold non-core source columns into the attributes jsonb. The core
+    # Node fields (title, body, status, archived_at) are pulled out at
+    # the call site.
+    base = attrs["metadata"] || %{}
+
+    [
+      {"source_type", attrs["source_type"]},
+      {"external_ref", attrs["external_ref"]},
+      {"reviewed_at", attrs["reviewed_at"]},
+      {"promoted_to_graph", attrs["promoted_to_graph"]},
+      {"promoted_at", attrs["promoted_at"]}
+    ]
+    |> Enum.reduce(base, fn {k, v}, acc ->
+      if is_nil(v), do: acc, else: Map.put(acc, k, v)
+    end)
+  end
+
+  defp source_node_attrs(%GraphNode{} = existing, attrs) do
+    merged_attributes =
+      (existing.attributes || %{})
+      |> Map.merge(source_attributes(attrs))
+
+    %{
+      title: attrs["title"] || existing.title,
+      body: attrs["content"] || existing.body,
+      status: attrs["processing_status"] || existing.status,
+      attributes: merged_attributes,
+      archived_at: attrs["archived_at"] || existing.archived_at
+    }
   end
 
   defp source_error_message({:unsupported_format, format}),
@@ -2728,14 +2776,19 @@ defmodule HydraX.Product do
   defp maybe_filter_source_processing_status(query, ""), do: query
 
   defp maybe_filter_source_processing_status(query, status) do
-    where(query, [source], source.processing_status == ^to_string(status))
+    # processing_status maps to Node.status now.
+    where(query, [source], source.status == ^to_string(status))
   end
 
   defp maybe_filter_source_type(query, nil), do: query
   defp maybe_filter_source_type(query, ""), do: query
 
   defp maybe_filter_source_type(query, source_type) do
-    where(query, [source], source.source_type == ^to_string(source_type))
+    where(
+      query,
+      [source],
+      fragment("?->>'source_type' = ?", source.attributes, ^to_string(source_type))
+    )
   end
 
   defp maybe_filter_source_search(query, nil), do: query
@@ -2747,8 +2800,8 @@ defmodule HydraX.Product do
     where(
       query,
       [source],
-      ilike(source.title, ^term) or ilike(source.content, ^term) or
-        ilike(source.external_ref, ^term)
+      ilike(source.title, ^term) or ilike(source.body, ^term) or
+        fragment("?->>'external_ref' ILIKE ?", source.attributes, ^term)
     )
   end
 
@@ -3100,14 +3153,18 @@ defmodule HydraX.Product do
           end
         end)
 
+      merged_attributes =
+        (source.attributes || %{})
+        |> Map.merge(parsed.metadata || %{})
+        |> Map.merge(%{
+          "chunk_count" => length(chunks),
+          "word_count" => word_count(parsed.content)
+        })
+
       source
-      |> Source.changeset(%{
-        "processing_status" => "completed",
-        "metadata" =>
-          Map.merge(parsed.metadata, %{
-            "chunk_count" => length(chunks),
-            "word_count" => word_count(parsed.content)
-          })
+      |> GraphNode.changeset(%{
+        status: "completed",
+        attributes: merged_attributes
       })
       |> Repo.update()
       |> case do
@@ -3184,10 +3241,10 @@ defmodule HydraX.Product do
   end
 
   defp update_source_memory_mirror(source, mirror_state) do
+    attrs = Map.put(source.attributes || %{}, "memory_mirror", mirror_state)
+
     source
-    |> Source.changeset(%{
-      "metadata" => Map.put(source.metadata || %{}, "memory_mirror", mirror_state)
-    })
+    |> GraphNode.changeset(%{attributes: attrs})
     |> Repo.update!()
     |> Repo.preload(:source_chunks, force: true)
   end
@@ -3221,7 +3278,7 @@ defmodule HydraX.Product do
       "product_source_id" => source.id,
       "product_source_title" => source.title,
       "product_source_chunk_id" => chunk.id,
-      "product_source_type" => source.source_type,
+      "product_source_type" => get_in(source.attributes || %{}, ["source_type"]),
       "product_source_agent_role" => agent.role,
       "source_kind" => "product_source",
       "mirror_reason" => "source_ingestion"
@@ -3240,11 +3297,11 @@ defmodule HydraX.Product do
   end
 
   defp mark_source_failed(source) do
+    merged_attributes =
+      Map.put(source.attributes || %{}, "last_error", "source ingestion failed")
+
     source
-    |> Source.changeset(%{
-      "processing_status" => "failed",
-      "metadata" => Map.put(source.metadata || %{}, "last_error", "source ingestion failed")
-    })
+    |> GraphNode.changeset(%{status: "failed", attributes: merged_attributes})
     |> Repo.update!()
     |> Repo.preload(:source_chunks, force: true)
   end
@@ -3355,15 +3412,17 @@ defmodule HydraX.Product do
   end
 
   defp source_export_json(source) do
+    attrs = source.attributes || %{}
+
     %{
       id: source.id,
       project_id: source.project_id,
       title: source.title,
-      source_type: source.source_type,
-      content: source.content,
-      external_ref: source.external_ref,
-      processing_status: source.processing_status,
-      metadata: source.metadata || %{},
+      source_type: Map.get(attrs, "source_type"),
+      content: source.body,
+      external_ref: Map.get(attrs, "external_ref"),
+      processing_status: source.status,
+      metadata: attrs,
       source_chunks:
         Enum.map(source.source_chunks || [], fn chunk ->
           %{
@@ -3510,8 +3569,12 @@ defmodule HydraX.Product do
 
   defp render_source_export_lines(sources) do
     Enum.flat_map(sources, fn source ->
+      attrs = source.attributes || %{}
+      source_type = Map.get(attrs, "source_type")
+      chunks = source.source_chunks || []
+
       [
-        "- [#{source.id}] #{source.title} (#{source.source_type}) chunks=#{length(source.source_chunks)} status=#{source.processing_status}"
+        "- [#{source.id}] #{source.title} (#{source_type}) chunks=#{length(chunks)} status=#{source.status}"
       ]
     end)
   end

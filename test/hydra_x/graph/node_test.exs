@@ -94,14 +94,14 @@ defmodule HydraX.Graph.NodeTest do
         project_id: project.id,
         type_key: "source",
         title: "The internet, volume 1",
-        status: "candidate",
-        attributes: %{"url" => "https://example.com"}
+        status: "completed",
+        attributes: %{"external_ref" => "https://example.com"}
       }
 
       {:ok, node} = %Node{} |> Node.changeset(attrs) |> Repo.insert()
       reloaded = Repo.get!(Node, node.id)
       assert reloaded.extends_primitive == "evidence"
-      assert reloaded.attributes["url"] == "https://example.com"
+      assert reloaded.attributes["external_ref"] == "https://example.com"
     end
   end
 

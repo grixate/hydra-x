@@ -1,8 +1,8 @@
 defmodule HydraX.Product.PubSub do
   @moduledoc false
 
+  alias HydraX.Graph.Node, as: GraphNode
   alias HydraX.Product.Project
-  alias HydraX.Product.Source
 
   def project_topic(project_or_id), do: "project:#{project_id(project_or_id)}"
   def source_topic(source_or_id), do: "source:#{source_id(source_or_id)}"
@@ -28,7 +28,7 @@ defmodule HydraX.Product.PubSub do
     )
   end
 
-  def broadcast_source_progress(%Source{} = source, status, attrs \\ %{}) do
+  def broadcast_source_progress(%GraphNode{type_key: "source"} = source, status, attrs \\ %{}) do
     payload =
       attrs
       |> Map.new()
@@ -43,7 +43,7 @@ defmodule HydraX.Product.PubSub do
   defp project_id(id) when is_integer(id), do: id
   defp project_id(id) when is_binary(id), do: String.to_integer(id)
 
-  defp source_id(%Source{id: id}), do: id
+  defp source_id(%GraphNode{id: id}), do: id
   defp source_id(id) when is_integer(id), do: id
   defp source_id(id) when is_binary(id), do: String.to_integer(id)
 

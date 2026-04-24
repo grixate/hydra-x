@@ -1,8 +1,8 @@
 defmodule HydraXWeb.SourceAPIController do
   use HydraXWeb, :controller
 
+  alias HydraX.Graph.Node, as: GraphNode
   alias HydraX.Product
-  alias HydraX.Product.Source
   alias HydraX.Product.AgentBridge
   alias HydraXWeb.ProductPayload
 
@@ -30,7 +30,7 @@ defmodule HydraXWeb.SourceAPIController do
   end
 
   def create(conn, %{"project_id" => project_id, "source" => params}) do
-    with {:ok, %Source{} = source} <- Product.create_source(project_id, params) do
+    with {:ok, %GraphNode{} = source} <- Product.create_source(project_id, params) do
       # Stream A1.3 — auto-trigger Researcher analysis. Spawns an
       # AgentTask (visible in CC) and runs the LLM in background.
       _ = HydraX.Product.ResearcherAutoProcess.maybe_enqueue(source)
@@ -45,7 +45,7 @@ defmodule HydraXWeb.SourceAPIController do
     end
   end
 
-  defp maybe_auto_promote(%Source{} = source) do
+  defp maybe_auto_promote(%GraphNode{} = source) do
     project = Product.get_project!(source.project_id)
     meta = project.metadata || %{}
 
@@ -71,14 +71,16 @@ defmodule HydraXWeb.SourceAPIController do
     source = Product.get_project_source!(project_id, parse_integer(id))
     board_session_id = params["board_session_id"]
 
+    source_type = get_in(source.attributes || %{}, ["source_type"])
+
     prompt = """
     Analyze this source document and extract key insights.
 
     Title: #{source.title}
-    Type: #{source.source_type}
+    Type: #{source_type}
 
     Content (first 3000 chars):
-    #{String.slice(source.content || "", 0, 3000)}
+    #{String.slice(source.body || "", 0, 3000)}
 
     Create insights for any significant findings. Each insight should have:
     - A clear, specific title
@@ -127,8 +129,10 @@ defmodule HydraXWeb.SourceAPIController do
     # click lets the user drain the queue without saturating the LLM
     # pool in one shot.
     pending =
-      HydraX.Product.Source
-      |> where([s], s.project_id == ^project_id and s.processing_status != "completed")
+      HydraX.Graph.Node
+      |> where([s],
+        s.project_id == ^project_id and s.type_key == "source" and s.status != "completed"
+      )
       |> order_by([s], asc: s.inserted_at)
       |> limit(25)
       |> HydraX.Repo.all()
@@ -182,7 +186,7 @@ defmodule HydraXWeb.SourceAPIController do
   def delete(conn, %{"project_id" => project_id, "id" => id}) do
     source = Product.get_project_source!(project_id, parse_integer(id))
 
-    with {:ok, %Source{}} <- Product.delete_source(source) do
+    with {:ok, %GraphNode{}} <- Product.delete_source(source) do
       send_resp(conn, :no_content, "")
     end
   end

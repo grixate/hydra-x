@@ -71,8 +71,8 @@ defmodule HydraX.Graph.IntegrationTest do
       Nodes.create_node(domain, project.id, %{
         type_key: "source",
         title: "Interview transcript: user-17",
-        status: "confirmed",
-        attributes: %{"url" => "https://example.com/transcripts/17"}
+        status: "completed",
+        attributes: %{"external_ref" => "https://example.com/transcripts/17"}
       })
 
     assert source.extends_primitive == "evidence"

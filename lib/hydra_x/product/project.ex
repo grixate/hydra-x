@@ -31,7 +31,6 @@ defmodule HydraX.Product.Project do
     belongs_to :memory_agent, AgentProfile
     belongs_to :coder_agent, AgentProfile
 
-    has_many :sources, HydraX.Product.Source
     has_many :product_conversations, HydraX.Product.ProductConversation
     has_many :board_sessions, HydraX.Product.BoardSession
 

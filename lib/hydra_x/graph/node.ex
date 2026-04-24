@@ -63,6 +63,14 @@ defmodule HydraX.Graph.Node do
              HydraX.Product.TaskFeedback,
              foreign_key: :task_id
 
+    has_many :source_chunks,
+             HydraX.Product.SourceChunk,
+             foreign_key: :source_id
+
+    has_many :source_references,
+             HydraX.Product.SourceReference,
+             foreign_key: :source_id
+
     timestamps(type: :utc_datetime_usec)
   end
 
