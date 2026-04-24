@@ -7,10 +7,11 @@ defmodule HydraX.Product.SimulationBridge do
   import Ecto.Query
   require Logger
 
+  alias HydraX.Graph.Domains
   alias HydraX.Graph.Node, as: GraphNode
+  alias HydraX.Graph.Nodes, as: GraphNodes
   alias HydraX.Product
   alias HydraX.Product.Graph
-  alias HydraX.Product.SimulationNode
   alias HydraX.Repo
 
   # -------------------------------------------------------------------
@@ -64,19 +65,25 @@ defmodule HydraX.Product.SimulationBridge do
   def run_product_simulation(project_id, opts \\ []) do
     archetypes = Keyword.get(opts, :archetypes)
     scenario = Keyword.get(opts, :scenario)
-
     archetypes = archetypes || elem(build_archetypes_from_insights(project_id), 1)
+    scenario_summary = if scenario, do: inspect(scenario, limit: 500), else: nil
 
-    sim_node =
-      %SimulationNode{}
-      |> SimulationNode.changeset(%{
-        "project_id" => project_id,
-        "status" => "configuring",
+    metadata = Keyword.get(opts, :metadata, %{})
+
+    attributes =
+      Map.merge(metadata, %{
         "archetype_summary" => archetypes,
-        "scenario_summary" => if(scenario, do: inspect(scenario, limit: 500), else: nil),
-        "metadata" => Keyword.get(opts, :metadata, %{})
+        "scenario_summary" => scenario_summary
       })
-      |> Repo.insert!()
+
+    {:ok, sim_node} =
+      GraphNodes.create_node(product_domain!(), project_id, %{
+        type_key: "simulation",
+        title: Map.get(metadata, "title") || simulation_title(scenario_summary),
+        body: scenario_summary,
+        status: "configuring",
+        attributes: attributes
+      })
 
     {:ok, sim_node}
   end
@@ -113,21 +120,23 @@ defmodule HydraX.Product.SimulationBridge do
   defp do_propose(project_id, persona, attrs, design_node_ids, population_size) do
     alias HydraX.Product.PubSub, as: ProductPubSub
 
-    sim_node =
-      %SimulationNode{}
-      |> SimulationNode.changeset(%{
-        "project_id" => project_id,
-        "status" => "proposed",
-        "metadata" => %{
-          "title" => Map.get(attrs, "title", "Untitled simulation"),
-          "rationale" => Map.get(attrs, "rationale"),
-          "proposed_by" => persona,
-          "design_node_ids" => design_node_ids,
-          "population_size" => population_size,
-          "comparison_mode" => Map.get(attrs, "comparison_mode", false)
-        }
+    title = Map.get(attrs, "title", "Untitled simulation")
+
+    attributes = %{
+      "rationale" => Map.get(attrs, "rationale"),
+      "proposed_by" => persona,
+      "design_node_ids" => design_node_ids,
+      "population_size" => population_size,
+      "comparison_mode" => Map.get(attrs, "comparison_mode", false)
+    }
+
+    {:ok, sim_node} =
+      GraphNodes.create_node(product_domain!(), project_id, %{
+        type_key: "simulation",
+        title: title,
+        status: "proposed",
+        attributes: attributes
       })
-      |> Repo.insert!()
 
     # Check trust level for auto-start
     project = Product.get_project!(project_id)
@@ -141,8 +150,8 @@ defmodule HydraX.Product.SimulationBridge do
         "simulation.proposed",
         %{
           sim_node_id: sim_node.id,
-          title: (sim_node.metadata || %{})["title"],
-          rationale: (sim_node.metadata || %{})["rationale"],
+          title: sim_node.title,
+          rationale: Map.get(sim_node.attributes || %{}, "rationale"),
           proposed_by: persona
         }
       )
@@ -163,17 +172,18 @@ defmodule HydraX.Product.SimulationBridge do
     now = DateTime.utc_now()
 
     {count, _} =
-      SimulationNode
-      |> where([s], s.id == ^sim_node_id and s.status == "proposed")
+      from(n in GraphNode,
+        where: n.id == ^sim_node_id and n.type_key == "simulation" and n.status == "proposed"
+      )
       |> Repo.update_all(set: [status: "running", updated_at: now])
 
     if count == 0 do
       {:error, :not_in_proposed_status}
     else
-      sim_node = Repo.get!(SimulationNode, sim_node_id)
-      metadata = sim_node.metadata || %{}
-      design_node_ids = Map.get(metadata, "design_node_ids", [])
-      _population = Map.get(metadata, "population_size", 100)
+      sim_node = Repo.get!(GraphNode, sim_node_id)
+      attributes = sim_node.attributes || %{}
+      design_node_ids = Map.get(attributes, "design_node_ids", [])
+      _population = Map.get(attributes, "population_size", 100)
 
       {:ok, scenario} = build_scenario_from_design(project_id, design_node_ids)
       {:ok, archetypes} = build_archetypes_from_insights(project_id)
@@ -190,32 +200,32 @@ defmodule HydraX.Product.SimulationBridge do
           }
 
           sim_node
-          |> SimulationNode.changeset(%{
-            "status" => "completed",
-            "metadata" => Map.merge(metadata, %{"results" => results})
+          |> GraphNode.changeset(%{
+            status: "completed",
+            attributes: Map.merge(attributes, %{"results" => results})
           })
           |> Repo.update!()
 
           ProductPubSub.broadcast_project_event(
             project_id,
             "simulation.completed",
-            %{sim_node_id: sim_node_id, title: metadata["title"]}
+            %{sim_node_id: sim_node_id, title: sim_node.title}
           )
         rescue
           error ->
             Logger.error("[SimulationBridge] Simulation #{sim_node_id} failed: #{inspect(error)}")
 
             sim_node
-            |> SimulationNode.changeset(%{
-              "status" => "failed",
-              "metadata" => Map.merge(metadata, %{"error" => inspect(error)})
+            |> GraphNode.changeset(%{
+              status: "failed",
+              attributes: Map.merge(attributes, %{"error" => inspect(error)})
             })
             |> Repo.update!()
 
             ProductPubSub.broadcast_project_event(
               project_id,
               "simulation.failed",
-              %{sim_node_id: sim_node_id, title: metadata["title"], error: inspect(error)}
+              %{sim_node_id: sim_node_id, title: sim_node.title, error: inspect(error)}
             )
         end
       end)
@@ -229,14 +239,17 @@ defmodule HydraX.Product.SimulationBridge do
   # -------------------------------------------------------------------
 
   def import_simulation_results(_project_id, simulation_node_id) do
-    sim_node = Repo.get!(SimulationNode, simulation_node_id)
+    sim_node = get_product_simulation!(simulation_node_id)
+    attributes = sim_node.attributes || %{}
 
-    if sim_node.results_imported do
+    if Map.get(attributes, "results_imported", false) do
       {:error, :already_imported}
     else
-      # Mark as imported
       sim_node
-      |> SimulationNode.changeset(%{"results_imported" => true, "status" => "completed"})
+      |> GraphNode.changeset(%{
+        status: "completed",
+        attributes: Map.put(attributes, "results_imported", true)
+      })
       |> Repo.update!()
 
       {:ok, %{simulation_node_id: sim_node.id, results_imported: true}}
@@ -248,14 +261,41 @@ defmodule HydraX.Product.SimulationBridge do
   # -------------------------------------------------------------------
 
   def list_product_simulations(project_id) do
-    SimulationNode
-    |> where([s], s.project_id == ^project_id)
+    from(s in GraphNode,
+      where:
+        s.project_id == ^project_id and s.type_key == "simulation" and
+          is_nil(s.archived_at)
+    )
     |> order_by([s], desc: s.inserted_at)
     |> Repo.all()
   end
 
   def get_product_simulation!(id) do
-    Repo.get!(SimulationNode, id)
+    Repo.one!(from n in GraphNode, where: n.id == ^id and n.type_key == "simulation")
+  end
+
+  defp product_domain! do
+    case Domains.get_domain_by_slug("product_development") do
+      nil ->
+        {:ok, domain} = HydraX.Graph.Domains.ProductDevelopment.seed()
+        domain
+
+      domain ->
+        domain
+    end
+  end
+
+  defp simulation_title(nil), do: "Simulation"
+  defp simulation_title(""), do: "Simulation"
+
+  defp simulation_title(body) when is_binary(body) do
+    body
+    |> String.slice(0, 80)
+    |> String.trim()
+    |> case do
+      "" -> "Simulation"
+      s -> s
+    end
   end
 
   # -------------------------------------------------------------------

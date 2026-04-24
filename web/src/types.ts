@@ -771,3 +771,38 @@ export type Mention = {
   metadata: { ambiguous_intent?: boolean; inferred?: MentionIntent } & Record<string, unknown>;
   inserted_at: string;
 };
+
+export type SchemaProposalChangeKind =
+  | "add_node_type"
+  | "add_relationship_type"
+  | "add_flag_type"
+  | "extend_node_type";
+
+export type SchemaProposalStatus =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "superseded";
+
+export type SchemaProposal = {
+  id: number;
+  domain_id: number;
+  change_kind: SchemaProposalChangeKind;
+  payload: Record<string, unknown>;
+  rationale: string | null;
+  status: SchemaProposalStatus;
+  proposed_by_agent_id: string | null;
+  proposed_by_operator: boolean;
+  reviewed_by_operator: boolean;
+  applied_at: string | null;
+  inserted_at: string;
+  updated_at: string;
+};
+
+export type SchemaProposalRequest = {
+  change_kind: SchemaProposalChangeKind;
+  payload: Record<string, unknown>;
+  rationale?: string;
+  proposed_by_agent_id?: string;
+  proposed_by_operator?: boolean;
+};

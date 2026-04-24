@@ -364,6 +364,31 @@ defmodule HydraX.Graph.Domains.ProductDevelopment do
         },
         icon: "hero-flag",
         color_token: "--color-accent-gold"
+      },
+      %{
+        type_key: "simulation",
+        display_name: "Simulation",
+        description: "A what-if run against the product graph. Bridges to the Simulation engine.",
+        extends: "activity",
+        status_vocabulary: ~w(proposed configuring running completed failed),
+        attribute_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "simulation_id" => %{"type" => "integer"},
+            "scenario_summary" => %{"type" => "string"},
+            "archetype_summary" => %{"type" => "array"},
+            "results_imported" => %{"type" => "boolean"},
+            "design_node_ids" => %{"type" => "array"},
+            "population_size" => %{"type" => "integer"},
+            "comparison_mode" => %{"type" => "boolean"},
+            "proposed_by" => %{"type" => "string"},
+            "rationale" => %{"type" => "string"},
+            "results" => %{"type" => "object"},
+            "error" => %{"type" => "string"}
+          }
+        },
+        icon: "hero-play-circle",
+        color_token: "--color-accent-purple"
       }
     ]
   end

@@ -9,7 +9,6 @@ defmodule HydraX.Product.Stream do
   alias HydraX.Graph.NodeRelationship
   alias HydraX.Product.GraphFlag
   alias HydraX.Graph.Node, as: GraphNode
-  alias HydraX.Product.SimulationNode
   alias HydraX.Repo
 
   @max_right_now 5
@@ -167,27 +166,30 @@ defmodule HydraX.Product.Stream do
   end
 
   defp proposed_simulation_stream_items(project_id) do
-    SimulationNode
-    |> where([s], s.project_id == ^project_id and s.status == "proposed")
+    GraphNode
+    |> where([s],
+      s.project_id == ^project_id and s.type_key == "simulation" and
+        s.status == "proposed"
+    )
     |> order_by([s], desc: s.inserted_at)
     |> limit(3)
     |> Repo.all()
     |> Enum.map(fn sim ->
-      metadata = sim.metadata || %{}
+      attributes = sim.attributes || %{}
 
       %{
         id: "simulation-proposed-#{sim.id}",
         category: "simulation_proposed",
-        title: Map.get(metadata, "title", "Proposed simulation"),
-        summary: Map.get(metadata, "rationale", "Review and approve to run."),
+        title: sim.title || "Proposed simulation",
+        summary: Map.get(attributes, "rationale", "Review and approve to run."),
         node_type: "simulation",
         node_id: sim.id,
         urgency: "action",
         timestamp: sim.inserted_at,
         connections: %{},
         metadata: %{
-          proposed_by: Map.get(metadata, "proposed_by"),
-          source_agent: Map.get(metadata, "proposed_by")
+          proposed_by: Map.get(attributes, "proposed_by"),
+          source_agent: Map.get(attributes, "proposed_by")
         }
       }
     end)
@@ -350,21 +352,22 @@ defmodule HydraX.Product.Stream do
       end)
 
     completed_simulations =
-      SimulationNode
+      GraphNode
       |> where(
         [s],
-        s.project_id == ^project_id and s.status == "completed" and s.updated_at > ^cutoff
+        s.project_id == ^project_id and s.type_key == "simulation" and
+          s.status == "completed" and s.updated_at > ^cutoff
       )
       |> order_by([s], desc: s.updated_at)
       |> limit(5)
       |> Repo.all()
       |> Enum.map(fn sim ->
-        metadata = sim.metadata || %{}
+        attributes = sim.attributes || %{}
 
         %{
           id: "simulation-completed-#{sim.id}",
           category: "simulation_completed",
-          title: Map.get(metadata, "title", "Simulation ##{sim.id}"),
+          title: sim.title || "Simulation ##{sim.id}",
           summary: "Simulation completed. Review results and recommendations.",
           node_type: "simulation",
           node_id: sim.id,
@@ -372,9 +375,9 @@ defmodule HydraX.Product.Stream do
           timestamp: sim.updated_at,
           connections: %{},
           metadata: %{
-            title: Map.get(metadata, "title"),
-            proposed_by: Map.get(metadata, "proposed_by"),
-            source_agent: Map.get(metadata, "proposed_by")
+            title: sim.title,
+            proposed_by: Map.get(attributes, "proposed_by"),
+            source_agent: Map.get(attributes, "proposed_by")
           }
         }
       end)

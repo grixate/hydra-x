@@ -41,6 +41,8 @@ import type {
   WatchTarget,
   AgentRule,
   Contradiction,
+  SchemaProposal,
+  SchemaProposalRequest,
 } from "@/types";
 
 const API_PREFIX = import.meta.env.VITE_API_BASE ?? "/api/v1";
@@ -1041,6 +1043,31 @@ export const api = {
     request<{ seeded: number }>("/user_auth/identity_bootstrap", {
       method: "POST",
       body: JSON.stringify({ nodes }),
+    }),
+  listSchemaProposals: (
+    domainSlug: string,
+    opts: { status?: string } = {},
+  ) => {
+    const query = opts.status ? `?status=${encodeURIComponent(opts.status)}` : "";
+    return request<SchemaProposal[]>(`/domains/${domainSlug}/proposals${query}`);
+  },
+  createSchemaProposal: (
+    domainSlug: string,
+    proposal: SchemaProposalRequest,
+  ) =>
+    request<SchemaProposal>(`/domains/${domainSlug}/proposals`, {
+      method: "POST",
+      body: JSON.stringify({ proposal }),
+    }),
+  decideSchemaProposal: (
+    domainSlug: string,
+    proposalId: number,
+    action: "approve" | "reject",
+    opts: { by_operator?: boolean } = {},
+  ) =>
+    request<SchemaProposal>(`/domains/${domainSlug}/proposals/${proposalId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ action, by_operator: opts.by_operator ?? true }),
     }),
 };
 

@@ -310,6 +310,19 @@ defmodule HydraXWeb.ProductPayload do
     }
   end
 
+  def vision_json(%GraphNode{type_key: "vision"} = v) do
+    %{
+      id: v.id,
+      project_id: v.project_id,
+      title: v.title,
+      body: v.body,
+      status: v.status,
+      metadata: v.attributes || %{},
+      inserted_at: v.inserted_at,
+      updated_at: v.updated_at
+    }
+  end
+
   def routine_json(%GraphNode{type_key: "routine"} = r) do
     attrs = r.attributes || %{}
 
