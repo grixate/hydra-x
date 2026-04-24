@@ -71,7 +71,9 @@ defmodule HydraX.Agent.HooksIntegrationTest do
 
       Worker.execute_tool_calls(agent.id, conversation, [tool_call])
 
-      assert_receive {:before, %{tool: "no_such_tool", agent_id: aid, conversation_id: cid}}, 2_000
+      assert_receive {:before, %{tool: "no_such_tool", agent_id: aid, conversation_id: cid}},
+                     2_000
+
       assert aid == agent.id
       assert cid == conversation.id
 

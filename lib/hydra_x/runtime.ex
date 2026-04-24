@@ -169,6 +169,7 @@ defmodule HydraX.Runtime do
   defdelegate export_conversation_transcript!(id), to: HydraX.Runtime.Conversations
   defdelegate list_turns(conversation_id), to: HydraX.Runtime.Conversations
   defdelegate list_turns(conversation_id, opts), to: HydraX.Runtime.Conversations
+
   defdelegate latest_user_turn_on_active_branch(conversation_id),
     to: HydraX.Runtime.Conversations
 

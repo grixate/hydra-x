@@ -70,7 +70,8 @@ defmodule HydraX.Product.Tools.DecisionCreate do
         "title" => params[:title] || params["title"],
         "body" => params[:body] || params["body"],
         "status" => params[:status] || params["status"] || "active",
-        "alternatives_considered" => params[:alternatives_considered] || params["alternatives_considered"] || [],
+        "alternatives_considered" =>
+          params[:alternatives_considered] || params["alternatives_considered"] || [],
         "decided_by" => "agent",
         "decided_at" => DateTime.utc_now()
       }
@@ -112,7 +113,8 @@ defmodule HydraX.Product.Tools.DecisionCreate do
 
   defp extract_project_id(params) do
     case params[:project_id] || params["project_id"] do
-      value when is_integer(value) -> {:ok, value}
+      value when is_integer(value) ->
+        {:ok, value}
 
       value when is_binary(value) ->
         case Integer.parse(value) do

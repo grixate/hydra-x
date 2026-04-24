@@ -104,7 +104,8 @@ defmodule HydraXWeb.GraphLive do
                     phx-value-node-id={node.id}
                     class={[
                       "cursor-pointer rounded-xl border px-4 py-3 transition hover:border-[var(--hx-accent)]",
-                      if(@selected_node && @selected_node.id == node.id && @selected_node.type == type,
+                      if(
+                        @selected_node && @selected_node.id == node.id && @selected_node.type == type,
                         do: "border-[var(--hx-accent)] bg-[rgba(245,110,66,0.12)]",
                         else: "border-white/10 bg-white/5"
                       )
@@ -117,7 +118,9 @@ defmodule HydraXWeb.GraphLive do
               </div>
 
               <div :if={@graph_data.nodes == []} class="text-center py-16">
-                <p class="text-[var(--hx-mute)]">Graph is empty. Promote nodes from a Board session to populate it.</p>
+                <p class="text-[var(--hx-mute)]">
+                  Graph is empty. Promote nodes from a Board session to populate it.
+                </p>
               </div>
             </div>
           </div>
@@ -132,7 +135,10 @@ defmodule HydraXWeb.GraphLive do
               </div>
               <h3 class="mt-1 text-lg font-medium text-white">{@selected_node.title}</h3>
             </div>
-            <button phx-click="deselect_node" class="text-[var(--hx-mute)] hover:text-white transition">
+            <button
+              phx-click="deselect_node"
+              class="text-[var(--hx-mute)] hover:text-white transition"
+            >
               x
             </button>
           </div>

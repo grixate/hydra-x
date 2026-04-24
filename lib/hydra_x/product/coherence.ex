@@ -70,7 +70,10 @@ defmodule HydraX.Product.Coherence do
     broken_task_count = check_task_requirement_chain(project_id)
 
     total_issues = orphan_count + stale_count + broken_req_count + broken_task_count
-    max_possible = max(orphan_count + stale_count + flag_count + broken_req_count + broken_task_count, 1)
+
+    max_possible =
+      max(orphan_count + stale_count + flag_count + broken_req_count + broken_task_count, 1)
+
     health_score = max(0.0, 1.0 - total_issues / max_possible)
 
     report = %{

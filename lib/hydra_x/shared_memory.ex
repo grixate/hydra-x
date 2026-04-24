@@ -71,7 +71,10 @@ defmodule HydraX.SharedMemory do
 
     %Distillation{}
     |> Distillation.changeset(attrs)
-    |> Repo.insert(on_conflict: :nothing, conflict_target: [:shared_node_id, :episode_node_type, :episode_node_id])
+    |> Repo.insert(
+      on_conflict: :nothing,
+      conflict_target: [:shared_node_id, :episode_node_type, :episode_node_id]
+    )
   end
 
   def list_distillations(%Node{id: node_id}) do

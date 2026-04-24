@@ -19,8 +19,8 @@ defmodule HydraX.Product.Tools.SimulationPropose do
       name: "simulation_propose",
       description:
         "Propose a simulation to resolve uncertainty in a decision or design choice. " <>
-        "Specify what to test, which design nodes or requirements to use as scenarios, " <>
-        "and why this simulation would help. The simulation will run asynchronously.",
+          "Specify what to test, which design nodes or requirements to use as scenarios, " <>
+          "and why this simulation would help. The simulation will run asynchronously.",
       input_schema: %{
         type: "object",
         properties: %{
@@ -79,13 +79,17 @@ defmodule HydraX.Product.Tools.SimulationPropose do
 
   defp project_id(params) do
     case params[:project_id] || params["project_id"] do
-      value when is_integer(value) -> {:ok, value}
+      value when is_integer(value) ->
+        {:ok, value}
+
       value when is_binary(value) ->
         case Integer.parse(value) do
           {integer, ""} -> {:ok, integer}
           _ -> {:error, :product_project_context_required}
         end
-      _ -> {:error, :product_project_context_required}
+
+      _ ->
+        {:error, :product_project_context_required}
     end
   end
 end

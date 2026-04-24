@@ -24,7 +24,17 @@ defmodule HydraX.Product.SimulationNode do
 
   def changeset(node, attrs) do
     node
-    |> cast(attrs, [:project_id, :simulation_id, :scenario_summary, :archetype_summary, :status, :results_imported, :metadata, :scope, :scope_root_id])
+    |> cast(attrs, [
+      :project_id,
+      :simulation_id,
+      :scenario_summary,
+      :archetype_summary,
+      :status,
+      :results_imported,
+      :metadata,
+      :scope,
+      :scope_root_id
+    ])
     |> validate_required([:project_id, :status])
     |> validate_inclusion(:status, @statuses)
     |> Scope.validate_and_default()

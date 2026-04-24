@@ -56,7 +56,10 @@ defmodule HydraX.Product.WorkspaceTest do
   end
 
   describe "provision/1" do
-    test "creates the row, the on-disk root, and a default HYDRA.md", %{project: project, tmp_root: tmp_root} do
+    test "creates the row, the on-disk root, and a default HYDRA.md", %{
+      project: project,
+      tmp_root: tmp_root
+    } do
       assert {:ok, %Workspace{} = ws} = Workspaces.provision(project)
       assert ws.status == "ready"
       assert ws.fs_path == Path.join(tmp_root, Integer.to_string(project.id))
@@ -66,7 +69,9 @@ defmodule HydraX.Product.WorkspaceTest do
       assert File.read!(hydra_md) =~ "Project Instructions"
     end
 
-    test "is idempotent — re-provisioning returns the existing row and preserves HYDRA.md", %{project: project} do
+    test "is idempotent — re-provisioning returns the existing row and preserves HYDRA.md", %{
+      project: project
+    } do
       {:ok, ws1} = Workspaces.provision(project)
       File.write!(Path.join(ws1.fs_path, "HYDRA.md"), "## Custom\n")
 

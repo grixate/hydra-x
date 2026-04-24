@@ -23,9 +23,16 @@ defmodule HydraX.Product.Tools.CodeEdit do
         type: "object",
         properties: %{
           path: %{type: "string", description: "Relative path within the project workspace."},
-          old_string: %{type: "string", description: "Text to find. Must be unique unless replace_all is true."},
+          old_string: %{
+            type: "string",
+            description: "Text to find. Must be unique unless replace_all is true."
+          },
           new_string: %{type: "string", description: "Replacement text."},
-          replace_all: %{type: "boolean", description: "Replace every occurrence (default false).", default: false}
+          replace_all: %{
+            type: "boolean",
+            description: "Replace every occurrence (default false).",
+            default: false
+          }
         },
         required: ["path", "old_string", "new_string"]
       }

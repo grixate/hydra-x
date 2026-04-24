@@ -53,21 +53,26 @@ defmodule HydraXWeb.SpendAPIController do
 
   defp period_range("7d", now), do: {DateTime.add(now, -7 * 86400), 7}
   defp period_range("90d", now), do: {DateTime.add(now, -90 * 86400), 90}
+
   defp period_range(_, _now) do
     today = Date.utc_today()
     {:ok, dt} = NaiveDateTime.new(today.year, today.month, 1, 0, 0, 0)
-    {DateTime.from_naive!(dt, "Etc/UTC"), Date.diff(Date.utc_today(), Date.new!(today.year, today.month, 1)) + 1}
+
+    {DateTime.from_naive!(dt, "Etc/UTC"),
+     Date.diff(Date.utc_today(), Date.new!(today.year, today.month, 1)) + 1}
   end
 
   defp parse_int(v) when is_integer(v), do: v
   defp parse_int(v) when is_binary(v), do: String.to_integer(v)
 
   defp safe_parse_int(nil, default), do: default
+
   defp safe_parse_int(v, default) when is_binary(v) do
     case Integer.parse(v) do
       {int, ""} -> int
       _ -> default
     end
   end
+
   defp safe_parse_int(v, _default) when is_integer(v), do: v
 end

@@ -59,7 +59,9 @@ defmodule HydraX.Runtime.Providers do
          ) do
       metadata when is_map(metadata) ->
         case metadata["model_override_provider_id"] do
-          id when is_integer(id) -> id
+          id when is_integer(id) ->
+            id
+
           id when is_binary(id) ->
             case Integer.parse(id) do
               {n, ""} -> n

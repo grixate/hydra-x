@@ -8,6 +8,7 @@ defmodule HydraX.Product.StreamEntriesTest do
 
   defp make_project!(name \\ "archive-test") do
     email = "stream+#{System.unique_integer([:positive])}@test.example.com"
+
     {:ok, %{user: _user, workspace: workspace}} =
       Accounts.create_user_with_workspace(%{"email" => email, "display_name" => "Tester"})
 

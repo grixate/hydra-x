@@ -239,6 +239,7 @@ defmodule HydraXWeb.LibraryAPIController do
 
   defp maybe_int(nil), do: nil
   defp maybe_int(v) when is_integer(v), do: v
+
   defp maybe_int(v) when is_binary(v) do
     case Integer.parse(v) do
       {n, _} -> n

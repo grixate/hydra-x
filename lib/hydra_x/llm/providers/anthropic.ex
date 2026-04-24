@@ -90,7 +90,6 @@ defmodule HydraX.LLM.Providers.Anthropic do
     %{content: nil, tool_calls: nil, stop_reason: "error", provider: provider_name}
   end
 
-
   defp anthropic_messages(messages) do
     system_prompt =
       messages

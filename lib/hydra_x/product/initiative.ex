@@ -596,10 +596,12 @@ defmodule HydraX.Product.Initiative do
   defp run_check(project_id, "designer", :check_design_language_drift) do
     # Check if there's a design_language knowledge entry or artifact
     has_design_language =
-      HydraX.Product.KnowledgeEntry
+      HydraX.Graph.Node
       |> where(
         [k],
-        k.project_id == ^project_id and k.entry_type == "design_language" and k.status == "active"
+        k.project_id == ^project_id and k.type_key == "knowledge_entry" and
+          fragment("?->>'entry_type' = ?", k.attributes, "design_language") and
+          k.status == "active"
       )
       |> Repo.exists?()
 

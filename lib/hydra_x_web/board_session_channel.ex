@@ -65,6 +65,7 @@ defmodule HydraXWeb.BoardSessionChannel do
       "board_session_event.created" ->
         if Map.get(payload, :board_session_id) == board_session_id do
           event_data = payload.event
+
           push(socket, "session_event", %{
             id: event_data.id,
             event_type: event_data.event_type,

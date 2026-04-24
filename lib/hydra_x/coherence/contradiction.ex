@@ -55,8 +55,7 @@ defmodule HydraX.Coherence.Contradiction do
       foreign_key: :resolved_by_user_id,
       type: :binary_id
 
-    has_many :events, HydraX.Coherence.ContradictionEvent,
-      foreign_key: :contradiction_id
+    has_many :events, HydraX.Coherence.ContradictionEvent, foreign_key: :contradiction_id
 
     timestamps(type: :utc_datetime_usec)
   end

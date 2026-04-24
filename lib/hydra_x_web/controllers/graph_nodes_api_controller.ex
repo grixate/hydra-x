@@ -13,13 +13,13 @@ defmodule HydraXWeb.GraphNodesAPIController do
     # Collect all nodes across all types
     nodes =
       Enum.flat_map(Graph.node_types(), fn type ->
-        case Graph.schema_for(type) do
+        case Graph.base_query_for(type) do
           nil ->
             []
 
-          schema ->
+          query ->
             try do
-              schema
+              query
               |> where([r], r.project_id == ^project_id)
               |> HydraX.Repo.all()
               |> Enum.map(fn record ->

@@ -45,13 +45,13 @@ defmodule HydraX.Product.AgentBridge do
       |> case do
         nil ->
           conversation_attrs = %{
-              "project_id" => project.id,
-              "hydra_conversation_id" => hydra_conversation.id,
-              "persona" => persona,
-              "title" => params["title"] || hydra_conversation.title,
-              "status" => "active",
-              "metadata" => params["metadata"] || %{}
-            }
+            "project_id" => project.id,
+            "hydra_conversation_id" => hydra_conversation.id,
+            "persona" => persona,
+            "title" => params["title"] || hydra_conversation.title,
+            "status" => "active",
+            "metadata" => params["metadata"] || %{}
+          }
 
           conversation_attrs =
             if params["board_session_id"],
@@ -244,8 +244,11 @@ defmodule HydraX.Product.AgentBridge do
         # the frontend disambiguation UI picks these up and asks.
         {intent, metadata} =
           case confidence do
-            :low -> {"share_context", %{"ambiguous_intent" => true, "inferred" => inferred_intent}}
-            _ -> {inferred_intent, %{"inferred_confidence" => to_string(confidence)}}
+            :low ->
+              {"share_context", %{"ambiguous_intent" => true, "inferred" => inferred_intent}}
+
+            _ ->
+              {inferred_intent, %{"inferred_confidence" => to_string(confidence)}}
           end
 
         HydraX.Product.Mentions.create_mention(%{
@@ -319,7 +322,10 @@ defmodule HydraX.Product.AgentBridge do
   defp normalize_persona(persona) when persona in ["strategist", :strategist], do: "strategist"
   defp normalize_persona(persona) when persona in ["architect", :architect], do: "architect"
   defp normalize_persona(persona) when persona in ["designer", :designer], do: "designer"
-  defp normalize_persona(persona) when persona in ["memory_agent", :memory_agent], do: "memory_agent"
+
+  defp normalize_persona(persona) when persona in ["memory_agent", :memory_agent],
+    do: "memory_agent"
+
   defp normalize_persona(persona) when persona in ["coder", :coder], do: "coder"
 
   defp default_title(project, persona) do

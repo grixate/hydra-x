@@ -117,12 +117,16 @@ defmodule HydraX.Product.CommandCenterJanitor do
     if already_nudged_for_this_stall?(task) do
       :skip
     else
-      case HydraX.Product.AgentBridge.ensure_project_conversation(task.project_id, "memory_agent", %{
-             "channel" => "memory_nudges",
-             "external_ref" => "memory_nudges",
-             "title" => "Nudges",
-             "metadata" => %{"kind" => "memory_nudges"}
-           }) do
+      case HydraX.Product.AgentBridge.ensure_project_conversation(
+             task.project_id,
+             "memory_agent",
+             %{
+               "channel" => "memory_nudges",
+               "external_ref" => "memory_nudges",
+               "title" => "Nudges",
+               "metadata" => %{"kind" => "memory_nudges"}
+             }
+           ) do
         {:ok, conversation} ->
           content =
             "You have a #{task.state |> String.replace("_", " ")} task from the #{task.agent_id}: " <>
@@ -190,7 +194,10 @@ defmodule HydraX.Product.CommandCenterJanitor do
   # on an LLM prose call; once warmed the panel opens from cache.
   defp warm_proposal_why do
     AgentTask
-    |> where([t], t.state == "proposing" and not is_nil(t.context_type) and not is_nil(t.context_id))
+    |> where(
+      [t],
+      t.state == "proposing" and not is_nil(t.context_type) and not is_nil(t.context_id)
+    )
     |> limit(20)
     |> Repo.all()
     |> Enum.reduce(0, fn task, acc ->
@@ -253,9 +260,7 @@ defmodule HydraX.Product.CommandCenterJanitor do
       case expires_at(task) do
         %DateTime{} = ts ->
           if DateTime.compare(ts, now) == :lt do
-            case AgentTasks.transition(task, "rejected",
-                   reason: "expired without review"
-                 ) do
+            case AgentTasks.transition(task, "rejected", reason: "expired without review") do
               {:ok, _} -> acc + 1
               _ -> acc
             end

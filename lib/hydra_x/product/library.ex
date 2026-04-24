@@ -566,7 +566,8 @@ defmodule HydraX.Product.Library do
             {edge.to_node_type, edge.to_node_id, edge_kind_to_relationship(edge.kind, :outgoing)}
 
           edge.to_node_type in ["source", "signal"] ->
-            {edge.from_node_type, edge.from_node_id, edge_kind_to_relationship(edge.kind, :incoming)}
+            {edge.from_node_type, edge.from_node_id,
+             edge_kind_to_relationship(edge.kind, :incoming)}
         end
 
       reference(source.project_id, source.id, node_type, node_id, %{
@@ -586,6 +587,7 @@ defmodule HydraX.Product.Library do
   defp edge_kind_to_relationship(_, _), do: "cites"
 
   defp excerpt(nil), do: ""
+
   defp excerpt(content) do
     content
     |> String.slice(0, 280)

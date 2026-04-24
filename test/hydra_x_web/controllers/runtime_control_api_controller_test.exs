@@ -4,7 +4,15 @@ defmodule HydraXWeb.RuntimeControlAPIControllerTest do
   alias HydraX.Product.Project
   alias HydraX.Product.ProductConversation
   alias HydraX.Repo
-  alias HydraX.Runtime.{AgentProfile, Conversation, ConversationBranch, Conversations, ProviderConfig, SessionBranches}
+
+  alias HydraX.Runtime.{
+    AgentProfile,
+    Conversation,
+    ConversationBranch,
+    Conversations,
+    ProviderConfig,
+    SessionBranches
+  }
 
   setup %{conn: conn} do
     suffix = System.unique_integer([:positive])
@@ -191,7 +199,11 @@ defmodule HydraXWeb.RuntimeControlAPIControllerTest do
       hydra_conv: hydra_conv
     } do
       {:ok, t1} =
-        Conversations.append_turn(hydra_conv, %{"role" => "user", "kind" => "message", "content" => "m1"})
+        Conversations.append_turn(hydra_conv, %{
+          "role" => "user",
+          "kind" => "message",
+          "content" => "m1"
+        })
 
       {:ok, branch} = SessionBranches.fork(t1, "side")
       conv_after = Repo.get!(Conversation, hydra_conv.id)

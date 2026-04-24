@@ -3,18 +3,18 @@ defmodule HydraXWeb.AgentFeedAPIController do
 
   import Ecto.Query
 
-  alias HydraX.Product.{Insight, Decision, Strategy, Requirement, DesignNode, ArchitectureNode}
-  alias HydraX.Product.{Learning, Artifact}
+  alias HydraX.Product.Artifact
+  alias HydraX.Product.Graph, as: ProductGraph
   alias HydraX.Repo
 
   action_fallback HydraXWeb.ProjectAPIFallbackController
 
-  @persona_schemas %{
-    "researcher" => [{Insight, "insight"}],
-    "strategist" => [{Decision, "decision"}, {Requirement, "requirement"}, {Strategy, "strategy"}],
-    "architect" => [{ArchitectureNode, "architecture_node"}],
-    "designer" => [{DesignNode, "design_node"}],
-    "memory_agent" => [{Learning, "learning"}]
+  @persona_node_types %{
+    "researcher" => ["insight"],
+    "strategist" => ["decision", "requirement", "strategy"],
+    "architect" => ["architecture_node"],
+    "designer" => ["design_node"],
+    "memory_agent" => ["learning"]
   }
 
   @accepted_statuses ~w(accepted active done)
@@ -24,17 +24,20 @@ defmodule HydraXWeb.AgentFeedAPIController do
     limit = parse_int(params["limit"] || "20")
     offset = parse_int(params["offset"] || "0")
 
-    schemas = Map.get(@persona_schemas, persona, [])
+    node_types = Map.get(@persona_node_types, persona, [])
 
     # Fetch nodes for this persona (without edge counts — added after pagination)
     nodes =
-      Enum.flat_map(schemas, fn {schema, node_type} ->
-        schema
+      Enum.flat_map(node_types, fn node_type ->
+        node_type
+        |> ProductGraph.base_query_for()
         |> where([n], n.project_id == ^project_id)
         |> order_by([n], desc: n.inserted_at)
         |> Repo.all()
         |> Enum.map(fn record ->
-          body = Map.get(record, :body) || Map.get(record, :content) || Map.get(record, :description) || ""
+          body =
+            Map.get(record, :body) || Map.get(record, :content) || Map.get(record, :description) ||
+              ""
 
           %{
             type: "node",
@@ -76,13 +79,16 @@ defmodule HydraXWeb.AgentFeedAPIController do
     # Combine and sort by date
     all_items =
       (nodes ++ artifacts)
-      |> Enum.sort_by(fn item ->
-        case item do
-          %{created_at: dt} when not is_nil(dt) -> dt
-          %{updated_at: dt} when not is_nil(dt) -> dt
-          _ -> ~U[2000-01-01 00:00:00Z]
-        end
-      end, {:desc, DateTime})
+      |> Enum.sort_by(
+        fn item ->
+          case item do
+            %{created_at: dt} when not is_nil(dt) -> dt
+            %{updated_at: dt} when not is_nil(dt) -> dt
+            _ -> ~U[2000-01-01 00:00:00Z]
+          end
+        end,
+        {:desc, DateTime}
+      )
 
     total_count = length(all_items)
 
@@ -95,7 +101,7 @@ defmodule HydraXWeb.AgentFeedAPIController do
         if item.type == "node" do
           Map.merge(item, %{
             upstream_count: count_edges(project_id, item.node_type, item.node_id, :upstream),
-            downstream_count: count_edges(project_id, item.node_type, item.node_id, :downstream),
+            downstream_count: count_edges(project_id, item.node_type, item.node_id, :downstream)
           })
         else
           item
@@ -116,6 +122,7 @@ defmodule HydraXWeb.AgentFeedAPIController do
 
     # Heatmap placeholder (deterministic per persona)
     seed = persona |> String.to_charlist() |> Enum.sum()
+
     heatmap =
       for di <- 0..6 do
         for hi <- 0..23 do
@@ -152,7 +159,8 @@ defmodule HydraXWeb.AgentFeedAPIController do
 
   defp count_edges(project_id, node_type, node_id, :upstream) do
     HydraX.Product.GraphEdge
-    |> where([e],
+    |> where(
+      [e],
       e.project_id == ^project_id and
         e.to_node_type == ^to_string(node_type) and
         e.to_node_id == ^node_id
@@ -162,7 +170,8 @@ defmodule HydraXWeb.AgentFeedAPIController do
 
   defp count_edges(project_id, node_type, node_id, :downstream) do
     HydraX.Product.GraphEdge
-    |> where([e],
+    |> where(
+      [e],
       e.project_id == ^project_id and
         e.from_node_type == ^to_string(node_type) and
         e.from_node_id == ^node_id

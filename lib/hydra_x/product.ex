@@ -21,18 +21,14 @@ defmodule HydraX.Product do
   alias HydraX.Graph.Nodes, as: GraphNodes
   alias HydraX.Product.InsightEvidence
   alias HydraX.Product.Onboarding
-  alias HydraX.Product.KnowledgeEntry
-  alias HydraX.Product.Learning
   alias HydraX.Product.Project
   alias HydraX.Product.ProductConversation
   alias HydraX.Product.ProductMessage
   alias HydraX.Product.PubSub, as: ProductPubSub
   alias HydraX.Product.RequirementInsight
-  alias HydraX.Product.Routine
   alias HydraX.Product.RoutineRun
   alias HydraX.Product.Source
   alias HydraX.Product.SourceChunk
-  alias HydraX.Product.Task, as: ProductTask
   alias HydraX.Product.TaskFeedback
   alias HydraX.Product.WorkspaceScaffold
   alias HydraX.Repo
@@ -112,8 +108,8 @@ defmodule HydraX.Product do
       strategies: count_type_key_nodes(project_id, "strategy", :all),
       design_nodes: count_project_records(DesignNode, project_id),
       architecture_nodes: count_project_records(ArchitectureNode, project_id),
-      tasks: count_project_records(ProductTask, project_id),
-      learnings: count_project_records(Learning, project_id),
+      tasks: count_type_key_nodes(project_id, "task", :all),
+      learnings: count_type_key_nodes(project_id, "learning", :all),
       flags:
         GraphFlag
         |> where([f], f.project_id == ^project_id and f.status == "open")
@@ -1003,50 +999,94 @@ defmodule HydraX.Product do
     priority = Keyword.get(opts, :priority)
     search = Keyword.get(opts, :search)
 
-    ProductTask
-    |> where([t], t.project_id == ^project_id)
+    from(n in GraphNode,
+      where: n.project_id == ^project_id and n.type_key == "task" and is_nil(n.archived_at)
+    )
     |> maybe_filter_product_record_status(status)
-    |> maybe_filter_priority(priority)
+    |> maybe_filter_task_priority(priority)
     |> maybe_filter_title_body_search(search)
     |> order_by([t], desc: t.updated_at)
     |> Repo.all()
   end
 
-  def get_task!(id), do: Repo.get!(ProductTask, id)
+  def get_task!(id) do
+    Repo.one!(from n in GraphNode, where: n.id == ^id and n.type_key == "task")
+  end
 
   def get_project_task!(project_or_id, id) do
     project_id = project_id(project_or_id)
 
-    ProductTask
-    |> where([t], t.project_id == ^project_id and t.id == ^parse_integer(id))
-    |> Repo.one!()
+    Repo.one!(
+      from n in GraphNode,
+        where: n.project_id == ^project_id and n.id == ^parse_integer(id) and n.type_key == "task"
+    )
   end
 
   def create_task(project_or_id, attrs) when is_map(attrs) do
     project_id = project_id(project_or_id)
     attrs = normalize_product_record_attrs(attrs)
 
-    %ProductTask{}
-    |> ProductTask.changeset(Map.put(attrs, "project_id", project_id))
-    |> Repo.insert()
+    task_attributes =
+      (attrs["metadata"] || %{})
+      |> Map.merge(%{
+        "assignee" => attrs["assignee"],
+        "effort_estimate" => attrs["effort_estimate"],
+        "priority" => attrs["priority"] || "medium"
+      })
+      |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+      |> Map.new()
+
+    node_attrs = %{
+      type_key: "task",
+      title: attrs["title"],
+      body: attrs["body"],
+      status: attrs["status"] || "backlog",
+      attributes: task_attributes
+    }
+
+    GraphNodes.create_node(product_domain!(), project_id, node_attrs)
     |> maybe_broadcast_project_record("task.created")
   end
 
-  def update_task(%ProductTask{} = task, attrs) when is_map(attrs) do
+  def update_task(%GraphNode{type_key: "task"} = task, attrs) when is_map(attrs) do
     attrs = normalize_product_record_attrs(attrs)
 
-    task
-    |> ProductTask.changeset(attrs)
-    |> Repo.update()
+    incoming_attrs =
+      %{
+        "assignee" => attrs["assignee"],
+        "effort_estimate" => attrs["effort_estimate"],
+        "priority" => attrs["priority"]
+      }
+      |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+      |> Map.new()
+
+    merged_attributes =
+      (task.attributes || %{})
+      |> Map.merge(attrs["metadata"] || %{})
+      |> Map.merge(incoming_attrs)
+
+    GraphNodes.update_node(task, %{
+      title: attrs["title"] || task.title,
+      body: attrs["body"] || task.body,
+      status: attrs["status"] || task.status,
+      attributes: merged_attributes
+    })
     |> maybe_broadcast_project_record("task.updated")
     |> maybe_notify_propagation("task", :updated)
   end
 
-  def delete_task(%ProductTask{} = task) do
+  def delete_task(%GraphNode{type_key: "task"} = task) do
     task
     |> Repo.delete()
     |> maybe_broadcast_project_record("task.deleted")
     |> maybe_notify_propagation("task", :deleted)
+  end
+
+  defp maybe_filter_task_priority(query, nil), do: query
+  defp maybe_filter_task_priority(query, ""), do: query
+
+  defp maybe_filter_task_priority(query, priority) do
+    where(query, [t], fragment("?->>'priority' = ?", t.attributes, ^to_string(priority)))
   end
 
   # -------------------------------------------------------------------
@@ -1059,8 +1099,9 @@ defmodule HydraX.Product do
     learning_type = Keyword.get(opts, :learning_type)
     search = Keyword.get(opts, :search)
 
-    Learning
-    |> where([l], l.project_id == ^project_id)
+    from(n in GraphNode,
+      where: n.project_id == ^project_id and n.type_key == "learning" and is_nil(n.archived_at)
+    )
     |> maybe_filter_product_record_status(status)
     |> maybe_filter_learning_type(learning_type)
     |> maybe_filter_title_body_search(search)
@@ -1068,37 +1109,67 @@ defmodule HydraX.Product do
     |> Repo.all()
   end
 
-  def get_learning!(id), do: Repo.get!(Learning, id)
+  def get_learning!(id) do
+    Repo.one!(from n in GraphNode, where: n.id == ^id and n.type_key == "learning")
+  end
 
   def get_project_learning!(project_or_id, id) do
     project_id = project_id(project_or_id)
 
-    Learning
-    |> where([l], l.project_id == ^project_id and l.id == ^parse_integer(id))
-    |> Repo.one!()
+    Repo.one!(
+      from n in GraphNode,
+        where:
+          n.project_id == ^project_id and n.id == ^parse_integer(id) and
+            n.type_key == "learning"
+    )
   end
 
   def create_learning(project_or_id, attrs) when is_map(attrs) do
     project_id = project_id(project_or_id)
     attrs = normalize_product_record_attrs(attrs)
 
-    %Learning{}
-    |> Learning.changeset(Map.put(attrs, "project_id", project_id))
-    |> Repo.insert()
+    learning_attributes =
+      (attrs["metadata"] || %{})
+      |> Map.merge(%{"learning_type" => attrs["learning_type"]})
+      |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+      |> Map.new()
+
+    node_attrs = %{
+      type_key: "learning",
+      title: attrs["title"],
+      body: attrs["body"],
+      status: attrs["status"] || "active",
+      attributes: learning_attributes
+    }
+
+    GraphNodes.create_node(product_domain!(), project_id, node_attrs)
     |> maybe_broadcast_project_record("learning.created")
   end
 
-  def update_learning(%Learning{} = learning, attrs) when is_map(attrs) do
+  def update_learning(%GraphNode{type_key: "learning"} = learning, attrs) when is_map(attrs) do
     attrs = normalize_product_record_attrs(attrs)
 
-    learning
-    |> Learning.changeset(attrs)
-    |> Repo.update()
+    incoming_attrs =
+      if attrs["learning_type"],
+        do: %{"learning_type" => attrs["learning_type"]},
+        else: %{}
+
+    merged_attributes =
+      (learning.attributes || %{})
+      |> Map.merge(attrs["metadata"] || %{})
+      |> Map.merge(incoming_attrs)
+
+    GraphNodes.update_node(learning, %{
+      title: attrs["title"] || learning.title,
+      body: attrs["body"] || learning.body,
+      status: attrs["status"] || learning.status,
+      attributes: merged_attributes
+    })
     |> maybe_broadcast_project_record("learning.updated")
     |> maybe_notify_propagation("learning", :updated)
   end
 
-  def delete_learning(%Learning{} = learning) do
+  def delete_learning(%GraphNode{type_key: "learning"} = learning) do
     learning
     |> Repo.delete()
     |> maybe_broadcast_project_record("learning.deleted")
@@ -1144,14 +1215,14 @@ defmodule HydraX.Product do
 
     nodes =
       Enum.flat_map(HydraX.Product.Graph.node_types(), fn type ->
-        case HydraX.Product.Graph.schema_for(type) do
+        case HydraX.Product.Graph.base_query_for(type) do
           nil ->
             []
 
-          schema ->
+          query ->
             try do
               base =
-                schema
+                query
                 |> where([r], r.project_id == ^project_id)
 
               # Source-as-Data: hide non-promoted sources from the default
@@ -1335,43 +1406,64 @@ defmodule HydraX.Product do
     project_id = project_id(project_or_id)
     status = Keyword.get(opts, :status)
 
-    Routine
-    |> where([r], r.project_id == ^project_id)
+    from(n in GraphNode,
+      where: n.project_id == ^project_id and n.type_key == "routine" and is_nil(n.archived_at)
+    )
     |> maybe_filter_product_record_status(status)
     |> order_by([r], desc: r.updated_at)
     |> Repo.all()
   end
 
-  def get_routine!(id), do: Repo.get!(Routine, id)
+  def get_routine!(id) do
+    Repo.one!(from n in GraphNode, where: n.id == ^id and n.type_key == "routine")
+  end
 
   def get_project_routine!(project_or_id, id) do
     project_id = project_id(project_or_id)
 
-    Routine
-    |> where([r], r.project_id == ^project_id and r.id == ^parse_integer(id))
-    |> Repo.one!()
+    Repo.one!(
+      from n in GraphNode,
+        where:
+          n.project_id == ^project_id and n.id == ^parse_integer(id) and
+            n.type_key == "routine"
+    )
   end
 
   def create_routine(project_or_id, attrs) when is_map(attrs) do
     project_id = project_id(project_or_id)
     attrs = normalize_product_record_attrs(attrs)
 
-    %Routine{}
-    |> Routine.changeset(Map.put(attrs, "project_id", project_id))
-    |> Repo.insert()
+    GraphNodes.create_node(product_domain!(), project_id, %{
+      type_key: "routine",
+      title: attrs["title"],
+      body: attrs["description"],
+      status: attrs["status"] || "active",
+      attributes: routine_attributes(attrs)
+    })
   end
 
-  def update_routine(%Routine{} = routine, attrs) when is_map(attrs) do
+  def update_routine(%GraphNode{type_key: "routine"} = routine, attrs) when is_map(attrs) do
     attrs = normalize_product_record_attrs(attrs)
-    routine |> Routine.changeset(attrs) |> Repo.update()
+
+    merged_attributes =
+      (routine.attributes || %{})
+      |> Map.merge(attrs["metadata"] || %{})
+      |> Map.merge(routine_attributes(attrs))
+
+    GraphNodes.update_node(routine, %{
+      title: attrs["title"] || routine.title,
+      body: attrs["description"] || routine.body,
+      status: attrs["status"] || routine.status,
+      attributes: merged_attributes
+    })
   end
 
-  def delete_routine(%Routine{} = routine), do: Repo.delete(routine)
+  def delete_routine(%GraphNode{type_key: "routine"} = routine), do: Repo.delete(routine)
 
   def list_routine_runs(routine_or_id, opts \\ []) do
     routine_id =
       case routine_or_id do
-        %Routine{id: id} -> id
+        %GraphNode{id: id} -> id
         id -> parse_integer(id)
       end
 
@@ -1382,6 +1474,23 @@ defmodule HydraX.Product do
     |> order_by([r], desc: r.started_at)
     |> limit(^limit)
     |> Repo.all()
+  end
+
+  defp routine_attributes(attrs) do
+    [
+      {"prompt_template", attrs["prompt_template"]},
+      {"assigned_persona", attrs["assigned_persona"]},
+      {"schedule_type", attrs["schedule_type"]},
+      {"cron_expression", attrs["cron_expression"]},
+      {"event_trigger", attrs["event_trigger"]},
+      {"timezone", attrs["timezone"]},
+      {"output_target", attrs["output_target"]},
+      {"last_run_at", attrs["last_run_at"]},
+      {"last_run_status", attrs["last_run_status"]},
+      {"last_run_tokens", attrs["last_run_tokens"]}
+    ]
+    |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+    |> Map.new()
   end
 
   def create_routine_run(attrs) when is_map(attrs) do
@@ -1399,8 +1508,11 @@ defmodule HydraX.Product do
     persona = Keyword.get(opts, :persona)
 
     query =
-      KnowledgeEntry
-      |> where([k], k.project_id == ^project_id)
+      from(n in GraphNode,
+        where:
+          n.project_id == ^project_id and n.type_key == "knowledge_entry" and
+            is_nil(n.archived_at)
+      )
       |> maybe_filter_product_record_status(status)
 
     query =
@@ -1410,9 +1522,13 @@ defmodule HydraX.Product do
         where(
           query,
           [k],
-          ^p in k.assigned_personas or
-            fragment("? = ANY(?)", "all", k.assigned_personas) or
-            k.assigned_personas == ^[]
+          fragment("?->'assigned_personas' @> ?", k.attributes, ^[p]) or
+            fragment("?->'assigned_personas' @> ?", k.attributes, ^["all"]) or
+            fragment(
+              "(?->'assigned_personas' IS NULL OR jsonb_array_length(?->'assigned_personas') = 0)",
+              k.attributes,
+              k.attributes
+            )
         )
       else
         query
@@ -1421,31 +1537,64 @@ defmodule HydraX.Product do
     query |> order_by([k], desc: k.updated_at) |> Repo.all()
   end
 
-  def get_knowledge_entry!(id), do: Repo.get!(KnowledgeEntry, id)
+  def get_knowledge_entry!(id) do
+    Repo.one!(from n in GraphNode, where: n.id == ^id and n.type_key == "knowledge_entry")
+  end
 
   def get_project_knowledge_entry!(project_or_id, id) do
     project_id = project_id(project_or_id)
 
-    KnowledgeEntry
-    |> where([k], k.project_id == ^project_id and k.id == ^parse_integer(id))
-    |> Repo.one!()
+    Repo.one!(
+      from n in GraphNode,
+        where:
+          n.project_id == ^project_id and n.id == ^parse_integer(id) and
+            n.type_key == "knowledge_entry"
+    )
   end
 
   def create_knowledge_entry(project_or_id, attrs) when is_map(attrs) do
     project_id = project_id(project_or_id)
     attrs = normalize_product_record_attrs(attrs)
 
-    %KnowledgeEntry{}
-    |> KnowledgeEntry.changeset(Map.put(attrs, "project_id", project_id))
-    |> Repo.insert()
+    GraphNodes.create_node(product_domain!(), project_id, %{
+      type_key: "knowledge_entry",
+      title: attrs["title"],
+      body: attrs["content"],
+      status: attrs["status"] || "active",
+      attributes: knowledge_entry_attributes(attrs)
+    })
   end
 
-  def update_knowledge_entry(%KnowledgeEntry{} = entry, attrs) when is_map(attrs) do
+  def update_knowledge_entry(%GraphNode{type_key: "knowledge_entry"} = entry, attrs)
+      when is_map(attrs) do
     attrs = normalize_product_record_attrs(attrs)
-    entry |> KnowledgeEntry.changeset(attrs) |> Repo.update()
+
+    merged_attributes =
+      (entry.attributes || %{})
+      |> Map.merge(attrs["metadata"] || %{})
+      |> Map.merge(knowledge_entry_attributes(attrs))
+
+    GraphNodes.update_node(entry, %{
+      title: attrs["title"] || entry.title,
+      body: attrs["content"] || entry.body,
+      status: attrs["status"] || entry.status,
+      attributes: merged_attributes
+    })
   end
 
-  def delete_knowledge_entry(%KnowledgeEntry{} = entry), do: Repo.delete(entry)
+  def delete_knowledge_entry(%GraphNode{type_key: "knowledge_entry"} = entry),
+    do: Repo.delete(entry)
+
+  defp knowledge_entry_attributes(attrs) do
+    [
+      {"entry_type", attrs["entry_type"]},
+      {"assigned_personas", attrs["assigned_personas"]},
+      {"source_type", attrs["source_type"]},
+      {"source_url", attrs["source_url"]}
+    ]
+    |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+    |> Map.new()
+  end
 
   @doc """
   Agent-initiated knowledge proposal. Creates a pending_review entry with
@@ -1460,13 +1609,12 @@ defmodule HydraX.Product do
 
     # Dedup check: skip if an active or pending entry with same title + type exists
     existing =
-      KnowledgeEntry
-      |> where(
-        [k],
-        k.project_id == ^project_id and
-          k.title == ^title and
-          k.entry_type == ^entry_type and
-          k.status in ["active", "pending_review"]
+      from(n in GraphNode,
+        where:
+          n.project_id == ^project_id and n.type_key == "knowledge_entry" and
+            n.title == ^title and
+            fragment("?->>'entry_type' = ?", n.attributes, ^entry_type) and
+            n.status in ["active", "pending_review"]
       )
       |> limit(1)
       |> Repo.one()
@@ -1474,17 +1622,13 @@ defmodule HydraX.Product do
     if existing do
       {:ok, existing}
     else
-      proposal_attrs =
+      attrs_with_generated =
         attrs
-        |> Map.put("project_id", project_id)
         |> Map.put("status", "pending_review")
         |> Map.put("source_type", "generated")
         |> Map.put_new("assigned_personas", [])
 
-      %KnowledgeEntry{}
-      |> KnowledgeEntry.changeset(proposal_attrs)
-      |> Repo.insert()
-      |> case do
+      case create_knowledge_entry(project_id, attrs_with_generated) do
         {:ok, entry} ->
           ProductPubSub.broadcast_project_event(project_id, "knowledge.proposed", entry)
           {:ok, entry}
@@ -1500,13 +1644,13 @@ defmodule HydraX.Product do
   """
   def review_knowledge(entry_or_id, action, attrs \\ %{})
 
-  def review_knowledge(%KnowledgeEntry{} = entry, :accept, attrs) do
+  def review_knowledge(%GraphNode{type_key: "knowledge_entry"} = entry, :accept, attrs) do
     merged = Map.merge(%{"status" => "active"}, normalize_product_record_attrs(attrs))
-    entry |> KnowledgeEntry.changeset(merged) |> Repo.update()
+    update_knowledge_entry(entry, merged)
   end
 
-  def review_knowledge(%KnowledgeEntry{} = entry, :reject, _attrs) do
-    entry |> KnowledgeEntry.changeset(%{"status" => "archived"}) |> Repo.update()
+  def review_knowledge(%GraphNode{type_key: "knowledge_entry"} = entry, :reject, _attrs) do
+    update_knowledge_entry(entry, %{"status" => "archived"})
   end
 
   def review_knowledge(id, action, attrs) when is_integer(id) do
@@ -2649,7 +2793,11 @@ defmodule HydraX.Product do
   defp maybe_filter_learning_type(query, ""), do: query
 
   defp maybe_filter_learning_type(query, learning_type) do
-    where(query, [r], r.learning_type == ^to_string(learning_type))
+    where(
+      query,
+      [r],
+      fragment("?->>'learning_type' = ?", r.attributes, ^to_string(learning_type))
+    )
   end
 
   defp maybe_filter_edge_kind(query, nil), do: query

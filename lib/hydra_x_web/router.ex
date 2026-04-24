@@ -141,6 +141,7 @@ defmodule HydraXWeb.Router do
     get "/projects/:project_id/library/candidates", LibraryAPIController, :candidates
     get "/projects/:project_id/library/sources/:id", LibraryAPIController, :show
     get "/projects/:project_id/library/sources/:id/content", LibraryAPIController, :content
+
     get "/projects/:project_id/library/sources/:id/referenced_by",
         LibraryAPIController,
         :referenced_by
@@ -243,7 +244,10 @@ defmodule HydraXWeb.Router do
     get "/projects/:project_id/contradictions/:id", ContradictionAPIController, :show
     post "/projects/:project_id/contradictions/:id/dismiss", ContradictionAPIController, :dismiss
     post "/projects/:project_id/contradictions/:id/resolve", ContradictionAPIController, :resolve
-    post "/projects/:project_id/contradictions/:id/acknowledge", ContradictionAPIController, :acknowledge_tension
+
+    post "/projects/:project_id/contradictions/:id/acknowledge",
+         ContradictionAPIController,
+         :acknowledge_tension
 
     # Graph visualization
     get "/projects/:project_id/graph/nodes", GraphNodesAPIController, :index
@@ -299,6 +303,11 @@ defmodule HydraXWeb.Router do
     get "/projects/:project_id/stream_entries", StreamEntryAPIController, :index
     get "/projects/:project_id/stream_entries/counts", StreamEntryAPIController, :counts
     post "/projects/:project_id/stream_entries/read", StreamEntryAPIController, :mark_read
+    post "/projects/:project_id/stream_entries/:id/dismiss", StreamEntryAPIController, :dismiss
+
+    # Stream spotlight lineage (spec v3 §3): single endpoint returns the
+    # lineage chain + Why prose for a stream item's referenced node(s).
+    get "/projects/:project_id/stream/lineage", StreamLineageAPIController, :show
 
     # Flows (Zone 4) + mentions
     get "/projects/:project_id/flows", FlowAPIController, :index
@@ -382,7 +391,9 @@ defmodule HydraXWeb.Router do
     delete "/projects/:project_id/board_sessions/:id", BoardSessionAPIController, :delete
 
     # Board session events
-    get "/projects/:project_id/board_sessions/:session_id/events", BoardSessionAPIController, :events
+    get "/projects/:project_id/board_sessions/:session_id/events",
+        BoardSessionAPIController,
+        :events
 
     # Board nodes (nested under sessions)
     get "/projects/:project_id/board_sessions/:session_id/nodes", BoardNodeAPIController, :index

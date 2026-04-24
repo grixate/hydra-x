@@ -101,6 +101,25 @@ a {
   outline: none !important;
 }
 
+.hydra-cosmos-graph canvas {
+  display: block;
+}
+
+.hydra-graph-html-canvas {
+  background: transparent;
+  pointer-events: none;
+}
+
+.hydra-graph-html-canvas > .hydra-graph-card-hit-target {
+  pointer-events: auto;
+  contain: layout paint style;
+}
+
+.hydra-graph-html-canvas > .hydra-graph-label {
+  pointer-events: none;
+  contain: layout paint style;
+}
+
 /* -----------------------------------------------------------------
    Graph motion language (Graph-Opt spec §7). All animations are CSS
    transitions on compositor-friendly properties (opacity, transform)
@@ -210,18 +229,70 @@ a {
   .graph-wip::after {
     animation: none;
   }
-  .agent-working-border {
-    animation: none;
+  .agent-working-border,
+  .agent-working-border::before,
+  .agent-chat-aura {
+    animation: none !important;
   }
 }
 
-/* Animated border for the collapsed agent chat rail when any agent is
-   actively working. Subtle pulse of the border color. */
-@keyframes agent-border-pulse {
-  0%, 100% { border-color: var(--border); box-shadow: none; }
-  50% { border-color: var(--ring); box-shadow: 0 0 0 1px var(--ring); }
+/* Gradient-flow chat glow (ported from Variant "AI Chat Input Component").
+   Two layers: a 1px moving-gradient rim on the button itself (via ::before
+   + mask-composite), and a sibling `.agent-chat-aura` div behind it that
+   breathes. Active only while any agent is working. */
+@keyframes border-flow {
+  0%   { background-position: 0% 50%; }
+  100% { background-position: -200% 50%; }
+}
+
+@keyframes aura-breathe {
+  0%, 100% { opacity: 0.45; transform: scale(1);    filter: blur(10px); }
+  50%      { opacity: 0.85; transform: scale(1.04); filter: blur(14px); }
 }
 
 .agent-working-border {
-  animation: agent-border-pulse 2.4s ease-in-out infinite;
+  position: relative;
+  border-color: transparent !important;
+}
+
+.agent-working-border::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(
+    90deg,
+    #ff4b1f,
+    #ff9068,
+    #a855f7,
+    #3b82f6,
+    #8b5cf6,
+    #ff4b1f
+  );
+  background-size: 200% auto;
+  animation: border-flow 4s linear infinite;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  pointer-events: none;
+}
+
+.agent-chat-aura {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 75, 31, 0.55),
+    rgba(255, 144, 104, 0.4),
+    rgba(168, 85, 247, 0.4),
+    rgba(59, 130, 246, 0.55),
+    rgba(139, 92, 246, 0.4),
+    rgba(255, 75, 31, 0.55)
+  );
+  background-size: 200% auto;
+  animation:
+    border-flow 4s linear infinite,
+    aura-breathe 4s ease-in-out infinite;
+  pointer-events: none;
 }

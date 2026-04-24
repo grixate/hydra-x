@@ -55,6 +55,14 @@ defmodule HydraX.Graph.Node do
              HydraX.Product.ArtifactVersion,
              foreign_key: :artifact_id
 
+    has_many :routine_runs,
+             HydraX.Product.RoutineRun,
+             foreign_key: :routine_id
+
+    has_many :task_feedback,
+             HydraX.Product.TaskFeedback,
+             foreign_key: :task_id
+
     timestamps(type: :utc_datetime_usec)
   end
 

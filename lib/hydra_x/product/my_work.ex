@@ -9,8 +9,6 @@ defmodule HydraX.Product.MyWork do
   alias HydraX.Product.BoardSession
   alias HydraX.Product.GraphFlag
   alias HydraX.Graph.Node, as: GraphNode
-  alias HydraX.Product.Routine
-  alias HydraX.Product.Task, as: ProductTask
   alias HydraX.Repo
 
   @recent_days 7
@@ -36,8 +34,11 @@ defmodule HydraX.Product.MyWork do
     needs_input = length(needs_input_items(project_id, nil))
 
     active_work =
-      ProductTask
-      |> where([t], t.project_id == ^project_id and t.status in ["in_progress", "review"])
+      GraphNode
+      |> where([t],
+        t.project_id == ^project_id and t.type_key == "task" and
+          t.status in ["in_progress", "review"]
+      )
       |> Repo.aggregate(:count, :id)
 
     %{needs_input: needs_input, active_work: active_work}
@@ -199,8 +200,11 @@ defmodule HydraX.Product.MyWork do
   end
 
   defp active_tasks(project_id) do
-    ProductTask
-    |> where([t], t.project_id == ^project_id and t.status in ["in_progress", "review"])
+    GraphNode
+    |> where([t],
+      t.project_id == ^project_id and t.type_key == "task" and
+        t.status in ["in_progress", "review"]
+    )
     |> order_by([t], desc: t.updated_at)
     |> Repo.all()
     |> Enum.map(fn t ->
@@ -256,8 +260,8 @@ defmodule HydraX.Product.MyWork do
   end
 
   defp recently_completed_tasks(project_id, since) do
-    ProductTask
-    |> where([t], t.project_id == ^project_id and t.status == "done")
+    GraphNode
+    |> where([t], t.project_id == ^project_id and t.type_key == "task" and t.status == "done")
     |> where([t], t.updated_at >= ^since)
     |> order_by([t], desc: t.updated_at)
     |> limit(10)
@@ -295,8 +299,12 @@ defmodule HydraX.Product.MyWork do
   # --- Agent Work ---
 
   defp current_agent_work(project_id, persona) do
-    Routine
-    |> where([r], r.project_id == ^project_id and r.persona == ^persona and r.active == true)
+    GraphNode
+    |> where([r],
+      r.project_id == ^project_id and r.type_key == "routine" and
+        fragment("?->>'assigned_persona' = ?", r.attributes, ^to_string(persona)) and
+        r.status == "active"
+    )
     |> Repo.all()
     |> Enum.map(fn r ->
       %{type: "routine", title: "Running routine: #{r.title}", routine_id: r.id}
@@ -327,9 +335,13 @@ defmodule HydraX.Product.MyWork do
   end
 
   defp queued_agent_work(project_id, persona) do
-    Routine
-    |> where([r], r.project_id == ^project_id and r.persona == ^persona and r.active == true)
-    |> where([r], not is_nil(r.schedule))
+    GraphNode
+    |> where([r],
+      r.project_id == ^project_id and r.type_key == "routine" and
+        fragment("?->>'assigned_persona' = ?", r.attributes, ^to_string(persona)) and
+        r.status == "active"
+    )
+    |> where([r], fragment("?->>'cron_expression' IS NOT NULL", r.attributes))
     |> Repo.all()
     |> Enum.map(fn r ->
       %{

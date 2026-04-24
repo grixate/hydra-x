@@ -10,11 +10,7 @@ defmodule HydraX.Product.Graph do
   alias HydraX.Product.GraphEdge
   alias HydraX.Product.GraphFlag
   alias HydraX.Graph.Node, as: GraphNode
-  alias HydraX.Product.KnowledgeEntry
-  alias HydraX.Product.Learning
-  alias HydraX.Product.Routine
   alias HydraX.Product.Source
-  alias HydraX.Product.Task, as: ProductTask
   alias HydraX.Repo
 
   @node_type_to_schema %{
@@ -26,11 +22,11 @@ defmodule HydraX.Product.Graph do
     "requirement" => GraphNode,
     "design_node" => GraphNode,
     "architecture_node" => GraphNode,
-    "task" => ProductTask,
-    "learning" => Learning,
+    "task" => GraphNode,
+    "learning" => GraphNode,
     "constraint" => GraphNode,
-    "routine" => Routine,
-    "knowledge_entry" => KnowledgeEntry
+    "routine" => GraphNode,
+    "knowledge_entry" => GraphNode
   }
 
   @traversable_node_types Map.keys(@node_type_to_schema)

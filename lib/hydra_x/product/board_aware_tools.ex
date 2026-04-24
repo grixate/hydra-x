@@ -58,8 +58,7 @@ defmodule HydraX.Product.BoardAwareTools do
 
   defp extract_metadata("insight", params) do
     %{
-      "evidence_chunk_ids" =>
-        params[:evidence_chunk_ids] || params["evidence_chunk_ids"] || []
+      "evidence_chunk_ids" => params[:evidence_chunk_ids] || params["evidence_chunk_ids"] || []
     }
   end
 

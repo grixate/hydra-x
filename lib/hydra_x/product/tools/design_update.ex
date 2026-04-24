@@ -25,7 +25,13 @@ defmodule HydraX.Product.Tools.DesignUpdate do
           body: %{type: "string", description: "Updated description"},
           node_type: %{
             type: "string",
-            enum: ["user_flow", "wireframe", "interaction_pattern", "component_spec", "design_rationale"]
+            enum: [
+              "user_flow",
+              "wireframe",
+              "interaction_pattern",
+              "component_spec",
+              "design_rationale"
+            ]
           },
           status: %{type: "string", enum: ["draft", "active", "superseded", "archived"]}
         },

@@ -359,7 +359,10 @@ defmodule HydraX.Agent.Worker do
   defp enrich_params(arguments, _name, _context), do: arguments
 
   defp maybe_put_board_session_id(arguments, %{board_session_id: nil}), do: arguments
-  defp maybe_put_board_session_id(arguments, %{board_session_id: id}), do: Map.put(arguments, :board_session_id, id)
+
+  defp maybe_put_board_session_id(arguments, %{board_session_id: id}),
+    do: Map.put(arguments, :board_session_id, id)
+
   defp maybe_put_board_session_id(arguments, _context), do: arguments
 
   defp log_tool_warning(conversation, tool_name, params, reason) do

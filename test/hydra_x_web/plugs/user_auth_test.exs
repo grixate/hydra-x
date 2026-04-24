@@ -6,7 +6,10 @@ defmodule HydraXWeb.Plugs.UserAuthTest do
 
   defp make_user! do
     email = "auth+#{System.unique_integer([:positive])}@test.example.com"
-    {:ok, %{user: user}} = Accounts.create_user_with_workspace(%{"email" => email, "display_name" => "T"})
+
+    {:ok, %{user: user}} =
+      Accounts.create_user_with_workspace(%{"email" => email, "display_name" => "T"})
+
     user
   end
 

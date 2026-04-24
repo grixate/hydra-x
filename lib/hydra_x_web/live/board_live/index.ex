@@ -87,7 +87,11 @@ defmodule HydraXWeb.BoardLive.Index do
         </div>
 
         <%!-- New session form --%>
-        <form :if={@show_new_form} phx-submit="create_session" class="glass-panel rounded-xl border border-white/10 p-5">
+        <form
+          :if={@show_new_form}
+          phx-submit="create_session"
+          class="glass-panel rounded-xl border border-white/10 p-5"
+        >
           <div class="flex gap-3">
             <input
               type="text"
@@ -135,7 +139,9 @@ defmodule HydraXWeb.BoardLive.Index do
         </div>
 
         <div :if={@board_sessions == []} class="text-center py-16">
-          <p class="text-[var(--hx-mute)]">No board sessions yet. Create one to start exploring ideas.</p>
+          <p class="text-[var(--hx-mute)]">
+            No board sessions yet. Create one to start exploring ideas.
+          </p>
         </div>
       </div>
     </ProductShell.shell>

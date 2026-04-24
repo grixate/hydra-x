@@ -252,6 +252,100 @@ defmodule HydraX.Graph.Domains.ProductDevelopment do
         },
         icon: "hero-bolt",
         color_token: "--color-accent-yellow"
+      },
+      %{
+        type_key: "task",
+        display_name: "Task",
+        description: "A human-assigned unit of work.",
+        extends: "activity",
+        status_vocabulary: ~w(backlog ready in_progress review done archived),
+        attribute_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "assignee" => %{"type" => "string"},
+            "effort_estimate" => %{"type" => "string"},
+            "priority" => %{
+              "type" => "string",
+              "enum" => ["critical", "high", "medium", "low"]
+            }
+          }
+        },
+        icon: "hero-clipboard-document-list",
+        color_token: "--color-accent-blue"
+      },
+      %{
+        type_key: "learning",
+        display_name: "Learning",
+        description: "Retrospective or data-grounded claim about what was learned.",
+        extends: "claim",
+        status_vocabulary: ~w(draft active archived),
+        attribute_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "learning_type" => %{
+              "type" => "string",
+              "enum" =>
+                ~w(retrospective post_mortem usage_data experiment_result)
+            }
+          }
+        },
+        icon: "hero-academic-cap",
+        color_token: "--color-accent-lime"
+      },
+      %{
+        type_key: "knowledge_entry",
+        display_name: "Knowledge Entry",
+        description: "A reference piece of project knowledge (design system, conventions, domain docs).",
+        extends: "evidence",
+        status_vocabulary: ~w(active pending_review archived),
+        attribute_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "entry_type" => %{
+              "type" => "string",
+              "enum" =>
+                ~w(design_language coding_conventions brand_guide product_vision domain_knowledge process_rules integration_docs pattern custom)
+            },
+            "assigned_personas" => %{"type" => "array"},
+            "source_type" => %{
+              "type" => "string",
+              "enum" => ["manual", "url", "generated"]
+            },
+            "source_url" => %{"type" => "string"}
+          }
+        },
+        icon: "hero-book-open",
+        color_token: "--color-accent-cyan"
+      },
+      %{
+        type_key: "routine",
+        display_name: "Routine",
+        description: "Scheduled recurring agent task (cron or event-triggered).",
+        extends: "activity",
+        status_vocabulary: ~w(active paused archived),
+        attribute_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "prompt_template" => %{"type" => "string"},
+            "assigned_persona" => %{"type" => "string"},
+            "schedule_type" => %{
+              "type" => "string",
+              "enum" => ["cron", "event"]
+            },
+            "cron_expression" => %{"type" => "string"},
+            "event_trigger" => %{"type" => "string"},
+            "timezone" => %{"type" => "string"},
+            "output_target" => %{
+              "type" => "string",
+              "enum" => ["graph_node", "stream_item"]
+            },
+            "last_run_at" => %{"type" => "string"},
+            "last_run_status" => %{"type" => "string"},
+            "last_run_tokens" => %{"type" => "integer"}
+          }
+        },
+        icon: "hero-arrow-path",
+        color_token: "--color-accent-slate"
       }
     ]
   end

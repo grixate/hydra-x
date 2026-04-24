@@ -146,7 +146,12 @@ defmodule HydraX.Tools.SwitchModelTest do
   end
 
   describe "allowed_models validation" do
-    test "rejects models not in the agent's allowlist", %{agent: agent, conversation: conv, p1: p1, p2: _p2} do
+    test "rejects models not in the agent's allowlist", %{
+      agent: agent,
+      conversation: conv,
+      p1: p1,
+      p2: _p2
+    } do
       # Restrict the agent to only the sonnet model.
       {:ok, updated} =
         agent
@@ -170,7 +175,12 @@ defmodule HydraX.Tools.SwitchModelTest do
                )
     end
 
-    test "nil allowed_models means any enabled model works", %{agent: _agent, conversation: conv, p1: p1, p2: p2} do
+    test "nil allowed_models means any enabled model works", %{
+      agent: _agent,
+      conversation: conv,
+      p1: p1,
+      p2: p2
+    } do
       # No allowlist set → both models work.
       assert {:ok, _} =
                SwitchModel.execute(

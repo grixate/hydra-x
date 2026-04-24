@@ -55,7 +55,7 @@ defmodule HydraX.Product.AgentTasks do
     |> apply_agent_filter(opts[:agent_id])
     |> apply_search(opts[:search])
     |> apply_exclude_terminal(opts[:exclude_terminal])
-    |> order_by([t], [desc: t.last_state_change_at, desc: t.id])
+    |> order_by([t], desc: t.last_state_change_at, desc: t.id)
     |> limit(^(opts[:limit] || 200))
     |> Repo.all()
   end
@@ -85,6 +85,7 @@ defmodule HydraX.Product.AgentTasks do
 
     Enum.map(agent_ids, fn agent_id ->
       agent_tasks = Map.get(by_agent, agent_id, [])
+
       %{
         agent_id: agent_id,
         state: derive_agent_state(agent_tasks),
@@ -359,18 +360,22 @@ defmodule HydraX.Product.AgentTasks do
   ## Helpers
 
   defp apply_state_filter(query, nil), do: query
+
   defp apply_state_filter(query, state) when is_binary(state),
     do: where(query, [t], t.state == ^state)
+
   defp apply_state_filter(query, states) when is_list(states),
     do: where(query, [t], t.state in ^states)
 
   defp apply_agent_filter(query, nil), do: query
   defp apply_agent_filter(query, ""), do: query
+
   defp apply_agent_filter(query, agent_id),
     do: where(query, [t], t.agent_id == ^agent_id)
 
   defp apply_search(query, nil), do: query
   defp apply_search(query, ""), do: query
+
   defp apply_search(query, term) do
     like = "%#{term}%"
     where(query, [t], ilike(t.title, ^like) or ilike(t.description, ^like))
@@ -378,10 +383,12 @@ defmodule HydraX.Product.AgentTasks do
 
   defp apply_exclude_terminal(query, true),
     do: where(query, [t], t.state not in ^AgentTask.terminal_states())
+
   defp apply_exclude_terminal(query, _), do: query
 
   defp maybe_put_started(attrs, "running", %AgentTask{started_at: nil}, now),
     do: Map.put(attrs, "started_at", now)
+
   defp maybe_put_started(attrs, _, _, _), do: attrs
 
   defp maybe_put_completed(attrs, new_state, now) do

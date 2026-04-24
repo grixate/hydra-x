@@ -25,9 +25,14 @@ defmodule HydraXWeb.GraphFlagAPIController do
     case Integer.parse(to_string(id)) do
       {int_id, ""} ->
         case Graph.resolve_flag(int_id, resolved_by) do
-          {:ok, flag} -> json(conn, %{data: ProductPayload.graph_flag_json(flag)})
-          {:error, :already_resolved} -> conn |> put_status(:conflict) |> json(%{error: "flag already resolved"})
-          {:error, _} -> conn |> put_status(:not_found) |> json(%{error: "flag not found"})
+          {:ok, flag} ->
+            json(conn, %{data: ProductPayload.graph_flag_json(flag)})
+
+          {:error, :already_resolved} ->
+            conn |> put_status(:conflict) |> json(%{error: "flag already resolved"})
+
+          {:error, _} ->
+            conn |> put_status(:not_found) |> json(%{error: "flag not found"})
         end
 
       _ ->

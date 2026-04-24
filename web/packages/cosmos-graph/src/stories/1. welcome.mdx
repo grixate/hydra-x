@@ -1,0 +1,81 @@
+import { Meta } from "@storybook/blocks";
+
+<Meta title="Welcome to cosmos.gl" />
+
+<div style={{ fontSize: '1.0rem', float: 'right' }}>
+  <a href="https://github.com/cosmosgl/graph" target="_blank" rel="noopener noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', color: '#fff' }}>
+    <svg height="30" viewBox="0 0 16 16" width="30" aria-hidden="true">
+      <path fill="currentColor" d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z"></path>
+    </svg>
+  </a>
+</div>
+
+<p style={{ fontSize: '1.75rem', lineHeight: '1.25em', marginTop: 0 }}>Welcome to <b>cosmos.gl</b> – a high-performance WebGL library for visualizing network graphs and machine learning embeddings.</p>
+
+<video style={{ width: '100%' }} src="https://user-images.githubusercontent.com/755708/173392407-9b05cbb6-d39e-4c2c-ab41-50900cfda823.mp4" loop autoPlay muted playsInline>
+</video>
+
+---
+
+### Quick Start
+
+Install the package:
+
+```bash
+npm install @cosmos.gl/graph
+```
+
+
+Get the data, [configure](../?path=/docs/configuration--docs) the graph and run the simulation:
+```javascript
+import { Graph } from '@cosmos.gl/graph'
+
+const div = document.querySelector('div')
+const config = {
+  spaceSize: 4096,
+  simulationFriction: 0.1, // keeps the graph inert
+  simulationGravity: 0, // disables gravity
+  simulationRepulsion: 0.5, // increases repulsion between points
+  curvedLinks: true, // curved links
+  fitViewDelay: 1000, // wait 1 second before fitting the view
+  fitViewPadding: 0.3, // centers the graph width padding of ~30% of screen
+  rescalePositions: true, // rescale positions
+  enableDrag: true, // enable dragging points
+  onPointClick: pointIndex => { console.log('Clicked point index: ', pointIndex) },
+  onBackgroundClick: () => { console.log('Clicked background') },
+  /* ... */
+}
+
+const graph = new Graph(div, config)
+
+// Points: [x1, y1, x2, y2, x3, y3]
+const pointPositions = new Float32Array([
+  0.0, 0.0,    // Point 1 at (0,0)
+  1.0, 0.0,    // Point 2 at (1,0)
+  0.5, 1.0,    // Point 3 at (0.5,1)
+]);
+
+graph.setPointPositions(pointPositions)
+
+// Links: [sourceIndex1, targetIndex1, sourceIndex2, targetIndex2]
+const links = new Float32Array([
+  0, 1,    // Link from point 0 to point 1
+  1, 2,    // Link from point 1 to point 2
+  2, 0,    // Link from point 2 to point 0
+]);
+
+graph.setLinks(links)
+
+graph.render()
+```
+
+Try the [Quick Start](../?path=/story/examples-beginners--quick-start) example.
+
+### Examples
+- [Actions](../?path=/story/examples-beginners--actions)
+- [Adding Point Labels](../?path=/story/examples-beginners--point-labels) (via [`@interacta/css-labels`](https://www.npmjs.com/package/@interacta/css-labels))
+
+
+---
+Copyright [OpenJS Foundation](https://openjsf.org) and cosmos.gl contributors. All rights reserved. The [OpenJS Foundation](https://openjsf.org) has registered trademarks and uses trademarks.  For a list of trademarks of the [OpenJS Foundation](https://openjsf.org), please see our [Trademark Policy](https://trademark-policy.openjsf.org/) and [Trademark List](https://trademark-list.openjsf.org/).  Trademarks and logos not indicated on the [list of OpenJS Foundation trademarks](https://trademark-list.openjsf.org) are trademarks™ or registered® trademarks of their respective holders. Use of them does not imply any affiliation with or endorsement by them.
+[The OpenJS Foundation](https://openjsf.org/) | [Terms of Use](https://terms-of-use.openjsf.org/) | [Privacy Policy](https://privacy-policy.openjsf.org/) | [Bylaws](https://bylaws.openjsf.org/) | [Code of Conduct](https://code-of-conduct.openjsf.org) | [Trademark Policy](https://trademark-policy.openjsf.org/) | [Trademark List](https://trademark-list.openjsf.org/) | [Cookie Policy](https://www.linuxfoundation.org/cookies/)

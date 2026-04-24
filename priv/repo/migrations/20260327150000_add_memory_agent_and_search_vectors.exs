@@ -10,7 +10,14 @@ defmodule HydraX.Repo.Migrations.AddMemoryAgentAndSearchVectors do
     create index(:projects, [:memory_agent_id])
 
     # Add tsvector search columns to all new node type tables
-    for table_name <- [:decisions, :strategies, :design_nodes, :architecture_nodes, :tasks, :learnings] do
+    for table_name <- [
+          :decisions,
+          :strategies,
+          :design_nodes,
+          :architecture_nodes,
+          :tasks,
+          :learnings
+        ] do
       execute("""
       ALTER TABLE #{table_name}
       ADD COLUMN search_vector tsvector

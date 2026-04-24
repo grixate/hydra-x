@@ -41,8 +41,7 @@ defmodule HydraX.Product.Tools.LibraryQuery do
           },
           node_type: %{
             type: "string",
-            description:
-              "Graph node type for for_node (e.g. insight, decision, requirement)"
+            description: "Graph node type for for_node (e.g. insight, decision, requirement)"
           },
           node_id: %{type: "integer", description: "Graph node id for for_node"},
           limit: %{type: "integer", description: "Result limit (default 10)"},

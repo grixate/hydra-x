@@ -95,7 +95,9 @@ defmodule HydraX.Product.Tools.HistorySearch do
 
   defp resolve_with_meta(node_type, node_id) do
     case Graph.resolve_node(node_type, node_id) do
-      {:ok, nil} -> nil
+      {:ok, nil} ->
+        nil
+
       {:ok, record} ->
         %{
           node_type: node_type,
@@ -104,19 +106,25 @@ defmodule HydraX.Product.Tools.HistorySearch do
           status: Map.get(record, :status, ""),
           updated_at: Map.get(record, :updated_at)
         }
-      _ -> nil
+
+      _ ->
+        nil
     end
   end
 
   defp extract_project_id(params) do
     case params[:project_id] || params["project_id"] do
-      value when is_integer(value) -> {:ok, value}
+      value when is_integer(value) ->
+        {:ok, value}
+
       value when is_binary(value) ->
         case Integer.parse(value) do
           {integer, ""} -> {:ok, integer}
           _ -> {:error, :product_project_context_required}
         end
-      _ -> {:error, :product_project_context_required}
+
+      _ ->
+        {:error, :product_project_context_required}
     end
   end
 end

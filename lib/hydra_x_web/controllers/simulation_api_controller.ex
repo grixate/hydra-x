@@ -158,19 +158,38 @@ defmodule HydraXWeb.SimulationAPIController do
   end
 
   defp decision_node(d) do
-    %{id: d.id, node_type: "decision", title: d.title, status: d.status, body: String.slice(d.body || "", 0, 200)}
+    %{
+      id: d.id,
+      node_type: "decision",
+      title: d.title,
+      status: d.status,
+      body: String.slice(d.body || "", 0, 200)
+    }
   end
 
   defp requirement_node(r) do
-    %{id: r.id, node_type: "requirement", title: r.title, status: r.status, body: String.slice(r.body || "", 0, 200)}
+    %{
+      id: r.id,
+      node_type: "requirement",
+      title: r.title,
+      status: r.status,
+      body: String.slice(r.body || "", 0, 200)
+    }
   end
 
   defp design_node(d) do
-    %{id: d.id, node_type: "design_node", title: d.title, status: d.status, body: String.slice(d.body || "", 0, 200)}
+    %{
+      id: d.id,
+      node_type: "design_node",
+      title: d.title,
+      status: d.status,
+      body: String.slice(d.body || "", 0, 200)
+    }
   end
 
   defp parse_int(nil, default), do: default
   defp parse_int(val, _default) when is_integer(val), do: val
+
   defp parse_int(val, default) when is_binary(val) do
     case Integer.parse(val) do
       {n, _} -> n

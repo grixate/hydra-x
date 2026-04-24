@@ -60,7 +60,12 @@ defmodule HydraX.Product.StreamTabs do
 
     StreamEntry
     |> where([e], e.project_id == ^project_id and e.tab == "activity")
+    # Per spec §11: "Mark as read" and "Hide" drop an entry from the default
+    # Activity view. Both use the existing `read_at` / `actioned_at` fields so
+    # no schema change is needed. A future "show hidden" toggle can relax this.
+    |> where([e], is_nil(e.read_at) and is_nil(e.actioned_at))
     |> apply_agent_filter(opts[:agent_id])
+    |> apply_type_filter(opts[:context_type])
     |> apply_search_filter(opts[:search])
     |> order_by([e], desc: e.inserted_at)
     |> limit(^limit)
@@ -162,6 +167,12 @@ defmodule HydraX.Product.StreamTabs do
     where(query, [e], ilike(e.title, ^like) or ilike(e.summary, ^like))
   end
 
+  defp apply_type_filter(query, nil), do: query
+  defp apply_type_filter(query, ""), do: query
+
+  defp apply_type_filter(query, type) when is_binary(type),
+    do: where(query, [e], e.context_type == ^type)
+
   ## Needs You
 
   def list_needs_you(project_id, opts \\ []) do
@@ -187,14 +198,15 @@ defmodule HydraX.Product.StreamTabs do
 
     blocked = list_blocked_tasks(project_id, now)
     failed = list_failed_tasks(project_id, now)
-    stuck_waiting = list_waiting_for_input_tasks(project_id, now, min_hours: @blocker_waiting_hours)
+
+    stuck_waiting =
+      list_waiting_for_input_tasks(project_id, now, min_hours: @blocker_waiting_hours)
+
     stalled = list_stalled_flows(project_id)
     historical = list_historical(project_id, "blockers")
     contradictions = list_contradictions(project_id)
 
-    merge_unique(
-      blocked ++ failed ++ stuck_waiting ++ stalled ++ historical ++ contradictions
-    )
+    merge_unique(blocked ++ failed ++ stuck_waiting ++ stalled ++ historical ++ contradictions)
     |> sort_by_severity_then_age()
     |> Enum.take(limit)
   end
@@ -365,7 +377,9 @@ defmodule HydraX.Product.StreamTabs do
 
     Repo.exists?(
       from t in AgentTask,
-        where: t.project_id == ^project_id and t.state in ["blocked", "failed"] and t.last_state_change_at <= ^cutoff
+        where:
+          t.project_id == ^project_id and t.state in ["blocked", "failed"] and
+            t.last_state_change_at <= ^cutoff
     )
   end
 
@@ -386,7 +400,11 @@ defmodule HydraX.Product.StreamTabs do
     cutoff = DateTime.add(now, -min_hours * 3600, :second)
 
     AgentTask
-    |> where([t], t.project_id == ^project_id and t.state == "waiting_for_input" and t.last_state_change_at <= ^cutoff)
+    |> where(
+      [t],
+      t.project_id == ^project_id and t.state == "waiting_for_input" and
+        t.last_state_change_at <= ^cutoff
+    )
     |> exclude_deferred(now)
     |> Repo.all()
     |> Enum.map(fn task -> task_item(task, "waiting_for_input") end)
@@ -396,7 +414,10 @@ defmodule HydraX.Product.StreamTabs do
     cutoff = DateTime.add(now, -@blocker_blocked_hours * 3600, :second)
 
     AgentTask
-    |> where([t], t.project_id == ^project_id and t.state == "blocked" and t.last_state_change_at <= ^cutoff)
+    |> where(
+      [t],
+      t.project_id == ^project_id and t.state == "blocked" and t.last_state_change_at <= ^cutoff
+    )
     |> exclude_deferred(now)
     |> Repo.all()
     |> Enum.map(fn task -> task_item(task, "blocked") end)
@@ -469,10 +490,17 @@ defmodule HydraX.Product.StreamTabs do
 
     tab =
       case kind do
-        "proposing" -> "needs_you"
-        "waiting_for_input" -> if age >= @blocker_waiting_hours * 3600, do: "blockers", else: "needs_you"
-        "blocked" -> "blockers"
-        "failed" -> "blockers"
+        "proposing" ->
+          "needs_you"
+
+        "waiting_for_input" ->
+          if age >= @blocker_waiting_hours * 3600, do: "blockers", else: "needs_you"
+
+        "blocked" ->
+          "blockers"
+
+        "failed" ->
+          "blockers"
       end
 
     %{

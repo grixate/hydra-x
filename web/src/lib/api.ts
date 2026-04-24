@@ -523,6 +523,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ refinement }),
     }),
+  deferAgentTask: (projectId: number, id: number, hours: number) =>
+    request<AgentTask>(`/projects/${projectId}/agent_tasks/${id}/defer`, {
+      method: "POST",
+      body: JSON.stringify({ hours }),
+    }),
   listProposals: (projectId: number, filters: { agent_id?: string } = {}) => {
     const params = new URLSearchParams();
     if (filters.agent_id) params.set("agent_id", filters.agent_id);
@@ -571,6 +576,32 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ ids }),
     }),
+  dismissStreamEntry: (projectId: number, id: number) =>
+    request<{ actioned: number }>(`/projects/${projectId}/stream_entries/${id}/dismiss`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
+  getStreamItemLineage: (projectId: number, item: StreamTabItem) => {
+    const params = new URLSearchParams();
+    if (item.stream_entry_id) params.set("stream_entry_id", String(item.stream_entry_id));
+    if (item.source_task_id) params.set("source_task_id", String(item.source_task_id));
+    if (item.context_type) params.set("context_type", item.context_type);
+    if (item.context_id) params.set("context_id", String(item.context_id));
+    if (item.kind) params.set("kind", item.kind);
+    const qs = params.toString();
+    return request<{
+      chain: Array<{ id: number; type: string; title: string; relation?: string | null }>;
+      why: string | null;
+      why_structured: {
+        root: string | null;
+        path: string | null;
+        summary: string | null;
+      } | null;
+      node_type: string | null;
+      node_id: number | null;
+      chain_b?: Array<{ id: number; type: string; title: string; relation?: string | null }> | null;
+    }>(`/projects/${projectId}/stream/lineage${qs ? `?${qs}` : ""}`);
+  },
   listFlows: (projectId: number) =>
     request<Flow[]>(`/projects/${projectId}/flows`),
   getAnalytics: (projectId: number) =>
@@ -669,10 +700,11 @@ export const api = {
   getStreamTab: (
     projectId: number,
     tab: StreamTab,
-    filters: { agent_id?: string; search?: string } = {},
+    filters: { agent_id?: string; context_type?: string; search?: string } = {},
   ) => {
     const params = new URLSearchParams();
     if (filters.agent_id) params.set("agent_id", filters.agent_id);
+    if (filters.context_type) params.set("context_type", filters.context_type);
     if (filters.search) params.set("search", filters.search);
     const qs = params.toString();
     return request<StreamTabItem[]>(

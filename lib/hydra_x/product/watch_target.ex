@@ -20,7 +20,15 @@ defmodule HydraX.Product.WatchTarget do
 
   def changeset(target, attrs) do
     target
-    |> cast(attrs, [:project_id, :target_type, :value, :check_interval_hours, :last_checked_at, :status, :metadata])
+    |> cast(attrs, [
+      :project_id,
+      :target_type,
+      :value,
+      :check_interval_hours,
+      :last_checked_at,
+      :status,
+      :metadata
+    ])
     |> validate_required([:project_id, :target_type, :value, :status])
     |> validate_inclusion(:target_type, @target_types)
     |> validate_inclusion(:status, @statuses)

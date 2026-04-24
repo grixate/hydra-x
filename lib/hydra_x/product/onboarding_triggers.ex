@@ -37,7 +37,9 @@ defmodule HydraX.Product.OnboardingTriggers do
     end
   rescue
     error ->
-      Logger.error("[OnboardingTriggers] Error in triggers for project #{project.id}: #{inspect(error)}")
+      Logger.error(
+        "[OnboardingTriggers] Error in triggers for project #{project.id}: #{inspect(error)}"
+      )
   end
 
   # -------------------------------------------------------------------
@@ -117,7 +119,9 @@ defmodule HydraX.Product.OnboardingTriggers do
     parts = [
       "Run an initial research sweep for a new project. Search for and create insights from:",
       if(domain, do: "- Market overview: #{domain} market size, trends, and landscape"),
-      if(target_users, do: "- User research: #{target_users} pain points, workflows, and tool usage"),
+      if(target_users,
+        do: "- User research: #{target_users} pain points, workflows, and tool usage"
+      ),
       if(competitors != [],
         do:
           "- Competitive analysis: " <>

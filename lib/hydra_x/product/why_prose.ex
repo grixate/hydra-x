@@ -38,6 +38,11 @@ defmodule HydraX.Product.WhyProse do
   @max_prose_words 150
   @prose_max_tokens 400
 
+  # Bump when system_prompt or output contract changes so existing cached
+  # rows become orphaned and regenerate on next access (new rows carry the
+  # new version in their cache_key hash; old rows are unreachable).
+  @prose_version "v2-structured"
+
   @doc """
   Return the full Why-button payload for a node, generating prose if needed.
 
@@ -120,7 +125,8 @@ defmodule HydraX.Product.WhyProse do
     vision_card_or_nil = vision_card(project)
 
     cards =
-      (if(vision_card_or_nil, do: [vision_card_or_nil], else: [])) ++ ancestor_cards ++ [target_card]
+      if(vision_card_or_nil, do: [vision_card_or_nil], else: []) ++
+        ancestor_cards ++ [target_card]
 
     cards
   end
@@ -138,9 +144,9 @@ defmodule HydraX.Product.WhyProse do
       %{
         node_type: to_string(n.node_type),
         node_id: n.node_id,
-        title: record && Map.get(record, :title) || "(unknown)",
+        title: (record && Map.get(record, :title)) || "(unknown)",
         body: record |> resolve_body() |> truncate(240),
-        status: record && Map.get(record, :status) || nil,
+        status: (record && Map.get(record, :status)) || nil,
         is_vision: false,
         is_target: false,
         edge_kind: n.edge_kind && to_string(n.edge_kind),
@@ -306,6 +312,7 @@ defmodule HydraX.Product.WhyProse do
   defp cache_key(%Project{} = project, lineage) do
     payload =
       :erlang.term_to_binary({
+        @prose_version,
         to_string(project.description || ""),
         Enum.map(lineage, fn card ->
           {card.node_type, card.node_id, card.title, card.body, card.is_vision, card.is_target}
@@ -351,18 +358,30 @@ defmodule HydraX.Product.WhyProse do
   defp system_prompt do
     """
     You are generating a "why" explanation for a node in a product graph.
-    Walk from the Vision node down to the target node, following the
-    lineage chain. For each step, explain in one sentence why the next
-    node exists given the previous one. Use causal language ("because",
-    "which led to", "in response to", "from that").
 
-    Keep the full explanation under #{@max_prose_words} words.
-    End with a single-sentence summary in this format:
+    Respond with EXACTLY THREE SHORT PARAGRAPHS separated by a blank line.
+    Do not add any headers, labels, or markdown. The reader will render
+    each paragraph as a labeled section, so adhere strictly to the shape:
+
+    [PARAGRAPH 1 — "Root"]
+    One sentence naming the root cause this node ultimately traces back
+    to (typically the Vision or an early ancestor in the chain).
+
+    [PARAGRAPH 2 — "Path"]
+    One to two sentences describing how the chain connects that root
+    to the target node, using causal language ("because", "which led
+    to", "in response to") and specific node titles.
+
+    [PARAGRAPH 3 — "Summary"]
+    A single closing sentence in the exact format:
     "So <target title> exists because <root reason>."
+
+    Keep the whole response under #{@max_prose_words} words.
 
     Rules:
     - Use only the actual chain provided. Do not invent nodes or reasoning.
-    - If the chain has no Vision, say so honestly and suggest connecting it.
+    - If the chain has no Vision, the first paragraph says so honestly and
+      suggests connecting the target back to a Vision node.
     - Avoid meta-language ("the lineage shows…") and filler.
     - Avoid generic platitudes ("this supports the broader vision of…").
     - Use the user's own words from node content where possible.

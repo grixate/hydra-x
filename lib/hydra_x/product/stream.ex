@@ -9,7 +9,6 @@ defmodule HydraX.Product.Stream do
   alias HydraX.Product.GraphEdge
   alias HydraX.Product.GraphFlag
   alias HydraX.Graph.Node, as: GraphNode
-  alias HydraX.Product.KnowledgeEntry
   alias HydraX.Product.SimulationNode
   alias HydraX.Repo
 
@@ -195,11 +194,12 @@ defmodule HydraX.Product.Stream do
   end
 
   defp pending_knowledge_stream_items(project_id) do
-    KnowledgeEntry
+    GraphNode
     |> where(
       [k],
-      k.project_id == ^project_id and k.status == "pending_review" and
-        k.source_type == "generated"
+      k.project_id == ^project_id and k.type_key == "knowledge_entry" and
+        k.status == "pending_review" and
+        fragment("?->>'source_type' = ?", k.attributes, "generated")
     )
     |> order_by([k], desc: k.inserted_at)
     |> limit(3)
@@ -380,11 +380,12 @@ defmodule HydraX.Product.Stream do
       end)
 
     accepted_knowledge =
-      KnowledgeEntry
+      GraphNode
       |> where(
         [k],
-        k.project_id == ^project_id and k.source_type == "generated" and k.status == "active" and
-          k.updated_at > ^cutoff
+        k.project_id == ^project_id and k.type_key == "knowledge_entry" and
+          fragment("?->>'source_type' = ?", k.attributes, "generated") and
+          k.status == "active" and k.updated_at > ^cutoff
       )
       |> order_by([k], desc: k.updated_at)
       |> limit(5)

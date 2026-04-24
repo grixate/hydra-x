@@ -11,7 +11,7 @@ defmodule HydraX.Product.TaskFeedback do
     field :created_by, :string, default: "human"
     field :metadata, :map, default: %{}
 
-    belongs_to :task, HydraX.Product.Task
+    belongs_to :task, HydraX.Graph.Node, foreign_key: :task_id
 
     timestamps(type: :utc_datetime_usec)
   end

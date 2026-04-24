@@ -258,31 +258,35 @@ defmodule HydraXWeb.ProductPayload do
     }
   end
 
-  def task_json(%HydraX.Product.Task{} = t) do
+  def task_json(%GraphNode{type_key: "task"} = t) do
+    attrs = t.attributes || %{}
+
     %{
       id: t.id,
       project_id: t.project_id,
       title: t.title,
       body: t.body,
       status: t.status,
-      priority: t.priority,
-      assignee: t.assignee,
-      effort_estimate: t.effort_estimate,
-      metadata: t.metadata || %{},
+      priority: Map.get(attrs, "priority"),
+      assignee: Map.get(attrs, "assignee"),
+      effort_estimate: Map.get(attrs, "effort_estimate"),
+      metadata: attrs,
       inserted_at: t.inserted_at,
       updated_at: t.updated_at
     }
   end
 
-  def learning_json(%HydraX.Product.Learning{} = l) do
+  def learning_json(%GraphNode{type_key: "learning"} = l) do
+    attrs = l.attributes || %{}
+
     %{
       id: l.id,
       project_id: l.project_id,
       title: l.title,
       body: l.body,
-      learning_type: l.learning_type,
+      learning_type: Map.get(attrs, "learning_type"),
       status: l.status,
-      metadata: l.metadata || %{},
+      metadata: attrs,
       inserted_at: l.inserted_at,
       updated_at: l.updated_at
     }
@@ -305,24 +309,26 @@ defmodule HydraXWeb.ProductPayload do
     }
   end
 
-  def routine_json(%HydraX.Product.Routine{} = r) do
+  def routine_json(%GraphNode{type_key: "routine"} = r) do
+    attrs = r.attributes || %{}
+
     %{
       id: r.id,
       project_id: r.project_id,
       title: r.title,
-      description: r.description,
-      prompt_template: r.prompt_template,
-      assigned_persona: r.assigned_persona,
-      schedule_type: r.schedule_type,
-      cron_expression: r.cron_expression,
-      event_trigger: r.event_trigger,
-      timezone: r.timezone,
-      output_target: r.output_target,
+      description: r.body,
+      prompt_template: Map.get(attrs, "prompt_template"),
+      assigned_persona: Map.get(attrs, "assigned_persona"),
+      schedule_type: Map.get(attrs, "schedule_type"),
+      cron_expression: Map.get(attrs, "cron_expression"),
+      event_trigger: Map.get(attrs, "event_trigger"),
+      timezone: Map.get(attrs, "timezone"),
+      output_target: Map.get(attrs, "output_target"),
       status: r.status,
-      last_run_at: r.last_run_at,
-      last_run_status: r.last_run_status,
-      last_run_tokens: r.last_run_tokens,
-      metadata: r.metadata || %{},
+      last_run_at: Map.get(attrs, "last_run_at"),
+      last_run_status: Map.get(attrs, "last_run_status"),
+      last_run_tokens: Map.get(attrs, "last_run_tokens"),
+      metadata: attrs,
       inserted_at: r.inserted_at,
       updated_at: r.updated_at
     }
@@ -344,18 +350,20 @@ defmodule HydraXWeb.ProductPayload do
     }
   end
 
-  def knowledge_entry_json(%HydraX.Product.KnowledgeEntry{} = k) do
+  def knowledge_entry_json(%GraphNode{type_key: "knowledge_entry"} = k) do
+    attrs = k.attributes || %{}
+
     %{
       id: k.id,
       project_id: k.project_id,
       title: k.title,
-      content: k.content,
-      entry_type: k.entry_type,
-      assigned_personas: k.assigned_personas,
-      source_type: k.source_type,
-      source_url: k.source_url,
+      content: k.body,
+      entry_type: Map.get(attrs, "entry_type"),
+      assigned_personas: Map.get(attrs, "assigned_personas", []),
+      source_type: Map.get(attrs, "source_type"),
+      source_url: Map.get(attrs, "source_url"),
       status: k.status,
-      metadata: k.metadata || %{},
+      metadata: attrs,
       inserted_at: k.inserted_at,
       updated_at: k.updated_at
     }

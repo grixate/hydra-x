@@ -98,7 +98,8 @@ defmodule HydraXWeb.SourceAPIController do
       }
     }
 
-    {:ok, conversation} = AgentBridge.ensure_project_conversation(project_id, "researcher", metadata)
+    {:ok, conversation} =
+      AgentBridge.ensure_project_conversation(project_id, "researcher", metadata)
 
     Task.start(fn ->
       AgentBridge.submit_message(conversation, prompt, %{
