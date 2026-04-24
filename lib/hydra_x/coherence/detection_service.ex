@@ -437,8 +437,8 @@ defmodule HydraX.Coherence.DetectionService do
   defp vision_candidates(project_id, node_type, node_id) do
     import Ecto.Query
 
-    HydraX.Product.Vision
-    |> where([r], r.project_id == ^project_id)
+    HydraX.Graph.Node
+    |> where([r], r.project_id == ^project_id and r.type_key == "vision")
     |> order_by([r], desc: r.updated_at)
     |> limit(^(@max_candidates * 2))
     |> Repo.all()
@@ -452,14 +452,7 @@ defmodule HydraX.Coherence.DetectionService do
   defp fetch_project_nodes(project_id, type) do
     import Ecto.Query
 
-    query =
-      case type do
-        "vision" ->
-          HydraX.Product.Vision
-
-        type_key ->
-          from n in HydraX.Graph.Node, where: n.type_key == ^type_key
-      end
+    query = from n in HydraX.Graph.Node, where: n.type_key == ^to_string(type)
 
     if query do
       records =

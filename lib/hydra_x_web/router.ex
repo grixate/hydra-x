@@ -434,6 +434,20 @@ defmodule HydraXWeb.Router do
     delete "/projects/:project_id/board_sessions/:session_id/edges/:id",
            BoardEdgeAPIController,
            :delete
+
+    # Schema-change proposal flow (spec §8) — runtime extension of a
+    # domain's type definitions.
+    get "/domains/:domain_slug/proposals",
+        SchemaProposalAPIController,
+        :index
+
+    post "/domains/:domain_slug/proposals",
+         SchemaProposalAPIController,
+         :create
+
+    patch "/domains/:domain_slug/proposals/:id",
+          SchemaProposalAPIController,
+          :update
   end
 
   # Other scopes may use custom stacks.

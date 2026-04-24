@@ -111,7 +111,7 @@ defmodule HydraX.Product.OnboardingFlow do
 
   defp vision_set?(%Project{} = project) do
     case HydraX.Product.Visions.get_for_project(project.id) do
-      %HydraX.Product.Vision{body: body} when is_binary(body) ->
+      %HydraX.Graph.Node{type_key: "vision", body: body} when is_binary(body) ->
         String.trim(body) != ""
 
       _ ->

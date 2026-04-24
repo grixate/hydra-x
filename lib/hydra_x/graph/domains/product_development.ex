@@ -348,6 +348,22 @@ defmodule HydraX.Graph.Domains.ProductDevelopment do
         },
         icon: "hero-arrow-path",
         color_token: "--color-accent-slate"
+      },
+      %{
+        type_key: "vision",
+        display_name: "Vision",
+        description: "The root node of a project: why it exists. At most one per project.",
+        extends: "claim",
+        status_vocabulary: ~w(active archived superseded),
+        attribute_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "horizon" => %{"type" => "string"},
+            "north_star" => %{"type" => "string"}
+          }
+        },
+        icon: "hero-flag",
+        color_token: "--color-accent-gold"
       }
     ]
   end

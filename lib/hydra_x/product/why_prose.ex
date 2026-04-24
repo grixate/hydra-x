@@ -173,7 +173,7 @@ defmodule HydraX.Product.WhyProse do
   # fallback from `project.description`.
   defp vision_card(%Project{} = project) do
     case HydraX.Product.Visions.get_for_project(project.id) do
-      %HydraX.Product.Vision{} = v ->
+      %HydraX.Graph.Node{type_key: "vision"} = v ->
         %{
           node_type: "vision",
           node_id: v.id,
