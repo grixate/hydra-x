@@ -1,7 +1,7 @@
 defmodule HydraX.Graph.Flags do
   @moduledoc """
   Coherence / quality signals attached to nodes. Replaces the typed
-  `graph_flags` table. Flag types are declared per-domain via
+  `graph_flags` table. Flag types are declared per-project via
   `FlagTypeDefinition`; raising an unknown flag is rejected.
   """
 
@@ -14,12 +14,12 @@ defmodule HydraX.Graph.Flags do
 
   @doc """
   Raise a flag on a node. If the flag type is unknown for the node's
-  domain, returns `{:error, :unknown_flag_type}`. Severity defaults to
-  the type's `default_severity` if not specified.
+  project, returns `{:error, :unknown_flag_type}`. Severity defaults
+  to the type's `default_severity` if not specified.
   """
   def raise_flag(%Node{} = node, flag_type_key, attrs \\ %{})
       when is_binary(flag_type_key) do
-    case SchemaRegistry.fetch_flag_type(node.domain_id, flag_type_key) do
+    case SchemaRegistry.fetch_flag_type(node.project_id, flag_type_key) do
       :error ->
         {:error, :unknown_flag_type}
 

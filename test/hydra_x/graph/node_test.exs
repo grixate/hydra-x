@@ -2,15 +2,13 @@ defmodule HydraX.Graph.NodeTest do
   use HydraX.DataCase, async: false
 
   alias HydraX.Accounts
-  alias HydraX.Graph.Domains
-  alias HydraX.Graph.Domains.ProductDevelopment
   alias HydraX.Graph.Node
+  alias HydraX.Graph.ProjectSchemas
   alias HydraX.Graph.SchemaRegistry
+  alias HydraX.PretrainedProjects.ProductDevelopment
   alias HydraX.Product
 
   setup do
-    {:ok, domain} = ProductDevelopment.seed()
-
     email = "node-test+#{System.unique_integer([:positive])}@test.example.com"
 
     {:ok, %{workspace: workspace}} =
@@ -23,13 +21,17 @@ defmodule HydraX.Graph.NodeTest do
         "workspace_id" => workspace.id
       })
 
-    %{domain: domain, project: project}
+    # Apply the built-in pretrained project to give this test project a
+    # full product-development schema. Per the amendment, projects are
+    # blank by default; tests opt in to the schema explicitly.
+    :ok = ProductDevelopment.apply_to_project(project.id)
+
+    %{project: project}
   end
 
   describe "changeset/2" do
-    test "creates a valid insight node", %{domain: domain, project: project} do
+    test "creates a valid insight node", %{project: project} do
       attrs = %{
-        domain_id: domain.id,
         project_id: project.id,
         type_key: "insight",
         title: "Users want faster onboarding",
@@ -45,9 +47,8 @@ defmodule HydraX.Graph.NodeTest do
       assert get_field(changeset, :extends_primitive) == "claim"
     end
 
-    test "rejects an unknown type_key", %{domain: domain, project: project} do
+    test "rejects an unknown type_key", %{project: project} do
       attrs = %{
-        domain_id: domain.id,
         project_id: project.id,
         type_key: "nonsense",
         title: "X",
@@ -56,12 +57,11 @@ defmodule HydraX.Graph.NodeTest do
 
       changeset = Node.changeset(%Node{}, attrs)
       refute changeset.valid?
-      assert "is not defined for this domain" in errors_on(changeset).type_key
+      assert "is not defined for this project" in errors_on(changeset).type_key
     end
 
-    test "rejects a status outside the type's vocabulary", %{domain: domain, project: project} do
+    test "rejects a status outside the type's vocabulary", %{project: project} do
       attrs = %{
-        domain_id: domain.id,
         project_id: project.id,
         type_key: "insight",
         title: "X",
@@ -73,13 +73,12 @@ defmodule HydraX.Graph.NodeTest do
       assert "is not in the type's status vocabulary" in errors_on(changeset).status
     end
 
-    test "rejects an attribute violating enum", %{domain: domain, project: project} do
+    test "rejects an attribute violating enum", %{project: project} do
       attrs = %{
-        domain_id: domain.id,
         project_id: project.id,
         type_key: "decision",
         title: "Pick stack",
-        status: "proposed",
+        status: "active",
         attributes: %{"reversibility" => "maybe"}
       }
 
@@ -88,9 +87,8 @@ defmodule HydraX.Graph.NodeTest do
       assert Enum.any?(errors_on(changeset).attributes, &(&1 =~ "reversibility"))
     end
 
-    test "inserts and reads back with denormalized primitive", %{domain: domain, project: project} do
+    test "inserts and reads back with denormalized primitive", %{project: project} do
       attrs = %{
-        domain_id: domain.id,
         project_id: project.id,
         type_key: "source",
         title: "The internet, volume 1",
@@ -105,11 +103,11 @@ defmodule HydraX.Graph.NodeTest do
     end
   end
 
-  describe "Domains.upsert_node_type/2" do
-    test "bumps SchemaRegistry after write", %{domain: domain} do
-      # fresh type not present in the builtin seed
+  describe "ProjectSchemas.upsert_node_type/2" do
+    test "primes SchemaRegistry after write", %{project: project} do
+      # fresh type not present in the builtin pretrained project
       {:ok, _} =
-        Domains.upsert_node_type(domain, %{
+        ProjectSchemas.upsert_node_type(project.id, %{
           type_key: "hypothesis",
           display_name: "Hypothesis",
           extends: "claim",
@@ -117,10 +115,7 @@ defmodule HydraX.Graph.NodeTest do
           attribute_schema: %{}
         })
 
-      # short sleep to let PubSub deliver invalidation
-      Process.sleep(50)
-
-      assert {:ok, type_def} = SchemaRegistry.fetch_node_type(domain.id, "hypothesis")
+      assert {:ok, type_def} = SchemaRegistry.fetch_node_type(project.id, "hypothesis")
       assert type_def.extends == "claim"
     end
   end

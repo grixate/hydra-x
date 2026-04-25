@@ -46,10 +46,7 @@ defmodule HydraX.Product.Graph do
   denormalized on the row so readers can filter without a join.
   """
   def link_nodes(project_id, from_type, from_id, to_type, to_id, kind, opts \\ []) do
-    domain_id = default_domain_id()
-
     attrs = %{
-      domain_id: domain_id,
       project_id: project_id,
       type_key: to_string(kind),
       from_node_id: from_id,
@@ -128,17 +125,6 @@ defmodule HydraX.Product.Graph do
       inserted_at: r.inserted_at,
       updated_at: r.updated_at
     }
-  end
-
-  defp default_domain_id do
-    case HydraX.Graph.Domains.get_domain_by_slug("product_development") do
-      %HydraX.Graph.Domain{id: id} ->
-        id
-
-      nil ->
-        {:ok, %{id: id}} = HydraX.Graph.Domains.ProductDevelopment.seed()
-        id
-    end
   end
 
   # -------------------------------------------------------------------

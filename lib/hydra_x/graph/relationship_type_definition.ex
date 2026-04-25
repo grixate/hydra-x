@@ -1,14 +1,13 @@
 defmodule HydraX.Graph.RelationshipTypeDefinition do
   @moduledoc """
-  Declares a relationship type within a domain: the allowed endpoint types,
-  cardinality, directionality, and optional attribute shape. Replaces the
-  hard-coded `kind` enum on `product_graph_edges`.
+  Declares a relationship type within a project: the allowed endpoint
+  types, cardinality, directionality, and optional attribute shape.
+  Per the Part 1 amendment, scoped to project, not domain.
   """
 
   use Ecto.Schema
   import Ecto.Changeset
 
-  alias HydraX.Graph.Domain
   alias HydraX.Graph.Primitives
 
   @cardinalities ~w(one_to_one one_to_many many_to_many)
@@ -24,7 +23,7 @@ defmodule HydraX.Graph.RelationshipTypeDefinition do
     field :directional, :boolean, default: true
     field :attribute_schema, :map, default: %{}
 
-    belongs_to :domain, Domain
+    belongs_to :project, HydraX.Product.Project
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -34,7 +33,7 @@ defmodule HydraX.Graph.RelationshipTypeDefinition do
   def changeset(definition, attrs) do
     definition
     |> cast(attrs, [
-      :domain_id,
+      :project_id,
       :type_key,
       :display_name,
       :description,
@@ -45,7 +44,7 @@ defmodule HydraX.Graph.RelationshipTypeDefinition do
       :directional,
       :attribute_schema
     ])
-    |> validate_required([:domain_id, :type_key, :display_name, :cardinality])
+    |> validate_required([:project_id, :type_key, :display_name, :cardinality])
     |> validate_format(:type_key, ~r/^[a-z][a-z0-9_]*$/,
       message: "must be lowercase snake_case starting with a letter"
     )
@@ -57,7 +56,7 @@ defmodule HydraX.Graph.RelationshipTypeDefinition do
         true -> [extends: "is not a known base relationship primitive"]
       end
     end)
-    |> unique_constraint([:domain_id, :type_key])
-    |> foreign_key_constraint(:domain_id)
+    |> unique_constraint([:project_id, :type_key])
+    |> foreign_key_constraint(:project_id)
   end
 end

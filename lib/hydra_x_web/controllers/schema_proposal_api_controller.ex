@@ -2,34 +2,34 @@ defmodule HydraXWeb.SchemaProposalAPIController do
   @moduledoc """
   HTTP surface for the schema-change proposal flow (spec §8).
 
-    * `GET    /api/v1/domains/:slug/proposals[?status=pending]`
-    * `POST   /api/v1/domains/:slug/proposals`
-    * `PATCH  /api/v1/domains/:slug/proposals/:id` with
+    * `GET    /api/v1/projects/:project_id/schema/proposals[?status=pending]`
+    * `POST   /api/v1/projects/:project_id/schema/proposals`
+    * `PATCH  /api/v1/projects/:project_id/schema/proposals/:id` with
       `{ "action": "approve" | "reject" }`
   """
 
   use HydraXWeb, :controller
 
-  alias HydraX.Graph.Domains
   alias HydraX.Graph.Proposals
 
   action_fallback HydraXWeb.ProjectAPIFallbackController
 
-  def index(conn, %{"domain_slug" => slug} = params) do
-    with {:ok, domain} <- fetch_domain(slug) do
-      proposals =
-        Proposals.list_proposals(domain.id, status: params["status"])
-        |> Enum.map(&serialize/1)
+  def index(conn, %{"project_id" => project_id} = params) do
+    project_id = parse_int(project_id)
 
-      json(conn, %{data: proposals})
-    end
+    proposals =
+      Proposals.list_proposals(project_id, status: params["status"])
+      |> Enum.map(&serialize/1)
+
+    json(conn, %{data: proposals})
   end
 
-  def create(conn, %{"domain_slug" => slug, "proposal" => params}) do
-    with {:ok, domain} <- fetch_domain(slug),
-         {:ok, proposal} <-
+  def create(conn, %{"project_id" => project_id, "proposal" => params}) do
+    project_id = parse_int(project_id)
+
+    with {:ok, proposal} <-
            Proposals.propose(
-             domain,
+             project_id,
              params["change_kind"],
              params["payload"] || %{},
              Map.take(params, [
@@ -66,17 +66,10 @@ defmodule HydraXWeb.SchemaProposalAPIController do
     end
   end
 
-  defp fetch_domain(slug) do
-    case Domains.get_domain_by_slug(slug) do
-      nil -> {:error, :not_found}
-      domain -> {:ok, domain}
-    end
-  end
-
   defp serialize(p) do
     %{
       id: p.id,
-      domain_id: p.domain_id,
+      project_id: p.project_id,
       change_kind: p.change_kind,
       payload: p.payload || %{},
       rationale: p.rationale,
@@ -89,4 +82,7 @@ defmodule HydraXWeb.SchemaProposalAPIController do
       updated_at: p.updated_at
     }
   end
+
+  defp parse_int(value) when is_integer(value), do: value
+  defp parse_int(value) when is_binary(value), do: String.to_integer(value)
 end

@@ -436,16 +436,16 @@ defmodule HydraXWeb.Router do
            :delete
 
     # Schema-change proposal flow (spec §8) — runtime extension of a
-    # domain's type definitions.
-    get "/domains/:domain_slug/proposals",
+    # project's type definitions.
+    get "/projects/:project_id/schema/proposals",
         SchemaProposalAPIController,
         :index
 
-    post "/domains/:domain_slug/proposals",
+    post "/projects/:project_id/schema/proposals",
          SchemaProposalAPIController,
          :create
 
-    patch "/domains/:domain_slug/proposals/:id",
+    patch "/projects/:project_id/schema/proposals/:id",
           SchemaProposalAPIController,
           :update
   end

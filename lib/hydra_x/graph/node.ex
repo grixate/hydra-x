@@ -10,7 +10,6 @@ defmodule HydraX.Graph.Node do
   use Ecto.Schema
   import Ecto.Changeset
 
-  alias HydraX.Graph.Domain
   alias HydraX.Graph.Primitives
   alias HydraX.Graph.SchemaRegistry
 
@@ -30,7 +29,6 @@ defmodule HydraX.Graph.Node do
     field :created_by_operator, :boolean, default: false
     field :archived_at, :utc_datetime_usec
 
-    belongs_to :domain, Domain
     belongs_to :project, HydraX.Product.Project
 
     # Transitional: while the product domain's join tables (`insight_evidence`,
@@ -77,7 +75,6 @@ defmodule HydraX.Graph.Node do
   def changeset(node, attrs) do
     node
     |> cast(attrs, [
-      :domain_id,
       :project_id,
       :type_key,
       :extends_primitive,
@@ -95,7 +92,6 @@ defmodule HydraX.Graph.Node do
       :archived_at
     ])
     |> validate_required([
-      :domain_id,
       :project_id,
       :type_key,
       :title,
@@ -110,25 +106,24 @@ defmodule HydraX.Graph.Node do
       end
     end)
     |> validate_against_registry()
-    |> foreign_key_constraint(:domain_id)
     |> foreign_key_constraint(:project_id)
   end
 
   defp validate_against_registry(changeset) do
-    domain_id = get_field(changeset, :domain_id)
+    project_id = get_field(changeset, :project_id)
     type_key = get_field(changeset, :type_key)
 
     cond do
       !changeset.valid? -> changeset
-      is_nil(domain_id) or is_nil(type_key) -> changeset
-      true -> apply_type_definition(changeset, domain_id, type_key)
+      is_nil(project_id) or is_nil(type_key) -> changeset
+      true -> apply_type_definition(changeset, project_id, type_key)
     end
   end
 
-  defp apply_type_definition(changeset, domain_id, type_key) do
-    case SchemaRegistry.fetch_node_type(domain_id, type_key) do
+  defp apply_type_definition(changeset, project_id, type_key) do
+    case SchemaRegistry.fetch_node_type(project_id, type_key) do
       :error ->
-        add_error(changeset, :type_key, "is not defined for this domain")
+        add_error(changeset, :type_key, "is not defined for this project")
 
       {:ok, type_def} ->
         changeset

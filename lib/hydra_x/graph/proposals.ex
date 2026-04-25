@@ -1,10 +1,14 @@
 defmodule HydraX.Graph.Proposals do
   @moduledoc """
   Schema-change proposal lifecycle (spec §8). Agents and operators
-  propose changes to a domain's schema (add a node type, extend an
+  propose changes to a project's schema (add a node type, extend an
   attribute schema, add a relationship or flag type). Operators
   approve or reject; on approval, the substrate applies the change
-  atomically and bumps the domain's `version`.
+  atomically and broadcasts a cache invalidation for that project.
+
+  Per the Part 1 amendment, schemas are project-scoped — there is no
+  global domain version to bump. Each project's "schema version" is
+  implicit in the set of approved proposals it has applied.
 
   V1 is additive-only — removing or renaming types, changing attribute
   types, or deleting statuses is deferred. `apply_change/2` rejects
@@ -13,8 +17,7 @@ defmodule HydraX.Graph.Proposals do
 
   import Ecto.Query, warn: false
 
-  alias HydraX.Graph.Domain
-  alias HydraX.Graph.Domains
+  alias HydraX.Graph.ProjectSchemas
   alias HydraX.Graph.SchemaChangeProposal
   alias HydraX.Repo
 
@@ -29,7 +32,7 @@ defmodule HydraX.Graph.Proposals do
   `payload` is a map — its shape depends on the change_kind:
 
     * `add_node_type` — the same attrs you'd pass to
-      `Domains.upsert_node_type/2` (type_key, display_name, extends,
+      `ProjectSchemas.upsert_node_type/2` (type_key, display_name, extends,
       attribute_schema, etc.).
     * `add_relationship_type` — attrs for `upsert_relationship_type/2`.
     * `add_flag_type` — attrs for `upsert_flag_type/2`.
@@ -37,10 +40,10 @@ defmodule HydraX.Graph.Proposals do
       "properties" => %{...}}` — new JSON Schema `properties` to merge
       into the existing type's `attribute_schema`.
   """
-  def propose(%Domain{} = domain, change_kind, payload, attrs \\ %{})
-      when is_binary(change_kind) and is_map(payload) do
+  def propose(project_id, change_kind, payload, attrs \\ %{})
+      when is_integer(project_id) and is_binary(change_kind) and is_map(payload) do
     base = %{
-      domain_id: domain.id,
+      project_id: project_id,
       change_kind: change_kind,
       payload: stringify_keys(payload),
       status: "pending",
@@ -56,16 +59,12 @@ defmodule HydraX.Graph.Proposals do
     |> Repo.insert()
   end
 
-  def list_proposals(domain_or_id, opts \\ [])
-
-  def list_proposals(%Domain{id: id}, opts), do: list_proposals(id, opts)
-
-  def list_proposals(domain_id, opts) when is_integer(domain_id) do
+  def list_proposals(project_id, opts \\ []) when is_integer(project_id) do
     status = Keyword.get(opts, :status)
 
     query =
       from(p in SchemaChangeProposal,
-        where: p.domain_id == ^domain_id,
+        where: p.project_id == ^project_id,
         order_by: [desc: p.inserted_at]
       )
 
@@ -79,24 +78,21 @@ defmodule HydraX.Graph.Proposals do
 
   @doc """
   Approve a proposal. Applies the change in a transaction, records
-  `applied_at`, flips status to `approved`, and bumps the domain's
-  version + broadcasts PubSub so live registries reload.
+  `applied_at`, flips status to `approved`, and broadcasts PubSub so
+  live registries reload the project's schema.
 
   Returns `{:ok, %SchemaChangeProposal{}}` on success or
-  `{:error, reason}` if the change cannot be applied (unsupported
-  kind, validation failure, or the underlying upsert fails).
+  `{:error, reason}` if the change cannot be applied.
   """
   def approve(proposal, opts \\ [])
 
   def approve(%SchemaChangeProposal{status: "pending"} = proposal, opts) do
     reviewed_by_operator = Keyword.get(opts, :by_operator, false)
-    domain = Repo.get!(Domain, proposal.domain_id)
+    project_id = proposal.project_id
 
     Repo.transaction(fn ->
-      case apply_change(domain, proposal) do
+      case apply_change(project_id, proposal) do
         {:ok, _applied} ->
-          bumped_domain = bump_domain_version!(domain)
-
           {:ok, updated_proposal} =
             proposal
             |> SchemaChangeProposal.changeset(%{
@@ -109,7 +105,7 @@ defmodule HydraX.Graph.Proposals do
           Phoenix.PubSub.broadcast(
             HydraX.PubSub,
             @pubsub_topic,
-            {:schema_updated, bumped_domain.id, bumped_domain.version}
+            {:schema_updated, project_id}
           )
 
           updated_proposal
@@ -143,35 +139,35 @@ defmodule HydraX.Graph.Proposals do
 
   # ---- Apply dispatch --------------------------------------------------
 
-  defp apply_change(%Domain{} = domain, %SchemaChangeProposal{
+  defp apply_change(project_id, %SchemaChangeProposal{
          change_kind: "add_node_type",
          payload: payload
        }) do
-    Domains.upsert_node_type(domain, atomize_attrs(payload))
+    ProjectSchemas.upsert_node_type(project_id, atomize_attrs(payload))
   end
 
-  defp apply_change(%Domain{} = domain, %SchemaChangeProposal{
+  defp apply_change(project_id, %SchemaChangeProposal{
          change_kind: "add_relationship_type",
          payload: payload
        }) do
-    Domains.upsert_relationship_type(domain, atomize_attrs(payload))
+    ProjectSchemas.upsert_relationship_type(project_id, atomize_attrs(payload))
   end
 
-  defp apply_change(%Domain{} = domain, %SchemaChangeProposal{
+  defp apply_change(project_id, %SchemaChangeProposal{
          change_kind: "add_flag_type",
          payload: payload
        }) do
-    Domains.upsert_flag_type(domain, atomize_attrs(payload))
+    ProjectSchemas.upsert_flag_type(project_id, atomize_attrs(payload))
   end
 
-  defp apply_change(%Domain{} = domain, %SchemaChangeProposal{
+  defp apply_change(project_id, %SchemaChangeProposal{
          change_kind: "extend_node_type",
          payload: payload
        }) do
     type_key = Map.get(payload, "type_key")
     new_properties = Map.get(payload, "properties", %{})
 
-    case Domains.list_node_types(domain)
+    case ProjectSchemas.list_node_types(project_id)
          |> Enum.find(fn t -> t.type_key == type_key end) do
       nil ->
         {:error, :unknown_type_key}
@@ -182,7 +178,7 @@ defmodule HydraX.Graph.Proposals do
         merged_props = Map.merge(existing_props, new_properties)
         merged_schema = Map.put(existing_schema, "properties", merged_props)
 
-        Domains.upsert_node_type(domain, %{
+        ProjectSchemas.upsert_node_type(project_id, %{
           type_key: type_key,
           display_name: existing.display_name,
           description: existing.description,
@@ -197,37 +193,11 @@ defmodule HydraX.Graph.Proposals do
     end
   end
 
-  defp apply_change(_domain, %SchemaChangeProposal{change_kind: kind}) do
+  defp apply_change(_project_id, %SchemaChangeProposal{change_kind: kind}) do
     {:error, {:unsupported_kind, kind}}
   end
 
   # ---- Helpers ---------------------------------------------------------
-
-  defp bump_domain_version!(%Domain{version: version} = domain) do
-    next_version = next_patch(version)
-
-    {:ok, updated} =
-      domain
-      |> Domain.changeset(%{version: next_version})
-      |> Repo.update()
-
-    updated
-  end
-
-  defp next_patch(version) when is_binary(version) do
-    case String.split(version, ".") do
-      [major, minor, patch] ->
-        case Integer.parse(patch) do
-          {n, _} -> "#{major}.#{minor}.#{n + 1}"
-          _ -> "#{version}+1"
-        end
-
-      _ ->
-        "#{version}+1"
-    end
-  end
-
-  defp next_patch(_), do: "0.1.1"
 
   defp stringify_keys(map) when is_map(map) do
     Map.new(map, fn
@@ -236,9 +206,6 @@ defmodule HydraX.Graph.Proposals do
     end)
   end
 
-  # Payload is stored as stringified keys in jsonb; the upsert_* helpers
-  # accept either atom or string keys via their own extraction, but we
-  # normalise here to the mixed-key map they expect.
   defp atomize_attrs(payload) when is_map(payload) do
     Map.new(payload, fn
       {k, v} when is_binary(k) ->

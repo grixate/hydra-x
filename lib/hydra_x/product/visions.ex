@@ -2,13 +2,17 @@ defmodule HydraX.Product.Visions do
   @moduledoc """
   Context for the project-root Vision node. Backed by the substrate:
   visions are `Graph.Node` rows with `type_key: "vision"`. Uniqueness
-  per project is enforced here (find-then-upsert) since the unified
-  `nodes` table doesn't impose a (project_id, type_key) unique index.
+  per project is enforced here (find-then-upsert).
+
+  Per the Part 1 amendment, projects start blank. A project must have
+  the "vision" type defined in its schema before `set_vision/2` can
+  succeed — typically by applying a pretrained project that includes
+  it. If the type isn't defined, the underlying `Node.changeset/2`
+  rejects the write with `is not defined for this project`.
   """
 
   import Ecto.Query
 
-  alias HydraX.Graph.Domains
   alias HydraX.Graph.Node, as: GraphNode
   alias HydraX.Graph.Nodes, as: GraphNodes
   alias HydraX.Product.Project
@@ -39,7 +43,7 @@ defmodule HydraX.Product.Visions do
       result =
         case existing do
           nil ->
-            GraphNodes.create_node(product_domain!(), project.id, %{
+            GraphNodes.create_node(project.id, %{
               type_key: "vision",
               title: attrs["title"] || project.name || "Vision",
               body: attrs["body"],
@@ -86,8 +90,10 @@ defmodule HydraX.Product.Visions do
             do: %{"title" => title, "body" => nil},
             else: %{"title" => title, "body" => body}
 
-        {:ok, vision} = set_vision(project, attrs)
-        vision
+        case set_vision(project, attrs) do
+          {:ok, vision} -> vision
+          {:error, _} -> nil
+        end
 
       %GraphNode{body: body} = vision when is_binary(body) and body != "" ->
         vision
@@ -98,20 +104,11 @@ defmodule HydraX.Product.Visions do
             vision
 
           body ->
-            {:ok, updated} = set_vision(project, %{"body" => body})
-            updated
+            case set_vision(project, %{"body" => body}) do
+              {:ok, updated} -> updated
+              {:error, _} -> vision
+            end
         end
-    end
-  end
-
-  defp product_domain! do
-    case Domains.get_domain_by_slug("product_development") do
-      nil ->
-        {:ok, domain} = HydraX.Graph.Domains.ProductDevelopment.seed()
-        domain
-
-      domain ->
-        domain
     end
   end
 

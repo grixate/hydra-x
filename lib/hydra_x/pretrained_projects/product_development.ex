@@ -1,50 +1,38 @@
-defmodule HydraX.Graph.Domains.ProductDevelopment do
+defmodule HydraX.PretrainedProjects.ProductDevelopment do
   @moduledoc """
-  Seed for the built-in `product_development` domain. Idempotent —
-  running it multiple times upserts the same definitions.
+  Built-in pretrained project for Hydra's reference workflow:
+  insights, decisions, requirements, designs, sources, etc. Apply this
+  to a fresh project to give it the canonical product-development
+  schema (node types, relationship types, flag types).
 
-  Only the core epistemic types in the §7 mapping are included here.
-  Learnings, KnowledgeEntry, Task, Routine, the Board subsystem, and
-  the Flow/Proposal subsystems are deliberately deferred until we
-  agree which of them belong in the substrate vs. stay separate.
+  Idempotent — running `apply_to_project/1` multiple times upserts the
+  same definitions. After application, no link to this module remains
+  in the project; the project owns its schema independently.
 
-  Invoke via `HydraX.Graph.Domains.ProductDevelopment.seed/0` (e.g. from
-  a mix task, test setup, or the main seeds.exs).
+  Invoke via `HydraX.PretrainedProjects.ProductDevelopment.apply_to_project(project_id)`
+  from project-creation flows, mix tasks, or test setup.
   """
 
-  alias HydraX.Graph.Domains
+  alias HydraX.Graph.ProjectSchemas
 
   @slug "product_development"
-  @version "0.1.0"
 
   def slug, do: @slug
 
-  def seed do
-    {:ok, domain} =
-      Domains.upsert_domain(%{
-        slug: @slug,
-        name: "Product Development",
-        version: @version,
-        status: "active",
-        source: "builtin",
-        metadata: %{
-          "description" => "The built-in domain for Hydra product-development work."
-        }
-      })
-
+  def apply_to_project(project_id) when is_integer(project_id) do
     Enum.each(node_types(), fn attrs ->
-      {:ok, _} = Domains.upsert_node_type(domain, attrs)
+      {:ok, _} = ProjectSchemas.upsert_node_type(project_id, attrs)
     end)
 
     Enum.each(relationship_types(), fn attrs ->
-      {:ok, _} = Domains.upsert_relationship_type(domain, attrs)
+      {:ok, _} = ProjectSchemas.upsert_relationship_type(project_id, attrs)
     end)
 
     Enum.each(flag_types(), fn attrs ->
-      {:ok, _} = Domains.upsert_flag_type(domain, attrs)
+      {:ok, _} = ProjectSchemas.upsert_flag_type(project_id, attrs)
     end)
 
-    {:ok, domain}
+    :ok
   end
 
   # §7 mapping (core 10). Status vocabularies are explicit where the current

@@ -1,17 +1,16 @@
 defmodule HydraX.Graph.NodeTypeDefinition do
   @moduledoc """
-  Declares a node type within a domain: its attribute shape, status
+  Declares a node type within a project: its attribute shape, status
   vocabulary, promotion sources, and the base primitive it extends.
 
-  Replaces hardcoded Ecto modules like `HydraX.Product.Insight`,
-  `HydraX.Product.Decision`, etc. Adding a new type becomes an
-  `INSERT` rather than a deployment.
+  Per the Part 1 amendment, schemas are project-scoped — every project
+  owns its own complete set of type definitions. Pretrained projects
+  populate them at apply time.
   """
 
   use Ecto.Schema
   import Ecto.Changeset
 
-  alias HydraX.Graph.Domain
   alias HydraX.Graph.Primitives
 
   schema "node_type_definitions" do
@@ -26,7 +25,7 @@ defmodule HydraX.Graph.NodeTypeDefinition do
     field :color_token, :string
     field :version, :integer, default: 1
 
-    belongs_to :domain, Domain
+    belongs_to :project, HydraX.Product.Project
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -34,7 +33,7 @@ defmodule HydraX.Graph.NodeTypeDefinition do
   def changeset(definition, attrs) do
     definition
     |> cast(attrs, [
-      :domain_id,
+      :project_id,
       :type_key,
       :display_name,
       :description,
@@ -46,7 +45,7 @@ defmodule HydraX.Graph.NodeTypeDefinition do
       :color_token,
       :version
     ])
-    |> validate_required([:domain_id, :type_key, :display_name, :version])
+    |> validate_required([:project_id, :type_key, :display_name, :version])
     |> validate_format(:type_key, ~r/^[a-z][a-z0-9_]*$/,
       message: "must be lowercase snake_case starting with a letter"
     )
@@ -57,7 +56,7 @@ defmodule HydraX.Graph.NodeTypeDefinition do
         true -> [extends: "is not a known base primitive"]
       end
     end)
-    |> unique_constraint([:domain_id, :type_key])
-    |> foreign_key_constraint(:domain_id)
+    |> unique_constraint([:project_id, :type_key])
+    |> foreign_key_constraint(:project_id)
   end
 end

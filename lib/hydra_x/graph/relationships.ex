@@ -3,31 +3,23 @@ defmodule HydraX.Graph.Relationships do
   Edges between `Graph.Node`s. Replaces `product_graph_edges`. All
   functions are project-scoped and primitive-aware — `list_by_primitive/3`
   exists so engine behaviours (lineage traversal, coherence detection)
-  can query without knowing about domain-specific type keys.
+  can query without knowing about project-specific type keys.
   """
 
   import Ecto.Query, warn: false
 
-  alias HydraX.Graph.Domain
   alias HydraX.Graph.Node
   alias HydraX.Graph.NodeRelationship
   alias HydraX.Repo
 
   # Writes
 
-  def create_relationship(
-        %Domain{} = domain,
-        %Node{} = from,
-        %Node{} = to,
-        type_key,
-        attrs \\ %{}
-      )
+  def create_relationship(%Node{} = from, %Node{} = to, type_key, attrs \\ %{})
       when is_binary(type_key) do
     if from.project_id != to.project_id do
       {:error, :cross_project_relationship}
     else
       base = %{
-        domain_id: domain.id,
         project_id: from.project_id,
         type_key: type_key,
         from_node_id: from.id,
@@ -112,8 +104,8 @@ defmodule HydraX.Graph.Relationships do
   end
 
   @known_keys ~w(
-    domain_id project_id type_key extends_primitive from_node_id to_node_id
-    weight attributes created_by_agent_id
+    project_id type_key extends_primitive from_node_id to_node_id
+    from_node_type to_node_type weight attributes created_by_agent_id
   )a
   @known_key_strings Enum.map(@known_keys, &Atom.to_string/1)
 

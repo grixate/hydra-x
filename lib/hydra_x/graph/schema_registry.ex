@@ -1,9 +1,12 @@
 defmodule HydraX.Graph.SchemaRegistry do
   @moduledoc """
-  In-memory cache of domain schema definitions. Reads happen against ETS
-  with no GenServer bottleneck; writes (cache invalidation) go through
-  the owner process and are broadcast via PubSub so every node in the
-  cluster refreshes its cache on the next read.
+  In-memory cache of project schema definitions. Reads happen against
+  ETS with no GenServer bottleneck; writes (cache invalidation) go
+  through the owner process and are broadcast via PubSub so every node
+  in the cluster refreshes its cache on the next read.
+
+  Per the Part 1 amendment, schemas are project-scoped — every project
+  owns its own complete schema, so the cache is keyed by `project_id`.
 
   Consulted on every node write to validate `attributes` against the
   declaring type's `attribute_schema`. Performance matters — keeping
@@ -31,24 +34,24 @@ defmodule HydraX.Graph.SchemaRegistry do
 
   @doc """
   Fetch a node type definition. Returns `{:ok, def}` when found, `:error`
-  otherwise. Lazy-loads the domain's schema on first access.
+  otherwise. Lazy-loads the project's schema on first access.
   """
-  def fetch_node_type(domain_id, type_key) do
-    fetch(:node_type, domain_id, type_key)
+  def fetch_node_type(project_id, type_key) do
+    fetch(:node_type, project_id, type_key)
   end
 
-  def fetch_relationship_type(domain_id, type_key) do
-    fetch(:relationship_type, domain_id, type_key)
+  def fetch_relationship_type(project_id, type_key) do
+    fetch(:relationship_type, project_id, type_key)
   end
 
-  def fetch_flag_type(domain_id, type_key) do
-    fetch(:flag_type, domain_id, type_key)
+  def fetch_flag_type(project_id, type_key) do
+    fetch(:flag_type, project_id, type_key)
   end
 
-  def list_node_types(domain_id) do
-    ensure_loaded(domain_id)
+  def list_node_types(project_id) do
+    ensure_loaded(project_id)
 
-    :ets.match_object(@table, {{:node_type, domain_id, :_}, :_})
+    :ets.match_object(@table, {{:node_type, project_id, :_}, :_})
     |> Enum.map(fn {_key, value} -> value end)
   end
 
@@ -82,31 +85,31 @@ defmodule HydraX.Graph.SchemaRegistry do
   def validate_attributes(_, _), do: :ok
 
   @doc """
-  Invalidate the cache for a domain. Safe to call from any process;
+  Invalidate the cache for a project. Safe to call from any process;
   broadcasts to all cluster nodes so every local registry drops its
-  entries for this domain.
+  entries for this project.
   """
-  def invalidate(domain_id) do
-    Phoenix.PubSub.broadcast(HydraX.PubSub, @pubsub_topic, {:schema_invalidated, domain_id})
+  def invalidate(project_id) do
+    Phoenix.PubSub.broadcast(HydraX.PubSub, @pubsub_topic, {:schema_invalidated, project_id})
   end
 
   @doc """
-  Put a definition directly into the cache. Used by `Graph.Domains` on
-  upsert so readers don't have to round-trip through the DB to refresh.
+  Put a definition directly into the cache. Used by `Graph.ProjectSchemas`
+  on upsert so readers don't have to round-trip through the DB to refresh.
   Safe to call from the calling process — writes to a public ETS table.
   """
-  def put_node_type(domain_id, %NodeTypeDefinition{} = def) do
-    :ets.insert(@table, {{:node_type, domain_id, def.type_key}, def})
+  def put_node_type(project_id, %NodeTypeDefinition{} = def) do
+    :ets.insert(@table, {{:node_type, project_id, def.type_key}, def})
     :ok
   end
 
-  def put_relationship_type(domain_id, %RelationshipTypeDefinition{} = def) do
-    :ets.insert(@table, {{:relationship_type, domain_id, def.type_key}, def})
+  def put_relationship_type(project_id, %RelationshipTypeDefinition{} = def) do
+    :ets.insert(@table, {{:relationship_type, project_id, def.type_key}, def})
     :ok
   end
 
-  def put_flag_type(domain_id, %FlagTypeDefinition{} = def) do
-    :ets.insert(@table, {{:flag_type, domain_id, def.type_key}, def})
+  def put_flag_type(project_id, %FlagTypeDefinition{} = def) do
+    :ets.insert(@table, {{:flag_type, project_id, def.type_key}, def})
     :ok
   end
 
@@ -116,74 +119,83 @@ defmodule HydraX.Graph.SchemaRegistry do
   def init(_opts) do
     :ets.new(@table, [:named_table, :public, :set, read_concurrency: true])
     Phoenix.PubSub.subscribe(HydraX.PubSub, @pubsub_topic)
-    {:ok, %{loaded: MapSet.new()}}
+    {:ok, %{}}
   end
 
   @impl true
-  def handle_info({:schema_invalidated, domain_id}, state) do
-    drop_domain(domain_id)
-    {:noreply, %{state | loaded: MapSet.delete(state.loaded, domain_id)}}
+  def handle_info({:schema_invalidated, project_id}, state) do
+    drop_project(project_id)
+    {:noreply, state}
   end
 
-  @impl true
-  def handle_call({:ensure_loaded, domain_id}, _from, state) do
-    if MapSet.member?(state.loaded, domain_id) do
-      {:reply, :ok, state}
-    else
-      load_domain(domain_id)
-      {:reply, :ok, %{state | loaded: MapSet.put(state.loaded, domain_id)}}
-    end
+  def handle_info({:schema_updated, project_id}, state) do
+    drop_project(project_id)
+    {:noreply, state}
   end
+
+  def handle_info(_msg, state), do: {:noreply, state}
 
   # Internals
 
-  defp fetch(kind, domain_id, type_key) do
-    case :ets.lookup(@table, {kind, domain_id, type_key}) do
+  defp fetch(kind, project_id, type_key) do
+    case :ets.lookup(@table, {kind, project_id, type_key}) do
       [{_key, value}] ->
         {:ok, value}
 
       [] ->
-        # Cache miss — ensure the domain is loaded, then retry.
-        ensure_loaded(domain_id)
+        # Cache miss — ensure the project is loaded, then retry.
+        ensure_loaded(project_id)
 
-        case :ets.lookup(@table, {kind, domain_id, type_key}) do
+        case :ets.lookup(@table, {kind, project_id, type_key}) do
           [{_key, value}] -> {:ok, value}
           [] -> :error
         end
     end
   end
 
-  defp ensure_loaded(domain_id) do
-    GenServer.call(__MODULE__, {:ensure_loaded, domain_id})
+  # Runs DB queries in the caller's process so they participate in any
+  # active Ecto sandbox connection. Idempotent — multiple processes
+  # racing to load the same project just write the same rows to ETS.
+  defp ensure_loaded(project_id) do
+    case :ets.lookup(@table, {:loaded, project_id}) do
+      [{_, _}] ->
+        :ok
+
+      [] ->
+        load_project(project_id)
+        :ets.insert(@table, {{:loaded, project_id}, true})
+        :ok
+    end
   end
 
-  defp load_domain(domain_id) do
-    node_types = Repo.all(from n in NodeTypeDefinition, where: n.domain_id == ^domain_id)
-    rel_types = Repo.all(from r in RelationshipTypeDefinition, where: r.domain_id == ^domain_id)
-    flag_types = Repo.all(from f in FlagTypeDefinition, where: f.domain_id == ^domain_id)
+  defp load_project(project_id) do
+    node_types = Repo.all(from n in NodeTypeDefinition, where: n.project_id == ^project_id)
+    rel_types = Repo.all(from r in RelationshipTypeDefinition, where: r.project_id == ^project_id)
+    flag_types = Repo.all(from f in FlagTypeDefinition, where: f.project_id == ^project_id)
 
     Enum.each(node_types, fn t ->
-      :ets.insert(@table, {{:node_type, domain_id, t.type_key}, t})
+      :ets.insert(@table, {{:node_type, project_id, t.type_key}, t})
     end)
 
     Enum.each(rel_types, fn t ->
-      :ets.insert(@table, {{:relationship_type, domain_id, t.type_key}, t})
+      :ets.insert(@table, {{:relationship_type, project_id, t.type_key}, t})
     end)
 
     Enum.each(flag_types, fn t ->
-      :ets.insert(@table, {{:flag_type, domain_id, t.type_key}, t})
+      :ets.insert(@table, {{:flag_type, project_id, t.type_key}, t})
     end)
 
     Logger.debug(fn ->
-      "[SchemaRegistry] loaded domain #{domain_id}: " <>
+      "[SchemaRegistry] loaded project #{project_id}: " <>
         "#{length(node_types)} nodes, #{length(rel_types)} rels, #{length(flag_types)} flags"
     end)
   end
 
-  defp drop_domain(domain_id) do
-    :ets.match_delete(@table, {{:node_type, domain_id, :_}, :_})
-    :ets.match_delete(@table, {{:relationship_type, domain_id, :_}, :_})
-    :ets.match_delete(@table, {{:flag_type, domain_id, :_}, :_})
+  defp drop_project(project_id) do
+    :ets.match_delete(@table, {{:node_type, project_id, :_}, :_})
+    :ets.match_delete(@table, {{:relationship_type, project_id, :_}, :_})
+    :ets.match_delete(@table, {{:flag_type, project_id, :_}, :_})
+    :ets.delete(@table, {:loaded, project_id})
   end
 
   # Attribute validation helpers
