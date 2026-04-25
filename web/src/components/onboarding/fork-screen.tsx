@@ -50,14 +50,20 @@ export function ForkScreen({
   onSelect,
 }: {
   projectName: string;
-  onSelect: (scenario: OnboardingScenario) => void;
+  onSelect: (scenario: OnboardingScenario) => void | Promise<void>;
 }) {
   const [busy, setBusy] = useState<OnboardingScenario | null>(null);
 
-  function pick(scenario: OnboardingScenario) {
+  async function pick(scenario: OnboardingScenario) {
     if (busy) return;
     setBusy(scenario);
-    onSelect(scenario);
+    try {
+      await onSelect(scenario);
+    } catch {
+      // Keep the user on the fork so they can retry; the parent
+      // typically transitions on success and unmounts this screen.
+      setBusy(null);
+    }
   }
 
   return (

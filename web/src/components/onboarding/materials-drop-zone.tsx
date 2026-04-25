@@ -170,15 +170,27 @@ export function MaterialsDropZone({
     }
   }
 
+  // Counter pattern: dragenter/leave fire for every child element when
+  // the cursor crosses internal boundaries. Track the depth so the
+  // active state doesn't flicker.
+  const dragDepthRef = useRef(0);
+
+  function onDragEnter(e: React.DragEvent) {
+    e.preventDefault();
+    dragDepthRef.current += 1;
+    if (dragDepthRef.current === 1) setDragActive(true);
+  }
   function onDragOver(e: React.DragEvent) {
     e.preventDefault();
-    setDragActive(true);
   }
-  function onDragLeave() {
-    setDragActive(false);
+  function onDragLeave(e: React.DragEvent) {
+    e.preventDefault();
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setDragActive(false);
   }
   function onDrop(e: React.DragEvent) {
     e.preventDefault();
+    dragDepthRef.current = 0;
     setDragActive(false);
     addFiles(e.dataTransfer.files);
   }
@@ -212,6 +224,7 @@ export function MaterialsDropZone({
           </div>
 
           <div
+            onDragEnter={onDragEnter}
             onDragOver={onDragOver}
             onDragLeave={onDragLeave}
             onDrop={onDrop}
@@ -270,7 +283,7 @@ export function MaterialsDropZone({
                     {item.kind === "file" ? item.file.name : item.url}
                   </span>
                   <StatusGlyph status={item.status} />
-                  {item.status === "queued" ? (
+                  {item.status === "queued" && !submitting ? (
                     <button
                       type="button"
                       onClick={() => removeItem(i)}

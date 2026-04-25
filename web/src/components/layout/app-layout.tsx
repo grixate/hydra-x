@@ -248,6 +248,13 @@ export function AppLayout() {
   // While dragging, skip the spring so width tracks the cursor 1:1.
   const marginTransition = dragging ? { duration: 0 } : MORPH_TRANSITION;
 
+  // Hold rendering until we know whether the fork screen should show.
+  // Without this gate, a first-time user sees the normal layout for a
+  // frame before the fork screen pops in.
+  if (pid !== null && onboarding === null) {
+    return <div className="h-screen bg-background" aria-hidden />;
+  }
+
   if (showFork && forkChoice === "explore") {
     return <ExploreCarousel onDismiss={handleCarouselDismiss} />;
   }
