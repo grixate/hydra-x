@@ -25,23 +25,11 @@ export function useOnboarding(projectId: number | null) {
     refresh().finally(() => setLoading(false));
   }, [projectId, refresh]);
 
-  const start = useCallback(async () => {
+  const markCompleted = useCallback(async () => {
     if (!projectId) return;
-    const updated = await api.startOnboarding(projectId);
+    const updated = await api.completeOnboarding(projectId);
     setStatus(updated);
   }, [projectId]);
 
-  const skip = useCallback(async () => {
-    if (!projectId) return;
-    const updated = await api.skipOnboarding(projectId);
-    setStatus(updated);
-  }, [projectId]);
-
-  const reset = useCallback(async () => {
-    if (!projectId) return;
-    const updated = await api.resetOnboarding(projectId);
-    setStatus(updated);
-  }, [projectId]);
-
-  return { status, loading, refresh, start, skip, reset };
+  return { status, loading, refresh, markCompleted };
 }

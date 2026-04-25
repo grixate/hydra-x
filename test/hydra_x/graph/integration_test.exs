@@ -31,7 +31,7 @@ defmodule HydraX.Graph.IntegrationTest do
         "display_name" => "Integration Tester"
       })
 
-    {:ok, project, _onboarding} =
+    {:ok, project} =
       Product.create_project(%{
         "name" => "Integration Project",
         "description" => "substrate E2E",
@@ -144,7 +144,7 @@ defmodule HydraX.Graph.IntegrationTest do
         "display_name" => "Other Workspace"
       })
 
-    {:ok, other_project, _} =
+    {:ok, other_project} =
       Product.create_project(%{
         "name" => "Other",
         "description" => "t",

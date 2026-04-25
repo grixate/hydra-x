@@ -6,10 +6,10 @@ defmodule HydraXWeb.OperatorAuth do
 
   alias Phoenix.Component
   alias Phoenix.LiveView
-  alias HydraX.Runtime
+  alias HydraX.Accounts
   alias HydraX.Runtime.Helpers
+  alias HydraXWeb.Plugs.UserAuth
 
-  @session_key :operator_authenticated
   @session_ts_key :operator_authenticated_at
   @session_active_key :operator_last_active_at
   @session_recent_auth_key :operator_recent_auth_at
@@ -37,11 +37,11 @@ defmodule HydraXWeb.OperatorAuth do
       )
 
   def recent_auth_window_seconds do
-    Runtime.effective_policy().auth.recent_auth_window_minutes * 60
+    Application.get_env(:hydra_x, :operator_recent_auth_window_seconds, 15 * 60)
   end
 
   def call(conn, :redirect_if_authenticated) do
-    if Runtime.operator_password_configured?() and session_valid?(conn) do
+    if session_valid?(conn) do
       conn
       |> touch_activity()
       |> redirect(to: "/")
@@ -52,14 +52,14 @@ defmodule HydraXWeb.OperatorAuth do
   end
 
   def call(conn, :require_authenticated_operator) do
-    if Runtime.operator_password_configured?() and not session_valid?(conn) do
+    if not session_valid?(conn) do
       state = session_state(conn)
 
       redirect_target =
-        if get_session(conn, @session_key) == true do
+        if get_session(conn, UserAuth.session_key()) do
           "/login?expired=#{expired_by(state)}"
         else
-          "/login"
+          unauthenticated_destination()
         end
 
       conn
@@ -73,41 +73,58 @@ defmodule HydraXWeb.OperatorAuth do
     end
   end
 
-  def log_in(conn, opts \\ []) do
+  def log_in(conn, %HydraX.Accounts.User{} = user, opts) do
     now = Keyword.get(opts, :now, System.system_time(:second))
     authenticated_at = Keyword.get(opts, :authenticated_at, now)
     last_active_at = Keyword.get(opts, :last_active_at, now)
     recent_auth_at = Keyword.get(opts, :recent_auth_at, now)
 
     conn
+    |> UserAuth.put_user_session(user)
     |> configure_session(renew: true)
-    |> put_session(@session_key, true)
     |> put_session(@session_ts_key, authenticated_at)
     |> put_session(@session_active_key, last_active_at)
-    |> put_session(@session_recent_auth_key, recent_auth_at)
+      |> put_session(@session_recent_auth_key, recent_auth_at)
   end
+
+  def log_in(conn, %HydraX.Accounts.User{} = user) do
+    log_in(conn, user, [])
+  end
+
+  def log_in(conn, opts) when is_list(opts) do
+    user = Keyword.get(opts, :user) || ensure_test_operator_user!()
+    log_in(conn, user, opts)
+  end
+
+  def log_in(conn), do: log_in(conn, [])
 
   def log_out(conn) do
     conn
+    |> UserAuth.clear_user_session()
     |> configure_session(renew: true)
-    |> delete_session(@session_key)
     |> delete_session(@session_ts_key)
     |> delete_session(@session_active_key)
     |> delete_session(@session_recent_auth_key)
   end
 
   def session_state(conn_or_session) do
-    authenticated? = session_value(conn_or_session, @session_key) == true
+    user_id = session_value(conn_or_session, UserAuth.session_key())
+    user = if is_binary(user_id), do: Accounts.get_user(user_id)
+    authenticated? = not is_nil(user)
+    operator? = Accounts.operator?(user)
     authenticated_at = session_value(conn_or_session, @session_ts_key)
     last_active_at = session_value(conn_or_session, @session_active_key)
     recent_auth_at = session_value(conn_or_session, @session_recent_auth_key)
 
     %{
       authenticated?: authenticated?,
+      operator?: operator?,
+      user: user,
+      user_id: user_id,
       authenticated_at: authenticated_at,
       last_active_at: last_active_at,
       recent_auth_at: recent_auth_at,
-      valid?: authenticated? and not session_expired?(authenticated_at, last_active_at),
+      valid?: authenticated? and operator? and not session_expired?(authenticated_at, last_active_at),
       recent_auth_valid?: authenticated? and recent_auth_valid?(recent_auth_at),
       session_expires_at: expires_at(authenticated_at, session_max_age_seconds()),
       idle_expires_at: expires_at(last_active_at, idle_timeout_seconds()),
@@ -116,28 +133,22 @@ defmodule HydraXWeb.OperatorAuth do
   end
 
   def on_mount(:require_authenticated_operator, _params, session, socket) do
-    configured? = Runtime.operator_password_configured?()
     session_state = session_state(session)
     valid? = session_state.valid?
 
     cond do
-      not configured? ->
-        {:cont,
-         socket
-         |> Component.assign(:operator_authenticated, false)
-         |> Component.assign(:operator_session, session_state)}
-
       valid? ->
         {:cont,
          socket
          |> Component.assign(:operator_authenticated, true)
+         |> Component.assign(:current_user, session_state.user)
          |> Component.assign(:operator_session, session_state)}
 
       true ->
         {:halt,
          socket
          |> LiveView.put_flash(:error, "Sign in to access the Hydra-X control plane.")
-         |> LiveView.redirect(to: "/login")}
+         |> LiveView.redirect(to: unauthenticated_destination())}
     end
   end
 
@@ -168,7 +179,7 @@ defmodule HydraXWeb.OperatorAuth do
   end
 
   defp clear_expired_session(conn, state) do
-    if get_session(conn, @session_key) == true do
+    if get_session(conn, UserAuth.session_key()) do
       state = state || session_state(conn)
 
       Helpers.audit_auth_action("Operator session expired",
@@ -195,6 +206,38 @@ defmodule HydraXWeb.OperatorAuth do
 
   defp expires_at(nil, _seconds), do: nil
   defp expires_at(timestamp, seconds), do: DateTime.from_unix!(timestamp + seconds)
+
+  defp unauthenticated_destination do
+    if Accounts.operator_user_exists?(), do: "/login", else: "/register"
+  end
+
+  defp ensure_test_operator_user! do
+    if Application.get_env(:hydra_x, :env) != :test do
+      raise ArgumentError, "OperatorAuth.log_in/2 requires a user outside test"
+    end
+
+    case HydraX.Accounts.get_user_by_email("operator@test.example.com") do
+      %HydraX.Accounts.User{} = user ->
+        if Accounts.operator?(user) do
+          user
+        else
+          user
+          |> HydraX.Accounts.User.operator_changeset()
+          |> HydraX.Repo.update!()
+        end
+
+      nil ->
+        {:ok, %{user: user}} =
+          Accounts.register_first_operator(%{
+            "email" => "operator@test.example.com",
+            "display_name" => "Test Operator",
+            "password" => "hydra-password-123",
+            "password_confirmation" => "hydra-password-123"
+          })
+
+        user
+    end
+  end
 
   defp expired_by(state) do
     now = System.system_time(:second)

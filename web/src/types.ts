@@ -665,16 +665,9 @@ export type ProposalItemDecision = {
   edits?: Record<string, unknown> | null;
 };
 
-export type OnboardingState = "pending" | "in_progress" | "completed" | "skipped";
-
 export type OnboardingStatus = {
   project_id: number;
-  state: OnboardingState;
-  vision_set: boolean;
-  bets_count: number;
-  hint: string | null;
-  onboarded_at: string | null;
-  onboarding_skipped_at: string | null;
+  has_completed_first_session: boolean;
 };
 
 export type StreamTab = "activity" | "needs_you" | "blockers";

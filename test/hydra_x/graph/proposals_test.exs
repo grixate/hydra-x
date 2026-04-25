@@ -16,7 +16,7 @@ defmodule HydraX.Graph.ProposalsTest do
         "display_name" => "Proposals Tester"
       })
 
-    {:ok, project, _onboarding} =
+    {:ok, project} =
       Product.create_project(%{
         "name" => "Proposals Test Project",
         "description" => "t",

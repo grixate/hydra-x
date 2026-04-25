@@ -105,6 +105,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   listProjects: () => request<Project[]>("/projects"),
+  getProject: (projectId: number) => request<Project>(`/projects/${projectId}`),
   createProject: (payload: {
     name: string;
     slug?: string;
@@ -715,21 +716,16 @@ export const api = {
   },
   getOnboarding: (projectId: number) =>
     request<OnboardingStatus>(`/projects/${projectId}/onboarding`),
-  startOnboarding: (projectId: number) =>
-    request<OnboardingStatus>(`/projects/${projectId}/onboarding/start`, {
+  completeOnboarding: (projectId: number) =>
+    request<OnboardingStatus>(`/projects/${projectId}/onboarding/complete`, {
       method: "POST",
       body: JSON.stringify({}),
     }),
-  skipOnboarding: (projectId: number) =>
-    request<OnboardingStatus>(`/projects/${projectId}/onboarding/skip`, {
-      method: "POST",
-      body: JSON.stringify({}),
-    }),
-  resetOnboarding: (projectId: number) =>
-    request<OnboardingStatus>(`/projects/${projectId}/onboarding/reset`, {
-      method: "POST",
-      body: JSON.stringify({}),
-    }),
+  applyPretrainedSchema: (projectId: number) =>
+    request<{ project_id: number; applied: string }>(
+      `/projects/${projectId}/onboarding/apply_pretrained`,
+      { method: "POST", body: JSON.stringify({}) },
+    ),
   // Decisions
   listDecisions: (projectId: number) =>
     request<Decision[]>(`/projects/${projectId}/decisions`),

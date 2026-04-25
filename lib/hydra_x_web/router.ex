@@ -45,11 +45,17 @@ defmodule HydraXWeb.Router do
     get "/login", SessionController, :new
     post "/login", SessionController, :create
     delete "/logout", SessionController, :delete
+    get "/register", RegistrationController, :new
+    post "/register", RegistrationController, :create
+    get "/password-reset", PasswordResetController, :new
+    post "/password-reset", PasswordResetController, :create
+    get "/password-reset/:token", PasswordResetController, :edit
+    put "/password-reset/:token", PasswordResetController, :update
+    get "/invitations/:token", InvitationController, :edit
+    put "/invitations/:token", InvitationController, :update
 
     get "/product", PageController, :product
     get "/product/*path", PageController, :product
-    get "/projects", PageController, :product
-    get "/projects/*path", PageController, :product
   end
 
   scope "/", HydraXWeb do
@@ -89,6 +95,13 @@ defmodule HydraXWeb.Router do
     end
   end
 
+  scope "/", HydraXWeb do
+    pipe_through :browser
+
+    get "/projects", PageController, :product
+    get "/projects/*path", PageController, :product
+  end
+
   scope "/api", HydraXWeb do
     pipe_through :api
 
@@ -97,7 +110,7 @@ defmodule HydraXWeb.Router do
     post "/slack/webhook", SlackWebhookController, :create
   end
 
-  # Auth API — no authentication required
+  # Legacy auth status API — backed by local user auth.
   scope "/api/v1", HydraXWeb do
     pipe_through [:api, :api_with_session]
 
@@ -105,15 +118,17 @@ defmodule HydraXWeb.Router do
     get "/auth/status", AuthAPIController, :status
   end
 
-  # Cycle 2 simple user auth (see HydraXWeb.Plugs.UserAuth). Separate
-  # from the operator-password `/auth/login` above. `:user_session` runs
-  # UserAuth so `me`/`identity_bootstrap` see `conn.assigns[:current_user]`.
+  # Local user auth. `:user_session` runs UserAuth so `me` and
+  # identity_bootstrap see `conn.assigns[:current_user]`.
   scope "/api/v1", HydraXWeb do
     pipe_through [:api, :user_session]
 
-    post "/user_auth/dev_login", UserAuthAPIController, :dev_login
+    post "/user_auth/register", UserAuthAPIController, :register
+    post "/user_auth/login", UserAuthAPIController, :login
     get "/user_auth/me", UserAuthAPIController, :me
     post "/user_auth/logout", UserAuthAPIController, :logout
+    post "/user_auth/forgot_password", UserAuthAPIController, :forgot_password
+    post "/user_auth/reset_password", UserAuthAPIController, :reset_password
     post "/user_auth/identity_bootstrap", UserAuthAPIController, :identity_bootstrap
   end
 
@@ -232,11 +247,12 @@ defmodule HydraXWeb.Router do
     get "/projects/:project_id/stream/tabs/counts", StreamTabsAPIController, :counts
     get "/projects/:project_id/stream/tabs/:tab", StreamTabsAPIController, :index
 
-    # Onboarding state machine
+    # Onboarding (per Hydra Onboarding spec): one boolean per project,
+    # set when the fork screen is past. The fork-screen flow lives in
+    # the frontend.
     get "/projects/:project_id/onboarding", OnboardingAPIController, :show
-    post "/projects/:project_id/onboarding/start", OnboardingAPIController, :start
-    post "/projects/:project_id/onboarding/skip", OnboardingAPIController, :skip
-    post "/projects/:project_id/onboarding/reset", OnboardingAPIController, :reset
+    post "/projects/:project_id/onboarding/complete", OnboardingAPIController, :mark_completed
+    post "/projects/:project_id/onboarding/apply_pretrained", OnboardingAPIController, :apply_pretrained
 
     # Coherence contradictions (Cycle 2 hero)
     get "/projects/:project_id/contradictions", ContradictionAPIController, :index

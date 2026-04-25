@@ -12,7 +12,7 @@ defmodule HydraX.Product.StreamEntriesTest do
     {:ok, %{user: _user, workspace: workspace}} =
       Accounts.create_user_with_workspace(%{"email" => email, "display_name" => "Tester"})
 
-    {:ok, project, _onboarding} =
+    {:ok, project} =
       Product.create_project(%{
         "name" => name,
         "description" => "t",

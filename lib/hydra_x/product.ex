@@ -5,6 +5,7 @@ defmodule HydraX.Product do
 
   import Ecto.Query
 
+  alias HydraX.Accounts
   alias HydraX.Config
   alias HydraX.Embeddings
   alias HydraX.Ingest.Parser
@@ -93,6 +94,19 @@ defmodule HydraX.Product do
     |> Repo.get!(id)
   end
 
+  @doc """
+  Mark the project's onboarding fork screen as past. Idempotent — safe
+  to call from any of the four scenario flows or from the skip path.
+  """
+  def mark_first_session_completed(%Project{has_completed_first_session: true} = project),
+    do: {:ok, project}
+
+  def mark_first_session_completed(%Project{} = project) do
+    project
+    |> Project.changeset(%{"has_completed_first_session" => true})
+    |> Repo.update()
+  end
+
   def project_counts(project_or_id) do
     project_id = project_id(project_or_id)
 
@@ -119,7 +133,17 @@ defmodule HydraX.Product do
   end
 
   def create_project(attrs) when is_map(attrs) do
-    attrs = normalize_project_attrs(attrs)
+    case create_project_with_onboarding(attrs) do
+      {:ok, project, _onboarding} -> {:ok, project}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def create_project_with_onboarding(attrs) when is_map(attrs) do
+    attrs =
+      attrs
+      |> normalize_project_attrs()
+      |> put_default_workspace_id()
 
     Repo.transaction(fn ->
       researcher = provision_agent!(attrs, "researcher")
@@ -166,6 +190,20 @@ defmodule HydraX.Product do
       {:error, changeset} ->
         {:error, changeset}
     end
+  end
+
+  defp put_default_workspace_id(%{"workspace_id" => workspace_id} = attrs)
+       when is_binary(workspace_id) and workspace_id != "" do
+    attrs
+  end
+
+  defp put_default_workspace_id(%{"workspace_id" => workspace_id} = attrs)
+       when not is_nil(workspace_id) do
+    attrs
+  end
+
+  defp put_default_workspace_id(attrs) do
+    Map.put(attrs, "workspace_id", Accounts.default_workspace_id())
   end
 
   def update_project(%Project{} = project, attrs) do
@@ -2044,6 +2082,33 @@ defmodule HydraX.Product do
     #{constraint_section}
     #{knowledge_section}
     #{shared_memory_section}
+    #{hydra_meta_section()}
+    """
+  end
+
+  # Hydra-meta knowledge — shared across personas so any agent can field
+  # "what is Stream?", "what does approving a proposal do?", etc. without
+  # a dedicated onboarding agent. Keep this terse; it lives in every
+  # prompt and shouldn't bloat token use.
+  defp hydra_meta_section do
+    """
+
+    ## How Hydra works (orient the user when asked)
+    Hydra is a workspace where typed knowledge accumulates into a graph and a team of agents reasons over it. Four main surfaces:
+    - **Stream** — the project's activity feed. Agents post here when they propose, complete, or get stuck. The "Needs You" tab is the user's queue.
+    - **Board** — a freeform canvas for working out ideas before they become structured. Drag, sketch, connect; promote into the graph when ready.
+    - **Graph** — every typed node in the project (insights, decisions, requirements, evidence) and the relationships between them. Click any node to see what supports it and what it leads to.
+    - **Library** — the user's sources and reference material. Agents read these to ground reasoning, so anything an agent claims should be traceable back to a Library item.
+
+    Schema-change proposals: when an agent wants to add a new node type, relationship type, or flag type, it issues a `schema_change_proposal`. These appear inline in chat as approve/reject cards. Approving applies immediately to the project's schema; rejecting drops the proposal. Users can also propose schema changes directly.
+
+    Node types, relationships, and flags are project-scoped: each project owns its complete schema. The five base primitives (claim, evidence, artifact, activity, entity, agent_role) are shared, but the concrete types extending them differ per project.
+
+    Agents and tasks: a team of specialised agents (Researcher, Strategist, Architect, Designer, Memory) work on the project. Users can ask an agent to do a specific thing, or let it work autonomously — proposals it generates flow into the user's queue. New agents are added from the Agents view; existing ones can be configured there too.
+
+    Adding materials: drop files or paste links into the Library. Sources are chunked and embedded, then made available to all agents for grounded reasoning.
+
+    When the user asks how something works, give a short concrete answer drawing on the section above; don't hand them documentation links — there isn't one yet.
     """
   end
 
@@ -2824,13 +2889,6 @@ defmodule HydraX.Product do
 
   defp maybe_filter_node_type(query, node_type) do
     where(query, [r], r.node_type == ^to_string(node_type))
-  end
-
-  defp maybe_filter_priority(query, nil), do: query
-  defp maybe_filter_priority(query, ""), do: query
-
-  defp maybe_filter_priority(query, priority) do
-    where(query, [r], r.priority == ^to_string(priority))
   end
 
   defp maybe_filter_learning_type(query, nil), do: query
