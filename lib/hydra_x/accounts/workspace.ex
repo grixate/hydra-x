@@ -23,7 +23,9 @@ defmodule HydraX.Accounts.Workspace do
     |> cast(attrs, [:name, :slug, :created_by_user_id, :deleted_at])
     |> validate_required([:name, :slug])
     |> update_change(:slug, &normalise_slug/1)
-    |> validate_format(:slug, ~r/^[a-z0-9\-]+$/, message: "lowercase letters, digits, hyphens only")
+    |> validate_format(:slug, ~r/^[a-z0-9\-]+$/,
+      message: "lowercase letters, digits, hyphens only"
+    )
     |> validate_length(:slug, min: 1, max: 80)
     |> validate_length(:name, min: 1, max: 120)
     |> unique_constraint(:slug)

@@ -124,7 +124,9 @@ defmodule HydraXWeb.BoardLive.Show do
 
   def handle_event("promote_all", _params, socket) do
     session = socket.assigns.session
-    draft_ids = socket.assigns.board_nodes |> Enum.filter(&(&1.status == "draft")) |> Enum.map(& &1.id)
+
+    draft_ids =
+      socket.assigns.board_nodes |> Enum.filter(&(&1.status == "draft")) |> Enum.map(& &1.id)
 
     case BoardPromotion.promote_batch(session.id, draft_ids) do
       {:ok, _results} ->
@@ -216,7 +218,11 @@ defmodule HydraXWeb.BoardLive.Show do
             + Add a node
           </button>
 
-          <form :if={@show_add_node} phx-submit="create_node" class="glass-panel rounded-xl border border-white/10 p-5 space-y-4">
+          <form
+            :if={@show_add_node}
+            phx-submit="create_node"
+            class="glass-panel rounded-xl border border-white/10 p-5 space-y-4"
+          >
             <div class="flex gap-3">
               <select
                 name="node_type"
@@ -273,7 +279,10 @@ defmodule HydraXWeb.BoardLive.Show do
                   <span class="rounded px-2 py-0.5 text-[10px] uppercase bg-white/10 text-[var(--hx-mute)]">
                     {humanize_type(node.node_type)}
                   </span>
-                  <span class={["rounded px-2 py-0.5 text-[10px] uppercase", node_status_style(node.status)]}>
+                  <span class={[
+                    "rounded px-2 py-0.5 text-[10px] uppercase",
+                    node_status_style(node.status)
+                  ]}>
                     {node.status}
                   </span>
                 </div>
@@ -304,11 +313,16 @@ defmodule HydraXWeb.BoardLive.Show do
         </div>
 
         <div :if={@board_nodes == []} class="text-center py-16">
-          <p class="text-[var(--hx-mute)]">No nodes in this session yet. Add a node or start a conversation with an agent.</p>
+          <p class="text-[var(--hx-mute)]">
+            No nodes in this session yet. Add a node or start a conversation with an agent.
+          </p>
         </div>
 
         <%!-- Selected node detail --%>
-        <div :if={@selected_node} class="glass-panel rounded-xl border border-[var(--hx-accent)]/30 p-6">
+        <div
+          :if={@selected_node}
+          class="glass-panel rounded-xl border border-[var(--hx-accent)]/30 p-6"
+        >
           <div class="flex items-start justify-between">
             <div>
               <div class="font-mono text-[10px] uppercase tracking-[0.25em] text-[var(--hx-mute)]">
@@ -316,7 +330,10 @@ defmodule HydraXWeb.BoardLive.Show do
               </div>
               <h3 class="mt-1 text-lg font-medium text-white">{@selected_node.title}</h3>
             </div>
-            <button phx-click="deselect_node" class="text-[var(--hx-mute)] hover:text-white transition">
+            <button
+              phx-click="deselect_node"
+              class="text-[var(--hx-mute)] hover:text-white transition"
+            >
               x
             </button>
           </div>

@@ -16,14 +16,14 @@ defmodule HydraX.Product.ResearcherAutoProcess do
   alias HydraX.Product
   alias HydraX.Product.AgentBridge
   alias HydraX.Product.AgentTasks
-  alias HydraX.Product.Source
+  alias HydraX.Graph.Node, as: GraphNode
 
   @doc """
   Enqueue researcher analysis for a newly-created source. Respects the
   per-project `metadata.auto_process_sources` flag; returns `:disabled`
   if the user has opted out.
   """
-  def maybe_enqueue(%Source{} = source) do
+  def maybe_enqueue(%GraphNode{type_key: "source"} = source) do
     project = Product.get_project!(source.project_id)
 
     if auto_process_enabled?(project) do
@@ -33,7 +33,7 @@ defmodule HydraX.Product.ResearcherAutoProcess do
     end
   end
 
-  def enqueue(%Source{} = source) do
+  def enqueue(%GraphNode{type_key: "source"} = source) do
     case AgentTasks.create_task(%{
            project_id: source.project_id,
            agent_id: "researcher",
@@ -75,14 +75,16 @@ defmodule HydraX.Product.ResearcherAutoProcess do
   end
 
   defp run_analysis(source, task) do
+    source_type = get_in(source.attributes || %{}, ["source_type"])
+
     prompt = """
     Analyse this newly-added source and extract key insights.
 
     Title: #{source.title}
-    Type: #{source.source_type}
+    Type: #{source_type}
 
     Content (first 3000 chars):
-    #{String.slice(source.content || "", 0, 3000)}
+    #{String.slice(source.body || "", 0, 3000)}
 
     Create insights for any significant findings. Each insight should have:
     - A clear, specific title

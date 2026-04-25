@@ -74,13 +74,17 @@ defmodule HydraXWeb.AgentTaskAPIController do
   def defer(conn, %{"project_id" => project_id, "id" => id} = params) do
     hours =
       case params["hours"] do
-        h when is_integer(h) and h > 0 -> h
+        h when is_integer(h) and h > 0 ->
+          h
+
         h when is_binary(h) ->
           case Integer.parse(h) do
             {n, _} when n > 0 -> n
             _ -> 24
           end
-        _ -> 24
+
+        _ ->
+          24
       end
 
     task = AgentTasks.get_task!(project_id, id)

@@ -1,8 +1,8 @@
 defmodule HydraXWeb.ArtifactAPIController do
   use HydraXWeb, :controller
 
+  alias HydraX.Graph.Node, as: GraphNode
   alias HydraX.Product
-  alias HydraX.Product.Artifact
   alias HydraXWeb.ProductPayload
 
   action_fallback HydraXWeb.ProjectAPIFallbackController
@@ -11,7 +11,9 @@ defmodule HydraXWeb.ArtifactAPIController do
     opts =
       []
       |> then(fn o -> if params["status"], do: [{:status, params["status"]} | o], else: o end)
-      |> then(fn o -> if params["artifact_type"], do: [{:artifact_type, params["artifact_type"]} | o], else: o end)
+      |> then(fn o ->
+        if params["artifact_type"], do: [{:artifact_type, params["artifact_type"]} | o], else: o
+      end)
       |> then(fn o -> if params["search"], do: [{:search, params["search"]} | o], else: o end)
 
     artifacts =
@@ -27,7 +29,7 @@ defmodule HydraXWeb.ArtifactAPIController do
   end
 
   def create(conn, %{"project_id" => project_id, "artifact" => params}) do
-    with {:ok, %Artifact{} = artifact} <- Product.create_artifact(project_id, params) do
+    with {:ok, %GraphNode{} = artifact} <- Product.create_artifact(project_id, params) do
       conn
       |> put_status(:created)
       |> json(%{data: ProductPayload.artifact_json(artifact)})
@@ -35,7 +37,7 @@ defmodule HydraXWeb.ArtifactAPIController do
   end
 
   def update(conn, %{"project_id" => project_id, "id" => id, "artifact" => params}) do
-    with {:ok, %Artifact{} = updated} <- Product.update_artifact(project_id, id, params) do
+    with {:ok, %GraphNode{} = updated} <- Product.update_artifact(project_id, id, params) do
       json(conn, %{data: ProductPayload.artifact_json(updated)})
     end
   end

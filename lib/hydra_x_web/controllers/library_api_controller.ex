@@ -9,7 +9,7 @@ defmodule HydraXWeb.LibraryAPIController do
   use HydraXWeb, :controller
 
   alias HydraX.Product.Library
-  alias HydraX.Product.Source
+  alias HydraX.Graph.Node, as: GraphNode
   alias HydraXWeb.ProductPayload
 
   action_fallback HydraXWeb.ProjectAPIFallbackController
@@ -184,7 +184,7 @@ defmodule HydraXWeb.LibraryAPIController do
           created_at: ref.inserted_at,
           source:
             case ref.source do
-              %Source{} = s -> source_payload(s)
+              %GraphNode{type_key: "source"} = s -> source_payload(s)
               _ -> nil
             end
         }
@@ -229,16 +229,19 @@ defmodule HydraXWeb.LibraryAPIController do
 
   # ---- helpers -------------------------------------------------------
 
-  defp source_payload(%Source{} = s) do
+  defp source_payload(%GraphNode{type_key: "source"} = s) do
+    attrs = s.attributes || %{}
+
     s
     |> ProductPayload.source_json(false)
-    |> Map.put(:promoted_to_graph, s.promoted_to_graph)
-    |> Map.put(:promoted_at, s.promoted_at)
+    |> Map.put(:promoted_to_graph, Map.get(attrs, "promoted_to_graph", false))
+    |> Map.put(:promoted_at, Map.get(attrs, "promoted_at"))
     |> Map.put(:archived_at, s.archived_at)
   end
 
   defp maybe_int(nil), do: nil
   defp maybe_int(v) when is_integer(v), do: v
+
   defp maybe_int(v) when is_binary(v) do
     case Integer.parse(v) do
       {n, _} -> n

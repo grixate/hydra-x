@@ -10,7 +10,8 @@ defmodule HydraX.Tools.SkillLoad do
 
   @impl true
   def description,
-    do: "Load the full body of an enabled skill by slug. Use when the compact skill index mentions a skill you need to read in detail."
+    do:
+      "Load the full body of an enabled skill by slug. Use when the compact skill index mentions a skill you need to read in detail."
 
   @impl true
   def safety_classification, do: "skill_read"

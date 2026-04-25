@@ -107,12 +107,12 @@ defmodule HydraX.Repo.Migrations.CreateProductGraphNodes do
     end
 
     create unique_index(:product_graph_edges, [
-      :from_node_type,
-      :from_node_id,
-      :to_node_type,
-      :to_node_id,
-      :kind
-    ])
+             :from_node_type,
+             :from_node_id,
+             :to_node_type,
+             :to_node_id,
+             :kind
+           ])
 
     create index(:product_graph_edges, [:project_id])
     create index(:product_graph_edges, [:from_node_type, :from_node_id])

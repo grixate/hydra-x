@@ -23,7 +23,15 @@ defmodule HydraX.Product.WhyProseCache do
 
   def changeset(entry, attrs) do
     entry
-    |> cast(attrs, [:project_id, :node_type, :node_id, :cache_key, :prose, :model_id, :generated_at])
+    |> cast(attrs, [
+      :project_id,
+      :node_type,
+      :node_id,
+      :cache_key,
+      :prose,
+      :model_id,
+      :generated_at
+    ])
     |> validate_required([:project_id, :node_type, :node_id, :cache_key, :prose, :generated_at])
     |> unique_constraint([:project_id, :node_type, :node_id, :cache_key])
     |> foreign_key_constraint(:project_id)

@@ -19,13 +19,18 @@ defmodule HydraX.Product.Library do
     * `archive/1`         → de-emphasise (stays queryable)
     * `reference!/5`      → attach a node → source reference
     * `referenced_by/2`   → list graph nodes that reference a source
+
+  Sources live in the substrate as `nodes` with `type_key: "source"`.
+  Source-specific fields (`source_type`, `external_ref`, `promoted_to_graph`,
+  `promoted_at`, `reviewed_at`) are stored in `node.attributes`. `status`
+  on the node represents the former `processing_status`.
   """
 
   import Ecto.Query
 
+  alias HydraX.Graph.Node, as: GraphNode
   alias HydraX.Product
-  alias HydraX.Product.GraphEdge
-  alias HydraX.Product.Source
+  alias HydraX.Graph.NodeRelationship, as: GraphEdge
   alias HydraX.Product.SourceReference
   alias HydraX.Repo
 
@@ -53,7 +58,6 @@ defmodule HydraX.Product.Library do
     include_archived = Keyword.get(opts, :include_archived, false)
     types = Keyword.get(opts, :source_types)
 
-    # Group chunks by source; top score wins per source.
     source_scores =
       Enum.reduce(chunks, %{}, fn ranked, acc ->
         sid = ranked.chunk.source_id
@@ -63,20 +67,28 @@ defmodule HydraX.Product.Library do
         end)
       end)
 
-    # Load the sources that actually matched, ordered by score desc.
     source_ids = Map.keys(source_scores)
 
     base =
-      Source
-      |> where([s], s.project_id == ^project_id and s.id in ^source_ids)
+      source_base_query(project_id)
+      |> where([s], s.id in ^source_ids)
 
     base = if include_archived, do: base, else: where(base, [s], is_nil(s.archived_at))
 
     base =
       case types do
-        nil -> base
-        [] -> base
-        list -> where(base, [s], s.source_type in ^list)
+        nil ->
+          base
+
+        [] ->
+          base
+
+        list ->
+          where(
+            base,
+            [s],
+            fragment("?->>'source_type' = ANY(?)", s.attributes, ^list)
+          )
       end
 
     sources = Repo.all(base)
@@ -107,8 +119,8 @@ defmodule HydraX.Product.Library do
     project_id = to_int(project_id)
     source_id = to_int(source_id)
 
-    case Source
-         |> where([s], s.project_id == ^project_id and s.id == ^source_id)
+    case source_base_query(project_id)
+         |> where([s], s.id == ^source_id)
          |> Repo.one() do
       nil -> {:error, :not_found}
       source -> {:ok, source}
@@ -121,7 +133,7 @@ defmodule HydraX.Product.Library do
   def get_content(project_id, source_id, opts \\ []) do
     with {:ok, source} <- get(project_id, source_id) do
       max = Keyword.get(opts, :max_chars)
-      content = source.content || ""
+      content = source.body || ""
 
       content =
         if is_integer(max) and byte_size(content) > max do
@@ -161,8 +173,8 @@ defmodule HydraX.Product.Library do
   def unprocessed(project_id) do
     project_id = to_int(project_id)
 
-    Source
-    |> where([s], s.project_id == ^project_id and s.processing_status != "completed")
+    source_base_query(project_id)
+    |> where([s], s.status != "completed")
     |> where([s], is_nil(s.archived_at))
     |> order_by([s], asc: s.inserted_at)
     |> Repo.all()
@@ -175,8 +187,7 @@ defmodule HydraX.Product.Library do
     project_id = to_int(project_id)
     limit = Keyword.get(opts, :limit, @default_recent_limit)
 
-    Source
-    |> where([s], s.project_id == ^project_id)
+    source_base_query(project_id)
     |> where([s], is_nil(s.archived_at))
     |> order_by([s], desc: s.inserted_at)
     |> limit(^limit)
@@ -192,8 +203,7 @@ defmodule HydraX.Product.Library do
   def list_by_bucket(project_id, "all", _opts) do
     project_id = to_int(project_id)
 
-    Source
-    |> where([s], s.project_id == ^project_id)
+    source_base_query(project_id)
     |> where([s], is_nil(s.archived_at))
     |> order_by([s], desc: s.inserted_at)
     |> Repo.all()
@@ -202,8 +212,8 @@ defmodule HydraX.Product.Library do
   def list_by_bucket(project_id, "archived", _opts) do
     project_id = to_int(project_id)
 
-    Source
-    |> where([s], s.project_id == ^project_id and not is_nil(s.archived_at))
+    source_base_query(project_id)
+    |> where([s], not is_nil(s.archived_at))
     |> order_by([s], desc: s.archived_at)
     |> Repo.all()
   end
@@ -211,18 +221,18 @@ defmodule HydraX.Product.Library do
   def list_by_bucket(project_id, "promoted", _opts) do
     project_id = to_int(project_id)
 
-    Source
-    |> where([s], s.project_id == ^project_id and s.promoted_to_graph == true)
+    source_base_query(project_id)
+    |> where([s], fragment("(?->>'promoted_to_graph')::boolean = true", s.attributes))
     |> where([s], is_nil(s.archived_at))
-    |> order_by([s], desc: s.promoted_at)
+    |> order_by([s], desc: fragment("?->>'promoted_at'", s.attributes))
     |> Repo.all()
   end
 
   def list_by_bucket(project_id, "unprocessed", _opts) do
     project_id = to_int(project_id)
 
-    Source
-    |> where([s], s.project_id == ^project_id and s.processing_status != "completed")
+    source_base_query(project_id)
+    |> where([s], s.status != "completed")
     |> where([s], is_nil(s.archived_at))
     |> order_by([s], desc: s.inserted_at)
     |> Repo.all()
@@ -238,8 +248,8 @@ defmodule HydraX.Product.Library do
       |> distinct(true)
       |> Repo.all()
 
-    Source
-    |> where([s], s.project_id == ^project_id and s.id in ^referenced_ids)
+    source_base_query(project_id)
+    |> where([s], s.id in ^referenced_ids)
     |> where([s], is_nil(s.archived_at))
     |> order_by([s], desc: s.inserted_at)
     |> Repo.all()
@@ -255,8 +265,7 @@ defmodule HydraX.Product.Library do
       |> distinct(true)
       |> Repo.all()
 
-    Source
-    |> where([s], s.project_id == ^project_id)
+    source_base_query(project_id)
     |> where([s], s.id not in ^referenced_ids)
     |> where([s], is_nil(s.archived_at))
     |> order_by([s], desc: s.inserted_at)
@@ -271,20 +280,22 @@ defmodule HydraX.Product.Library do
   Promote a source to a Source graph node. Marks the flag; the graph data
   builder uses it to decide visibility.
   """
-  def promote(%Source{} = source) do
+  def promote(%GraphNode{type_key: "source"} = source) do
+    merged_attributes =
+      (source.attributes || %{})
+      |> Map.put("promoted_to_graph", true)
+      |> Map.put("promoted_at", DateTime.utc_now() |> DateTime.to_iso8601())
+
     source
-    |> Ecto.Changeset.change(%{
-      promoted_to_graph: true,
-      promoted_at: DateTime.utc_now()
-    })
+    |> GraphNode.changeset(%{attributes: merged_attributes})
     |> Repo.update()
     |> broadcast("source.promoted")
   end
 
   def promote(source_id) do
-    case Repo.get(Source, to_int(source_id)) do
-      nil -> {:error, :not_found}
-      s -> promote(s)
+    case Repo.get(GraphNode, to_int(source_id)) do
+      %GraphNode{type_key: "source"} = s -> promote(s)
+      _ -> {:error, :not_found}
     end
   end
 
@@ -292,12 +303,17 @@ defmodule HydraX.Product.Library do
   Demote a source back to Library-only. Spec §8: existing graph edges to
   this source are converted to source_references on the opposite node.
   """
-  def demote(%Source{} = source) do
+  def demote(%GraphNode{type_key: "source"} = source) do
     Repo.transaction(fn ->
       convert_graph_edges_to_references(source)
 
+      merged_attributes =
+        (source.attributes || %{})
+        |> Map.put("promoted_to_graph", false)
+        |> Map.delete("promoted_at")
+
       case source
-           |> Ecto.Changeset.change(%{promoted_to_graph: false, promoted_at: nil})
+           |> GraphNode.changeset(%{attributes: merged_attributes})
            |> Repo.update() do
         {:ok, updated} -> updated
         {:error, changeset} -> Repo.rollback(changeset)
@@ -314,25 +330,25 @@ defmodule HydraX.Product.Library do
   end
 
   def demote(source_id) do
-    case Repo.get(Source, to_int(source_id)) do
-      nil -> {:error, :not_found}
-      s -> demote(s)
+    case Repo.get(GraphNode, to_int(source_id)) do
+      %GraphNode{type_key: "source"} = s -> demote(s)
+      _ -> {:error, :not_found}
     end
   end
 
   @doc """
   Archive (de-emphasise) a source. Remains queryable. References preserved.
   """
-  def archive(%Source{} = source) do
+  def archive(%GraphNode{type_key: "source"} = source) do
     source
-    |> Ecto.Changeset.change(%{archived_at: DateTime.utc_now()})
+    |> GraphNode.changeset(%{archived_at: DateTime.utc_now()})
     |> Repo.update()
     |> broadcast("source.archived")
   end
 
-  def unarchive(%Source{} = source) do
+  def unarchive(%GraphNode{type_key: "source"} = source) do
     source
-    |> Ecto.Changeset.change(%{archived_at: nil})
+    |> GraphNode.changeset(%{archived_at: nil})
     |> Repo.update()
     |> broadcast("source.unarchived")
   end
@@ -531,9 +547,12 @@ defmodule HydraX.Product.Library do
     if candidate_ids == [] do
       []
     else
-      Source
-      |> where([s], s.project_id == ^project_id and s.id in ^candidate_ids)
-      |> where([s], s.promoted_to_graph == false)
+      source_base_query(project_id)
+      |> where([s], s.id in ^candidate_ids)
+      |> where(
+        [s],
+        fragment("COALESCE((?->>'promoted_to_graph')::boolean, false) = false", s.attributes)
+      )
       |> where([s], is_nil(s.archived_at))
       |> Repo.all()
       |> Enum.map(fn s ->
@@ -548,7 +567,11 @@ defmodule HydraX.Product.Library do
   # Internal helpers
   # -------------------------------------------------------------------
 
-  defp convert_graph_edges_to_references(%Source{} = source) do
+  defp source_base_query(project_id) do
+    from(s in GraphNode, where: s.project_id == ^project_id and s.type_key == "source")
+  end
+
+  defp convert_graph_edges_to_references(%GraphNode{} = source) do
     edges =
       GraphEdge
       |> where(
@@ -563,10 +586,11 @@ defmodule HydraX.Product.Library do
       {node_type, node_id, relationship} =
         cond do
           edge.from_node_type in ["source", "signal"] ->
-            {edge.to_node_type, edge.to_node_id, edge_kind_to_relationship(edge.kind, :outgoing)}
+            {edge.to_node_type, edge.to_node_id, edge_kind_to_relationship(edge.type_key, :outgoing)}
 
           edge.to_node_type in ["source", "signal"] ->
-            {edge.from_node_type, edge.from_node_id, edge_kind_to_relationship(edge.kind, :incoming)}
+            {edge.from_node_type, edge.from_node_id,
+             edge_kind_to_relationship(edge.type_key, :incoming)}
         end
 
       reference(source.project_id, source.id, node_type, node_id, %{
@@ -586,6 +610,7 @@ defmodule HydraX.Product.Library do
   defp edge_kind_to_relationship(_, _), do: "cites"
 
   defp excerpt(nil), do: ""
+
   defp excerpt(content) do
     content
     |> String.slice(0, 280)
@@ -603,10 +628,12 @@ defmodule HydraX.Product.Library do
 
   defp to_int(v), do: raise(ArgumentError, "cannot coerce #{inspect(v)} to integer")
 
-  defp broadcast({:ok, %Source{} = s} = result, event) do
+  defp broadcast({:ok, %GraphNode{} = s} = result, event) do
+    attrs = s.attributes || %{}
+
     HydraX.Product.PubSub.broadcast_project_event(s.project_id, event, %{
       source_id: s.id,
-      promoted_to_graph: s.promoted_to_graph,
+      promoted_to_graph: Map.get(attrs, "promoted_to_graph", false),
       archived_at: s.archived_at
     })
 

@@ -23,7 +23,8 @@ defmodule HydraX.Agent.PromptBuilder do
         if(mcp_context not in [nil, ""], do: "## MCP Integrations\n\n#{mcp_context}"),
         if(product_context not in [nil, ""], do: "## Product Context\n\n#{product_context}"),
         if(product_instructions not in [nil, ""],
-          do: "## Project Instructions\n\n#{product_instructions}"),
+          do: "## Project Instructions\n\n#{product_instructions}"
+        ),
         if(bulletin not in [nil, ""], do: "## Bulletin\n\n#{bulletin}"),
         if(summary not in [nil, ""], do: "## Conversation Summary\n\n#{summary}")
       ]

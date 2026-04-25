@@ -21,6 +21,7 @@ defmodule HydraX.Runtime.Bootstrap do
   end
 
   defp bootstrap_runtime(state) do
+    {:ok, _domain} = HydraX.Graph.Domains.ProductDevelopment.seed()
     agent = HydraX.Runtime.ensure_default_agent!()
     HydraX.Budget.ensure_policy!(agent.id)
     HydraX.Runtime.reconcile_agents!()

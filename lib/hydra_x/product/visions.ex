@@ -1,47 +1,77 @@
 defmodule HydraX.Product.Visions do
   @moduledoc """
-  Context for the project-root Vision node.
+  Context for the project-root Vision node. Backed by the substrate:
+  visions are `Graph.Node` rows with `type_key: "vision"`. Uniqueness
+  per project is enforced here (find-then-upsert) since the unified
+  `nodes` table doesn't impose a (project_id, type_key) unique index.
   """
 
-  alias HydraX.Repo
+  import Ecto.Query
+
+  alias HydraX.Graph.Domains
+  alias HydraX.Graph.Node, as: GraphNode
+  alias HydraX.Graph.Nodes, as: GraphNodes
   alias HydraX.Product.Project
-  alias HydraX.Product.Vision
+  alias HydraX.Repo
 
   def get_for_project(project_id) do
-    Repo.get_by(Vision, project_id: to_int(project_id))
+    project_id = to_int(project_id)
+
+    Repo.one(
+      from n in GraphNode,
+        where: n.project_id == ^project_id and n.type_key == "vision",
+        order_by: [desc: n.inserted_at],
+        limit: 1
+    )
   end
 
   @doc """
-  Idempotent upsert. Creates the Vision if none exists; updates body/title
-  if one does. Keeps `project.description` in sync as a fallback view.
+  Idempotent upsert. Creates the Vision node if none exists; updates
+  body/title if one does. Keeps `project.description` in sync as a
+  fallback view.
   """
   def set_vision(%Project{} = project, attrs) do
     attrs = Map.new(attrs, fn {k, v} -> {to_string(k), v} end)
 
     Repo.transaction(fn ->
-      vision =
-        case get_for_project(project.id) do
-          nil -> %Vision{project_id: project.id}
-          existing -> existing
+      existing = get_for_project(project.id)
+
+      result =
+        case existing do
+          nil ->
+            GraphNodes.create_node(product_domain!(), project.id, %{
+              type_key: "vision",
+              title: attrs["title"] || project.name || "Vision",
+              body: attrs["body"],
+              status: attrs["status"] || "active",
+              attributes: attrs["metadata"] || %{}
+            })
+
+          %GraphNode{} = vision ->
+            merged_attributes = Map.merge(vision.attributes || %{}, attrs["metadata"] || %{})
+
+            GraphNodes.update_node(vision, %{
+              title: attrs["title"] || vision.title,
+              body: attrs["body"] || vision.body,
+              status: attrs["status"] || vision.status,
+              attributes: merged_attributes
+            })
         end
 
-      merged = %{
-        "project_id" => project.id,
-        "title" => attrs["title"] || vision.title || project.name,
-        "body" => attrs["body"] || vision.body,
-        "status" => attrs["status"] || vision.status || "active",
-        "metadata" => Map.merge(vision.metadata || %{}, attrs["metadata"] || %{})
-      }
+      case result do
+        {:ok, updated_vision} ->
+          # Mirror body into project.description so the Why-button
+          # fallback path still works for consumers that haven't switched
+          # to Vision-as-node.
+          project
+          |> Ecto.Changeset.change(description: updated_vision.body)
+          |> Repo.update!()
 
-      {:ok, updated_vision} = vision |> Vision.changeset(merged) |> Repo.insert_or_update()
+          updated_vision
 
-      # Mirror into project.description so the Why-button fallback path
-      # still works until every consumer has switched to Vision-as-node.
-      project
-      |> Ecto.Changeset.change(description: updated_vision.body)
-      |> Repo.update!()
-
-      updated_vision
+        {:error, changeset} ->
+          Repo.rollback(changeset)
+      end
     end)
   end
 
@@ -59,14 +89,10 @@ defmodule HydraX.Product.Visions do
         {:ok, vision} = set_vision(project, attrs)
         vision
 
-      %Vision{body: body} = vision when is_binary(body) and body != "" ->
+      %GraphNode{body: body} = vision when is_binary(body) and body != "" ->
         vision
 
       vision ->
-        # Vision row exists but body is empty. If `project.description`
-        # has content, mirror it in so `vision_set?` returns a consistent
-        # answer (bug fix — previously onboarding could complete with an
-        # empty Vision node but a non-empty description).
         case String.trim(project.description || "") do
           "" ->
             vision
@@ -75,6 +101,17 @@ defmodule HydraX.Product.Visions do
             {:ok, updated} = set_vision(project, %{"body" => body})
             updated
         end
+    end
+  end
+
+  defp product_domain! do
+    case Domains.get_domain_by_slug("product_development") do
+      nil ->
+        {:ok, domain} = HydraX.Graph.Domains.ProductDevelopment.seed()
+        domain
+
+      domain ->
+        domain
     end
   end
 

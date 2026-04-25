@@ -44,7 +44,13 @@ defmodule HydraX.Product.Tools.TrailTrace do
       center =
         case Graph.resolve_node(node_type, node_id) do
           {:ok, record} when not is_nil(record) ->
-            %{node_type: node_type, node_id: node_id, title: Map.get(record, :title, ""), status: Map.get(record, :status, "")}
+            %{
+              node_type: node_type,
+              node_id: node_id,
+              title: Map.get(record, :title, ""),
+              status: Map.get(record, :status, "")
+            }
+
           _ ->
             %{node_type: node_type, node_id: node_id, title: "unknown", status: "unknown"}
         end
@@ -68,14 +74,17 @@ defmodule HydraX.Product.Tools.TrailTrace do
 
   @impl true
   def result_summary(%{trail: t}),
-    do: "#{t.upstream_count} upstream, #{t.downstream_count} downstream for #{t.center.node_type}##{t.center.node_id}"
+    do:
+      "#{t.upstream_count} upstream, #{t.downstream_count} downstream for #{t.center.node_type}##{t.center.node_id}"
 
   def result_summary(%{error: error}) when is_binary(error), do: error
   def result_summary(payload), do: inspect(payload, limit: 8, printable_limit: 120)
 
   defp resolve_chain(nodes) do
     refs = Enum.map(nodes, fn n -> {n.node_type, n.node_id} end)
-    resolved = Graph.resolve_nodes(refs) |> Map.new(fn {type, id, record} -> {{type, id}, record} end)
+
+    resolved =
+      Graph.resolve_nodes(refs) |> Map.new(fn {type, id, record} -> {{type, id}, record} end)
 
     Enum.map(nodes, fn n ->
       record = Map.get(resolved, {n.node_type, n.node_id})
@@ -92,13 +101,17 @@ defmodule HydraX.Product.Tools.TrailTrace do
 
   defp extract_project_id(params) do
     case params[:project_id] || params["project_id"] do
-      value when is_integer(value) -> {:ok, value}
+      value when is_integer(value) ->
+        {:ok, value}
+
       value when is_binary(value) ->
         case Integer.parse(value) do
           {integer, ""} -> {:ok, integer}
           _ -> {:error, :product_project_context_required}
         end
-      _ -> {:error, :product_project_context_required}
+
+      _ ->
+        {:error, :product_project_context_required}
     end
   end
 end

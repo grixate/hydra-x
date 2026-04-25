@@ -61,7 +61,19 @@ defmodule HydraX.Product.Mentions do
       has_any?(lower, ["what do you think", "thoughts?", "opinion", "would you"]) ->
         {"request_input", :high}
 
-      has_any?(lower, ["can you", "could you", "please ", "look into", "investigate", "check this", "check it", "find out", "dig into", "analyse", "analyze"]) ->
+      has_any?(lower, [
+        "can you",
+        "could you",
+        "please ",
+        "look into",
+        "investigate",
+        "check this",
+        "check it",
+        "find out",
+        "dig into",
+        "analyse",
+        "analyze"
+      ]) ->
         {"request_task", :high}
 
       String.contains?(lower, "?") ->
@@ -268,7 +280,12 @@ defmodule HydraX.Product.Mentions do
         "target_conversation_id" => target_conversation_id(mention)
       }
 
-      insert_system_message!(source_msg.product_conversation_id, mention.project_id, content, metadata)
+      insert_system_message!(
+        source_msg.product_conversation_id,
+        mention.project_id,
+        content,
+        metadata
+      )
     end
   end
 
@@ -285,7 +302,12 @@ defmodule HydraX.Product.Mentions do
         "errors" => inspect(changeset.errors)
       }
 
-      insert_system_message!(source_msg.product_conversation_id, mention.project_id, content, metadata)
+      insert_system_message!(
+        source_msg.product_conversation_id,
+        mention.project_id,
+        content,
+        metadata
+      )
     end
   end
 
@@ -359,7 +381,12 @@ defmodule HydraX.Product.Mentions do
   end
 
   defp pretty_agent(id),
-    do: id |> String.replace("_", " ") |> String.split() |> Enum.map(&String.capitalize/1) |> Enum.join(" ")
+    do:
+      id
+      |> String.replace("_", " ")
+      |> String.split()
+      |> Enum.map(&String.capitalize/1)
+      |> Enum.join(" ")
 
   defp truncate(nil, _), do: ""
 

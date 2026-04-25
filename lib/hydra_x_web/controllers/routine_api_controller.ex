@@ -1,8 +1,8 @@
 defmodule HydraXWeb.RoutineAPIController do
   use HydraXWeb, :controller
 
+  alias HydraX.Graph.Node, as: GraphNode
   alias HydraX.Product
-  alias HydraX.Product.Routine
   alias HydraXWeb.ProductPayload
 
   action_fallback HydraXWeb.ProjectAPIFallbackController
@@ -21,21 +21,23 @@ defmodule HydraXWeb.RoutineAPIController do
   end
 
   def create(conn, %{"project_id" => project_id, "routine" => params}) do
-    with {:ok, %Routine{} = routine} <- Product.create_routine(project_id, params) do
+    with {:ok, %GraphNode{} = routine} <- Product.create_routine(project_id, params) do
       conn |> put_status(:created) |> json(%{data: ProductPayload.routine_json(routine)})
     end
   end
 
   def update(conn, %{"project_id" => project_id, "id" => id, "routine" => params}) do
     routine = Product.get_project_routine!(project_id, id)
-    with {:ok, %Routine{} = updated} <- Product.update_routine(routine, params) do
+
+    with {:ok, %GraphNode{} = updated} <- Product.update_routine(routine, params) do
       json(conn, %{data: ProductPayload.routine_json(updated)})
     end
   end
 
   def delete(conn, %{"project_id" => project_id, "id" => id}) do
     routine = Product.get_project_routine!(project_id, id)
-    with {:ok, %Routine{}} <- Product.delete_routine(routine) do
+
+    with {:ok, %GraphNode{}} <- Product.delete_routine(routine) do
       send_resp(conn, :no_content, "")
     end
   end
@@ -55,12 +57,13 @@ defmodule HydraXWeb.RoutineAPIController do
     routine = Product.get_project_routine!(project_id, id)
 
     case Product.create_routine_run(%{
-      "routine_id" => routine.id,
-      "started_at" => DateTime.utc_now(),
-      "status" => "running"
-    }) do
+           "routine_id" => routine.id,
+           "started_at" => DateTime.utc_now(),
+           "status" => "running"
+         }) do
       {:ok, run} ->
         conn |> put_status(:created) |> json(%{data: ProductPayload.routine_run_json(run)})
+
       {:error, changeset} ->
         conn |> put_status(:unprocessable_entity) |> json(%{error: inspect(changeset.errors)})
     end
@@ -68,11 +71,13 @@ defmodule HydraXWeb.RoutineAPIController do
 
   defp parse_limit(nil), do: 20
   defp parse_limit(value) when is_integer(value), do: value
+
   defp parse_limit(value) when is_binary(value) do
     case Integer.parse(value) do
       {int, ""} -> min(int, 100)
       _ -> 20
     end
   end
+
   defp parse_limit(_), do: 20
 end

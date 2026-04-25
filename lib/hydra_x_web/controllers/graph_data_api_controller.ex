@@ -17,14 +17,14 @@ defmodule HydraXWeb.GraphDataAPIController do
 
     nodes =
       Enum.flat_map(Graph.node_types(), fn type ->
-        case Graph.schema_for(type) do
+        case Graph.base_query_for(type) do
           nil ->
             []
 
-          schema ->
+          query ->
             try do
               base =
-                schema
+                query
                 |> where([r], r.project_id == ^project_id)
 
               base =
@@ -80,7 +80,7 @@ defmodule HydraXWeb.GraphDataAPIController do
               id: e.id,
               source: source,
               target: target,
-              kind: e.kind,
+              kind: e.type_key,
               weight: e.weight
             }
             | acc

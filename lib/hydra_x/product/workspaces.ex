@@ -279,4 +279,3 @@ defmodule HydraX.Product.Workspaces do
     Enum.map_join(files, "\n", fn name -> "- `#{name}`" end)
   end
 end
-

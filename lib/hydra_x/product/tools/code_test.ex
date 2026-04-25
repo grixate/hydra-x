@@ -69,19 +69,26 @@ defmodule HydraX.Product.Tools.CodeTest do
 
   defp fetch_timeout(params) do
     case params[:timeout_ms] || params["timeout_ms"] do
-      nil -> {:ok, @default_timeout_ms}
-      n when is_integer(n) and n > 0 -> {:ok, n}
+      nil ->
+        {:ok, @default_timeout_ms}
+
+      n when is_integer(n) and n > 0 ->
+        {:ok, n}
+
       s when is_binary(s) ->
         case Integer.parse(s) do
           {n, ""} when n > 0 -> {:ok, n}
           _ -> {:error, :invalid_timeout}
         end
-      _ -> {:error, :invalid_timeout}
+
+      _ ->
+        {:error, :invalid_timeout}
     end
   end
 
   @impl true
   def result_summary(%{command: [prog | _], passed: true}), do: "tests passed (#{prog})"
+
   def result_summary(%{command: [prog | _], passed: false, exit_code: code}),
     do: "tests failed (#{prog}, exit #{code})"
 

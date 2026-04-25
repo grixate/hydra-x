@@ -154,7 +154,10 @@ defmodule HydraX.Coherence do
             if updated.dismissed_count >= 3 do
               {:ok, auto} =
                 updated
-                |> Contradiction.changeset(%{"status" => "dismissed", "status_reason" => "auto-silenced after 3 dismissals"})
+                |> Contradiction.changeset(%{
+                  "status" => "dismissed",
+                  "status_reason" => "auto-silenced after 3 dismissals"
+                })
                 |> Repo.update()
 
               log_event(auto, "dismissed", %{"auto" => true}, system_actor())
@@ -218,8 +221,13 @@ defmodule HydraX.Coherence do
   # Keeps pair-lookup + the partial unique index in agreement regardless
   # of which side the LLM scan discovered first.
   defp normalise_pair_order(attrs) do
-    a = {to_string(attrs["node_a_type"] || ""), attrs["node_a_id"] || 0, attrs["node_a_scope"] || "project"}
-    b = {to_string(attrs["node_b_type"] || ""), attrs["node_b_id"] || 0, attrs["node_b_scope"] || "project"}
+    a =
+      {to_string(attrs["node_a_type"] || ""), attrs["node_a_id"] || 0,
+       attrs["node_a_scope"] || "project"}
+
+    b =
+      {to_string(attrs["node_b_type"] || ""), attrs["node_b_id"] || 0,
+       attrs["node_b_scope"] || "project"}
 
     if a <= b do
       attrs
@@ -386,6 +394,7 @@ defmodule HydraX.Coherence do
   defp system_actor, do: %{type: "system", id: nil}
 
   defp apply_status_filter(query, nil), do: query
+
   defp apply_status_filter(query, status) when is_binary(status),
     do: where(query, [c], c.status == ^status)
 

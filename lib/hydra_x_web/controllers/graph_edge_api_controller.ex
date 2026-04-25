@@ -56,9 +56,9 @@ defmodule HydraXWeb.GraphEdgeAPIController do
       from_node_id: edge.from_node_id,
       to_node_type: edge.to_node_type,
       to_node_id: edge.to_node_id,
-      kind: edge.kind,
+      kind: edge.type_key,
       weight: edge.weight,
-      metadata: edge.metadata,
+      metadata: edge.attributes || %{},
       inserted_at: edge.inserted_at,
       updated_at: edge.updated_at
     }

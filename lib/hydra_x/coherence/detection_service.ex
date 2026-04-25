@@ -67,7 +67,10 @@ defmodule HydraX.Coherence.DetectionService do
 
   def detect_in_project(project_id, node_type, node_id) do
     target = load_project_node(node_type, node_id)
-    if is_nil(target), do: :skip, else: do_detect_in_project(project_id, target, node_type, node_id)
+
+    if is_nil(target),
+      do: :skip,
+      else: do_detect_in_project(project_id, target, node_type, node_id)
   end
 
   defp do_detect_in_project(project_id, target, node_type, node_id) do
@@ -105,7 +108,10 @@ defmodule HydraX.Coherence.DetectionService do
   """
   def detect_cross_project(project_id, node_type, node_id) do
     target = load_project_node(node_type, node_id)
-    if is_nil(target), do: :skip, else: do_detect_cross_project(project_id, target, node_type, node_id)
+
+    if is_nil(target),
+      do: :skip,
+      else: do_detect_cross_project(project_id, target, node_type, node_id)
   end
 
   defp do_detect_cross_project(project_id, target, node_type, node_id) do
@@ -315,7 +321,8 @@ defmodule HydraX.Coherence.DetectionService do
                 {:ok,
                  %{
                    confidence: normalise(conf, "medium", ["low", "medium", "high"]),
-                   severity: normalise(data["severity"] || "medium", "medium", ["low", "medium", "high"]),
+                   severity:
+                     normalise(data["severity"] || "medium", "medium", ["low", "medium", "high"]),
                    explanation: exp,
                    suggested_resolutions: data["suggested_resolutions"] || []
                  }}
@@ -325,14 +332,26 @@ defmodule HydraX.Coherence.DetectionService do
                   "[Coherence] YES without required fields, keys=#{inspect(Map.keys(partial))}"
                 )
 
-                {:ok, %{confidence: "medium", severity: "medium", explanation: trimmed, suggested_resolutions: []}}
+                {:ok,
+                 %{
+                   confidence: "medium",
+                   severity: "medium",
+                   explanation: trimmed,
+                   suggested_resolutions: []
+                 }}
 
               {:error, reason} ->
                 Logger.info(
                   "[Coherence] YES with malformed JSON: #{inspect(reason)} — accepting with medium confidence"
                 )
 
-                {:ok, %{confidence: "medium", severity: "medium", explanation: trimmed, suggested_resolutions: []}}
+                {:ok,
+                 %{
+                   confidence: "medium",
+                   severity: "medium",
+                   explanation: trimmed,
+                   suggested_resolutions: []
+                 }}
             end
 
           nil ->
@@ -358,7 +377,8 @@ defmodule HydraX.Coherence.DetectionService do
   end
 
   defp maybe_record(verdict, base_attrs) do
-    if Map.get(@confidence_rank, verdict.confidence, 0) < Map.get(@confidence_rank, @min_confidence, 2) do
+    if Map.get(@confidence_rank, verdict.confidence, 0) <
+         Map.get(@confidence_rank, @min_confidence, 2) do
       :below_threshold
     else
       Coherence.record_detection(
@@ -389,39 +409,54 @@ defmodule HydraX.Coherence.DetectionService do
   end
 
   defp candidate_project_nodes(project_id, node_type, node_id) do
-    # Cycle 2 minimum: naive — fetch up to N recent project-scope nodes
-    # of meaningful types. Future cycles will use embeddings to pre-filter.
-    Enum.flat_map(
-      ["insight", "decision", "requirement", "strategy", "vision"],
-      fn type ->
-        {:ok, records} = fetch_project_nodes(project_id, type)
+    # Primitive-keyed: fetch any claim-extending substrate node plus
+    # still-typed `vision` records. Spec §9 — contradiction detection
+    # is domain-neutral and operates on the `claim` primitive.
+    substrate_candidates(project_id, node_type, node_id) ++
+      vision_candidates(project_id, node_type, node_id)
+  end
 
-        records
-        |> Enum.reject(fn r ->
-          to_string(type) == to_string(node_type) and r.id == to_int(node_id)
-        end)
-        |> Enum.take(@max_candidates)
-        |> Enum.map(fn r -> {type, r.id, r} end)
-      end
+  defp substrate_candidates(project_id, node_type, node_id) do
+    import Ecto.Query
+
+    from(n in HydraX.Graph.Node,
+      where:
+        n.project_id == ^project_id and n.extends_primitive == "claim" and
+          is_nil(n.archived_at)
     )
+    |> order_by([n], desc: n.updated_at)
+    |> limit(^(@max_candidates * 2))
+    |> Repo.all()
+    |> Enum.reject(fn n ->
+      to_string(n.type_key) == to_string(node_type) and n.id == to_int(node_id)
+    end)
+    |> Enum.take(@max_candidates)
+    |> Enum.map(fn n -> {n.type_key, n.id, n} end)
+  end
+
+  defp vision_candidates(project_id, node_type, node_id) do
+    import Ecto.Query
+
+    HydraX.Graph.Node
+    |> where([r], r.project_id == ^project_id and r.type_key == "vision")
+    |> order_by([r], desc: r.updated_at)
+    |> limit(^(@max_candidates * 2))
+    |> Repo.all()
+    |> Enum.reject(fn r ->
+      to_string(node_type) == "vision" and r.id == to_int(node_id)
+    end)
+    |> Enum.take(@max_candidates)
+    |> Enum.map(fn r -> {"vision", r.id, r} end)
   end
 
   defp fetch_project_nodes(project_id, type) do
-    schema =
-      case type do
-        "insight" -> HydraX.Product.Insight
-        "decision" -> HydraX.Product.Decision
-        "requirement" -> HydraX.Product.Requirement
-        "strategy" -> HydraX.Product.Strategy
-        "vision" -> HydraX.Product.Vision
-        _ -> nil
-      end
+    import Ecto.Query
 
-    if schema do
-      import Ecto.Query
+    query = from n in HydraX.Graph.Node, where: n.type_key == ^to_string(type)
 
+    if query do
       records =
-        schema
+        query
         |> where([r], r.project_id == ^project_id)
         |> order_by([r], desc: r.updated_at)
         |> limit(^(@max_candidates * 2))
@@ -454,7 +489,8 @@ defmodule HydraX.Coherence.DetectionService do
     import Ecto.Query
 
     from(p in HydraX.Product.Project,
-      join: w in HydraX.Accounts.Workspace, on: w.id == p.workspace_id,
+      join: w in HydraX.Accounts.Workspace,
+      on: w.id == p.workspace_id,
       where: w.created_by_user_id == ^owner_user_id
     )
     |> Repo.all()

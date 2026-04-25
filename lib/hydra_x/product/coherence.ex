@@ -70,7 +70,10 @@ defmodule HydraX.Product.Coherence do
     broken_task_count = check_task_requirement_chain(project_id)
 
     total_issues = orphan_count + stale_count + broken_req_count + broken_task_count
-    max_possible = max(orphan_count + stale_count + flag_count + broken_req_count + broken_task_count, 1)
+
+    max_possible =
+      max(orphan_count + stale_count + flag_count + broken_req_count + broken_task_count, 1)
+
     health_score = max(0.0, 1.0 - total_issues / max_possible)
 
     report = %{
@@ -144,13 +147,13 @@ defmodule HydraX.Product.Coherence do
   defp check_requirement_insight_chain(project_id) do
     # Find active requirements whose lineage insights are archived/superseded
     edges =
-      HydraX.Product.GraphEdge
+      HydraX.Graph.NodeRelationship
       |> where(
         [e],
         e.project_id == ^project_id and
           e.to_node_type == "requirement" and
           e.from_node_type == "insight" and
-          e.kind == "lineage"
+          e.type_key == "lineage"
       )
       |> Repo.all()
 
@@ -176,13 +179,13 @@ defmodule HydraX.Product.Coherence do
 
   defp check_task_requirement_chain(project_id) do
     edges =
-      HydraX.Product.GraphEdge
+      HydraX.Graph.NodeRelationship
       |> where(
         [e],
         e.project_id == ^project_id and
           e.to_node_type == "task" and
           e.from_node_type == "requirement" and
-          e.kind == "lineage"
+          e.type_key == "lineage"
       )
       |> Repo.all()
 

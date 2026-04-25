@@ -5,8 +5,8 @@ defmodule HydraX.Product.RequirementInsight do
   schema "requirement_insights" do
     field :metadata, :map, default: %{}
 
-    belongs_to :requirement, HydraX.Product.Requirement
-    belongs_to :insight, HydraX.Product.Insight
+    belongs_to :requirement, HydraX.Graph.Node, foreign_key: :requirement_id
+    belongs_to :insight, HydraX.Graph.Node, foreign_key: :insight_id
 
     timestamps(type: :utc_datetime_usec)
   end

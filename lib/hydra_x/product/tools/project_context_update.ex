@@ -72,8 +72,17 @@ defmodule HydraX.Product.Tools.ProjectContextUpdate do
         %{}
         |> maybe_put("product_domain", params[:product_domain] || params["product_domain"])
         |> maybe_put("target_users", params[:target_users] || params["target_users"])
-        |> maybe_put("competitors", merge_list(existing_meta["competitors"], params[:competitors] || params["competitors"]))
-        |> maybe_put("key_assumptions", merge_list(existing_meta["key_assumptions"], params[:key_assumptions] || params["key_assumptions"]))
+        |> maybe_put(
+          "competitors",
+          merge_list(existing_meta["competitors"], params[:competitors] || params["competitors"])
+        )
+        |> maybe_put(
+          "key_assumptions",
+          merge_list(
+            existing_meta["key_assumptions"],
+            params[:key_assumptions] || params["key_assumptions"]
+          )
+        )
         |> maybe_put("business_model", params[:business_model] || params["business_model"])
         |> maybe_put("stage", params[:stage] || params["stage"])
 
@@ -88,7 +97,8 @@ defmodule HydraX.Product.Tools.ProjectContextUpdate do
             OnboardingTriggers.maybe_trigger(updated_project, updated_fields)
           end)
 
-          {:ok, %{updated_fields: updated_fields, context_complete: has_enough_context?(new_meta)}}
+          {:ok,
+           %{updated_fields: updated_fields, context_complete: has_enough_context?(new_meta)}}
 
         {:error, changeset} ->
           {:error, %{error: "update_failed", details: inspect(changeset.errors)}}
@@ -98,7 +108,8 @@ defmodule HydraX.Product.Tools.ProjectContextUpdate do
 
   @impl true
   def result_summary(%{updated_fields: fields, context_complete: true}),
-    do: "Updated project context (#{Enum.join(fields, ", ")}). Enough context for autonomous work."
+    do:
+      "Updated project context (#{Enum.join(fields, ", ")}). Enough context for autonomous work."
 
   def result_summary(%{updated_fields: fields}),
     do: "Updated project context: #{Enum.join(fields, ", ")}"
@@ -107,7 +118,8 @@ defmodule HydraX.Product.Tools.ProjectContextUpdate do
 
   defp extract_project_id(params) do
     case params[:project_id] || params["project_id"] do
-      value when is_integer(value) -> {:ok, value}
+      value when is_integer(value) ->
+        {:ok, value}
 
       value when is_binary(value) ->
         case Integer.parse(value) do
@@ -132,9 +144,11 @@ defmodule HydraX.Product.Tools.ProjectContextUpdate do
 
   defp merge_list(nil, new) when is_list(new), do: new
   defp merge_list(existing, nil), do: existing
+
   defp merge_list(existing, new) when is_list(existing) and is_list(new) do
     Enum.uniq(existing ++ new)
   end
+
   defp merge_list(_, new), do: new
 
   defp has_enough_context?(meta) do

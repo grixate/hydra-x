@@ -6,7 +6,7 @@ defmodule HydraX.Product.InsightEvidence do
     field :quote, :string
     field :metadata, :map, default: %{}
 
-    belongs_to :insight, HydraX.Product.Insight
+    belongs_to :insight, HydraX.Graph.Node, foreign_key: :insight_id
     belongs_to :source_chunk, HydraX.Product.SourceChunk
 
     timestamps(type: :utc_datetime_usec)

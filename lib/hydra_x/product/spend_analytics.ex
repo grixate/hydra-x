@@ -61,7 +61,13 @@ defmodule HydraX.Product.SpendAnalytics do
         |> Enum.map(fn {model, model_usages} ->
           m_in = Enum.reduce(model_usages, 0, fn u, acc -> acc + u.tokens_in end)
           m_out = Enum.reduce(model_usages, 0, fn u, acc -> acc + u.tokens_out end)
-          %{model: model, tokens_in: m_in, tokens_out: m_out, cost_cents: Pricing.cost_cents(model, m_in, m_out)}
+
+          %{
+            model: model,
+            tokens_in: m_in,
+            tokens_out: m_out,
+            cost_cents: Pricing.cost_cents(model, m_in, m_out)
+          }
         end)
         |> Enum.sort_by(& &1.cost_cents, :desc)
 
@@ -74,13 +80,22 @@ defmodule HydraX.Product.SpendAnalytics do
     agent_ids = project_agent_ids(project_id) |> Enum.map(fn {_, id} -> id end)
 
     Usage
-    |> where([u], u.agent_id in ^agent_ids and u.inserted_at >= ^period_start and u.inserted_at <= ^period_end)
+    |> where(
+      [u],
+      u.agent_id in ^agent_ids and u.inserted_at >= ^period_start and u.inserted_at <= ^period_end
+    )
     |> Repo.all()
     |> Enum.group_by(fn u -> get_in(u.metadata || %{}, ["model"]) || "unknown" end)
     |> Enum.map(fn {model, usages} ->
       t_in = Enum.reduce(usages, 0, fn u, acc -> acc + u.tokens_in end)
       t_out = Enum.reduce(usages, 0, fn u, acc -> acc + u.tokens_out end)
-      %{model: model, tokens_in: t_in, tokens_out: t_out, cost_cents: Pricing.cost_cents(model, t_in, t_out)}
+
+      %{
+        model: model,
+        tokens_in: t_in,
+        tokens_out: t_out,
+        cost_cents: Pricing.cost_cents(model, t_in, t_out)
+      }
     end)
     |> Enum.sort_by(& &1.cost_cents, :desc)
   end
@@ -146,7 +161,11 @@ defmodule HydraX.Product.SpendAnalytics do
 
     usages =
       Usage
-      |> where([u], u.agent_id in ^agent_ids and u.inserted_at >= ^period_start and u.inserted_at <= ^period_end)
+      |> where(
+        [u],
+        u.agent_id in ^agent_ids and u.inserted_at >= ^period_start and
+          u.inserted_at <= ^period_end
+      )
       |> Repo.all()
 
     tokens = Enum.reduce(usages, 0, fn u, acc -> acc + u.tokens_in + u.tokens_out end)
@@ -175,7 +194,10 @@ defmodule HydraX.Product.SpendAnalytics do
 
   defp agent_usage_in_period(agent_id, period_start, period_end) do
     Usage
-    |> where([u], u.agent_id == ^agent_id and u.inserted_at >= ^period_start and u.inserted_at <= ^period_end)
+    |> where(
+      [u],
+      u.agent_id == ^agent_id and u.inserted_at >= ^period_start and u.inserted_at <= ^period_end
+    )
     |> Repo.all()
   end
 

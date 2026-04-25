@@ -13,6 +13,7 @@ defmodule HydraXWeb.StreamTabsAPIController do
         "activity" ->
           StreamTabs.list_activity(project_id,
             agent_id: params["agent_id"],
+            context_type: params["context_type"],
             search: params["search"]
           )
 

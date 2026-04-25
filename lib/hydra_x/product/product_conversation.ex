@@ -21,7 +21,15 @@ defmodule HydraX.Product.ProductConversation do
 
   def changeset(conversation, attrs) do
     conversation
-    |> cast(attrs, [:project_id, :hydra_conversation_id, :persona, :title, :status, :metadata, :board_session_id])
+    |> cast(attrs, [
+      :project_id,
+      :hydra_conversation_id,
+      :persona,
+      :title,
+      :status,
+      :metadata,
+      :board_session_id
+    ])
     |> validate_required([:project_id, :hydra_conversation_id, :persona, :status])
     |> validate_inclusion(:status, @statuses)
     |> foreign_key_constraint(:project_id)

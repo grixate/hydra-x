@@ -4,7 +4,7 @@ defmodule HydraXWeb.GraphTrailAPIController do
   import Ecto.Query
 
   alias HydraX.Product.Graph
-  alias HydraX.Product.GraphEdge
+  alias HydraX.Graph.NodeRelationship, as: GraphEdge
   alias HydraX.Repo
 
   action_fallback HydraXWeb.ProjectAPIFallbackController
@@ -21,12 +21,20 @@ defmodule HydraXWeb.GraphTrailAPIController do
 
     upstream =
       if direction in ["both", "upstream"],
-        do: resolve_chain(project_id, Graph.trace_upstream(project_id, node_type, node_id, max_depth: depth)),
+        do:
+          resolve_chain(
+            project_id,
+            Graph.trace_upstream(project_id, node_type, node_id, max_depth: depth)
+          ),
         else: []
 
     downstream =
       if direction in ["both", "downstream"],
-        do: resolve_chain(project_id, Graph.trace_downstream(project_id, node_type, node_id, max_depth: depth)),
+        do:
+          resolve_chain(
+            project_id,
+            Graph.trace_downstream(project_id, node_type, node_id, max_depth: depth)
+          ),
         else: []
 
     flags = Graph.open_flags(project_id, node_type: node_type)
@@ -80,9 +88,19 @@ defmodule HydraXWeb.GraphTrailAPIController do
           result
 
         _ ->
-          %{node_type: node_type, node_id: node_id, title: "not found", status: "unknown",
-            body: "", inserted_at: nil, updated_at: nil, metadata: %{},
-            upstream_counts: %{}, downstream_counts: %{}, constraints: []}
+          %{
+            node_type: node_type,
+            node_id: node_id,
+            title: "not found",
+            status: "unknown",
+            body: "",
+            inserted_at: nil,
+            updated_at: nil,
+            metadata: %{},
+            upstream_counts: %{},
+            downstream_counts: %{},
+            constraints: []
+          }
       end
 
     # Add connection counts
@@ -100,7 +118,8 @@ defmodule HydraXWeb.GraphTrailAPIController do
 
   defp edge_counts_by_type(project_id, node_type, node_id, :upstream) do
     GraphEdge
-    |> where([e],
+    |> where(
+      [e],
       e.project_id == ^project_id and
         e.to_node_type == ^to_string(node_type) and
         e.to_node_id == ^node_id
@@ -113,7 +132,8 @@ defmodule HydraXWeb.GraphTrailAPIController do
 
   defp edge_counts_by_type(project_id, node_type, node_id, :downstream) do
     GraphEdge
-    |> where([e],
+    |> where(
+      [e],
       e.project_id == ^project_id and
         e.from_node_type == ^to_string(node_type) and
         e.from_node_id == ^node_id
@@ -127,11 +147,12 @@ defmodule HydraXWeb.GraphTrailAPIController do
   defp linked_constraints(project_id, node_type, node_id) do
     constraint_edges =
       GraphEdge
-      |> where([e],
+      |> where(
+        [e],
         e.project_id == ^project_id and
           e.to_node_type == ^to_string(node_type) and
           e.to_node_id == ^node_id and
-          e.kind == "constrains"
+          e.type_key == "constrains"
       )
       |> Repo.all()
 
@@ -153,7 +174,9 @@ defmodule HydraXWeb.GraphTrailAPIController do
 
   defp resolve_chain(project_id, nodes) do
     refs = Enum.map(nodes, fn n -> {n.node_type, n.node_id} end)
-    resolved = Graph.resolve_nodes(refs) |> Map.new(fn {type, id, record} -> {{type, id}, record} end)
+
+    resolved =
+      Graph.resolve_nodes(refs) |> Map.new(fn {type, id, record} -> {{type, id}, record} end)
 
     # Batch count edges for all chain nodes in 2 queries instead of 2*N
     upstream_counts = batch_edge_counts(project_id, refs, :upstream)
@@ -207,7 +230,7 @@ defmodule HydraXWeb.GraphTrailAPIController do
 
   # Schemas use different field names for the main text content
   defp resolve_body(record) do
-    (Map.get(record, :body) || Map.get(record, :content) || Map.get(record, :description) || "")
+    Map.get(record, :body) || Map.get(record, :content) || Map.get(record, :description) || ""
   end
 
   defp parse_int(nil), do: nil

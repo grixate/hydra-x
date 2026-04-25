@@ -2,7 +2,15 @@ defmodule HydraX.Runtime.SessionBranchesTest do
   use HydraX.DataCase, async: false
 
   alias HydraX.Repo
-  alias HydraX.Runtime.{AgentProfile, Conversation, ConversationBranch, Conversations, SessionBranches, Turn}
+
+  alias HydraX.Runtime.{
+    AgentProfile,
+    Conversation,
+    ConversationBranch,
+    Conversations,
+    SessionBranches,
+    Turn
+  }
 
   setup do
     suffix = System.unique_integer([:positive])
@@ -18,7 +26,11 @@ defmodule HydraX.Runtime.SessionBranchesTest do
 
     conversation =
       %Conversation{}
-      |> Conversation.changeset(%{"agent_id" => agent.id, "channel" => "test", "status" => "active"})
+      |> Conversation.changeset(%{
+        "agent_id" => agent.id,
+        "channel" => "test",
+        "status" => "active"
+      })
       |> Repo.insert!()
 
     {:ok, conversation: conversation, agent: agent}
@@ -42,9 +54,22 @@ defmodule HydraX.Runtime.SessionBranchesTest do
   end
 
   describe "append_turn / list_turns active-branch behaviour" do
-    test "appended turns land in the active branch with branch-local sequence", %{conversation: conv} do
-      {:ok, t1} = Conversations.append_turn(conv, %{"role" => "user", "content" => "hi", "kind" => "message"})
-      {:ok, t2} = Conversations.append_turn(conv, %{"role" => "assistant", "content" => "yo", "kind" => "message"})
+    test "appended turns land in the active branch with branch-local sequence", %{
+      conversation: conv
+    } do
+      {:ok, t1} =
+        Conversations.append_turn(conv, %{
+          "role" => "user",
+          "content" => "hi",
+          "kind" => "message"
+        })
+
+      {:ok, t2} =
+        Conversations.append_turn(conv, %{
+          "role" => "assistant",
+          "content" => "yo",
+          "kind" => "message"
+        })
 
       assert t1.sequence == 1
       assert t2.sequence == 2
@@ -63,7 +88,9 @@ defmodule HydraX.Runtime.SessionBranchesTest do
       {:ok, _new_branch} = SessionBranches.fork(t1, "alt")
 
       reloaded_after = Repo.get!(Conversation, conv.id)
-      {:ok, _} = Conversations.append_turn(reloaded_after, %{"role" => "user", "content" => "alt-1"})
+
+      {:ok, _} =
+        Conversations.append_turn(reloaded_after, %{"role" => "user", "content" => "alt-1"})
 
       active = Conversations.list_turns(conv.id)
       all = Conversations.list_turns(conv.id, branch: :all)
@@ -96,10 +123,14 @@ defmodule HydraX.Runtime.SessionBranchesTest do
       {:ok, _branch} = SessionBranches.fork(t1, "branch-a")
       conv_after = Repo.get!(Conversation, conv.id)
 
-      {:ok, t3} = Conversations.append_turn(conv_after, %{"role" => "user", "content" => "branch-1"})
+      {:ok, t3} =
+        Conversations.append_turn(conv_after, %{"role" => "user", "content" => "branch-1"})
+
       assert t3.sequence == 1
 
-      {:ok, t4} = Conversations.append_turn(conv_after, %{"role" => "user", "content" => "branch-2"})
+      {:ok, t4} =
+        Conversations.append_turn(conv_after, %{"role" => "user", "content" => "branch-2"})
+
       assert t4.sequence == 2
 
       # The original branch is untouched.
@@ -184,7 +215,9 @@ defmodule HydraX.Runtime.SessionBranchesTest do
   end
 
   describe "branch-local uniqueness" do
-    test "two branches can each hold their own sequence 1 without collision", %{conversation: conv} do
+    test "two branches can each hold their own sequence 1 without collision", %{
+      conversation: conv
+    } do
       {:ok, t1} = Conversations.append_turn(conv, %{"role" => "user", "content" => "x"})
       {:ok, _branch} = SessionBranches.fork(t1, "side")
       conv_after = Repo.get!(Conversation, conv.id)

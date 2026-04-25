@@ -1,8 +1,8 @@
 defmodule HydraXWeb.LearningAPIController do
   use HydraXWeb, :controller
 
+  alias HydraX.Graph.Node, as: GraphNode
   alias HydraX.Product
-  alias HydraX.Product.Learning
   alias HydraXWeb.ProductPayload
 
   action_fallback HydraXWeb.ProjectAPIFallbackController
@@ -25,21 +25,23 @@ defmodule HydraXWeb.LearningAPIController do
   end
 
   def create(conn, %{"project_id" => project_id, "learning" => params}) do
-    with {:ok, %Learning{} = learning} <- Product.create_learning(project_id, params) do
+    with {:ok, %GraphNode{} = learning} <- Product.create_learning(project_id, params) do
       conn |> put_status(:created) |> json(%{data: ProductPayload.learning_json(learning)})
     end
   end
 
   def update(conn, %{"project_id" => project_id, "id" => id, "learning" => params}) do
     learning = Product.get_project_learning!(project_id, id)
-    with {:ok, %Learning{} = updated} <- Product.update_learning(learning, params) do
+
+    with {:ok, %GraphNode{} = updated} <- Product.update_learning(learning, params) do
       json(conn, %{data: ProductPayload.learning_json(updated)})
     end
   end
 
   def delete(conn, %{"project_id" => project_id, "id" => id}) do
     learning = Product.get_project_learning!(project_id, id)
-    with {:ok, %Learning{}} <- Product.delete_learning(learning) do
+
+    with {:ok, %GraphNode{}} <- Product.delete_learning(learning) do
       send_resp(conn, :no_content, "")
     end
   end

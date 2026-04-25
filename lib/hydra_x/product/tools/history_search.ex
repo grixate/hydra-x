@@ -4,7 +4,7 @@ defmodule HydraX.Product.Tools.HistorySearch do
   import Ecto.Query
 
   alias HydraX.Product.Graph
-  alias HydraX.Product.GraphEdge
+  alias HydraX.Graph.NodeRelationship
   alias HydraX.Repo
 
   @impl true
@@ -42,24 +42,24 @@ defmodule HydraX.Product.Tools.HistorySearch do
 
       # Find supersedes chain (older versions)
       superseded_by =
-        GraphEdge
+        NodeRelationship
         |> where(
           [e],
           e.project_id == ^project_id and
             e.to_node_type == ^node_type and
             e.to_node_id == ^node_id and
-            e.kind == "supersedes"
+            e.type_key == "supersedes"
         )
         |> Repo.all()
 
       supersedes =
-        GraphEdge
+        NodeRelationship
         |> where(
           [e],
           e.project_id == ^project_id and
             e.from_node_type == ^node_type and
             e.from_node_id == ^node_id and
-            e.kind == "supersedes"
+            e.type_key == "supersedes"
         )
         |> Repo.all()
 
@@ -95,7 +95,9 @@ defmodule HydraX.Product.Tools.HistorySearch do
 
   defp resolve_with_meta(node_type, node_id) do
     case Graph.resolve_node(node_type, node_id) do
-      {:ok, nil} -> nil
+      {:ok, nil} ->
+        nil
+
       {:ok, record} ->
         %{
           node_type: node_type,
@@ -104,19 +106,25 @@ defmodule HydraX.Product.Tools.HistorySearch do
           status: Map.get(record, :status, ""),
           updated_at: Map.get(record, :updated_at)
         }
-      _ -> nil
+
+      _ ->
+        nil
     end
   end
 
   defp extract_project_id(params) do
     case params[:project_id] || params["project_id"] do
-      value when is_integer(value) -> {:ok, value}
+      value when is_integer(value) ->
+        {:ok, value}
+
       value when is_binary(value) ->
         case Integer.parse(value) do
           {integer, ""} -> {:ok, integer}
           _ -> {:error, :product_project_context_required}
         end
-      _ -> {:error, :product_project_context_required}
+
+      _ ->
+        {:error, :product_project_context_required}
     end
   end
 end

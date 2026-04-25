@@ -5,15 +5,10 @@ defmodule HydraX.Product.Stream do
 
   import Ecto.Query
 
-  alias HydraX.Product.Artifact
-  alias HydraX.Product.Decision
   alias HydraX.Product.Graph
-  alias HydraX.Product.GraphEdge
+  alias HydraX.Graph.NodeRelationship
   alias HydraX.Product.GraphFlag
-  alias HydraX.Product.Insight
-  alias HydraX.Product.KnowledgeEntry
-  alias HydraX.Product.Requirement
-  alias HydraX.Product.SimulationNode
+  alias HydraX.Graph.Node, as: GraphNode
   alias HydraX.Repo
 
   @max_right_now 5
@@ -56,13 +51,20 @@ defmodule HydraX.Product.Stream do
     pending_knowledge_items = pending_knowledge_stream_items(project_id)
     proposed_simulation_items = proposed_simulation_stream_items(project_id)
 
-    (flag_items ++ draft_insight_items ++ draft_decision_items ++ draft_requirement_items ++ pending_knowledge_items ++ proposed_simulation_items)
+    (flag_items ++
+       draft_insight_items ++
+       draft_decision_items ++
+       draft_requirement_items ++ pending_knowledge_items ++ proposed_simulation_items)
     |> Enum.sort_by(& &1.timestamp, {:desc, DateTime})
   end
 
   defp flag_stream_items(project_id) do
     GraphFlag
-    |> where([f], f.project_id == ^project_id and f.status == "open" and f.flag_type in ["needs_review", "contradicted"])
+    |> where(
+      [f],
+      f.project_id == ^project_id and f.status == "open" and
+        f.flag_type in ["needs_review", "contradicted"]
+    )
     |> order_by([f], desc: f.inserted_at)
     |> limit(10)
     |> Repo.all()
@@ -86,8 +88,8 @@ defmodule HydraX.Product.Stream do
   end
 
   defp draft_insight_stream_items(project_id) do
-    Insight
-    |> where([i], i.project_id == ^project_id and i.status == "draft")
+    GraphNode
+    |> where([i], i.project_id == ^project_id and i.type_key == "insight" and i.status == "draft")
     |> order_by([i], desc: i.inserted_at)
     |> limit(5)
     |> Repo.all()
@@ -110,8 +112,11 @@ defmodule HydraX.Product.Stream do
   end
 
   defp draft_decision_stream_items(project_id) do
-    Decision
-    |> where([d], d.project_id == ^project_id and d.status == "draft")
+    GraphNode
+    |> where(
+      [d],
+      d.project_id == ^project_id and d.type_key == "decision" and d.status == "draft"
+    )
     |> order_by([d], desc: d.inserted_at)
     |> limit(5)
     |> Repo.all()
@@ -134,8 +139,11 @@ defmodule HydraX.Product.Stream do
   end
 
   defp draft_requirement_stream_items(project_id) do
-    Requirement
-    |> where([r], r.project_id == ^project_id and r.status == "draft")
+    GraphNode
+    |> where(
+      [r],
+      r.project_id == ^project_id and r.type_key == "requirement" and r.status == "draft"
+    )
     |> order_by([r], desc: r.inserted_at)
     |> limit(5)
     |> Repo.all()
@@ -158,35 +166,43 @@ defmodule HydraX.Product.Stream do
   end
 
   defp proposed_simulation_stream_items(project_id) do
-    SimulationNode
-    |> where([s], s.project_id == ^project_id and s.status == "proposed")
+    GraphNode
+    |> where([s],
+      s.project_id == ^project_id and s.type_key == "simulation" and
+        s.status == "proposed"
+    )
     |> order_by([s], desc: s.inserted_at)
     |> limit(3)
     |> Repo.all()
     |> Enum.map(fn sim ->
-      metadata = sim.metadata || %{}
+      attributes = sim.attributes || %{}
 
       %{
         id: "simulation-proposed-#{sim.id}",
         category: "simulation_proposed",
-        title: Map.get(metadata, "title", "Proposed simulation"),
-        summary: Map.get(metadata, "rationale", "Review and approve to run."),
+        title: sim.title || "Proposed simulation",
+        summary: Map.get(attributes, "rationale", "Review and approve to run."),
         node_type: "simulation",
         node_id: sim.id,
         urgency: "action",
         timestamp: sim.inserted_at,
         connections: %{},
         metadata: %{
-          proposed_by: Map.get(metadata, "proposed_by"),
-          source_agent: Map.get(metadata, "proposed_by")
+          proposed_by: Map.get(attributes, "proposed_by"),
+          source_agent: Map.get(attributes, "proposed_by")
         }
       }
     end)
   end
 
   defp pending_knowledge_stream_items(project_id) do
-    KnowledgeEntry
-    |> where([k], k.project_id == ^project_id and k.status == "pending_review" and k.source_type == "generated")
+    GraphNode
+    |> where(
+      [k],
+      k.project_id == ^project_id and k.type_key == "knowledge_entry" and
+        k.status == "pending_review" and
+        fragment("?->>'source_type' = ?", k.attributes, "generated")
+    )
     |> order_by([k], desc: k.inserted_at)
     |> limit(3)
     |> Repo.all()
@@ -225,7 +241,10 @@ defmodule HydraX.Product.Stream do
 
     resolved_flags =
       GraphFlag
-      |> where([f], f.project_id == ^project_id and f.status == "resolved" and f.updated_at > ^cutoff)
+      |> where(
+        [f],
+        f.project_id == ^project_id and f.status == "resolved" and f.updated_at > ^cutoff
+      )
       |> order_by([f], desc: f.updated_at)
       |> limit(10)
       |> Repo.all()
@@ -247,8 +266,12 @@ defmodule HydraX.Product.Stream do
       end)
 
     recent_insights =
-      Insight
-      |> where([i], i.project_id == ^project_id and i.status != "draft" and i.updated_at > ^cutoff)
+      GraphNode
+      |> where(
+        [i],
+        i.project_id == ^project_id and i.type_key == "insight" and i.status != "draft" and
+          i.updated_at > ^cutoff
+      )
       |> order_by([i], desc: i.updated_at)
       |> limit(10)
       |> Repo.all()
@@ -270,8 +293,12 @@ defmodule HydraX.Product.Stream do
       end)
 
     recent_decisions =
-      Decision
-      |> where([d], d.project_id == ^project_id and d.status != "draft" and d.updated_at > ^cutoff)
+      GraphNode
+      |> where(
+        [d],
+        d.project_id == ^project_id and d.type_key == "decision" and d.status != "draft" and
+          d.updated_at > ^cutoff
+      )
       |> order_by([d], desc: d.updated_at)
       |> limit(10)
       |> Repo.all()
@@ -293,43 +320,54 @@ defmodule HydraX.Product.Stream do
       end)
 
     recent_artifacts =
-      Artifact
-      |> where([a], a.project_id == ^project_id and a.version > 1 and a.updated_at > ^cutoff)
+      GraphNode
+      |> where(
+        [a],
+        a.project_id == ^project_id and a.type_key == "artifact" and
+          a.lock_version > 1 and a.updated_at > ^cutoff
+      )
       |> order_by([a], desc: a.updated_at)
       |> limit(5)
       |> Repo.all()
       |> Enum.map(fn artifact ->
+        attrs = artifact.attributes || %{}
+
         %{
           id: "artifact-#{artifact.id}",
           category: "artifact_updated",
           title: artifact.title,
-          summary: "Version #{artifact.version} by #{artifact.last_updated_by || "system"}",
+          summary:
+            "Version #{artifact.lock_version} by #{Map.get(attrs, "last_updated_by") || "system"}",
           node_type: "artifact",
           node_id: artifact.id,
           urgency: "info",
           timestamp: artifact.updated_at,
           connections: %{},
           metadata: %{
-            artifact_type: artifact.artifact_type,
-            change_summary: (artifact.metadata || %{})["last_change_summary"],
-            source_agent: artifact.last_updated_by
+            artifact_type: Map.get(attrs, "artifact_type"),
+            change_summary: Map.get(attrs, "last_change_summary"),
+            source_agent: Map.get(attrs, "last_updated_by")
           }
         }
       end)
 
     completed_simulations =
-      SimulationNode
-      |> where([s], s.project_id == ^project_id and s.status == "completed" and s.updated_at > ^cutoff)
+      GraphNode
+      |> where(
+        [s],
+        s.project_id == ^project_id and s.type_key == "simulation" and
+          s.status == "completed" and s.updated_at > ^cutoff
+      )
       |> order_by([s], desc: s.updated_at)
       |> limit(5)
       |> Repo.all()
       |> Enum.map(fn sim ->
-        metadata = sim.metadata || %{}
+        attributes = sim.attributes || %{}
 
         %{
           id: "simulation-completed-#{sim.id}",
           category: "simulation_completed",
-          title: Map.get(metadata, "title", "Simulation ##{sim.id}"),
+          title: sim.title || "Simulation ##{sim.id}",
           summary: "Simulation completed. Review results and recommendations.",
           node_type: "simulation",
           node_id: sim.id,
@@ -337,16 +375,21 @@ defmodule HydraX.Product.Stream do
           timestamp: sim.updated_at,
           connections: %{},
           metadata: %{
-            title: Map.get(metadata, "title"),
-            proposed_by: Map.get(metadata, "proposed_by"),
-            source_agent: Map.get(metadata, "proposed_by")
+            title: sim.title,
+            proposed_by: Map.get(attributes, "proposed_by"),
+            source_agent: Map.get(attributes, "proposed_by")
           }
         }
       end)
 
     accepted_knowledge =
-      KnowledgeEntry
-      |> where([k], k.project_id == ^project_id and k.source_type == "generated" and k.status == "active" and k.updated_at > ^cutoff)
+      GraphNode
+      |> where(
+        [k],
+        k.project_id == ^project_id and k.type_key == "knowledge_entry" and
+          fragment("?->>'source_type' = ?", k.attributes, "generated") and
+          k.status == "active" and k.updated_at > ^cutoff
+      )
       |> order_by([k], desc: k.updated_at)
       |> limit(5)
       |> Repo.all()
@@ -365,7 +408,9 @@ defmodule HydraX.Product.Stream do
         }
       end)
 
-    (resolved_flags ++ recent_insights ++ recent_decisions ++ recent_artifacts ++ completed_simulations ++ accepted_knowledge)
+    (resolved_flags ++
+       recent_insights ++
+       recent_decisions ++ recent_artifacts ++ completed_simulations ++ accepted_knowledge)
     |> Enum.sort_by(& &1.timestamp, {:desc, DateTime})
     |> Enum.take(15)
   end
@@ -376,7 +421,11 @@ defmodule HydraX.Product.Stream do
 
   defp generate_emerging(project_id) do
     GraphFlag
-    |> where([f], f.project_id == ^project_id and f.status == "open" and f.flag_type in ["stale", "orphaned", "confidence_decayed"])
+    |> where(
+      [f],
+      f.project_id == ^project_id and f.status == "open" and
+        f.flag_type in ["stale", "orphaned", "confidence_decayed"]
+    )
     |> order_by([f], desc: f.inserted_at)
     |> limit(5)
     |> Repo.all()
@@ -412,15 +461,22 @@ defmodule HydraX.Product.Stream do
 
   defp connection_counts(project_id, node_type, node_id) do
     outgoing =
-      GraphEdge
-      |> where([e], e.project_id == ^project_id and e.from_node_type == ^node_type and e.from_node_id == ^node_id)
+      NodeRelationship
+      |> where(
+        [e],
+        e.project_id == ^project_id and e.from_node_type == ^node_type and
+          e.from_node_id == ^node_id
+      )
       |> select([e], {e.to_node_type, count(e.id)})
       |> group_by([e], e.to_node_type)
       |> Repo.all()
 
     incoming =
-      GraphEdge
-      |> where([e], e.project_id == ^project_id and e.to_node_type == ^node_type and e.to_node_id == ^node_id)
+      NodeRelationship
+      |> where(
+        [e],
+        e.project_id == ^project_id and e.to_node_type == ^node_type and e.to_node_id == ^node_id
+      )
       |> select([e], {e.from_node_type, count(e.id)})
       |> group_by([e], e.from_node_type)
       |> Repo.all()
@@ -441,7 +497,10 @@ defmodule HydraX.Product.Stream do
   end
 
   # Autonomous work attribution — check first since it applies across categories
-  defp generate_narrative(_project_id, %{metadata: %{autonomous: true, initiative_source: true}} = item) do
+  defp generate_narrative(
+         _project_id,
+         %{metadata: %{autonomous: true, initiative_source: true}} = item
+       ) do
     agent =
       case Map.get(item.metadata, :source_agent) do
         nil -> "An agent"
@@ -471,6 +530,7 @@ defmodule HydraX.Product.Stream do
 
     if length(downstream) > 0 do
       count = length(downstream)
+
       "This node has #{count} downstream dependenc#{if count == 1, do: "y", else: "ies"} that may be affected."
     else
       nil
@@ -478,7 +538,11 @@ defmodule HydraX.Product.Stream do
   end
 
   # New insights — check what they connect to
-  defp generate_narrative(project_id, %{category: "insight_created", node_type: "insight", node_id: id}) do
+  defp generate_narrative(project_id, %{
+         category: "insight_created",
+         node_type: "insight",
+         node_id: id
+       }) do
     # Check for contradictions on this specific insight
     flags = Graph.open_flags(project_id, node_type: "insight", flag_type: "contradicted")
     contradicted = Enum.any?(flags, &(&1.node_id == id))
@@ -508,7 +572,11 @@ defmodule HydraX.Product.Stream do
   end
 
   # Decision gates — check supporting evidence
-  defp generate_narrative(project_id, %{category: "decision_gate", node_type: node_type, node_id: node_id}) do
+  defp generate_narrative(project_id, %{
+         category: "decision_gate",
+         node_type: node_type,
+         node_id: node_id
+       }) do
     upstream = Graph.edges_to(project_id, node_type, node_id)
     insight_count = Enum.count(upstream, &(&1.from_node_type == "insight"))
 
@@ -520,17 +588,26 @@ defmodule HydraX.Product.Stream do
   end
 
   # Emerging — stale nodes
-  defp generate_narrative(_project_id, %{category: "agent_finding", metadata: %{flag_type: "stale"}}) do
+  defp generate_narrative(_project_id, %{
+         category: "agent_finding",
+         metadata: %{flag_type: "stale"}
+       }) do
     "This hasn't been reviewed in over 90 days. The evidence may no longer reflect current conditions."
   end
 
   # Emerging — orphaned nodes
-  defp generate_narrative(_project_id, %{category: "agent_finding", metadata: %{flag_type: "orphaned"}}) do
+  defp generate_narrative(_project_id, %{
+         category: "agent_finding",
+         metadata: %{flag_type: "orphaned"}
+       }) do
     "This node has no incoming lineage edges. Consider linking it to its source or archiving it."
   end
 
   # Emerging — confidence decay
-  defp generate_narrative(_project_id, %{category: "agent_finding", metadata: %{flag_type: "confidence_decayed"}}) do
+  defp generate_narrative(_project_id, %{
+         category: "agent_finding",
+         metadata: %{flag_type: "confidence_decayed"}
+       }) do
     "Confidence has decayed over time. Re-validate against current data."
   end
 
@@ -562,10 +639,13 @@ defmodule HydraX.Product.Stream do
     |> Enum.flat_map(fn {_key, group_items} ->
       split_by_time_window(Enum.sort_by(group_items, & &1.timestamp, {:desc, DateTime}))
     end)
-    |> Enum.sort_by(fn
-      %{type: :group, timestamp: ts} -> ts
-      %{timestamp: ts} -> ts
-    end, {:desc, DateTime})
+    |> Enum.sort_by(
+      fn
+        %{type: :group, timestamp: ts} -> ts
+        %{timestamp: ts} -> ts
+      end,
+      {:desc, DateTime}
+    )
   end
 
   defp split_by_time_window(sorted_items) do
@@ -603,14 +683,17 @@ defmodule HydraX.Product.Stream do
     node_type = first[:node_type] || "item"
     count = length(items)
 
-    [%{
-      id: "group-#{first.id}",
-      type: :group,
-      items: items,
-      title: "#{count} new #{node_type}s from #{agent}",
-      narrative: "The #{agent} produced #{count} #{node_type}s. Review them to update the product graph.",
-      timestamp: first.timestamp
-    }]
+    [
+      %{
+        id: "group-#{first.id}",
+        type: :group,
+        items: items,
+        title: "#{count} new #{node_type}s from #{agent}",
+        narrative:
+          "The #{agent} produced #{count} #{node_type}s. Review them to update the product graph.",
+        timestamp: first.timestamp
+      }
+    ]
   end
 
   defp wrap_group([]), do: []

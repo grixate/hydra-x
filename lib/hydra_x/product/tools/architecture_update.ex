@@ -25,7 +25,13 @@ defmodule HydraX.Product.Tools.ArchitectureUpdate do
           body: %{type: "string", description: "Updated description"},
           node_type: %{
             type: "string",
-            enum: ["system_design", "data_model", "api_contract", "infra_choice", "tech_selection"]
+            enum: [
+              "system_design",
+              "data_model",
+              "api_contract",
+              "infra_choice",
+              "tech_selection"
+            ]
           },
           status: %{type: "string", enum: ["draft", "active", "superseded", "archived"]}
         },
@@ -50,7 +56,8 @@ defmodule HydraX.Product.Tools.ArchitectureUpdate do
   defp do_update(node, params) do
     case Product.update_architecture_node(node, params) do
       {:ok, updated} ->
-        {:ok, %{architecture_node: %{id: updated.id, title: updated.title, status: updated.status}}}
+        {:ok,
+         %{architecture_node: %{id: updated.id, title: updated.title, status: updated.status}}}
 
       {:error, %Ecto.Changeset{} = changeset} ->
         {:error, %{error: "validation_failed", details: translate_errors(changeset)}}

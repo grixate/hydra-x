@@ -31,18 +31,31 @@ defmodule HydraX.Product.WorkspaceDockerTest do
       send(test_pid, {:docker_call, args})
 
       case args do
-        ["docker", "run" | _] -> {"fake-container-#{suffix}\n", 0}
-        ["docker", "inspect" | _] -> {"true\n", 0}
-        ["docker", "exec", _container, "echo" | rest] -> {Enum.join(rest, " ") <> "\n", 0}
+        ["docker", "run" | _] ->
+          {"fake-container-#{suffix}\n", 0}
+
+        ["docker", "inspect" | _] ->
+          {"true\n", 0}
+
+        ["docker", "exec", _container, "echo" | rest] ->
+          {Enum.join(rest, " ") <> "\n", 0}
+
         # `cat /nonexistent` → simulate non-zero exit
         ["docker", "exec", _container, "cat", "/nonexistent" | _] ->
           {"cat: /nonexistent: No such file\n", 1}
 
         # `cat /also/missing` → simulate exit 2
-        ["docker", "exec", _container, "cat", "/also/missing" | _] -> {"err\n", 2}
-        ["docker", "exec", _container, _ | _] -> {"", 0}
-        ["docker", "rm" | _] -> {"", 0}
-        _ -> {"", 0}
+        ["docker", "exec", _container, "cat", "/also/missing" | _] ->
+          {"err\n", 2}
+
+        ["docker", "exec", _container, _ | _] ->
+          {"", 0}
+
+        ["docker", "rm" | _] ->
+          {"", 0}
+
+        _ ->
+          {"", 0}
       end
     end
 

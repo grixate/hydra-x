@@ -25,7 +25,10 @@ defmodule HydraX.Product.Tools.CodeSearch do
         type: "object",
         properties: %{
           pattern: %{type: "string", description: "Regular expression to search for."},
-          path: %{type: "string", description: "Optional sub-path to limit the search. Defaults to workspace root."},
+          path: %{
+            type: "string",
+            description: "Optional sub-path to limit the search. Defaults to workspace root."
+          },
           glob: %{type: "string", description: "Optional file glob filter, e.g. \"*.ts\"."}
         },
         required: ["pattern"]
@@ -65,7 +68,15 @@ defmodule HydraX.Product.Tools.CodeSearch do
   end
 
   defp build_rg_args(pattern, sub_path, glob) do
-    base = ["rg", "--line-number", "--no-heading", "--max-count", Integer.to_string(@max_results), pattern]
+    base = [
+      "rg",
+      "--line-number",
+      "--no-heading",
+      "--max-count",
+      Integer.to_string(@max_results),
+      pattern
+    ]
+
     base = if glob, do: base ++ ["--glob", glob], else: base
     base ++ [sub_path]
   end

@@ -48,6 +48,30 @@ defmodule HydraX.Product.StreamEntries do
   end
 
   @doc """
+  Mark a StreamEntry as actioned — removes it from Needs You / Blockers
+  derived lists (see spec §5 "Ignore for now" / "Resolve manually").
+  Idempotent; a second call is a no-op.
+  """
+  def mark_actioned(project_id, id) do
+    project_id = to_int(project_id)
+    id = to_int(id)
+    now = DateTime.utc_now()
+
+    {count, _} =
+      StreamEntry
+      |> where([e], e.project_id == ^project_id and e.id == ^id and is_nil(e.actioned_at))
+      |> Repo.update_all(set: [actioned_at: now])
+
+    if count > 0 do
+      ProductPubSub.broadcast_project_event(project_id, "stream_entry.actioned", %{
+        stream_entry_id: id
+      })
+    end
+
+    {:ok, count}
+  end
+
+  @doc """
   B3.7 — delete stream entries older than `older_than_days` (default 365).
   Called periodically so the Activity tab stays bounded. Returns the
   number of rows removed.
@@ -89,7 +113,8 @@ defmodule HydraX.Product.StreamEntries do
     end
   end
 
-  def emit_for_stall(%AgentTask{} = task, stall_type) when stall_type in [:blocked, :waiting_for_input] do
+  def emit_for_stall(%AgentTask{} = task, stall_type)
+      when stall_type in [:blocked, :waiting_for_input] do
     tab =
       case stall_type do
         :blocked -> "blockers"

@@ -1,9 +1,9 @@
 defmodule HydraXWeb.SimulationAPIController do
   use HydraXWeb, :controller
 
+  alias HydraX.Graph.Node, as: GraphNode
   alias HydraX.Product
   alias HydraX.Product.SimulationBridge
-  alias HydraX.Product.SimulationNode
 
   action_fallback HydraXWeb.ProjectAPIFallbackController
 
@@ -114,9 +114,9 @@ defmodule HydraXWeb.SimulationAPIController do
       true ->
         updated =
           sim_node
-          |> SimulationNode.changeset(%{
-            "status" => "failed",
-            "metadata" => Map.merge(sim_node.metadata || %{}, %{"rejected" => true})
+          |> GraphNode.changeset(%{
+            status: "failed",
+            attributes: Map.merge(sim_node.attributes || %{}, %{"rejected" => true})
           })
           |> HydraX.Repo.update!()
 
@@ -137,40 +137,59 @@ defmodule HydraXWeb.SimulationAPIController do
   end
 
   defp simulation_json(sim_node) do
-    metadata = sim_node.metadata || %{}
+    attrs = sim_node.attributes || %{}
 
     %{
       id: sim_node.id,
       project_id: sim_node.project_id,
-      simulation_id: sim_node.simulation_id,
-      scenario_summary: sim_node.scenario_summary,
-      archetype_summary: sim_node.archetype_summary,
+      simulation_id: Map.get(attrs, "simulation_id"),
+      scenario_summary: Map.get(attrs, "scenario_summary") || sim_node.body,
+      archetype_summary: Map.get(attrs, "archetype_summary", []),
       status: sim_node.status,
-      results_imported: sim_node.results_imported,
-      metadata: metadata,
-      title: metadata["title"],
-      population_size: metadata["population_size"],
-      max_ticks: metadata["max_ticks"],
-      comparison_mode: metadata["comparison_mode"] || false,
+      results_imported: Map.get(attrs, "results_imported", false),
+      metadata: attrs,
+      title: sim_node.title,
+      population_size: Map.get(attrs, "population_size"),
+      max_ticks: Map.get(attrs, "max_ticks"),
+      comparison_mode: Map.get(attrs, "comparison_mode", false),
       inserted_at: sim_node.inserted_at,
       updated_at: sim_node.updated_at
     }
   end
 
   defp decision_node(d) do
-    %{id: d.id, node_type: "decision", title: d.title, status: d.status, body: String.slice(d.body || "", 0, 200)}
+    %{
+      id: d.id,
+      node_type: "decision",
+      title: d.title,
+      status: d.status,
+      body: String.slice(d.body || "", 0, 200)
+    }
   end
 
   defp requirement_node(r) do
-    %{id: r.id, node_type: "requirement", title: r.title, status: r.status, body: String.slice(r.body || "", 0, 200)}
+    %{
+      id: r.id,
+      node_type: "requirement",
+      title: r.title,
+      status: r.status,
+      body: String.slice(r.body || "", 0, 200)
+    }
   end
 
   defp design_node(d) do
-    %{id: d.id, node_type: "design_node", title: d.title, status: d.status, body: String.slice(d.body || "", 0, 200)}
+    %{
+      id: d.id,
+      node_type: "design_node",
+      title: d.title,
+      status: d.status,
+      body: String.slice(d.body || "", 0, 200)
+    }
   end
 
   defp parse_int(nil, default), do: default
   defp parse_int(val, _default) when is_integer(val), do: val
+
   defp parse_int(val, default) when is_binary(val) do
     case Integer.parse(val) do
       {n, _} -> n

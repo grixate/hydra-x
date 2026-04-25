@@ -9,6 +9,7 @@ defmodule HydraX.Product.MentionsUpdateIntentTest do
 
   defp make_project! do
     email = "mentions+#{System.unique_integer([:positive])}@test.example.com"
+
     {:ok, %{workspace: workspace}} =
       Accounts.create_user_with_workspace(%{"email" => email, "display_name" => "T"})
 

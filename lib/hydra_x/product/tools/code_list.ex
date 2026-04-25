@@ -23,7 +23,8 @@ defmodule HydraX.Product.Tools.CodeList do
         properties: %{
           path: %{
             type: "string",
-            description: "Relative directory path within the workspace. Use \"\" or \".\" for root."
+            description:
+              "Relative directory path within the workspace. Use \"\" or \".\" for root."
           }
         },
         required: ["path"]

@@ -46,6 +46,7 @@ defmodule HydraXWeb.ProductConversationAPIController do
 
   defp parse_int_param(nil, default), do: default
   defp parse_int_param(val, _default) when is_integer(val), do: val
+
   defp parse_int_param(val, default) when is_binary(val) do
     case Integer.parse(val) do
       {n, _} -> n

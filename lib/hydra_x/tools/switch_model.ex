@@ -59,24 +59,24 @@ defmodule HydraX.Tools.SwitchModel do
         with :ok <- check_allowlist(conversation_id, model),
              provider when not is_nil(provider) <- Providers.find_provider_by_model(model) do
           case apply_override(conversation_id, provider, reason) do
-              {:ok, _conv} ->
-                require Logger
+            {:ok, _conv} ->
+              require Logger
 
-                Logger.info(
-                  "switch_model: conversation=#{conversation_id} model=#{model} reason=#{inspect(reason)}"
-                )
+              Logger.info(
+                "switch_model: conversation=#{conversation_id} model=#{model} reason=#{inspect(reason)}"
+              )
 
-                {:ok,
-                 %{
-                   model: model,
-                   provider_id: provider.id,
-                   provider_name: provider.name,
-                   reason: reason
-                 }}
+              {:ok,
+               %{
+                 model: model,
+                 provider_id: provider.id,
+                 provider_name: provider.name,
+                 reason: reason
+               }}
 
-              {:error, reason} ->
-                {:error, reason}
-            end
+            {:error, reason} ->
+              {:error, reason}
+          end
         else
           nil ->
             {:error, {:model_not_available, model, Providers.list_available_models()}}
@@ -95,8 +95,12 @@ defmodule HydraX.Tools.SwitchModel do
          %AgentProfile{runtime_state: runtime_state} <-
            Repo.get(AgentProfile, agent_id) do
       case get_in(runtime_state || %{}, ["allowed_models"]) do
-        nil -> :ok
-        [] -> :ok
+        nil ->
+          :ok
+
+        [] ->
+          :ok
+
         list when is_list(list) ->
           if model in list do
             :ok
@@ -104,7 +108,8 @@ defmodule HydraX.Tools.SwitchModel do
             {:error, {:model_not_allowed, model, list}}
           end
 
-        _ -> :ok
+        _ ->
+          :ok
       end
     else
       _ -> :ok

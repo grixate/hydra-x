@@ -27,7 +27,6 @@ defmodule HydraX.Product.OnboardingFlow do
 
   alias HydraX.Repo
   alias HydraX.Product.Project
-  alias HydraX.Product.Strategy
 
   @type status_result :: %{
           state: String.t(),
@@ -112,7 +111,7 @@ defmodule HydraX.Product.OnboardingFlow do
 
   defp vision_set?(%Project{} = project) do
     case HydraX.Product.Visions.get_for_project(project.id) do
-      %HydraX.Product.Vision{body: body} when is_binary(body) ->
+      %HydraX.Graph.Node{type_key: "vision", body: body} when is_binary(body) ->
         String.trim(body) != ""
 
       _ ->
@@ -128,16 +127,18 @@ defmodule HydraX.Product.OnboardingFlow do
   defp description_set?(_), do: false
 
   defp count_strategies(project_id) do
-    Strategy
-    |> where([s], s.project_id == ^project_id)
+    HydraX.Graph.Node
+    |> where([s], s.project_id == ^project_id and s.type_key == "strategy")
     |> Repo.aggregate(:count, :id)
   end
 
   defp has_any_node?(project_id) do
     count_strategies(project_id) > 0 or
-      Repo.exists?(from i in HydraX.Product.Insight, where: i.project_id == ^project_id) or
-      Repo.exists?(from d in HydraX.Product.Decision, where: d.project_id == ^project_id) or
-      Repo.exists?(from r in HydraX.Product.Requirement, where: r.project_id == ^project_id)
+      Repo.exists?(
+        from n in HydraX.Graph.Node,
+          where:
+            n.project_id == ^project_id and n.type_key in ["insight", "decision", "requirement"]
+      )
   end
 
   defp hint_for(%Project{onboarding_state: "pending"}),

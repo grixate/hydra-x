@@ -27,11 +27,18 @@ export function CollapsedChatBar({ projectId, onExpand }: CollapsedChatBarProps)
   const { workingAgents, proposalCount, anyWorking } = useChatDockSignals(projectId);
 
   return (
-    <button
+    <span className="relative inline-flex">
+      {anyWorking && (
+        <span
+          aria-hidden
+          className="agent-chat-aura pointer-events-none absolute inset-0 rounded-full"
+        />
+      )}
+      <button
       type="button"
       onClick={onExpand}
       title="Open chat (⌘J)"
-      className={`pointer-events-auto flex h-10 items-center gap-2.5 rounded-full border bg-background/95 px-3 shadow-md backdrop-blur-sm transition-colors hover:bg-muted/60 ${
+      className={`pointer-events-auto relative flex h-10 items-center gap-2.5 rounded-full border bg-background/95 px-3 shadow-md backdrop-blur-sm transition-colors hover:bg-muted/60 ${
         anyWorking ? "agent-working-border" : ""
       }`}
     >
@@ -54,6 +61,7 @@ export function CollapsedChatBar({ projectId, onExpand }: CollapsedChatBarProps)
           ⌘J
         </kbd>
       </span>
-    </button>
+      </button>
+    </span>
   );
 }

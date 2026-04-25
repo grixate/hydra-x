@@ -27,7 +27,13 @@ defmodule HydraX.Product.Tools.DesignCreate do
           body: %{type: "string", description: "Detailed design description or specification"},
           node_type: %{
             type: "string",
-            enum: ["user_flow", "wireframe", "interaction_pattern", "component_spec", "design_rationale"],
+            enum: [
+              "user_flow",
+              "wireframe",
+              "interaction_pattern",
+              "component_spec",
+              "design_rationale"
+            ],
             description: "Type of design artifact"
           },
           linked_requirement_ids: %{
@@ -103,13 +109,17 @@ defmodule HydraX.Product.Tools.DesignCreate do
 
   defp extract_project_id(params) do
     case params[:project_id] || params["project_id"] do
-      value when is_integer(value) -> {:ok, value}
+      value when is_integer(value) ->
+        {:ok, value}
+
       value when is_binary(value) ->
         case Integer.parse(value) do
           {integer, ""} -> {:ok, integer}
           _ -> {:error, :product_project_context_required}
         end
-      _ -> {:error, :product_project_context_required}
+
+      _ ->
+        {:error, :product_project_context_required}
     end
   end
 

@@ -34,6 +34,11 @@ defmodule HydraXWeb.StreamEntryAPIController do
     json(conn, %{data: %{marked: count}})
   end
 
+  def dismiss(conn, %{"project_id" => project_id, "id" => id}) do
+    {:ok, count} = StreamEntries.mark_actioned(project_id, id)
+    json(conn, %{data: %{actioned: count}})
+  end
+
   defp serialize(entry) do
     %{
       id: entry.id,

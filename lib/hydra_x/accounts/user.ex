@@ -31,5 +31,7 @@ defmodule HydraX.Accounts.User do
   end
 
   defp normalise_email(nil), do: nil
-  defp normalise_email(email) when is_binary(email), do: email |> String.trim() |> String.downcase()
+
+  defp normalise_email(email) when is_binary(email),
+    do: email |> String.trim() |> String.downcase()
 end

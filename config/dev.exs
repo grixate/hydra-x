@@ -18,6 +18,11 @@ config :hydra_x, HydraX.Repo,
 # The watchers configuration can be used to run external
 # watchers to your application. For example, we can use it
 # to bundle .js and .css sources.
+# Allow the Vite dev server (localhost:3000) to make state-changing API calls
+# through its /api proxy. The browser keeps the Origin header as :3000 while
+# Phoenix's self-origin is :4000, so they'd otherwise mismatch.
+config :hydra_x, api_allowed_origins: ["http://localhost:3000", "http://127.0.0.1:3000"]
+
 config :hydra_x, HydraXWeb.Endpoint,
   # Binding to loopback ipv4 address prevents access from other machines.
   # Change to `ip: {0, 0, 0, 0}` to allow access from other machines.

@@ -3,10 +3,8 @@ defmodule HydraXWeb.AgentStatusAPIController do
 
   import Ecto.Query
 
+  alias HydraX.Graph.Node, as: GraphNode
   alias HydraX.Product.AgentTasks
-  alias HydraX.Product.Insight
-  alias HydraX.Product.Decision
-  alias HydraX.Product.Requirement
   alias HydraX.Product.ProductConversation
   alias HydraX.Product.ProductMessage
   alias HydraX.Repo
@@ -49,19 +47,28 @@ defmodule HydraXWeb.AgentStatusAPIController do
   defp draft_count_for_persona(project_id, persona) do
     case persona do
       "researcher" ->
-        Insight
-        |> where([i], i.project_id == ^project_id and i.status == "draft")
+        GraphNode
+        |> where(
+          [i],
+          i.project_id == ^project_id and i.type_key == "insight" and i.status == "draft"
+        )
         |> Repo.aggregate(:count, :id)
 
       "strategist" ->
         decisions =
-          Decision
-          |> where([d], d.project_id == ^project_id and d.status == "draft")
+          GraphNode
+          |> where(
+            [d],
+            d.project_id == ^project_id and d.type_key == "decision" and d.status == "draft"
+          )
           |> Repo.aggregate(:count, :id)
 
         requirements =
-          Requirement
-          |> where([r], r.project_id == ^project_id and r.status == "draft")
+          GraphNode
+          |> where(
+            [r],
+            r.project_id == ^project_id and r.type_key == "requirement" and r.status == "draft"
+          )
           |> Repo.aggregate(:count, :id)
 
         decisions + requirements

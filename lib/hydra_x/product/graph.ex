@@ -7,36 +7,25 @@ defmodule HydraX.Product.Graph do
 
   import Ecto.Query
 
-  alias HydraX.Product.ArchitectureNode
-  alias HydraX.Product.Constraint
-  alias HydraX.Product.Decision
-  alias HydraX.Product.DesignNode
-  alias HydraX.Product.GraphEdge
+  alias HydraX.Graph.Node, as: GraphNode
+  alias HydraX.Graph.NodeRelationship
   alias HydraX.Product.GraphFlag
-  alias HydraX.Product.Insight
-  alias HydraX.Product.KnowledgeEntry
-  alias HydraX.Product.Learning
-  alias HydraX.Product.Requirement
-  alias HydraX.Product.Routine
-  alias HydraX.Product.Source
-  alias HydraX.Product.Strategy
-  alias HydraX.Product.Task, as: ProductTask
   alias HydraX.Repo
 
   @node_type_to_schema %{
-    "signal" => Source,
-    "source" => Source,
-    "insight" => Insight,
-    "decision" => Decision,
-    "strategy" => Strategy,
-    "requirement" => Requirement,
-    "design_node" => DesignNode,
-    "architecture_node" => ArchitectureNode,
-    "task" => ProductTask,
-    "learning" => Learning,
-    "constraint" => Constraint,
-    "routine" => Routine,
-    "knowledge_entry" => KnowledgeEntry
+    "signal" => GraphNode,
+    "source" => GraphNode,
+    "insight" => GraphNode,
+    "decision" => GraphNode,
+    "strategy" => GraphNode,
+    "requirement" => GraphNode,
+    "design_node" => GraphNode,
+    "architecture_node" => GraphNode,
+    "task" => GraphNode,
+    "learning" => GraphNode,
+    "constraint" => GraphNode,
+    "routine" => GraphNode,
+    "knowledge_entry" => GraphNode
   }
 
   @traversable_node_types Map.keys(@node_type_to_schema)
@@ -47,34 +36,45 @@ defmodule HydraX.Product.Graph do
   # Edge operations
   # -------------------------------------------------------------------
 
+  @doc """
+  Create an edge between two nodes. Endpoint (type, id) pairs remain
+  in the call signature for caller compatibility; storage routes to
+  `node_relationships`.
+
+  The edge's `type_key` (relationship type) equals the former `kind`.
+  `metadata` becomes `attributes`. `from_node_type`/`to_node_type` are
+  denormalized on the row so readers can filter without a join.
+  """
   def link_nodes(project_id, from_type, from_id, to_type, to_id, kind, opts \\ []) do
+    domain_id = default_domain_id()
+
     attrs = %{
-      "project_id" => project_id,
-      "from_node_type" => to_string(from_type),
-      "from_node_id" => from_id,
-      "to_node_type" => to_string(to_type),
-      "to_node_id" => to_id,
-      "kind" => to_string(kind),
-      "weight" => Keyword.get(opts, :weight, 1.0),
-      "metadata" => Keyword.get(opts, :metadata, %{})
+      domain_id: domain_id,
+      project_id: project_id,
+      type_key: to_string(kind),
+      from_node_id: from_id,
+      to_node_id: to_id,
+      from_node_type: substrate_type_for(from_type),
+      to_node_type: substrate_type_for(to_type),
+      weight: Keyword.get(opts, :weight, 1.0),
+      attributes: Keyword.get(opts, :metadata, %{})
     }
 
-    %GraphEdge{}
-    |> GraphEdge.changeset(attrs)
+    %NodeRelationship{}
+    |> NodeRelationship.changeset(attrs)
     |> Repo.insert()
   end
 
   def unlink_nodes(project_id, from_type, from_id, to_type, to_id, kind) do
     query =
-      GraphEdge
-      |> where(
-        [e],
-        e.project_id == ^project_id and
-          e.from_node_type == ^to_string(from_type) and
-          e.from_node_id == ^from_id and
-          e.to_node_type == ^to_string(to_type) and
-          e.to_node_id == ^to_id and
-          e.kind == ^to_string(kind)
+      from(r in NodeRelationship,
+        where:
+          r.project_id == ^project_id and
+            r.from_node_type == ^substrate_type_for(from_type) and
+            r.from_node_id == ^from_id and
+            r.to_node_type == ^substrate_type_for(to_type) and
+            r.to_node_id == ^to_id and
+            r.type_key == ^to_string(kind)
       )
 
     case Repo.one(query) do
@@ -86,29 +86,59 @@ defmodule HydraX.Product.Graph do
   def edges_from(project_id, node_type, node_id, opts \\ []) do
     kind = Keyword.get(opts, :kind)
 
-    GraphEdge
-    |> where(
-      [e],
-      e.project_id == ^project_id and
-        e.from_node_type == ^to_string(node_type) and
-        e.from_node_id == ^node_id
+    from(r in NodeRelationship,
+      where:
+        r.project_id == ^project_id and
+          r.from_node_type == ^substrate_type_for(node_type) and
+          r.from_node_id == ^node_id
     )
     |> maybe_filter_kind(kind)
     |> Repo.all()
+    |> Enum.map(&edge_facade/1)
   end
 
   def edges_to(project_id, node_type, node_id, opts \\ []) do
     kind = Keyword.get(opts, :kind)
 
-    GraphEdge
-    |> where(
-      [e],
-      e.project_id == ^project_id and
-        e.to_node_type == ^to_string(node_type) and
-        e.to_node_id == ^node_id
+    from(r in NodeRelationship,
+      where:
+        r.project_id == ^project_id and
+          r.to_node_type == ^substrate_type_for(node_type) and
+          r.to_node_id == ^node_id
     )
     |> maybe_filter_kind(kind)
     |> Repo.all()
+    |> Enum.map(&edge_facade/1)
+  end
+
+  # Return a map with the legacy edge-shape field names so readers
+  # that expect `.kind`, `.metadata` keep working while we finish the
+  # shape-migration.
+  defp edge_facade(%NodeRelationship{} = r) do
+    %{
+      id: r.id,
+      project_id: r.project_id,
+      from_node_type: r.from_node_type,
+      from_node_id: r.from_node_id,
+      to_node_type: r.to_node_type,
+      to_node_id: r.to_node_id,
+      kind: r.type_key,
+      weight: r.weight,
+      metadata: r.attributes || %{},
+      inserted_at: r.inserted_at,
+      updated_at: r.updated_at
+    }
+  end
+
+  defp default_domain_id do
+    case HydraX.Graph.Domains.get_domain_by_slug("product_development") do
+      %HydraX.Graph.Domain{id: id} ->
+        id
+
+      nil ->
+        {:ok, %{id: id}} = HydraX.Graph.Domains.ProductDevelopment.seed()
+        id
+    end
   end
 
   # -------------------------------------------------------------------
@@ -171,11 +201,11 @@ defmodule HydraX.Product.Graph do
 
   defp maybe_filter_kind(query, kinds) when is_list(kinds) do
     string_kinds = Enum.map(kinds, &to_string/1)
-    where(query, [e], e.kind in ^string_kinds)
+    where(query, [r], r.type_key in ^string_kinds)
   end
 
   defp maybe_filter_kind(query, kind) do
-    where(query, [e], e.kind == ^to_string(kind))
+    where(query, [r], r.type_key == ^to_string(kind))
   end
 
   # -------------------------------------------------------------------
@@ -198,6 +228,7 @@ defmodule HydraX.Product.Graph do
   def resolve_node(node_type, node_id) do
     case schema_for(node_type) do
       nil -> {:error, :unknown_node_type}
+      GraphNode -> {:ok, fetch_substrate_node(node_type, node_id)}
       schema -> {:ok, Repo.get(schema, node_id)}
     end
   end
@@ -210,6 +241,14 @@ defmodule HydraX.Product.Graph do
         nil ->
           []
 
+        GraphNode ->
+          substrate_type = substrate_type_for(type)
+
+          GraphNode
+          |> where([n], n.id in ^ids and n.type_key == ^substrate_type)
+          |> Repo.all()
+          |> Enum.map(fn record -> {type, record.id, record} end)
+
         schema ->
           schema
           |> where([r], r.id in ^ids)
@@ -219,9 +258,50 @@ defmodule HydraX.Product.Graph do
     end)
   end
 
+  defp fetch_substrate_node(node_type, node_id) do
+    substrate_type = substrate_type_for(node_type)
+
+    Repo.one(
+      from n in GraphNode,
+        where: n.id == ^node_id and n.type_key == ^substrate_type
+    )
+  end
+
   def schema_for(node_type), do: Map.get(@node_type_to_schema, to_string(node_type))
 
+  @doc """
+  Base query for a node type. Returns an Ecto queryable that already
+  filters by `type_key` for substrate-backed types (the `nodes` table
+  stores many types side-by-side), or the typed schema module unchanged
+  for legacy types.
+  """
+  def base_query_for(node_type) do
+    type_str = to_string(node_type)
+
+    case schema_for(type_str) do
+      nil ->
+        nil
+
+      GraphNode ->
+        # "signal" is a legacy alias for the "source" type_key.
+        substrate_type = if type_str == "signal", do: "source", else: type_str
+        from(n in GraphNode, where: n.type_key == ^substrate_type)
+
+      schema ->
+        schema
+    end
+  end
+
   def node_types, do: @traversable_node_types
+
+  # "signal" is a legacy display-layer alias for "source" — the
+  # substrate stores both as type_key="source".
+  defp substrate_type_for(type) do
+    case to_string(type) do
+      "signal" -> "source"
+      other -> other
+    end
+  end
 
   # -------------------------------------------------------------------
   # Health checks
@@ -233,30 +313,88 @@ defmodule HydraX.Product.Graph do
         do: [to_string(node_type)],
         else: @traversable_node_types -- ["signal", "source"]
 
-    Enum.flat_map(types, fn type ->
-      case schema_for(type) do
-        nil ->
-          []
+    # Primitive-keyed path: any substrate node whose primitive is one
+    # that *should* participate in the graph. Evidence-extending nodes
+    # (like sources) can reasonably be dangling; exclude them.
+    substrate_orphans =
+      if node_type do
+        substrate_orphans_for_type(project_id, to_string(node_type))
+      else
+        substrate_orphans_for_primitives(project_id, ~w(claim entity artifact activity))
+      end
 
-        schema ->
-          node_ids_with_incoming =
-            GraphEdge
-            |> where([e], e.project_id == ^project_id and e.to_node_type == ^type)
-            |> select([e], e.to_node_id)
-            |> Repo.all()
-            |> MapSet.new()
+    # Legacy-typed node orphans (vision, etc.) — keep the per-type loop
+    # until those schemas also move onto the substrate.
+    legacy_types =
+      types
+      |> Enum.reject(fn t -> substrate_type?(t) end)
 
-          all_nodes =
-            schema
+    legacy_orphans =
+      Enum.flat_map(legacy_types, fn type ->
+        case base_query_for(type) do
+          nil ->
+            []
+
+          query ->
+            node_ids_with_incoming =
+              from(r in NodeRelationship,
+                where: r.project_id == ^project_id and r.to_node_type == ^type,
+                select: r.to_node_id
+              )
+              |> Repo.all()
+              |> MapSet.new()
+
+            query
             |> where([r], r.project_id == ^project_id)
             |> select([r], {r.id, r.title})
             |> Repo.all()
+            |> Enum.reject(fn {id, _title} -> MapSet.member?(node_ids_with_incoming, id) end)
+            |> Enum.map(fn {id, title} -> %{node_type: type, node_id: id, title: title} end)
+        end
+      end)
 
-          all_nodes
-          |> Enum.reject(fn {id, _title} -> MapSet.member?(node_ids_with_incoming, id) end)
-          |> Enum.map(fn {id, title} -> %{node_type: type, node_id: id, title: title} end)
-      end
+    substrate_orphans ++ legacy_orphans
+  end
+
+  defp substrate_orphans_for_type(project_id, type_key) do
+    from(n in GraphNode,
+      where: n.project_id == ^project_id and n.type_key == ^type_key
+    )
+    |> filter_orphans_with_inbound(project_id)
+  end
+
+  defp substrate_orphans_for_primitives(project_id, primitives) do
+    from(n in GraphNode,
+      where:
+        n.project_id == ^project_id and n.extends_primitive in ^primitives and
+          is_nil(n.archived_at)
+    )
+    |> filter_orphans_with_inbound(project_id)
+  end
+
+  defp filter_orphans_with_inbound(node_query, project_id) do
+    with_inbound =
+      from(r in NodeRelationship,
+        where: r.project_id == ^project_id,
+        select: r.to_node_id
+      )
+      |> Repo.all()
+      |> MapSet.new()
+
+    node_query
+    |> select([n], {n.id, n.title, n.type_key})
+    |> Repo.all()
+    |> Enum.reject(fn {id, _title, _type_key} -> MapSet.member?(with_inbound, id) end)
+    |> Enum.map(fn {id, title, type_key} ->
+      %{node_type: type_key, node_id: id, title: title}
     end)
+  end
+
+  defp substrate_type?(type) do
+    case schema_for(type) do
+      GraphNode -> true
+      _ -> false
+    end
   end
 
   def density_report(project_id) do
@@ -264,14 +402,15 @@ defmodule HydraX.Product.Graph do
 
     Enum.into(types, %{}, fn type ->
       count =
-        case schema_for(type) do
+        case base_query_for(type) do
           nil -> 0
-          schema -> schema |> where([r], r.project_id == ^project_id) |> Repo.aggregate(:count)
+          query -> query |> where([r], r.project_id == ^project_id) |> Repo.aggregate(:count)
         end
 
       outgoing =
-        GraphEdge
-        |> where([e], e.project_id == ^project_id and e.from_node_type == ^type)
+        from(r in NodeRelationship,
+          where: r.project_id == ^project_id and r.from_node_type == ^type
+        )
         |> Repo.aggregate(:count)
 
       avg_outgoing = if count > 0, do: outgoing / count, else: 0.0
@@ -291,12 +430,12 @@ defmodule HydraX.Product.Graph do
         else: @traversable_node_types -- ["signal", "source"]
 
     Enum.flat_map(types, fn type ->
-      case schema_for(type) do
+      case base_query_for(type) do
         nil ->
           []
 
-        schema ->
-          schema
+        query ->
+          query
           |> where([r], r.project_id == ^project_id and r.updated_at < ^cutoff)
           |> select([r], {r.id, r.title, r.updated_at})
           |> Repo.all()

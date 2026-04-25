@@ -117,7 +117,9 @@ defmodule HydraX.Product.Flows do
     case flow |> Flow.changeset(changes) |> Repo.update() do
       {:ok, updated} ->
         if updated.status != flow.status do
-          ProductPubSub.broadcast_project_event(updated.project_id, "flow.updated", %{flow: updated})
+          ProductPubSub.broadcast_project_event(updated.project_id, "flow.updated", %{
+            flow: updated
+          })
         else
           ProductPubSub.broadcast_project_event(updated.project_id, "flow.membership_updated", %{
             flow: updated

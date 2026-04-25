@@ -1,8 +1,8 @@
 defmodule HydraXWeb.RequirementAPIController do
   use HydraXWeb, :controller
 
+  alias HydraX.Graph.Node, as: GraphNode
   alias HydraX.Product
-  alias HydraX.Product.Requirement
   alias HydraXWeb.ProductPayload
 
   action_fallback HydraXWeb.ProjectAPIFallbackController
@@ -29,7 +29,7 @@ defmodule HydraXWeb.RequirementAPIController do
   end
 
   def create(conn, %{"project_id" => project_id, "requirement" => params}) do
-    with {:ok, %Requirement{} = requirement} <- Product.create_requirement(project_id, params) do
+    with {:ok, %GraphNode{} = requirement} <- Product.create_requirement(project_id, params) do
       conn
       |> put_status(:created)
       |> json(%{data: ProductPayload.requirement_json(requirement)})
@@ -39,7 +39,7 @@ defmodule HydraXWeb.RequirementAPIController do
   def update(conn, %{"project_id" => project_id, "id" => id, "requirement" => params}) do
     requirement = Product.get_project_requirement!(project_id, id)
 
-    with {:ok, %Requirement{} = updated} <- Product.update_requirement(requirement, params) do
+    with {:ok, %GraphNode{} = updated} <- Product.update_requirement(requirement, params) do
       json(conn, %{data: ProductPayload.requirement_json(updated)})
     end
   end
@@ -47,7 +47,7 @@ defmodule HydraXWeb.RequirementAPIController do
   def delete(conn, %{"project_id" => project_id, "id" => id}) do
     requirement = Product.get_project_requirement!(project_id, id)
 
-    with {:ok, %Requirement{}} <- Product.delete_requirement(requirement) do
+    with {:ok, %GraphNode{}} <- Product.delete_requirement(requirement) do
       send_resp(conn, :no_content, "")
     end
   end

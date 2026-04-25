@@ -19,9 +19,9 @@ defmodule HydraX.Product.Tools.KnowledgePropose do
       name: "knowledge_propose",
       description:
         "Propose a new knowledge entry based on a pattern you've observed in your work. " <>
-        "Knowledge entries become part of your permanent context, helping you handle " <>
-        "similar situations better in the future. The entry will be reviewed by the user " <>
-        "before becoming active.",
+          "Knowledge entries become part of your permanent context, helping you handle " <>
+          "similar situations better in the future. The entry will be reviewed by the user " <>
+          "before becoming active.",
       input_schema: %{
         type: "object",
         properties: %{
@@ -34,8 +34,12 @@ defmodule HydraX.Product.Tools.KnowledgePropose do
           entry_type: %{
             type: "string",
             enum: [
-              "coding_conventions", "design_language", "process_rules",
-              "domain_knowledge", "pattern", "custom"
+              "coding_conventions",
+              "design_language",
+              "process_rules",
+              "domain_knowledge",
+              "pattern",
+              "custom"
             ],
             description: "Type of knowledge entry"
           },
@@ -88,13 +92,17 @@ defmodule HydraX.Product.Tools.KnowledgePropose do
 
   defp project_id(params) do
     case params[:project_id] || params["project_id"] do
-      value when is_integer(value) -> {:ok, value}
+      value when is_integer(value) ->
+        {:ok, value}
+
       value when is_binary(value) ->
         case Integer.parse(value) do
           {integer, ""} -> {:ok, integer}
           _ -> {:error, :product_project_context_required}
         end
-      _ -> {:error, :product_project_context_required}
+
+      _ ->
+        {:error, :product_project_context_required}
     end
   end
 

@@ -3,28 +3,12 @@ defmodule HydraXWeb.AnalyticsAPIController do
 
   import Ecto.Query
 
-  alias HydraX.Product.Insight
-  alias HydraX.Product.Decision
-  alias HydraX.Product.Strategy
-  alias HydraX.Product.Requirement
-  alias HydraX.Product.DesignNode
-  alias HydraX.Product.ArchitectureNode
-  alias HydraX.Product.Task, as: ProductTask
-  alias HydraX.Product.Learning
+  alias HydraX.Product.Graph, as: ProductGraph
   alias HydraX.Repo
 
   action_fallback HydraXWeb.ProjectAPIFallbackController
 
-  @node_schemas %{
-    "insight" => Insight,
-    "decision" => Decision,
-    "strategy" => Strategy,
-    "requirement" => Requirement,
-    "design_node" => DesignNode,
-    "architecture_node" => ArchitectureNode,
-    "task" => ProductTask,
-    "learning" => Learning
-  }
+  @node_types ~w(insight decision strategy requirement design_node architecture_node task learning)
 
   @accepted_statuses ~w(accepted active done)
 
@@ -60,18 +44,28 @@ defmodule HydraXWeb.AnalyticsAPIController do
 
   defp compute_productivity(project_id, since) do
     counts =
-      Enum.map(@node_schemas, fn {type, schema} ->
-        total =
-          schema
-          |> where([n], n.project_id == ^project_id and n.inserted_at >= ^since)
-          |> Repo.aggregate(:count, :id)
+      Enum.map(@node_types, fn type ->
+        case ProductGraph.base_query_for(type) do
+          nil ->
+            {type, 0, 0}
 
-        accepted =
-          schema
-          |> where([n], n.project_id == ^project_id and n.inserted_at >= ^since and n.status in ^@accepted_statuses)
-          |> Repo.aggregate(:count, :id)
+          query ->
+            total =
+              query
+              |> where([n], n.project_id == ^project_id and n.inserted_at >= ^since)
+              |> Repo.aggregate(:count, :id)
 
-        {type, total, accepted}
+            accepted =
+              query
+              |> where(
+                [n],
+                n.project_id == ^project_id and n.inserted_at >= ^since and
+                  n.status in ^@accepted_statuses
+              )
+              |> Repo.aggregate(:count, :id)
+
+            {type, total, accepted}
+        end
       end)
 
     total_created = Enum.reduce(counts, 0, fn {_, t, _}, acc -> acc + t end)

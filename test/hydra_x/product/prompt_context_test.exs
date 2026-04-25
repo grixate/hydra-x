@@ -7,6 +7,7 @@ defmodule HydraX.Product.PromptContextTest do
 
   defp project_with_scope! do
     email = "ctx+#{System.unique_integer([:positive])}@test.example.com"
+
     {:ok, %{user: user, workspace: workspace}} =
       Accounts.create_user_with_workspace(%{"email" => email, "display_name" => "T"})
 

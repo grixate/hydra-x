@@ -43,7 +43,8 @@ defmodule HydraX.Accounts do
     Repo.transaction(fn ->
       with {:ok, user} <- create_user(attrs),
            {:ok, workspace} <- create_personal_workspace(user),
-           {:ok, membership} <- add_member(workspace, user, %{role: "owner", invited_by_user_id: nil}) do
+           {:ok, membership} <-
+             add_member(workspace, user, %{role: "owner", invited_by_user_id: nil}) do
         %{user: user, workspace: workspace, membership: membership}
       else
         {:error, reason} -> Repo.rollback(reason)
@@ -61,7 +62,10 @@ defmodule HydraX.Accounts do
 
   def mark_email_verified(%User{} = user, now \\ DateTime.utc_now()) do
     user
-    |> Ecto.Changeset.change(email_verified_at: user.email_verified_at || now, last_sign_in_at: now)
+    |> Ecto.Changeset.change(
+      email_verified_at: user.email_verified_at || now,
+      last_sign_in_at: now
+    )
     |> Repo.update()
   end
 
@@ -170,8 +174,7 @@ defmodule HydraX.Accounts do
   def workspace_owner?(workspace_id, user_id) do
     Repo.exists?(
       from m in WorkspaceMembership,
-        where:
-          m.workspace_id == ^workspace_id and m.user_id == ^user_id and m.role == "owner"
+        where: m.workspace_id == ^workspace_id and m.user_id == ^user_id and m.role == "owner"
     )
   end
 
@@ -243,8 +246,7 @@ defmodule HydraX.Accounts do
     leaving_owner? =
       Repo.exists?(
         from m in WorkspaceMembership,
-          where:
-            m.workspace_id == ^workspace_id and m.user_id == ^user_id and m.role == "owner"
+          where: m.workspace_id == ^workspace_id and m.user_id == ^user_id and m.role == "owner"
       )
 
     if leaving_owner? and owners <= 1, do: {:error, :last_owner}, else: :ok
@@ -293,7 +295,8 @@ defmodule HydraX.Accounts do
         Repo.rollback(:invitation_invalid)
       end
 
-      user = get_user_by_email(invitation.email) || ensure_user_for_invitation(invitation, user_attrs)
+      user =
+        get_user_by_email(invitation.email) || ensure_user_for_invitation(invitation, user_attrs)
 
       membership_attrs = %{
         "role" => invitation.role,
@@ -493,6 +496,8 @@ defmodule HydraX.Accounts do
     :sha256 |> :crypto.hash(raw) |> Base.encode16(case: :lower)
   end
 
-  defp normalise_email(email) when is_binary(email), do: email |> String.trim() |> String.downcase()
+  defp normalise_email(email) when is_binary(email),
+    do: email |> String.trim() |> String.downcase()
+
   defp normalise_email(other), do: other
 end

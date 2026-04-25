@@ -70,12 +70,13 @@ defmodule HydraX.Product.Initiative do
     ProductPubSub.subscribe_project(project_id)
     schedule_tick()
 
-    {:ok, %{
-      project_id: project_id,
-      last_actions: %{},
-      queued_work: [],
-      paused: false
-    }}
+    {:ok,
+     %{
+       project_id: project_id,
+       last_actions: %{},
+       queued_work: [],
+       paused: false
+     }}
   end
 
   @impl true
@@ -87,7 +88,10 @@ defmodule HydraX.Product.Initiative do
         |> execute_batch()
       rescue
         error ->
-          Logger.error("[Initiative] Tick failed for project #{state.project_id}: #{inspect(error)}")
+          Logger.error(
+            "[Initiative] Tick failed for project #{state.project_id}: #{inspect(error)}"
+          )
+
           state
       end
 
@@ -99,23 +103,41 @@ defmodule HydraX.Product.Initiative do
   # (not the spec's incorrect {:product_event, ...} format)
   @impl true
   def handle_info({:product_project_event, "source.created", _payload}, state) do
-    state = queue_work(state, "researcher", :analyze_new_source,
-      "A new source has been uploaded. Analyze it and extract key insights with source references.",
-      :high)
+    state =
+      queue_work(
+        state,
+        "researcher",
+        :analyze_new_source,
+        "A new source has been uploaded. Analyze it and extract key insights with source references.",
+        :high
+      )
+
     {:noreply, state}
   end
 
   def handle_info({:product_project_event, "insight.created", _payload}, state) do
-    state = queue_work(state, "strategist", :evaluate_new_insight,
-      "A new insight has been created. Evaluate whether it warrants product decisions or updates to existing strategies.",
-      :medium)
+    state =
+      queue_work(
+        state,
+        "strategist",
+        :evaluate_new_insight,
+        "A new insight has been created. Evaluate whether it warrants product decisions or updates to existing strategies.",
+        :medium
+      )
+
     {:noreply, state}
   end
 
   def handle_info({:product_project_event, "decision.created", _payload}, state) do
-    state = queue_work(state, "architect", :assess_decision_feasibility,
-      "A new decision has been recorded. Assess its technical feasibility and identify any architecture implications.",
-      :medium)
+    state =
+      queue_work(
+        state,
+        "architect",
+        :assess_decision_feasibility,
+        "A new decision has been recorded. Assess its technical feasibility and identify any architecture implications.",
+        :medium
+      )
+
     {:noreply, state}
   end
 
@@ -144,13 +166,19 @@ defmodule HydraX.Product.Initiative do
         _ -> "strategist"
       end
 
-    state = queue_work(state, proposed_by, :analyze_simulation_results,
-      "Simulation '#{title}' (ID #{sim_node_id}) has completed. " <>
-      "Review the simulation results in the simulation node metadata. " <>
-      "Analyze the outcomes, identify key findings, and create a recommendation. " <>
-      "If the results are conclusive, propose a decision or update an existing one. " <>
-      "Update the relevant strategy memo artifact with your analysis.",
-      :high)
+    state =
+      queue_work(
+        state,
+        proposed_by,
+        :analyze_simulation_results,
+        "Simulation '#{title}' (ID #{sim_node_id}) has completed. " <>
+          "Review the simulation results in the simulation node metadata. " <>
+          "Analyze the outcomes, identify key findings, and create a recommendation. " <>
+          "If the results are conclusive, propose a decision or update an existing one. " <>
+          "Update the relevant strategy memo artifact with your analysis.",
+        :high
+      )
+
     {:noreply, state}
   end
 
@@ -160,12 +188,19 @@ defmodule HydraX.Product.Initiative do
     artifact = payload[:artifact] || payload["artifact"]
 
     if updated_by != "memory_agent" && artifact do
-      artifact_title = if is_map(artifact), do: Map.get(artifact, :title, "artifact"), else: "artifact"
+      artifact_title =
+        if is_map(artifact), do: Map.get(artifact, :title, "artifact"), else: "artifact"
 
-      state = queue_work(state, "memory_agent", :update_project_summary,
-        "The #{updated_by || "an agent"} updated artifact '#{artifact_title}'. " <>
-        "Review whether the Project Summary artifact needs updating to reflect this change.",
-        :low)
+      state =
+        queue_work(
+          state,
+          "memory_agent",
+          :update_project_summary,
+          "The #{updated_by || "an agent"} updated artifact '#{artifact_title}'. " <>
+            "Review whether the Project Summary artifact needs updating to reflect this change.",
+          :low
+        )
+
       {:noreply, state}
     else
       {:noreply, state}
@@ -194,12 +229,13 @@ defmodule HydraX.Product.Initiative do
 
   @impl true
   def handle_call(:status, _from, state) do
-    {:reply, %{
-      project_id: state.project_id,
-      paused: state.paused,
-      queued_work_count: length(state.queued_work),
-      last_actions: state.last_actions
-    }, state}
+    {:reply,
+     %{
+       project_id: state.project_id,
+       paused: state.paused,
+       queued_work_count: length(state.queued_work),
+       last_actions: state.last_actions
+     }, state}
   end
 
   # --- Evaluation logic ---
@@ -215,10 +251,10 @@ defmodule HydraX.Product.Initiative do
     else
       work_items =
         evaluate_agent(project_id, "researcher", @researcher_checks) ++
-        evaluate_agent(project_id, "strategist", @strategist_checks) ++
-        evaluate_agent(project_id, "architect", @architect_checks) ++
-        evaluate_agent(project_id, "designer", @designer_checks) ++
-        evaluate_agent(project_id, "coherence", @coherence_checks)
+          evaluate_agent(project_id, "strategist", @strategist_checks) ++
+          evaluate_agent(project_id, "architect", @architect_checks) ++
+          evaluate_agent(project_id, "designer", @designer_checks) ++
+          evaluate_agent(project_id, "coherence", @coherence_checks)
 
       # Deduplicate: merge new items with existing queue, keyed by {agent, check}
       new_queue =
@@ -236,6 +272,7 @@ defmodule HydraX.Product.Initiative do
       case run_check(project_id, agent, check) do
         {:work_needed, prompt, priority} ->
           [%{agent: agent, check: check, prompt: prompt, priority: priority}]
+
         :ok ->
           []
       end
@@ -246,15 +283,17 @@ defmodule HydraX.Product.Initiative do
 
   defp run_check(project_id, "researcher", :check_thin_evidence_areas) do
     density = Graph.density_report(project_id)
-    thin_areas = Enum.filter(density, fn {_type, stats} -> stats.count > 0 && stats.avg_outgoing < 0.5 end)
+
+    thin_areas =
+      Enum.filter(density, fn {_type, stats} -> stats.count > 0 && stats.avg_outgoing < 0.5 end)
 
     if length(thin_areas) > 0 do
       types = Enum.map(thin_areas, fn {type, _} -> type end) |> Enum.join(", ")
+
       {:work_needed,
        "The following areas of the product graph have thin evidence: #{types}. " <>
-       "Search for additional research, data, or signals that could strengthen these areas. " <>
-       "Create new insights with source references.",
-       :medium}
+         "Search for additional research, data, or signals that could strengthen these areas. " <>
+         "Create new insights with source references.", :medium}
     else
       :ok
     end
@@ -265,11 +304,11 @@ defmodule HydraX.Product.Initiative do
 
     if length(stale_insights) > 3 do
       titles = stale_insights |> Enum.take(5) |> Enum.map(& &1.title) |> Enum.join("; ")
+
       {:work_needed,
        "#{length(stale_insights)} insights haven't been revalidated in 60+ days, including: #{titles}. " <>
-       "Review each insight against current information. Flag any that are no longer accurate. " <>
-       "Update confidence levels.",
-       :low}
+         "Review each insight against current information. Flag any that are no longer accurate. " <>
+         "Update confidence levels.", :low}
     else
       :ok
     end
@@ -280,11 +319,11 @@ defmodule HydraX.Product.Initiative do
 
     if length(orphan_insights) > 2 do
       titles = orphan_insights |> Enum.take(3) |> Enum.map(& &1.title) |> Enum.join("; ")
+
       {:work_needed,
        "#{length(orphan_insights)} insights exist without downstream decisions, including: #{titles}. " <>
-       "Evaluate whether these insights warrant product decisions. If they do, draft decision proposals. " <>
-       "If they're informational only, note why no decision is needed.",
-       :medium}
+         "Evaluate whether these insights warrant product decisions. If they do, draft decision proposals. " <>
+         "If they're informational only, note why no decision is needed.", :medium}
     else
       :ok
     end
@@ -297,9 +336,8 @@ defmodule HydraX.Product.Initiative do
     if length(decision_flags) > 0 do
       {:work_needed,
        "#{length(decision_flags)} decisions have contradiction flags. " <>
-       "Consider whether a simulation would help resolve the uncertainty. " <>
-       "If so, propose a simulation configuration specifying what to test and why.",
-       :high}
+         "Consider whether a simulation would help resolve the uncertainty. " <>
+         "If so, propose a simulation configuration specifying what to test and why.", :high}
     else
       :ok
     end
@@ -322,8 +360,7 @@ defmodule HydraX.Product.Initiative do
     if length(flags) > 2 do
       {:work_needed,
        "#{length(flags)} contradiction flags are unresolved. " <>
-       "Review each contradiction and propose resolutions.",
-       :medium}
+         "Review each contradiction and propose resolutions.", :medium}
     else
       :ok
     end
@@ -347,9 +384,10 @@ defmodule HydraX.Product.Initiative do
 
     if length(overdue) > 0 do
       values = overdue |> Enum.take(3) |> Enum.map(& &1.value) |> Enum.join(", ")
+
       {:work_needed,
        "#{length(overdue)} watch targets are overdue for checking, including: #{values}. " <>
-       "Review each target for new developments and create insights from any findings.",
+         "Review each target for new developments and create insights from any findings.",
        :medium}
     else
       :ok
@@ -358,15 +396,18 @@ defmodule HydraX.Product.Initiative do
 
   defp run_check(project_id, "researcher", :check_unprocessed_sources) do
     unprocessed =
-      HydraX.Product.Source
-      |> where([s], s.project_id == ^project_id and s.processing_status in ["pending", "uploaded"])
+      HydraX.Graph.Node
+      |> where(
+        [s],
+        s.project_id == ^project_id and s.type_key == "source" and
+          s.status in ["pending", "uploaded"]
+      )
       |> Repo.aggregate(:count)
 
     if unprocessed > 0 do
       {:work_needed,
        "#{unprocessed} source(s) have been uploaded but not yet analyzed. " <>
-       "Process each source, extract key findings, and create insights with citations.",
-       :high}
+         "Process each source, extract key findings, and create insights with citations.", :high}
     else
       :ok
     end
@@ -378,16 +419,19 @@ defmodule HydraX.Product.Initiative do
     cutoff = DateTime.utc_now() |> DateTime.add(-30 * 86400)
 
     stale_decisions =
-      HydraX.Product.Decision
-      |> where([d], d.project_id == ^project_id and d.status == "accepted" and d.updated_at < ^cutoff)
+      HydraX.Graph.Node
+      |> where(
+        [d],
+        d.project_id == ^project_id and d.type_key == "decision" and
+          d.status == "accepted" and d.updated_at < ^cutoff
+      )
       |> Repo.aggregate(:count)
 
     if stale_decisions > 2 do
       {:work_needed,
        "#{stale_decisions} accepted decisions haven't been reviewed in 30+ days. " <>
-       "Evaluate whether each decision still holds given current insights and market conditions. " <>
-       "Flag any that need revision.",
-       :low}
+         "Evaluate whether each decision still holds given current insights and market conditions. " <>
+         "Flag any that need revision.", :low}
     else
       :ok
     end
@@ -396,8 +440,13 @@ defmodule HydraX.Product.Initiative do
   defp run_check(project_id, "strategist", :check_strategy_memo_due) do
     # Check if a strategy_memo artifact exists and when it was last updated
     last_memo_update =
-      HydraX.Product.Artifact
-      |> where([a], a.project_id == ^project_id and a.artifact_type == "strategy_memo" and a.status == "active")
+      HydraX.Graph.Node
+      |> where(
+        [a],
+        a.project_id == ^project_id and a.type_key == "artifact" and
+          fragment("?->>'artifact_type' = ?", a.attributes, "strategy_memo") and
+          a.status == "active"
+      )
       |> order_by([a], desc: a.updated_at)
       |> limit(1)
       |> select([a], a.updated_at)
@@ -412,9 +461,8 @@ defmodule HydraX.Product.Initiative do
     if days_since > 7 do
       {:work_needed,
        "It has been #{days_since} days since the last strategy memo update. " <>
-       "Review the current state of decisions, insights, and simulations. " <>
-       "Draft or update the strategy memo artifact with current recommendations.",
-       :medium}
+         "Review the current state of decisions, insights, and simulations. " <>
+         "Draft or update the strategy memo artifact with current recommendations.", :medium}
     else
       :ok
     end
@@ -425,27 +473,33 @@ defmodule HydraX.Product.Initiative do
   defp run_check(project_id, "architect", :check_unspecified_requirements) do
     # Requirements that have no architecture node edges
     req_ids_with_arch =
-      HydraX.Product.GraphEdge
-      |> where([e],
+      HydraX.Graph.NodeRelationship
+      |> where(
+        [e],
         e.project_id == ^project_id and
-        e.from_node_type == "requirement" and
-        e.to_node_type == "architecture_node"
+          e.from_node_type == "requirement" and
+          e.to_node_type == "architecture_node"
       )
       |> select([e], e.from_node_id)
       |> Repo.all()
       |> MapSet.new()
 
     unspecified =
-      HydraX.Product.Requirement
-      |> where([r], r.project_id == ^project_id and r.status in ["accepted", "draft"])
+      HydraX.Graph.Node
+      |> where(
+        [r],
+        r.project_id == ^project_id and r.type_key == "requirement" and
+          r.status in ["accepted", "draft"]
+      )
       |> Repo.all()
       |> Enum.reject(fn r -> MapSet.member?(req_ids_with_arch, r.id) end)
 
     if length(unspecified) > 1 do
       titles = unspecified |> Enum.take(3) |> Enum.map(& &1.title) |> Enum.join("; ")
+
       {:work_needed,
        "#{length(unspecified)} requirements have no architecture specification, including: #{titles}. " <>
-       "Create architecture nodes that describe how each requirement will be implemented.",
+         "Create architecture nodes that describe how each requirement will be implemented.",
        :medium}
     else
       :ok
@@ -457,20 +511,23 @@ defmodule HydraX.Product.Initiative do
     cutoff = DateTime.utc_now() |> DateTime.add(-7 * 86400)
 
     recent_arch =
-      HydraX.Product.ArchitectureNode
-      |> where([a], a.project_id == ^project_id and a.updated_at > ^cutoff)
+      HydraX.Graph.Node
+      |> where(
+        [a],
+        a.project_id == ^project_id and a.type_key == "architecture_node" and
+          a.updated_at > ^cutoff
+      )
       |> Repo.aggregate(:count)
 
     total_arch =
-      HydraX.Product.ArchitectureNode
-      |> where([a], a.project_id == ^project_id)
+      HydraX.Graph.Node
+      |> where([a], a.project_id == ^project_id and a.type_key == "architecture_node")
       |> Repo.aggregate(:count)
 
     if total_arch > 0 && recent_arch == 0 do
       {:work_needed,
        "No architecture nodes have been updated in 7+ days (#{total_arch} total). " <>
-       "Audit dependencies and technical assumptions. Flag any that need updating.",
-       :low}
+         "Audit dependencies and technical assumptions. Flag any that need updating.", :low}
     else
       :ok
     end
@@ -482,7 +539,7 @@ defmodule HydraX.Product.Initiative do
     if length(flags) > 1 do
       {:work_needed,
        "#{length(flags)} architecture nodes have open flags. " <>
-       "Review flagged nodes for technical debt or contradictions and propose resolutions.",
+         "Review flagged nodes for technical debt or contradictions and propose resolutions.",
        :medium}
     else
       :ok
@@ -493,28 +550,33 @@ defmodule HydraX.Product.Initiative do
 
   defp run_check(project_id, "designer", :check_undesigned_requirements) do
     req_ids_with_design =
-      HydraX.Product.GraphEdge
-      |> where([e],
+      HydraX.Graph.NodeRelationship
+      |> where(
+        [e],
         e.project_id == ^project_id and
-        e.from_node_type == "requirement" and
-        e.to_node_type == "design_node"
+          e.from_node_type == "requirement" and
+          e.to_node_type == "design_node"
       )
       |> select([e], e.from_node_id)
       |> Repo.all()
       |> MapSet.new()
 
     undesigned =
-      HydraX.Product.Requirement
-      |> where([r], r.project_id == ^project_id and r.status in ["accepted", "draft"])
+      HydraX.Graph.Node
+      |> where(
+        [r],
+        r.project_id == ^project_id and r.type_key == "requirement" and
+          r.status in ["accepted", "draft"]
+      )
       |> Repo.all()
       |> Enum.reject(fn r -> MapSet.member?(req_ids_with_design, r.id) end)
 
     if length(undesigned) > 1 do
       titles = undesigned |> Enum.take(3) |> Enum.map(& &1.title) |> Enum.join("; ")
+
       {:work_needed,
        "#{length(undesigned)} requirements have no design nodes, including: #{titles}. " <>
-       "Create design specifications for each unaddressed requirement.",
-       :medium}
+         "Create design specifications for each unaddressed requirement.", :medium}
     else
       :ok
     end
@@ -526,8 +588,7 @@ defmodule HydraX.Product.Initiative do
     if length(flags) > 1 do
       {:work_needed,
        "#{length(flags)} design nodes have open flags indicating potential inconsistencies. " <>
-       "Review and resolve design contradictions.",
-       :medium}
+         "Review and resolve design contradictions.", :medium}
     else
       :ok
     end
@@ -536,13 +597,23 @@ defmodule HydraX.Product.Initiative do
   defp run_check(project_id, "designer", :check_design_language_drift) do
     # Check if there's a design_language knowledge entry or artifact
     has_design_language =
-      HydraX.Product.KnowledgeEntry
-      |> where([k], k.project_id == ^project_id and k.entry_type == "design_language" and k.status == "active")
+      HydraX.Graph.Node
+      |> where(
+        [k],
+        k.project_id == ^project_id and k.type_key == "knowledge_entry" and
+          fragment("?->>'entry_type' = ?", k.attributes, "design_language") and
+          k.status == "active"
+      )
       |> Repo.exists?()
 
     has_design_language_artifact =
-      HydraX.Product.Artifact
-      |> where([a], a.project_id == ^project_id and a.artifact_type == "design_language" and a.status == "active")
+      HydraX.Graph.Node
+      |> where(
+        [a],
+        a.project_id == ^project_id and a.type_key == "artifact" and
+          fragment("?->>'artifact_type' = ?", a.attributes, "design_language") and
+          a.status == "active"
+      )
       |> Repo.exists?()
 
     if has_design_language || has_design_language_artifact do
@@ -550,16 +621,19 @@ defmodule HydraX.Product.Initiative do
       cutoff = DateTime.utc_now() |> DateTime.add(-7 * 86400)
 
       recent_design_count =
-        HydraX.Product.DesignNode
-        |> where([d], d.project_id == ^project_id and d.inserted_at > ^cutoff)
+        HydraX.Graph.Node
+        |> where(
+          [d],
+          d.project_id == ^project_id and d.type_key == "design_node" and
+            d.inserted_at > ^cutoff
+        )
         |> Repo.aggregate(:count)
 
       if recent_design_count > 2 do
         {:work_needed,
          "#{recent_design_count} design nodes created in the last 7 days. " <>
-         "Review whether they align with the established design language. " <>
-         "Flag any inconsistencies.",
-         :low}
+           "Review whether they align with the established design language. " <>
+           "Flag any inconsistencies.", :low}
       else
         :ok
       end
@@ -580,9 +654,14 @@ defmodule HydraX.Product.Initiative do
     now = DateTime.utc_now()
 
     # Sort by numeric priority (descending = highest first)
-    sorted = Enum.sort_by(state.queued_work, fn item ->
-      Map.get(@priority_values, item.priority, 0)
-    end, :desc)
+    sorted =
+      Enum.sort_by(
+        state.queued_work,
+        fn item ->
+          Map.get(@priority_values, item.priority, 0)
+        end,
+        :desc
+      )
 
     # Filter out agents on cooldown
     {executable, on_cooldown} =
@@ -663,9 +742,7 @@ defmodule HydraX.Product.Initiative do
     :ok
   rescue
     err ->
-      Logger.warning(
-        "[Initiative] autonomous work failed for #{persona}: #{inspect(err)}"
-      )
+      Logger.warning("[Initiative] autonomous work failed for #{persona}: #{inspect(err)}")
 
       :error
   end
@@ -710,7 +787,7 @@ defmodule HydraX.Product.Initiative do
 
   defp find_insights_without_decisions(project_id) do
     insights_with_decisions =
-      HydraX.Product.GraphEdge
+      HydraX.Graph.NodeRelationship
       |> where(
         [e],
         e.project_id == ^project_id and
@@ -721,8 +798,12 @@ defmodule HydraX.Product.Initiative do
       |> Repo.all()
       |> MapSet.new()
 
-    HydraX.Product.Insight
-    |> where([i], i.project_id == ^project_id and i.status in ["accepted", "draft"])
+    HydraX.Graph.Node
+    |> where(
+      [i],
+      i.project_id == ^project_id and i.type_key == "insight" and
+        i.status in ["accepted", "draft"]
+    )
     |> Repo.all()
     |> Enum.reject(fn i -> MapSet.member?(insights_with_decisions, i.id) end)
   end

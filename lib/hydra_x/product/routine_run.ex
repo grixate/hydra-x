@@ -14,7 +14,7 @@ defmodule HydraX.Product.RoutineRun do
     field :cost_cents, :integer
     field :metadata, :map, default: %{}
 
-    belongs_to :routine, HydraX.Product.Routine
+    belongs_to :routine, HydraX.Graph.Node, foreign_key: :routine_id
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -22,8 +22,15 @@ defmodule HydraX.Product.RoutineRun do
   def changeset(run, attrs) do
     run
     |> cast(attrs, [
-      :routine_id, :started_at, :completed_at, :status,
-      :prompt_resolved, :output, :token_count, :cost_cents, :metadata
+      :routine_id,
+      :started_at,
+      :completed_at,
+      :status,
+      :prompt_resolved,
+      :output,
+      :token_count,
+      :cost_cents,
+      :metadata
     ])
     |> validate_required([:routine_id, :started_at, :status])
     |> validate_inclusion(:status, @statuses)
