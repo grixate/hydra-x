@@ -1,14 +1,12 @@
 defmodule HydraX.Graph.FlagTypeDefinition do
   @moduledoc """
-  Declares a flag type within a domain (e.g. `orphan`, `contradicted`,
+  Declares a flag type within a project (e.g. `orphan`, `contradicted`,
   `stale`). Severity defaults come from the definition; individual flag
-  rows may override.
+  rows may override. Per the Part 1 amendment, scoped to project.
   """
 
   use Ecto.Schema
   import Ecto.Changeset
-
-  alias HydraX.Graph.Domain
 
   @severities ~w(info warning critical)
 
@@ -18,7 +16,7 @@ defmodule HydraX.Graph.FlagTypeDefinition do
     field :description, :string
     field :default_severity, :string, default: "warning"
 
-    belongs_to :domain, Domain
+    belongs_to :project, HydraX.Product.Project
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -27,13 +25,13 @@ defmodule HydraX.Graph.FlagTypeDefinition do
 
   def changeset(definition, attrs) do
     definition
-    |> cast(attrs, [:domain_id, :type_key, :display_name, :description, :default_severity])
-    |> validate_required([:domain_id, :type_key, :display_name, :default_severity])
+    |> cast(attrs, [:project_id, :type_key, :display_name, :description, :default_severity])
+    |> validate_required([:project_id, :type_key, :display_name, :default_severity])
     |> validate_format(:type_key, ~r/^[a-z][a-z0-9_]*$/,
       message: "must be lowercase snake_case starting with a letter"
     )
     |> validate_inclusion(:default_severity, @severities)
-    |> unique_constraint([:domain_id, :type_key])
-    |> foreign_key_constraint(:domain_id)
+    |> unique_constraint([:project_id, :type_key])
+    |> foreign_key_constraint(:project_id)
   end
 end

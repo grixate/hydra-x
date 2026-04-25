@@ -1045,27 +1045,27 @@ export const api = {
       body: JSON.stringify({ nodes }),
     }),
   listSchemaProposals: (
-    domainSlug: string,
+    projectId: number,
     opts: { status?: string } = {},
   ) => {
     const query = opts.status ? `?status=${encodeURIComponent(opts.status)}` : "";
-    return request<SchemaProposal[]>(`/domains/${domainSlug}/proposals${query}`);
+    return request<SchemaProposal[]>(`/projects/${projectId}/schema/proposals${query}`);
   },
   createSchemaProposal: (
-    domainSlug: string,
+    projectId: number,
     proposal: SchemaProposalRequest,
   ) =>
-    request<SchemaProposal>(`/domains/${domainSlug}/proposals`, {
+    request<SchemaProposal>(`/projects/${projectId}/schema/proposals`, {
       method: "POST",
       body: JSON.stringify({ proposal }),
     }),
   decideSchemaProposal: (
-    domainSlug: string,
+    projectId: number,
     proposalId: number,
     action: "approve" | "reject",
     opts: { by_operator?: boolean } = {},
   ) =>
-    request<SchemaProposal>(`/domains/${domainSlug}/proposals/${proposalId}`, {
+    request<SchemaProposal>(`/projects/${projectId}/schema/proposals/${proposalId}`, {
       method: "PATCH",
       body: JSON.stringify({ action, by_operator: opts.by_operator ?? true }),
     }),

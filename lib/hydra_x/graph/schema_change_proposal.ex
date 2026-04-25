@@ -1,8 +1,8 @@
 defmodule HydraX.Graph.SchemaChangeProposal do
   @moduledoc """
-  A proposed change to a domain's schema, authored by an operator or
+  A proposed change to a project's schema, authored by an operator or
   agent. Approved proposals are applied atomically by the registry and
-  trigger a PubSub schema-version bump.
+  trigger a PubSub cache invalidation for that project.
 
   V1 supports only additive changes (§8.3 of the substrate spec):
   removing or renaming types, changing attribute types, or deleting
@@ -11,8 +11,6 @@ defmodule HydraX.Graph.SchemaChangeProposal do
 
   use Ecto.Schema
   import Ecto.Changeset
-
-  alias HydraX.Graph.Domain
 
   @change_kinds ~w(
     add_node_type
@@ -35,7 +33,7 @@ defmodule HydraX.Graph.SchemaChangeProposal do
     field :reviewed_by_operator, :boolean, default: false
     field :applied_at, :utc_datetime_usec
 
-    belongs_to :domain, Domain
+    belongs_to :project, HydraX.Product.Project
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -46,7 +44,7 @@ defmodule HydraX.Graph.SchemaChangeProposal do
   def changeset(proposal, attrs) do
     proposal
     |> cast(attrs, [
-      :domain_id,
+      :project_id,
       :proposed_by_agent_id,
       :proposed_by_operator,
       :change_kind,
@@ -56,9 +54,9 @@ defmodule HydraX.Graph.SchemaChangeProposal do
       :reviewed_by_operator,
       :applied_at
     ])
-    |> validate_required([:domain_id, :change_kind, :status, :payload])
+    |> validate_required([:project_id, :change_kind, :status, :payload])
     |> validate_inclusion(:change_kind, @change_kinds)
     |> validate_inclusion(:status, @statuses)
-    |> foreign_key_constraint(:domain_id)
+    |> foreign_key_constraint(:project_id)
   end
 end

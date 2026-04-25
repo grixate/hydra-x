@@ -1,18 +1,22 @@
 defmodule HydraX.Graph do
   @moduledoc """
-  The domain-neutral substrate context. Owns `Node`, `NodeRelationship`,
-  `NodeFlag`, and the schema-definition tables (`Domain`,
-  `NodeTypeDefinition`, `RelationshipTypeDefinition`,
-  `FlagTypeDefinition`).
+  The substrate context. Owns `Node`, `NodeRelationship`, `NodeFlag`,
+  and the schema-definition tables (`NodeTypeDefinition`,
+  `RelationshipTypeDefinition`, `FlagTypeDefinition`).
 
-  Phase 1a ships the schemas and migration only. Subsequent phases add:
-    * `SchemaRegistry` — cached schema lookup + attribute validation.
-    * `Primitives`-keyed traversal and coherence.
-    * Schema-change proposal lifecycle.
-    * Adapters from the existing typed product context.
+  Per the Part 1 amendment, the substrate is project-scoped — there
+  is no longer a `domain` layer above projects. Schemas live with
+  projects; pretrained projects (lib/hydra_x/pretrained_projects/)
+  populate them at apply time.
+
+  Composition:
+    * `SchemaRegistry` — cached schema lookup + attribute validation
+      keyed by project_id.
+    * `Primitives` — base epistemic vocabulary (claim/evidence/etc.).
+    * `ProjectSchemas` — project-scoped CRUD for type definitions.
+    * `Proposals` — schema-change proposal lifecycle.
   """
 
-  alias HydraX.Graph.Domain
   alias HydraX.Graph.FlagTypeDefinition
   alias HydraX.Graph.Node
   alias HydraX.Graph.NodeEmbedding
@@ -24,8 +28,7 @@ defmodule HydraX.Graph do
   alias HydraX.Graph.SchemaChangeProposal
 
   @type schema_module ::
-          Domain
-          | NodeTypeDefinition
+          NodeTypeDefinition
           | RelationshipTypeDefinition
           | FlagTypeDefinition
           | Node

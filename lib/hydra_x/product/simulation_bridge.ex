@@ -7,7 +7,6 @@ defmodule HydraX.Product.SimulationBridge do
   import Ecto.Query
   require Logger
 
-  alias HydraX.Graph.Domains
   alias HydraX.Graph.Node, as: GraphNode
   alias HydraX.Graph.Nodes, as: GraphNodes
   alias HydraX.Product
@@ -77,7 +76,7 @@ defmodule HydraX.Product.SimulationBridge do
       })
 
     {:ok, sim_node} =
-      GraphNodes.create_node(product_domain!(), project_id, %{
+      GraphNodes.create_node(project_id,%{
         type_key: "simulation",
         title: Map.get(metadata, "title") || simulation_title(scenario_summary),
         body: scenario_summary,
@@ -131,7 +130,7 @@ defmodule HydraX.Product.SimulationBridge do
     }
 
     {:ok, sim_node} =
-      GraphNodes.create_node(product_domain!(), project_id, %{
+      GraphNodes.create_node(project_id,%{
         type_key: "simulation",
         title: title,
         status: "proposed",
@@ -272,17 +271,6 @@ defmodule HydraX.Product.SimulationBridge do
 
   def get_product_simulation!(id) do
     Repo.one!(from n in GraphNode, where: n.id == ^id and n.type_key == "simulation")
-  end
-
-  defp product_domain! do
-    case Domains.get_domain_by_slug("product_development") do
-      nil ->
-        {:ok, domain} = HydraX.Graph.Domains.ProductDevelopment.seed()
-        domain
-
-      domain ->
-        domain
-    end
   end
 
   defp simulation_title(nil), do: "Simulation"

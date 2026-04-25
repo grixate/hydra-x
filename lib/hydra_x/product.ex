@@ -15,7 +15,6 @@ defmodule HydraX.Product do
   alias HydraX.Product.BoardSession
   alias HydraX.Product.Citations
   alias HydraX.Product.GraphFlag
-  alias HydraX.Graph.Domains
   alias HydraX.Graph.Node, as: GraphNode
   alias HydraX.Graph.Nodes, as: GraphNodes
   alias HydraX.Product.InsightEvidence
@@ -277,7 +276,7 @@ defmodule HydraX.Product do
         attributes: source_attributes(source_attrs)
       }
 
-      with {:ok, source} <- GraphNodes.create_node(product_domain!(), project.id, node_attrs) do
+      with {:ok, source} <- GraphNodes.create_node(project.id,node_attrs) do
         ProductPubSub.broadcast_project_event(project.id, "source.created", source)
 
         ProductPubSub.broadcast_source_progress(source, "progress", %{
@@ -400,8 +399,6 @@ defmodule HydraX.Product do
     else
       case load_project_chunks(project.id, evidence_chunk_ids) do
         {:ok, chunks} ->
-          domain = product_domain!()
-
           Repo.transaction(fn ->
             node_attrs = %{
               type_key: "insight",
@@ -413,7 +410,7 @@ defmodule HydraX.Product do
             }
 
             insight =
-              case GraphNodes.create_node(domain, project.id, node_attrs) do
+              case GraphNodes.create_node(project.id, node_attrs) do
                 {:ok, node} -> node
                 {:error, changeset} -> Repo.rollback(changeset)
               end
@@ -509,17 +506,6 @@ defmodule HydraX.Product do
     )
   end
 
-  defp product_domain! do
-    case Domains.get_domain_by_slug("product_development") do
-      nil ->
-        {:ok, domain} = HydraX.Graph.Domains.ProductDevelopment.seed()
-        domain
-
-      domain ->
-        domain
-    end
-  end
-
   defp maybe_filter_insight_status(query, nil), do: query
   defp maybe_filter_insight_status(query, ""), do: query
   defp maybe_filter_insight_status(query, status), do: where(query, [n], n.status == ^status)
@@ -585,7 +571,7 @@ defmodule HydraX.Product do
             }
 
             requirement =
-              case GraphNodes.create_node(product_domain!(), project.id, node_attrs) do
+              case GraphNodes.create_node(project.id,node_attrs) do
                 {:ok, node} -> node
                 {:error, changeset} -> Repo.rollback(changeset)
               end
@@ -730,7 +716,7 @@ defmodule HydraX.Product do
       attributes: decision_attributes(attrs)
     }
 
-    GraphNodes.create_node(product_domain!(), project_id, node_attrs)
+    GraphNodes.create_node(project_id,node_attrs)
     |> maybe_broadcast_project_record("decision.created")
     |> maybe_notify_coherence("decision", :created)
   end
@@ -823,7 +809,7 @@ defmodule HydraX.Product do
       attributes: attrs["metadata"] || %{}
     }
 
-    GraphNodes.create_node(product_domain!(), project_id, node_attrs)
+    GraphNodes.create_node(project_id,node_attrs)
     |> maybe_broadcast_project_record("strategy.created")
     |> maybe_notify_coherence("strategy", :created)
   end
@@ -948,7 +934,7 @@ defmodule HydraX.Product do
       attributes: merged_attributes
     }
 
-    GraphNodes.create_node(product_domain!(), project_id, node_attrs)
+    GraphNodes.create_node(project_id,node_attrs)
     |> maybe_broadcast_project_record(event)
   end
 
@@ -1049,7 +1035,7 @@ defmodule HydraX.Product do
       attributes: task_attributes
     }
 
-    GraphNodes.create_node(product_domain!(), project_id, node_attrs)
+    GraphNodes.create_node(project_id,node_attrs)
     |> maybe_broadcast_project_record("task.created")
   end
 
@@ -1147,7 +1133,7 @@ defmodule HydraX.Product do
       attributes: learning_attributes
     }
 
-    GraphNodes.create_node(product_domain!(), project_id, node_attrs)
+    GraphNodes.create_node(project_id,node_attrs)
     |> maybe_broadcast_project_record("learning.created")
   end
 
@@ -1209,7 +1195,6 @@ defmodule HydraX.Product do
       attrs
       |> Map.put_new("type_key", attrs["kind"])
       |> Map.put_new("attributes", attrs["metadata"] || %{})
-      |> Map.put_new("domain_id", default_graph_domain_id())
 
     %HydraX.Graph.NodeRelationship{}
     |> HydraX.Graph.NodeRelationship.changeset(attrs)
@@ -1218,17 +1203,6 @@ defmodule HydraX.Product do
 
   def delete_graph_edge(%HydraX.Graph.NodeRelationship{} = edge) do
     Repo.delete(edge)
-  end
-
-  defp default_graph_domain_id do
-    case HydraX.Graph.Domains.get_domain_by_slug("product_development") do
-      %{id: id} ->
-        id
-
-      nil ->
-        {:ok, %{id: id}} = HydraX.Graph.Domains.ProductDevelopment.seed()
-        id
-    end
   end
 
   @doc """
@@ -1386,7 +1360,7 @@ defmodule HydraX.Product do
       attributes: constraint_attributes(attrs)
     }
 
-    GraphNodes.create_node(product_domain!(), project_id, node_attrs)
+    GraphNodes.create_node(project_id,node_attrs)
     |> maybe_broadcast_project_record("constraint.created")
   end
 
@@ -1462,7 +1436,7 @@ defmodule HydraX.Product do
     project_id = project_id(project_or_id)
     attrs = normalize_product_record_attrs(attrs)
 
-    GraphNodes.create_node(product_domain!(), project_id, %{
+    GraphNodes.create_node(project_id,%{
       type_key: "routine",
       title: attrs["title"],
       body: attrs["description"],
@@ -1585,7 +1559,7 @@ defmodule HydraX.Product do
     project_id = project_id(project_or_id)
     attrs = normalize_product_record_attrs(attrs)
 
-    GraphNodes.create_node(product_domain!(), project_id, %{
+    GraphNodes.create_node(project_id,%{
       type_key: "knowledge_entry",
       title: attrs["title"],
       body: attrs["content"],
@@ -2484,7 +2458,6 @@ defmodule HydraX.Product do
     %GraphNode{}
     |> GraphNode.changeset(%{
       project_id: project.id,
-      domain_id: product_domain!().id,
       type_key: "source",
       title: attrs["title"],
       body: attrs["content"],
@@ -3121,7 +3094,6 @@ defmodule HydraX.Product do
     %GraphNode{}
     |> GraphNode.changeset(%{
       project_id: project_id,
-      domain_id: product_domain!().id,
       type_key: "insight",
       title: attrs["title"],
       body: attrs["body"],
@@ -3135,7 +3107,6 @@ defmodule HydraX.Product do
     %GraphNode{}
     |> GraphNode.changeset(%{
       project_id: project_id,
-      domain_id: product_domain!().id,
       type_key: "requirement",
       title: attrs["title"],
       body: attrs["body"],
@@ -3871,7 +3842,7 @@ defmodule HydraX.Product do
       attributes: artifact_attributes
     }
 
-    case GraphNodes.create_node(product_domain!(), project_id, node_attrs) do
+    case GraphNodes.create_node(project_id,node_attrs) do
       {:ok, artifact} ->
         ProductPubSub.broadcast_project_event(project_id, "artifact.created", artifact)
         {:ok, artifact}
@@ -3973,27 +3944,36 @@ defmodule HydraX.Product do
   end
 
   defp provision_default_artifacts!(project) do
-    defaults = [
-      %{
-        "title" => "Project Summary",
-        "artifact_type" => "project_summary",
-        "body" =>
-          "# #{project.name}\n\nProject summary will be maintained as the product graph evolves.",
-        "owner_persona" => "memory_agent",
-        "last_updated_by" => "system"
-      },
-      %{
-        "title" => "Decision Log",
-        "artifact_type" => "decision_log",
-        "body" => "# Decision Log\n\nChronological record of all decisions with reasoning.",
-        "owner_persona" => "memory_agent",
-        "last_updated_by" => "system"
-      }
-    ]
+    # Per the Part 1 amendment, projects start with no schema. Only
+    # provision defaults if the project has the `artifact` type defined
+    # (e.g. it had a pretrained project applied).
+    case HydraX.Graph.SchemaRegistry.fetch_node_type(project.id, "artifact") do
+      :error ->
+        :ok
 
-    Enum.each(defaults, fn attrs ->
-      {:ok, _} = create_artifact(project.id, attrs)
-    end)
+      {:ok, _} ->
+        defaults = [
+          %{
+            "title" => "Project Summary",
+            "artifact_type" => "project_summary",
+            "body" =>
+              "# #{project.name}\n\nProject summary will be maintained as the product graph evolves.",
+            "owner_persona" => "memory_agent",
+            "last_updated_by" => "system"
+          },
+          %{
+            "title" => "Decision Log",
+            "artifact_type" => "decision_log",
+            "body" => "# Decision Log\n\nChronological record of all decisions with reasoning.",
+            "owner_persona" => "memory_agent",
+            "last_updated_by" => "system"
+          }
+        ]
+
+        Enum.each(defaults, fn attrs ->
+          {:ok, _} = create_artifact(project.id, attrs)
+        end)
+    end
   end
 
   defp load_project(%Project{} = project),

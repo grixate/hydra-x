@@ -9,7 +9,6 @@ defmodule HydraX.Graph.NodeRelationship do
   use Ecto.Schema
   import Ecto.Changeset
 
-  alias HydraX.Graph.Domain
   alias HydraX.Graph.Node
   alias HydraX.Graph.Primitives
   alias HydraX.Graph.SchemaRegistry
@@ -28,7 +27,6 @@ defmodule HydraX.Graph.NodeRelationship do
     field :from_node_type, :string
     field :to_node_type, :string
 
-    belongs_to :domain, Domain
     belongs_to :project, HydraX.Product.Project
     belongs_to :from_node, Node
     belongs_to :to_node, Node
@@ -39,7 +37,6 @@ defmodule HydraX.Graph.NodeRelationship do
   def changeset(relationship, attrs) do
     relationship
     |> cast(attrs, [
-      :domain_id,
       :project_id,
       :type_key,
       :extends_primitive,
@@ -51,7 +48,7 @@ defmodule HydraX.Graph.NodeRelationship do
       :attributes,
       :created_by_agent_id
     ])
-    |> validate_required([:domain_id, :project_id, :type_key, :from_node_id, :to_node_id])
+    |> validate_required([:project_id, :type_key, :from_node_id, :to_node_id])
     |> validate_change(:extends_primitive, fn :extends_primitive, value ->
       cond do
         is_nil(value) -> []
@@ -60,7 +57,6 @@ defmodule HydraX.Graph.NodeRelationship do
       end
     end)
     |> validate_against_registry()
-    |> foreign_key_constraint(:domain_id)
     |> foreign_key_constraint(:project_id)
     |> foreign_key_constraint(:from_node_id)
     |> foreign_key_constraint(:to_node_id)
@@ -70,20 +66,20 @@ defmodule HydraX.Graph.NodeRelationship do
   end
 
   defp validate_against_registry(changeset) do
-    domain_id = get_field(changeset, :domain_id)
+    project_id = get_field(changeset, :project_id)
     type_key = get_field(changeset, :type_key)
 
     cond do
       !changeset.valid? -> changeset
-      is_nil(domain_id) or is_nil(type_key) -> changeset
-      true -> apply_type_definition(changeset, domain_id, type_key)
+      is_nil(project_id) or is_nil(type_key) -> changeset
+      true -> apply_type_definition(changeset, project_id, type_key)
     end
   end
 
-  defp apply_type_definition(changeset, domain_id, type_key) do
-    case SchemaRegistry.fetch_relationship_type(domain_id, type_key) do
+  defp apply_type_definition(changeset, project_id, type_key) do
+    case SchemaRegistry.fetch_relationship_type(project_id, type_key) do
       :error ->
-        add_error(changeset, :type_key, "is not defined for this domain")
+        add_error(changeset, :type_key, "is not defined for this project")
 
       {:ok, type_def} ->
         changeset

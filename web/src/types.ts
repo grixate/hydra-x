@@ -786,7 +786,7 @@ export type SchemaProposalStatus =
 
 export type SchemaProposal = {
   id: number;
-  domain_id: number;
+  project_id: number;
   change_kind: SchemaProposalChangeKind;
   payload: Record<string, unknown>;
   rationale: string | null;

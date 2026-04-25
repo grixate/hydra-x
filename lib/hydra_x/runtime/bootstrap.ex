@@ -21,7 +21,9 @@ defmodule HydraX.Runtime.Bootstrap do
   end
 
   defp bootstrap_runtime(state) do
-    {:ok, _domain} = HydraX.Graph.Domains.ProductDevelopment.seed()
+    # Per the Part 1 amendment, schemas are project-scoped — there is
+    # no global pretrained project to seed at app startup. Pretrained
+    # projects apply to specific projects at creation time.
     agent = HydraX.Runtime.ensure_default_agent!()
     HydraX.Budget.ensure_policy!(agent.id)
     HydraX.Runtime.reconcile_agents!()

@@ -10,7 +10,6 @@ defmodule HydraX.Graph.Nodes do
 
   import Ecto.Query, warn: false
 
-  alias HydraX.Graph.Domain
   alias HydraX.Graph.Node
   alias HydraX.Repo
 
@@ -19,15 +18,14 @@ defmodule HydraX.Graph.Nodes do
   # Writes
 
   @doc """
-  Create a node under the given domain/project/type. Defaults `scope`
-  and `scope_root_id` to the project (matching the current platform
+  Create a node under the given project + type. Defaults `scope` and
+  `scope_root_id` to the project (matching the current platform
   convention). Attribute validation happens in `Node.changeset/2`
   against the declaring type's `attribute_schema`.
   """
-  def create_node(%Domain{} = domain, project_id, attrs)
+  def create_node(project_id, attrs)
       when is_integer(project_id) and is_map(attrs) do
     base = %{
-      domain_id: domain.id,
       project_id: project_id,
       scope: "project",
       scope_root_id: project_id
@@ -125,7 +123,7 @@ defmodule HydraX.Graph.Nodes do
   end
 
   @known_keys ~w(
-    domain_id project_id type_key extends_primitive title body attributes
+    project_id type_key extends_primitive title body attributes
     status importance confidence scope scope_root_id lock_version
     created_by_agent_id created_by_operator archived_at
   )a
