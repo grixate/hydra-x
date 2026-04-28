@@ -48,7 +48,21 @@ defmodule HydraXWeb.ConnCase do
       seed_default_agent()
     end
 
+    conn =
+      if auto_operator_login?(tags) do
+        register_and_log_in_operator(conn)
+      else
+        conn
+      end
+
     {:ok, conn: conn}
+  end
+
+  defp auto_operator_login?(tags) do
+    file = Map.get(tags, :file, "")
+
+    is_binary(file) and String.contains?(file, "test/hydra_x_web/live/") and
+      Map.get(tags, :operator_login, true)
   end
 
   defp seed_default_agent do
@@ -99,5 +113,42 @@ defmodule HydraXWeb.ConnCase do
       else
         reraise error, __STACKTRACE__
       end
+  end
+
+  def create_operator_user!(attrs \\ %{}) do
+    attrs = Map.new(attrs)
+
+    email =
+      Map.get(attrs, :email, "operator+#{System.unique_integer([:positive])}@test.example.com")
+
+    password = Map.get(attrs, :password, "hydra-password-123")
+
+    case HydraX.Accounts.register_first_operator(%{
+           "email" => email,
+           "display_name" => Map.get(attrs, :display_name, "Operator"),
+           "password" => password,
+           "password_confirmation" => password
+         }) do
+      {:ok, %{user: user}} ->
+        user
+
+      {:error, :registration_closed} ->
+        import Ecto.Query
+
+        HydraX.Repo.one!(
+          from u in HydraX.Accounts.User,
+            where: not is_nil(u.operator_at),
+            order_by: [asc: u.operator_at],
+            limit: 1
+        )
+    end
+  end
+
+  def register_and_log_in_operator(conn, attrs \\ %{}) do
+    user = create_operator_user!(attrs)
+
+    conn
+    |> Plug.Test.init_test_session(%{})
+    |> HydraXWeb.OperatorAuth.log_in(user)
   end
 end

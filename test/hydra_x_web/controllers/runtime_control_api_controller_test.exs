@@ -50,6 +50,7 @@ defmodule HydraXWeb.RuntimeControlAPIControllerTest do
       |> Project.changeset(%{
         "name" => "Runtime Control #{suffix}",
         "slug" => "runtime-control-#{suffix}",
+        "workspace_id" => HydraX.Accounts.default_workspace_id(),
         "researcher_agent_id" => researcher.id,
         "strategist_agent_id" => strategist.id
       })
@@ -75,7 +76,10 @@ defmodule HydraXWeb.RuntimeControlAPIControllerTest do
       })
       |> Repo.insert()
 
-    conn = put_req_header(conn, "accept", "application/json")
+    conn =
+      conn
+      |> register_and_log_in_operator()
+      |> put_req_header("accept", "application/json")
 
     {:ok,
      conn: conn,

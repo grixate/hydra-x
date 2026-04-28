@@ -5,10 +5,22 @@ import { ToastContainer } from "@/components/ui/toast-notification";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   AgentChatPane,
+  CHAT_PANE_OPEN_EVENT,
   classifySurface,
+  dispatchAgentChatPaneSwitch,
+  dispatchChatPaneOpen,
+  onboardingOpeningKey,
+  setPendingSend,
   type ChatSurface,
 } from "@/components/chat/agent-chat-pane";
 import { CollapsedChatBar } from "@/components/chat/collapsed-chat-bar";
+import { ForkScreen, type OnboardingScenario } from "@/components/onboarding/fork-screen";
+import { ExploreCarousel } from "@/components/onboarding/explore-carousel";
+import { IdeaPrompt } from "@/components/onboarding/idea-prompt";
+import { MaterialsDropZone } from "@/components/onboarding/materials-drop-zone";
+import { useOnboarding } from "@/hooks/use-onboarding";
+import { api } from "@/lib/api";
+import type { Project } from "@/types";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "motion/react";
 
@@ -64,6 +76,95 @@ export function AppLayout() {
     [location.pathname, projectId],
   );
 
+  const { status: onboarding, markCompleted } = useOnboarding(pid);
+  const [project, setProject] = useState<Project | null>(null);
+  const [forkChoice, setForkChoice] = useState<OnboardingScenario | null>(null);
+
+  useEffect(() => {
+    if (!pid) {
+      setProject(null);
+      return;
+    }
+    let cancelled = false;
+    api
+      .getProject(pid)
+      .then((p) => {
+        if (!cancelled) setProject(p);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [pid]);
+
+  const handleForkSelect = useCallback(
+    async (scenario: OnboardingScenario) => {
+      if (scenario === "just_start" || scenario === "skip") {
+        if (pid !== null) {
+          try {
+            window.localStorage.setItem(onboardingOpeningKey(pid), scenario);
+          } catch {
+            /* ignore */
+          }
+        }
+        await markCompleted();
+        dispatchChatPaneOpen();
+        dispatchAgentChatPaneSwitch("strategist");
+        return;
+      }
+
+      if (scenario === "explore" || scenario === "idea" || scenario === "materials") {
+        setForkChoice(scenario);
+        return;
+      }
+
+      await markCompleted();
+    },
+    [markCompleted, pid],
+  );
+
+  const handleCarouselDismiss = useCallback(async () => {
+    await markCompleted();
+    setForkChoice(null);
+  }, [markCompleted]);
+
+  const handleIdeaSubmit = useCallback(
+    async (text: string) => {
+      if (pid !== null) {
+        setPendingSend(pid, text);
+      }
+      await markCompleted();
+      setForkChoice(null);
+      dispatchChatPaneOpen();
+      dispatchAgentChatPaneSwitch("strategist");
+    },
+    [markCompleted, pid],
+  );
+
+  const handleIdeaBack = useCallback(() => {
+    setForkChoice(null);
+  }, []);
+
+  const handleMaterialsComplete = useCallback(
+    async (_count: number) => {
+      if (pid !== null) {
+        try {
+          window.localStorage.setItem(onboardingOpeningKey(pid), "materials");
+        } catch {
+          /* ignore */
+        }
+      }
+      await markCompleted();
+      setForkChoice(null);
+      dispatchChatPaneOpen();
+      dispatchAgentChatPaneSwitch("strategist");
+    },
+    [markCompleted, pid],
+  );
+
+  const showFork =
+    pid !== null && onboarding !== null && !onboarding.has_completed_first_session;
+
   const [chatCollapsed, setChatCollapsed] = useState<boolean>(() =>
     readStoredCollapsed(surface),
   );
@@ -99,6 +200,14 @@ export function AppLayout() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  useEffect(() => {
+    function onOpen() {
+      setChatCollapsed(false);
+    }
+    window.addEventListener(CHAT_PANE_OPEN_EVENT, onOpen);
+    return () => window.removeEventListener(CHAT_PANE_OPEN_EVENT, onOpen);
   }, []);
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -138,6 +247,47 @@ export function AppLayout() {
 
   // While dragging, skip the spring so width tracks the cursor 1:1.
   const marginTransition = dragging ? { duration: 0 } : MORPH_TRANSITION;
+
+  // Hold rendering until we know whether the fork screen should show.
+  // Without this gate, a first-time user sees the normal layout for a
+  // frame before the fork screen pops in.
+  if (pid !== null && onboarding === null) {
+    return <div className="h-screen bg-background" aria-hidden />;
+  }
+
+  if (showFork && forkChoice === "explore") {
+    return <ExploreCarousel onDismiss={handleCarouselDismiss} />;
+  }
+
+  if (showFork && forkChoice === "idea") {
+    return (
+      <IdeaPrompt
+        projectName={project?.name ?? ""}
+        onSubmit={handleIdeaSubmit}
+        onBack={handleIdeaBack}
+      />
+    );
+  }
+
+  if (showFork && forkChoice === "materials" && pid !== null) {
+    return (
+      <MaterialsDropZone
+        projectName={project?.name ?? ""}
+        projectId={pid}
+        onComplete={handleMaterialsComplete}
+        onBack={() => setForkChoice(null)}
+      />
+    );
+  }
+
+  if (showFork) {
+    return (
+      <ForkScreen
+        projectName={project?.name ?? ""}
+        onSelect={handleForkSelect}
+      />
+    );
+  }
 
   return (
     <TooltipProvider delayDuration={200}>

@@ -35,6 +35,82 @@ defmodule HydraX.Accounts do
     Repo.get_by(User, email: normalise_email(email))
   end
 
+  def operator_user_exists? do
+    Repo.exists?(from u in User, where: not is_nil(u.operator_at))
+  end
+
+  def get_operator_user(id) when is_binary(id) do
+    Repo.get_by(User, id: id) |> operator_or_nil()
+  end
+
+  def change_user_registration(attrs \\ %{}) do
+    User.registration_changeset(%User{}, attrs, hash_password: false)
+  end
+
+  def change_user_password(%User{} = user, attrs \\ %{}) do
+    User.password_changeset(user, attrs, hash_password: false)
+  end
+
+  @doc """
+  Register the first local user and promote them to the instance operator.
+  Once an operator exists, public registration is closed.
+  """
+  def register_first_operator(attrs) do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    Repo.transaction(fn ->
+      if operator_user_exists?(), do: Repo.rollback(:registration_closed)
+
+      with {:ok, user} <-
+             %User{}
+             |> User.registration_changeset(
+               attrs
+               |> Map.new(fn {k, v} -> {to_string(k), v} end)
+               |> Map.put("operator_at", now)
+             )
+             |> Ecto.Changeset.put_change(:operator_at, now)
+             |> Ecto.Changeset.put_change(:email_verified_at, now)
+             |> Repo.insert(),
+           {:ok, workspace} <- create_personal_workspace(user),
+           {:ok, membership} <-
+             add_member(workspace, user, %{role: "owner", invited_by_user_id: nil}) do
+        %{user: user, workspace: workspace, membership: membership}
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  def authenticate_user(email, password) when is_binary(email) and is_binary(password) do
+    user = get_user_by_email(email)
+
+    if User.valid_password?(user, password) do
+      user
+      |> Ecto.Changeset.change(last_sign_in_at: DateTime.utc_now())
+      |> Repo.update()
+      |> case do
+        {:ok, user} -> {:ok, user}
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      {:error, :invalid_credentials}
+    end
+  end
+
+  def authenticate_user(_, _) do
+    User.valid_password?(nil, nil)
+    {:error, :invalid_credentials}
+  end
+
+  def operator?(%User{operator_at: %DateTime{}}), do: true
+  def operator?(_), do: false
+
+  def update_user_password(%User{} = user, attrs) do
+    user
+    |> User.password_changeset(attrs)
+    |> Repo.update()
+  end
+
   @doc """
   Create a user and auto-create their personal workspace per spec §4 / §6.
   Returns `{:ok, %{user, workspace, membership}}` or an error changeset.
@@ -69,12 +145,28 @@ defmodule HydraX.Accounts do
     |> Repo.update()
   end
 
+  defp operator_or_nil(%User{} = user), do: if(operator?(user), do: user)
+  defp operator_or_nil(_), do: nil
+
   ## ------------------------------------------------------------------
   ## Workspaces
   ## ------------------------------------------------------------------
 
   def get_workspace(id), do: Repo.get(Workspace, id)
   def get_workspace_by_slug(slug), do: Repo.get_by(Workspace, slug: slug)
+
+  def ensure_default_workspace! do
+    Repo.one(
+      from w in Workspace,
+        where: is_nil(w.deleted_at),
+        order_by: [asc: w.inserted_at],
+        limit: 1
+    ) || create_system_workspace!()
+  end
+
+  def default_workspace_id do
+    ensure_default_workspace!().id
+  end
 
   @doc """
   Create a workspace. Ensures slug uniqueness with an appended `-2`, `-3`,
@@ -149,6 +241,24 @@ defmodule HydraX.Accounts do
       "slug" => slugify(user.display_name || email_username(user.email)),
       "created_by_user_id" => user.id
     })
+  end
+
+  defp create_system_workspace! do
+    case create_user_with_workspace(%{
+           "email" => "system@hydra.local",
+           "display_name" => "System"
+         }) do
+      {:ok, %{workspace: workspace}} ->
+        workspace
+
+      {:error, _reason} ->
+        Repo.one!(
+          from w in Workspace,
+            where: is_nil(w.deleted_at),
+            order_by: [asc: w.inserted_at],
+            limit: 1
+        )
+    end
   end
 
   defp email_username(email) when is_binary(email), do: email |> String.split("@") |> hd()
@@ -328,6 +438,82 @@ defmodule HydraX.Accounts do
     end)
   end
 
+  @doc """
+  Accept an invitation while setting a local password for users who do not
+  already have one.
+  """
+  def register_invited_user(raw_token, user_attrs) do
+    hash = hash_token(raw_token)
+    now = DateTime.utc_now()
+
+    Repo.transaction(fn ->
+      invitation =
+        from(i in Invitation,
+          where:
+            i.token_hash == ^hash and is_nil(i.accepted_at) and is_nil(i.revoked_at) and
+              i.expires_at >= ^now
+        )
+        |> Repo.one()
+
+      if is_nil(invitation), do: Repo.rollback(:invitation_invalid)
+
+      attrs =
+        user_attrs
+        |> Map.new(fn {k, v} -> {to_string(k), v} end)
+        |> Map.put("email", invitation.email)
+
+      user =
+        case get_user_by_email(invitation.email) do
+          nil ->
+            case %User{}
+                 |> User.registration_changeset(attrs)
+                 |> Ecto.Changeset.put_change(:email_verified_at, now)
+                 |> Repo.insert() do
+              {:ok, user} -> user
+              {:error, changeset} -> Repo.rollback(changeset)
+            end
+
+          %User{password_hash: nil} = user ->
+            case user
+                 |> User.password_changeset(attrs)
+                 |> Ecto.Changeset.put_change(:email_verified_at, user.email_verified_at || now)
+                 |> Repo.update() do
+              {:ok, user} -> user
+              {:error, changeset} -> Repo.rollback(changeset)
+            end
+
+          user ->
+            user
+        end
+
+      membership_attrs = %{
+        "role" => invitation.role,
+        "joined_at" => now,
+        "invited_by_user_id" => invitation.invited_by_user_id
+      }
+
+      workspace = Repo.get!(Workspace, invitation.workspace_id)
+
+      case add_member(workspace, user, membership_attrs) do
+        {:ok, _} ->
+          :ok
+
+        {:error, %Ecto.Changeset{errors: errors}} ->
+          unless Keyword.has_key?(errors, :workspace_id) or
+                   Keyword.has_key?(errors, :user_id) do
+            Repo.rollback(:membership_failed)
+          end
+      end
+
+      {:ok, accepted} =
+        invitation
+        |> Ecto.Changeset.change(accepted_at: now)
+        |> Repo.update()
+
+      %{invitation: accepted, user: user}
+    end)
+  end
+
   defp ensure_user_for_invitation(%Invitation{email: email}, user_attrs) do
     {:ok, user} =
       create_user(
@@ -406,6 +592,7 @@ defmodule HydraX.Accounts do
   ## ------------------------------------------------------------------
 
   @magic_link_ttl_minutes 15
+  @password_reset_ttl_minutes 30
 
   @doc """
   Issue a magic-link token. Returns `{:ok, %AuthToken{}, raw_token}`. The
@@ -467,6 +654,65 @@ defmodule HydraX.Accounts do
       {:ok, verified} = mark_email_verified(user, now)
 
       verified
+    end)
+  end
+
+  def issue_password_reset(email, opts \\ []) do
+    normalized = normalise_email(email)
+
+    case get_user_by_email(normalized) do
+      nil ->
+        {:ok, nil, nil}
+
+      %User{} = user ->
+        {raw_token, token_hash} = fresh_token()
+        expires_at = DateTime.add(DateTime.utc_now(), @password_reset_ttl_minutes * 60, :second)
+
+        attrs = %{
+          "user_id" => user.id,
+          "email" => normalized,
+          "context" => "password_reset",
+          "token_hash" => token_hash,
+          "sent_to" => Keyword.get(opts, :sent_to, normalized),
+          "expires_at" => expires_at
+        }
+
+        case %AuthToken{} |> AuthToken.changeset(attrs) |> Repo.insert() do
+          {:ok, token} -> {:ok, token, raw_token}
+          err -> err
+        end
+    end
+  end
+
+  def reset_user_password(raw_token, attrs) do
+    hash = hash_token(raw_token)
+    now = DateTime.utc_now()
+
+    Repo.transaction(fn ->
+      token =
+        from(t in AuthToken,
+          where:
+            t.token_hash == ^hash and t.context == "password_reset" and
+              is_nil(t.consumed_at) and t.expires_at >= ^now
+        )
+        |> Repo.one()
+
+      if is_nil(token) or is_nil(token.user_id), do: Repo.rollback(:invalid_or_expired)
+
+      user = Repo.get!(User, token.user_id)
+
+      case update_user_password(user, attrs) do
+        {:ok, user} ->
+          {:ok, _} =
+            token
+            |> Ecto.Changeset.change(consumed_at: now)
+            |> Repo.update()
+
+          user
+
+        {:error, changeset} ->
+          Repo.rollback(changeset)
+      end
     end)
   end
 

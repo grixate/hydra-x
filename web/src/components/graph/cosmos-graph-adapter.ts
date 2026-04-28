@@ -2,7 +2,7 @@ import { PointShape } from "@cosmos.gl/graph";
 
 import type { GraphData, GraphDataEdge, GraphDataNode } from "@/types";
 
-import { NODE_COLORS, STATE_TONES } from "./graph-constants";
+import { FAMILY_COLORS, NODE_COLORS, STATE_TONES, familyFor } from "./graph-constants";
 
 export type GraphAltitude = "overview" | "neighbourhood" | "document";
 
@@ -20,14 +20,15 @@ export type CosmosGraphModel = {
   linkColors: Float32Array;
   linkWidths: Float32Array;
   linkArrows: boolean[];
+  // Indices of nodes that should render the dense-evidence outline ring.
+  // Cosmograph supports a single outline color globally — we use it as a
+  // density signal (≥3 source refs reads as "thick evidence" per spec).
+  denseRingIndices: number[];
 };
 
-const DENSE_PURPLE = "#534AB7";
-const MID_PURPLE = "#7F77DD";
-const THIN_PURPLE = "#CECBF6";
-const TEAL = "#1D9E75";
-const PINK = "#D946EF";
-const DECISION = "#334155";
+// Density signal threshold for the outline ring (Constellation spec §1.1
+// "thick evidence" = ≥3 sources or ≥10 connections in the local cluster).
+const DENSE_RING_SOURCE_THRESHOLD = 3;
 
 export function altitudeForZoom(zoom: number): GraphAltitude {
   if (zoom >= 1.25) return "document";
@@ -57,18 +58,25 @@ export function buildCosmosGraphModel(
   const pointColors = new Float32Array(nodes.length * 4);
   const pointSizes = new Float32Array(nodes.length);
   const pointShapes = new Float32Array(nodes.length);
-  const dimUnhighlighted = highlightedIds.size > 0;
+  const denseRingIndices: number[] = [];
 
   nodes.forEach((node, index) => {
     const [x, y] = initialPosition(node, index, nodes.length);
     pointPositions[index * 2] = x;
     pointPositions[index * 2 + 1] = y;
 
-    const color = colorForNode(node);
-    const rgba = hexToRgba(color, dimUnhighlighted && !highlightedIds.has(node.id) ? 0.22 : alphaForNode(node));
-    pointColors.set(rgba, index * 4);
+    // Always render at full identity color. Highlighting/dimming is
+    // applied by Cosmograph itself via `highlightedPointIndices` +
+    // `pointGreyoutColor` / `pointGreyoutOpacity` — pushing dim alpha
+    // into the buffer would double-encode the dim and force a data
+    // rebuild every time the user hovered.
+    pointColors.set(hexToRgba(colorForNode(node), alphaForNode(node)), index * 4);
     pointSizes[index] = densitySize(node);
-    pointShapes[index] = node.node_type === "decision" ? PointShape.Square : PointShape.Circle;
+    pointShapes[index] = shapeForNode(node);
+
+    if ((node.source_reference_count ?? 0) >= DENSE_RING_SOURCE_THRESHOLD) {
+      denseRingIndices.push(index);
+    }
   });
 
   const links = new Float32Array(edges.length * 2);
@@ -85,12 +93,11 @@ export function buildCosmosGraphModel(
     edgeIndexById.set(edge.id, index);
 
     const color = colorForEdge(edge);
-    const isDimmed =
-      highlightedIds.size > 0 &&
-      !highlightedIds.has(edge.source) &&
-      !highlightedIds.has(edge.target);
-    linkColors.set(hexToRgba(color, isDimmed ? 0.08 : edge.kind === "contradicts" ? 0.82 : 0.34), index * 4);
-    linkWidths[index] = edge.kind === "contradicts" ? 1.05 : 0.65;
+    const isContradicts = edge.kind === "contradicts";
+    // Idle hairline alpha. Cosmograph's `linkGreyoutOpacity` handles
+    // dimming when a highlight set is active; we don't bake it in.
+    linkColors.set(hexToRgba(color, isContradicts ? 0.85 : 0.32), index * 4);
+    linkWidths[index] = isContradicts ? 1.1 : 0.5;
     linkArrows[index] = edge.kind === "lineage" || edge.kind === "dependency";
   });
 
@@ -108,43 +115,75 @@ export function buildCosmosGraphModel(
     linkColors,
     linkWidths,
     linkArrows,
+    denseRingIndices,
   };
 }
 
 export function colorForNode(node: Pick<GraphDataNode, "node_type" | "source_reference_count">): string {
+  // Calm family palette per the design proposal — fill encodes identity
+  // (which family the node belongs to), the global outline ring encodes
+  // density (≥3 source refs lights up). No more saturated overrides per
+  // type. Library entities get their dedicated tokens since they don't
+  // map cleanly to the project graph's five families.
   switch (node.node_type) {
-    case "insight":
-    case "requirement":
-      return densityColor(node.source_reference_count ?? 0);
-    case "source":
-    case "source_ref":
-    case "signal":
-      return TEAL;
-    case "decision":
-      return DECISION;
-    case "strategy":
-      return "#0f5a7a";
     case "constraint":
       return STATE_TONES.tension;
-    case "learning":
-    case "outcome":
-      return "#9a5d2a";
-    case "design_node":
-    case "architecture_node":
-    case "task":
-      return "#3f4a5c";
+    case "topic":
+      return NODE_COLORS.topic ?? "#7c5cd1";
+    case "author":
+      return NODE_COLORS.author ?? "#0e8a6c";
+    case "publication":
+      return NODE_COLORS.publication ?? "#7e6a4f";
+    case "excerpt":
+      return NODE_COLORS.excerpt ?? "#a8b3c9";
     default:
-      return NODE_COLORS[node.node_type] ?? densityColor(node.source_reference_count ?? 0);
+      return FAMILY_COLORS[familyFor(node.node_type)];
   }
 }
 
-export function densityColor(sourceCount: number): string {
-  if (sourceCount >= 10) return DENSE_PURPLE;
-  if (sourceCount >= 3) return MID_PURPLE;
-  return THIN_PURPLE;
+// Library spec §5.2 — visual hierarchy. Topic > source > author/publication;
+// authors render as triangles, publications as squares, excerpts as small
+// diamonds; everything else stays circular.
+function shapeForNode(node: Pick<GraphDataNode, "node_type">): number {
+  switch (node.node_type) {
+    case "decision":
+      return PointShape.Square;
+    case "author":
+      return PointShape.Triangle;
+    case "publication":
+      return PointShape.Square;
+    case "excerpt":
+      return PointShape.Diamond;
+    default:
+      return PointShape.Circle;
+  }
 }
 
-export function densitySize(node: Pick<GraphDataNode, "source_reference_count" | "connection_count" | "node_type">): number {
+export function densitySize(
+  node: Pick<GraphDataNode, "source_reference_count" | "connection_count" | "node_type"> & {
+    granularity?: string | null;
+  },
+): number {
+  // Library spec §5.2 — topics are visual anchors, larger by default.
+  // Granularity drives a multiplier: coarse > medium > fine.
+  if (node.node_type === "topic") {
+    const granularityBoost =
+      node.granularity === "coarse" ? 10 : node.granularity === "fine" ? 4 : 7;
+    const connectionWeight = Math.sqrt(Math.max(0, node.connection_count ?? 0)) * 1.6;
+    return Math.max(8, Math.min(28, 6 + granularityBoost + connectionWeight));
+  }
+
+  // Authors and publications are smaller satellite markers — they're context,
+  // not the primary signal.
+  if (node.node_type === "author" || node.node_type === "publication") {
+    const connectionWeight = Math.sqrt(Math.max(0, node.connection_count ?? 0)) * 1.0;
+    return Math.max(4, Math.min(12, 4 + connectionWeight));
+  }
+
+  if (node.node_type === "excerpt") {
+    return 5;
+  }
+
   const sourceCount = node.source_reference_count ?? 0;
   const connectionWeight = Math.sqrt(Math.max(0, node.connection_count ?? 0)) * 1.25;
   const evidenceWeight = Math.log2(sourceCount + 1) * 3.25;
@@ -153,28 +192,27 @@ export function densitySize(node: Pick<GraphDataNode, "source_reference_count" |
 }
 
 export function colorForEdge(edge: Pick<GraphDataEdge, "kind">): string {
+  // Calm hairline palette — the edges should whisper. Only contradictions
+  // and questions carry an attention-grabbing hue.
   switch (edge.kind) {
     case "contradicts":
       return STATE_TONES.tension;
-    case "lineage":
-    case "derived_from":
-      return TEAL;
     case "questions":
       return "#d97706";
-    case "supports":
-      return MID_PURPLE;
-    case "dependency":
-      return "#64748b";
     default:
-      return "#AFA9EC";
+      return "#94a3b8"; // slate-400 — neutral hairline for all structural edges
   }
 }
 
 function alphaForNode(node: GraphDataNode): number {
-  if (node.wip) return 0.62;
-  if ((node.source_reference_count ?? 0) >= 10) return 0.92;
-  if ((node.source_reference_count ?? 0) >= 3) return 0.78;
-  return 0.54;
+  // Evidence density is already encoded by `colorForNode` (DENSE_PURPLE
+  // → MID_PURPLE → THIN_PURPLE). Layering alpha on top double-encodes
+  // the same axis and just makes most nodes washed out (~54% opacity)
+  // because most graphs have few source references per node.
+  // Keep WIP slightly translucent — that's a visual cue for proposed /
+  // forming state, not for evidence density.
+  if (node.wip) return 0.7;
+  return 1.0;
 }
 
 function initialPosition(node: GraphDataNode, index: number, total: number): [number, number] {

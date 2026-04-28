@@ -25,8 +25,6 @@ defmodule Mix.Tasks.HydraX.Stream.Seed do
 
   @shortdoc "Seed ~100 Stream entries for design evaluation"
 
-  @agents ~w(researcher strategist architect designer memory_agent coherence continuous_research)
-
   @context_types ~w(node source session flow task)
 
   # Sentence-form title + optional summary pools per activity kind.

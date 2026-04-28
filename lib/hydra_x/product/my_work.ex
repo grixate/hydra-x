@@ -35,7 +35,8 @@ defmodule HydraX.Product.MyWork do
 
     active_work =
       GraphNode
-      |> where([t],
+      |> where(
+        [t],
         t.project_id == ^project_id and t.type_key == "task" and
           t.status in ["in_progress", "review"]
       )
@@ -201,7 +202,8 @@ defmodule HydraX.Product.MyWork do
 
   defp active_tasks(project_id) do
     GraphNode
-    |> where([t],
+    |> where(
+      [t],
       t.project_id == ^project_id and t.type_key == "task" and
         t.status in ["in_progress", "review"]
     )
@@ -300,7 +302,8 @@ defmodule HydraX.Product.MyWork do
 
   defp current_agent_work(project_id, persona) do
     GraphNode
-    |> where([r],
+    |> where(
+      [r],
       r.project_id == ^project_id and r.type_key == "routine" and
         fragment("?->>'assigned_persona' = ?", r.attributes, ^to_string(persona)) and
         r.status == "active"
@@ -336,7 +339,8 @@ defmodule HydraX.Product.MyWork do
 
   defp queued_agent_work(project_id, persona) do
     GraphNode
-    |> where([r],
+    |> where(
+      [r],
       r.project_id == ^project_id and r.type_key == "routine" and
         fragment("?->>'assigned_persona' = ?", r.attributes, ^to_string(persona)) and
         r.status == "active"

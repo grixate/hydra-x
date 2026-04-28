@@ -3,6 +3,7 @@ defmodule HydraX.RuntimeTest do
 
   alias HydraX.Agent.Channel
   alias HydraX.Agent.Worker
+  alias HydraX.Accounts
   alias HydraX.Budget
   alias HydraX.Memory
   alias HydraX.Repo
@@ -839,6 +840,13 @@ defmodule HydraX.RuntimeTest do
         )
       end,
       120
+    )
+
+    wait_for(
+      fn ->
+        Runtime.conversation_channel_state(conversation.id).status == "completed"
+      end,
+      240
     )
 
     final_state = Runtime.conversation_channel_state(conversation.id)
@@ -3004,7 +3012,7 @@ defmodule HydraX.RuntimeTest do
     assert budget.status == :ok
     assert budget.detail =~ "daily"
     assert auth.status == :warn
-    assert auth.detail =~ "control plane open"
+    assert auth.detail =~ "awaits first local operator registration"
     assert tools.status == :ok
     assert tools.detail =~ "shell allowlist"
     assert Budget.get_policy(agent.id)
@@ -3180,8 +3188,10 @@ defmodule HydraX.RuntimeTest do
   end
 
   test "health snapshot reports operator auth once configured" do
-    assert {:ok, _secret} =
-             Runtime.save_operator_secret_password(%{
+    assert {:ok, _} =
+             Accounts.register_first_operator(%{
+               "email" => "operator@test.example.com",
+               "display_name" => "Operator",
                "password" => "hydra-password-123",
                "password_confirmation" => "hydra-password-123"
              })
@@ -3191,7 +3201,7 @@ defmodule HydraX.RuntimeTest do
       |> Enum.find(&(&1.name == "auth"))
 
     assert auth_check.status == :ok
-    assert auth_check.detail =~ "operator password set"
+    assert auth_check.detail =~ "local operator"
   end
 
   test "provider capability resolution includes mock fallback" do

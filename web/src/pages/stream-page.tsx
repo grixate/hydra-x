@@ -16,7 +16,6 @@ import {
 } from "@/components/stream/stream-tabs/stream-item-spotlight";
 import { dispatchAgentChatPaneSwitch } from "@/components/chat/agent-chat-pane";
 import { EmptyTabState } from "@/components/stream/stream-tabs/empty-state";
-import { OnboardingBanner } from "@/components/onboarding/onboarding-banner";
 import type { StreamTab, StreamTabCounts, StreamTabItem } from "@/types";
 
 type TabMeta = {
@@ -327,8 +326,6 @@ export function StreamPage() {
 
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-[720px] px-4 py-6 lg:px-6">
-          <OnboardingBanner surface="stream" />
-
           {tab === "activity" ? (
             <ActivityFilters
               agentFilter={activityAgentFilter}

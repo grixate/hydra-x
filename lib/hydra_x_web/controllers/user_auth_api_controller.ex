@@ -1,71 +1,97 @@
 defmodule HydraXWeb.UserAuthAPIController do
   @moduledoc """
-  Cycle 2 simple-auth endpoints. Dev-login swaps OAuth/magic-link for a
-  direct email → user lookup (or create) so the frontend can mint a
-  session cookie without an external identity provider.
-
-  Routes:
-    * `POST /api/v1/user_auth/dev_login` — `{email, display_name?}` →
-      creates or finds user + personal workspace, sets session cookie.
-    * `GET  /api/v1/user_auth/me`        — current user + workspaces.
-    * `POST /api/v1/user_auth/logout`    — drops the session cookie.
+  Local user-auth endpoints for self-hosted Hydra.
   """
 
   use HydraXWeb, :controller
 
+  require Logger
+
   alias HydraX.Accounts
+  alias HydraX.Security.LoginThrottle
+  alias HydraXWeb.DevAuth
+  alias HydraXWeb.OperatorAuth
   alias HydraXWeb.Plugs.UserAuth
 
   action_fallback HydraXWeb.ProjectAPIFallbackController
 
-  def dev_login(conn, %{"email" => email} = params) when is_binary(email) do
-    unless dev_login_enabled?() do
-      conn
-      |> put_status(:forbidden)
-      |> json(%{error: "dev_login_disabled"})
-    else
-      email = String.trim(email)
+  def register(conn, %{"email" => _email} = params) do
+    case Accounts.register_first_operator(params) do
+      {:ok, %{user: user}} ->
+        conn
+        |> OperatorAuth.log_in(user)
+        |> put_status(:created)
+        |> json(%{data: user_payload(user)})
 
-      cond do
-        email == "" ->
-          conn
-          |> put_status(:bad_request)
-          |> json(%{error: "email_required"})
+      {:error, :registration_closed} ->
+        conn
+        |> put_status(:forbidden)
+        |> json(%{error: "registration_closed"})
 
-        true ->
-          do_dev_login(conn, email, params["display_name"])
-      end
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:error, changeset}
     end
   end
 
-  def dev_login(conn, _params) do
+  def register(conn, _params) do
     conn
     |> put_status(:bad_request)
     |> json(%{error: "email_required"})
   end
 
-  defp do_dev_login(conn, email, display_name) do
-    case Accounts.get_user_by_email(email) do
-      nil ->
-        attrs = %{"email" => email, "display_name" => display_name || default_name(email)}
+  def dev_login(conn, _params) do
+    if DevAuth.enabled?() do
+      user = DevAuth.operator_user!()
 
-        case Accounts.create_user_with_workspace(attrs) do
-          {:ok, %{user: user}} ->
-            respond_with_session(conn, user)
-
-          {:error, %Ecto.Changeset{} = changeset} ->
-            {:error, changeset}
-
-          {:error, reason} ->
-            conn
-            |> put_status(:unprocessable_entity)
-            |> json(%{error: "user_create_failed", reason: inspect(reason)})
-        end
-
-      user ->
-        {:ok, user} = Accounts.mark_email_verified(user)
-        respond_with_session(conn, user)
+      conn
+      |> OperatorAuth.log_in(user)
+      |> json(%{data: user_payload(user)})
+    else
+      conn
+      |> put_status(:not_found)
+      |> json(%{error: "not_found"})
     end
+  end
+
+  def login(conn, %{"email" => email, "password" => password})
+      when is_binary(email) and is_binary(password) do
+    ip = client_ip(conn)
+    throttle = LoginThrottle.state(ip)
+
+    cond do
+      throttle.rate_limited? ->
+        conn
+        |> put_status(:too_many_requests)
+        |> json(%{error: "rate_limited", retry_after: throttle.retry_after_seconds})
+
+      true ->
+        case Accounts.authenticate_user(email, password) do
+          {:ok, user} ->
+            LoginThrottle.clear_attempts(ip)
+
+            conn =
+              if Accounts.operator?(user) do
+                OperatorAuth.log_in(conn, user)
+              else
+                UserAuth.put_user_session(conn, user)
+              end
+
+            json(conn, %{data: user_payload(user)})
+
+          {:error, _reason} ->
+            LoginThrottle.record_attempt(ip)
+
+            conn
+            |> put_status(:unauthorized)
+            |> json(%{error: "invalid_credentials"})
+        end
+    end
+  end
+
+  def login(conn, _params) do
+    conn
+    |> put_status(:bad_request)
+    |> json(%{error: "email_and_password_required"})
   end
 
   def me(conn, _params) do
@@ -79,6 +105,51 @@ defmodule HydraXWeb.UserAuthAPIController do
     conn
     |> UserAuth.clear_user_session()
     |> json(%{data: %{signed_out: true}})
+  end
+
+  def forgot_password(conn, %{"email" => email}) when is_binary(email) do
+    case Accounts.issue_password_reset(email) do
+      {:ok, _token, raw_token} when is_binary(raw_token) ->
+        Logger.warning(
+          "Hydra local password reset requested for #{email}: #{url(~p"/password-reset/#{raw_token}")}"
+        )
+
+      _ ->
+        :ok
+    end
+
+    json(conn, %{data: %{reset_requested: true}})
+  end
+
+  def forgot_password(conn, _params) do
+    conn
+    |> put_status(:bad_request)
+    |> json(%{error: "email_required"})
+  end
+
+  def reset_password(conn, %{"token" => token} = params) when is_binary(token) do
+    password_params =
+      params
+      |> Map.take(["password", "password_confirmation"])
+
+    case Accounts.reset_user_password(token, password_params) do
+      {:ok, _user} ->
+        json(conn, %{data: %{password_reset: true}})
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:error, changeset}
+
+      {:error, :invalid_or_expired} ->
+        conn
+        |> put_status(:unprocessable_entity)
+        |> json(%{error: "invalid_or_expired"})
+    end
+  end
+
+  def reset_password(conn, _params) do
+    conn
+    |> put_status(:bad_request)
+    |> json(%{error: "token_required"})
   end
 
   @doc """
@@ -117,18 +188,13 @@ defmodule HydraXWeb.UserAuthAPIController do
     conn |> put_status(:bad_request) |> json(%{error: "nodes_required"})
   end
 
-  defp respond_with_session(conn, user) do
-    conn
-    |> UserAuth.put_user_session(user)
-    |> json(%{data: user_payload(user)})
-  end
-
   defp user_payload(user) do
     %{
       id: user.id,
       email: user.email,
       display_name: user.display_name,
       avatar_url: user.avatar_url,
+      operator: Accounts.operator?(user),
       workspaces: Enum.map(Accounts.list_workspaces_for_user(user.id), &workspace_payload/1)
     }
   end
@@ -137,11 +203,12 @@ defmodule HydraXWeb.UserAuthAPIController do
     %{id: workspace.id, name: workspace.name, slug: workspace.slug}
   end
 
-  defp default_name(email) do
-    email |> String.split("@") |> hd() |> String.capitalize()
-  end
+  defp client_ip(conn) do
+    forwarded = Plug.Conn.get_req_header(conn, "x-forwarded-for")
 
-  defp dev_login_enabled? do
-    Application.get_env(:hydra_x, :dev_login_enabled, true)
+    case forwarded do
+      [ip | _] -> ip |> String.split(",") |> List.first() |> String.trim()
+      _ -> conn.remote_ip |> :inet.ntoa() |> to_string()
+    end
   end
 end

@@ -1,6 +1,26 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+
+// Global diagnostics — make sure NOTHING that goes wrong is silent.
+// Async errors and unhandled rejections don't reach React error boundaries;
+// these listeners give us a console trail when the surface goes blank.
+if (typeof window !== "undefined") {
+  window.addEventListener("error", (event) => {
+    // eslint-disable-next-line no-console
+    console.error(
+      "[hydra:window.error]",
+      event.message,
+      "at",
+      `${event.filename}:${event.lineno}:${event.colno}`,
+      event.error,
+    );
+  });
+  window.addEventListener("unhandledrejection", (event) => {
+    // eslint-disable-next-line no-console
+    console.error("[hydra:unhandledrejection]", event.reason);
+  });
+}
 import { AppLayout } from "@/components/layout/app-layout";
 import { LandingLayout } from "@/components/layout/landing-layout";
 import { StreamPage } from "@/pages/stream-page";

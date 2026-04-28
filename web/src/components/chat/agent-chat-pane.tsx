@@ -13,9 +13,8 @@ import type { AgentTask, ProductConversation, ProductMessage } from "@/types";
 import { AGENTS, UniversalInput } from "./universal-input";
 import { BoardChatMessage } from "@/components/board/board-chat-message";
 import type { ChipSurface } from "./surface-suggestion-chips";
-import { OnboardingChips } from "@/components/onboarding/onboarding-chips";
-import { useOnboarding } from "@/hooks/use-onboarding";
 import { ProposalCard } from "@/components/command-center/proposal-card";
+import { SchemaProposalsCard } from "@/components/onboarding/schema-proposals-card";
 import { useGraphChatContext } from "./graph-chat-context";
 
 export type ChatSurface =
@@ -83,6 +82,75 @@ function persistAgent(projectId: string, surface: ChatSurface, agent: string) {
 export function dispatchAgentChatPaneSwitch(agent: string) {
   if (typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent(AGENT_SWITCH_EVENT, { detail: { agent } }));
+}
+
+export const CHAT_PANE_OPEN_EVENT = "hydra:chat-pane-open";
+
+export function dispatchChatPaneOpen() {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(CHAT_PANE_OPEN_EVENT));
+}
+
+export function onboardingOpeningKey(projectId: number) {
+  return `onboarding:opening:${projectId}`;
+}
+
+export type OnboardingOpeningKind = "just_start" | "skip" | "materials";
+
+export function readOnboardingOpening(projectId: number): OnboardingOpeningKind | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(onboardingOpeningKey(projectId));
+    if (raw === "just_start" || raw === "skip" || raw === "materials") return raw;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export function clearOnboardingOpening(projectId: number) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(onboardingOpeningKey(projectId));
+  } catch {
+    /* ignore */
+  }
+}
+
+const OPENING_MESSAGES: Record<OnboardingOpeningKind, string> = {
+  just_start: "Hi — what are you working on?",
+  skip: "I'm here when you want to start.",
+  materials:
+    "I've gone through the materials you shared. Tell me about the project in your own words — I'll suggest a starting structure based on what I read.",
+};
+
+export function openingMessageFor(kind: OnboardingOpeningKind) {
+  return OPENING_MESSAGES[kind];
+}
+
+function pendingSendKey(projectId: number) {
+  return `onboarding:pending_send:${projectId}`;
+}
+
+export function setPendingSend(projectId: number, text: string) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(pendingSendKey(projectId), text);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function takePendingSend(projectId: number): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(pendingSendKey(projectId));
+    if (!raw) return null;
+    window.localStorage.removeItem(pendingSendKey(projectId));
+    return raw;
+  } catch {
+    return null;
+  }
 }
 
 export function AgentChatPane() {
@@ -156,6 +224,9 @@ function AgentChatPaneInner({
   const [sending, setSending] = useState(false);
   const [streamDelta, setStreamDelta] = useState("");
   const [pendingProposals, setPendingProposals] = useState<AgentTask[]>([]);
+  const [onboardingOpening, setOnboardingOpening] = useState<OnboardingOpeningKind | null>(
+    () => readOnboardingOpening(projectId),
+  );
 
   const navigate = useNavigate();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -297,6 +368,10 @@ function AgentChatPaneInner({
       if (targetAgent !== agent) onAgentChange(targetAgent);
 
       setSending(true);
+      if (onboardingOpening) {
+        clearOnboardingOpening(projectId);
+        setOnboardingOpening(null);
+      }
       const optimistic: ProductMessage = {
         id: Date.now(),
         role: "user",
@@ -338,8 +413,18 @@ function AgentChatPaneInner({
         setSending(false);
       }
     },
-    [agent, conversation, onAgentChange, projectId, sending],
+    [agent, conversation, onAgentChange, onboardingOpening, projectId, sending],
   );
+
+  useEffect(() => {
+    if (loading || sending) return;
+    if (agent !== "strategist") return;
+    if (!conversation) return;
+    const pending = takePendingSend(projectId);
+    if (pending) {
+      void handleSubmit(pending, "strategist");
+    }
+  }, [agent, conversation, handleSubmit, loading, projectId, sending]);
 
   const agentMeta = AGENTS.find((a) => a.slug === agent) ?? AGENTS[0];
   const AgentIcon = agentMeta.icon;
@@ -392,6 +477,10 @@ function AgentChatPaneInner({
         </div>
       ) : null}
 
+      <div className="border-b px-3 py-2 empty:hidden">
+        <SchemaProposalsCard projectId={projectId} />
+      </div>
+
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-3">
         {loading ? (
           <div className="space-y-3">
@@ -400,9 +489,21 @@ function AgentChatPaneInner({
             <Skeleton className="h-10 w-3/4" />
           </div>
         ) : messages.length === 0 && !sending ? (
-          <div className="flex flex-col items-center justify-center py-10 text-center text-xs text-muted-foreground">
-            <p className="font-medium">Start a conversation with the {agentMeta.label}.</p>
-          </div>
+          onboardingOpening && agent === "strategist" ? (
+            <div className="space-y-3">
+              <BoardChatMessage
+                role="assistant"
+                content={openingMessageFor(onboardingOpening)}
+                agent={agent}
+                projectId={projectId}
+                onSelectContext={() => {}}
+              />
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center py-10 text-center text-xs text-muted-foreground">
+              <p className="font-medium">Start a conversation with the {agentMeta.label}.</p>
+            </div>
+          )
         ) : (
           <div className="space-y-3">
             {messages.map((msg, i) => (
@@ -455,30 +556,18 @@ function PaneChipsAndInput({
   onAgentChange: (agent: string) => void;
   onSubmit: (text: string, agent: string) => void;
 }) {
-  const { status: onboarding, skip, refresh } = useOnboarding(projectId);
   const [prefill, setPrefill] = useState<string>("");
   const graphCtx = useGraphChatContext();
-  const isGraph = surface === "graph" && !!graphCtx;
-
-  const showOnboardingChips =
-    onboarding?.state === "pending" && agent === "strategist";
-
-  async function handleSkip() {
-    await skip();
-    refresh();
-  }
+  // Library spec §6.2 — Library surface gets the same bidirectional graph
+  // coupling as the project Graph surface (selection narrows scope, answer
+  // highlights graph). Both lenses publish through the same module-singleton
+  // GraphChatProvider, so wiring them identically here is safe.
+  const couplesGraph = (surface === "graph" || surface === "library") && !!graphCtx;
 
   return (
     <div className="relative">
-      {showOnboardingChips ? (
-        <OnboardingChips
-          onPrefill={(text) => setPrefill(text)}
-          onSend={(text) => onSubmit(text, agent)}
-          onSkip={handleSkip}
-        />
-      ) : null}
       <UniversalInput
-        surface={isGraph ? "graph" : "stream"}
+        surface={couplesGraph ? "graph" : "stream"}
         projectId={projectId}
         initialValue={prefill}
         onSubmit={(text, ag) => {
@@ -487,10 +576,10 @@ function PaneChipsAndInput({
         }}
         currentAgent={agent}
         onAgentChange={onAgentChange}
-        selectedNodes={isGraph ? graphCtx!.contextNodes : undefined}
-        previewNode={isGraph ? graphCtx!.previewNode : undefined}
-        onClearSelection={isGraph ? graphCtx!.onClearContext : undefined}
-        onRemoveNode={isGraph ? graphCtx!.onRemoveContext : undefined}
+        selectedNodes={couplesGraph ? graphCtx!.contextNodes : undefined}
+        previewNode={couplesGraph ? graphCtx!.previewNode : undefined}
+        onClearSelection={couplesGraph ? graphCtx!.onClearContext : undefined}
+        onRemoveNode={couplesGraph ? graphCtx!.onRemoveContext : undefined}
         docked
       />
     </div>

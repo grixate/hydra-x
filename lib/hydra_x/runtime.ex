@@ -6,6 +6,7 @@ defmodule HydraX.Runtime do
   Operator authentication functions are defined directly here.
   """
 
+  alias HydraX.Accounts
   alias HydraX.Repo
   alias HydraX.Runtime.Helpers
   alias HydraX.Runtime.OperatorSecret
@@ -449,7 +450,7 @@ defmodule HydraX.Runtime do
   end
 
   def operator_password_configured? do
-    not is_nil(get_operator_secret())
+    Accounts.operator_user_exists?()
   end
 
   def change_operator_secret(secret \\ nil, attrs \\ %{}) do

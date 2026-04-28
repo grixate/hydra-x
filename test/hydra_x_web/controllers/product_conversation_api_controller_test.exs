@@ -3,6 +3,10 @@ defmodule HydraXWeb.ProductConversationAPIControllerTest do
 
   alias HydraX.Product
 
+  setup %{conn: conn} do
+    {:ok, conn: register_and_log_in_operator(conn)}
+  end
+
   test "POST /api/v1/projects/:project_id/conversations creates a product conversation", %{
     conn: conn
   } do

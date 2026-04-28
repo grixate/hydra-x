@@ -31,8 +31,12 @@ defmodule HydraXWeb.SourceAPIController do
 
   def create(conn, %{"project_id" => project_id, "source" => params}) do
     with {:ok, %GraphNode{} = source} <- Product.create_source(project_id, params) do
-      # Stream A1.3 — auto-trigger Researcher analysis. Spawns an
-      # AgentTask (visible in CC) and runs the LLM in background.
+      # Library spec §4 — staged preprocessing pipeline (summary, topics,
+      # citations, authors, contradictions). Runs asynchronously.
+      _ = HydraX.Product.LibraryPreprocess.enqueue(source)
+
+      # Stream A1.3 — auto-trigger Researcher analysis to extract insights
+      # from the source. Independent of preprocessing (different scope).
       _ = HydraX.Product.ResearcherAutoProcess.maybe_enqueue(source)
 
       # Source-as-Data (spec §9): honour per-project opt-in for legacy
@@ -42,6 +46,40 @@ defmodule HydraXWeb.SourceAPIController do
       conn
       |> put_status(:created)
       |> json(%{data: ProductPayload.source_json(source, true)})
+    end
+  end
+
+  @doc """
+  Library spec §4.3 — re-run a single preprocessing stage on a source whose
+  initial run hit a partial failure. Body: `{"stage": "summary"|"topics"|...}`.
+  """
+  def reprocess_stage(conn, %{"project_id" => project_id, "id" => id, "stage" => stage}) do
+    project_id = parse_integer(project_id)
+    source = Product.get_project_source!(project_id, parse_integer(id))
+    stage_atom = safe_stage(stage)
+
+    cond do
+      stage_atom == nil ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: %{code: "unknown_stage", stages: HydraX.Product.LibraryPreprocess.stages()}})
+
+      true ->
+        Task.Supervisor.start_child(HydraX.TaskSupervisor, fn ->
+          HydraX.Product.LibraryPreprocess.run_stage(source, stage_atom)
+        end)
+
+        json(conn, %{data: %{source_id: source.id, stage: stage, queued: true}})
+    end
+  end
+
+  defp safe_stage(stage) do
+    valid = Enum.map(HydraX.Product.LibraryPreprocess.stages(), &Atom.to_string/1)
+
+    if to_string(stage) in valid do
+      String.to_existing_atom(to_string(stage))
+    else
+      nil
     end
   end
 
@@ -130,7 +168,8 @@ defmodule HydraXWeb.SourceAPIController do
     # pool in one shot.
     pending =
       HydraX.Graph.Node
-      |> where([s],
+      |> where(
+        [s],
         s.project_id == ^project_id and s.type_key == "source" and s.status != "completed"
       )
       |> order_by([s], asc: s.inserted_at)
@@ -163,8 +202,12 @@ defmodule HydraXWeb.SourceAPIController do
         }
 
         case Product.create_source(project_id, attrs) do
-          {:ok, source} -> {:ok, source}
-          {:error, reason} -> {:error, file.filename, reason}
+          {:ok, source} ->
+            _ = HydraX.Product.LibraryPreprocess.enqueue(source)
+            {:ok, source}
+
+          {:error, reason} ->
+            {:error, file.filename, reason}
         end
       end)
 

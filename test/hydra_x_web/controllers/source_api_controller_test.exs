@@ -3,22 +3,16 @@ defmodule HydraXWeb.SourceAPIControllerTest do
 
   alias HydraX.Memory
   alias HydraX.Product
-  alias HydraX.Runtime
-  alias HydraXWeb.OperatorAuth
+
+  setup %{conn: conn} do
+    {:ok, conn: register_and_log_in_operator(conn)}
+  end
 
   test "POST /api/v1/projects/:project_id/sources indexes source content", %{conn: conn} do
     {:ok, project} = Product.create_project(%{"name" => "API Sources"})
 
-    assert {:ok, _secret} =
-             Runtime.save_operator_secret_password(%{
-               "password" => "hydra-password-123",
-               "password_confirmation" => "hydra-password-123"
-             })
-
     conn =
       conn
-      |> init_test_session(%{})
-      |> OperatorAuth.log_in()
       |> put_req_header("accept", "application/json")
       |> post(~p"/api/v1/projects/#{project.id}/sources", %{
         "source" => %{
@@ -98,16 +92,8 @@ defmodule HydraXWeb.SourceAPIControllerTest do
        } do
     {:ok, project} = Product.create_project(%{"name" => "API Source Memory"})
 
-    assert {:ok, _secret} =
-             Runtime.save_operator_secret_password(%{
-               "password" => "hydra-password-123",
-               "password_confirmation" => "hydra-password-123"
-             })
-
     conn =
       conn
-      |> init_test_session(%{})
-      |> OperatorAuth.log_in()
       |> put_req_header("accept", "application/json")
       |> post(~p"/api/v1/projects/#{project.id}/sources", %{
         "source" => %{

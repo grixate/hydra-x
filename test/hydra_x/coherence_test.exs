@@ -11,7 +11,7 @@ defmodule HydraX.CoherenceTest do
     {:ok, %{workspace: workspace}} =
       Accounts.create_user_with_workspace(%{"email" => email, "display_name" => "T"})
 
-    {:ok, project, _} =
+    {:ok, project} =
       Product.create_project(%{
         "name" => "coherence-#{System.unique_integer([:positive])}",
         "description" => "t",

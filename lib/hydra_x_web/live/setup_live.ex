@@ -689,19 +689,10 @@ defmodule HydraXWeb.SetupLive do
           <div class="text-xs uppercase tracking-[0.28em] text-[var(--hx-mute)]">
             Control plane auth
           </div>
-          <h2 class="mt-3 font-display text-4xl">Operator password</h2>
+          <h2 class="mt-3 font-display text-4xl">Local operator account</h2>
           <p class="mt-3 max-w-3xl text-sm text-[var(--hx-mute)]">
-            The management UI stays open until you set an operator password. After that, all browser routes require a signed session.
+            The management UI is protected by the first local user account. New users join by invitation, while operator access remains separate from workspace ownership.
           </p>
-          <div
-            :if={@operator_secret}
-            class="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-4 text-sm text-[var(--hx-mute)]"
-          >
-            Password active. Last rotated at {Calendar.strftime(
-              @operator_secret.last_rotated_at,
-              "%Y-%m-%d %H:%M:%S UTC"
-            )}.
-          </div>
           <div class="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-4 text-sm text-[var(--hx-mute)]">
             Sensitive actions require a fresh sign-in every {div(
               @operator_status.recent_auth_window_seconds,
@@ -711,31 +702,12 @@ defmodule HydraXWeb.SetupLive do
               @operator_status.idle_timeout_seconds,
               60
             )} minutes.
-            <span :if={@operator_status.password_age_days != nil}>
-              Password age: {@operator_status.password_age_days} days.
-            </span>
           </div>
           <div class="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-4 text-sm text-[var(--hx-mute)]">
             Secret posture: {@secret_status.posture}. Protected {@secret_status.protected_records}/{@secret_status.total_records} records ({@secret_status.coverage_percent}%).
             Encrypted {@secret_status.encrypted_records}, env-backed {@secret_status.env_backed_records},
             unresolved env {@secret_status.unresolved_env_records}, plaintext {@secret_status.plaintext_records}.
           </div>
-          <.form
-            for={@operator_form}
-            id="operator-form"
-            phx-submit="save_operator_password"
-            class="mt-6 grid gap-4 xl:grid-cols-2"
-          >
-            <.input field={@operator_form[:password]} type="password" label="Password" />
-            <.input
-              field={@operator_form[:password_confirmation]}
-              type="password"
-              label="Confirm password"
-            />
-            <div class="xl:col-span-2 pt-2">
-              <.button>Save operator password</.button>
-            </div>
-          </.form>
         </article>
       </section>
 

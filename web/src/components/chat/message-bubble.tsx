@@ -2,6 +2,8 @@ import type { Citation, ProductMessage } from "@/types";
 
 import { CitationBadge } from "@/components/chat/citation-badge";
 import { CitationFootnotes } from "@/components/chat/citation-footnotes";
+import { parseContentWithCites } from "@/components/chat/cite-parser";
+import { useGraphChatContext } from "@/components/chat/graph-chat-context";
 import { cn, formatDate } from "@/lib/utils";
 
 export function MessageBubble({
@@ -12,6 +14,27 @@ export function MessageBubble({
   onRevealCitation: (citation: Citation) => void;
 }) {
   const assistant = message.role === "assistant";
+
+  // Library spec §6.3 — parse inline `<cite node_type=... node_id=...>` cites
+  // out of the message body and render them as clickable graph-focus badges.
+  const { parts, citations: nodeCitations } = parseContentWithCites(message.content);
+  const graphChat = useGraphChatContext();
+
+  // Merge backend-provided chunk citations + parser-extracted node citations
+  // for the footnotes row. Backend chunks first, then node cites; deduped by
+  // identity.
+  const allCitations: Citation[] = [...message.citations, ...nodeCitations];
+
+  const handleCiteClick = (citation: Citation) => {
+    if (citation.node_type && citation.node_id != null) {
+      // Library spec §6.2 — clicking an inline cite focuses + highlights the
+      // cited node on the graph.
+      const graphId = `${citation.node_type}-${citation.node_id}`;
+      graphChat?.onGraphCommand?.({ type: "focus", nodeId: graphId });
+      graphChat?.onGraphCommand?.({ type: "highlight", nodeIds: [graphId] });
+    }
+    onRevealCitation(citation);
+  };
 
   return (
     <article className={cn("flex", assistant ? "justify-start" : "justify-end")}>
@@ -30,17 +53,29 @@ export function MessageBubble({
           </span>
         </div>
         <p className="whitespace-pre-wrap text-sm leading-7">
-          {message.content}
+          {parts.length > 0
+            ? parts.map((part, idx) =>
+                part.kind === "text" ? (
+                  <span key={`t-${idx}`}>{part.text}</span>
+                ) : (
+                  <CitationBadge
+                    key={`c-${idx}`}
+                    index={part.index}
+                    onClick={() => handleCiteClick(part.citation)}
+                  />
+                ),
+              )
+            : message.content}
           {message.citations.map((citation, index) => (
             <CitationBadge
               key={`${message.id}-${citation.source_chunk_id ?? index}`}
-              index={index + 1}
-              onClick={() => onRevealCitation(citation)}
+              index={index + 1 + nodeCitations.length}
+              onClick={() => handleCiteClick(citation)}
             />
           ))}
         </p>
         {assistant ? (
-          <CitationFootnotes citations={message.citations} onReveal={onRevealCitation} />
+          <CitationFootnotes citations={allCitations} onReveal={handleCiteClick} />
         ) : null}
       </div>
     </article>

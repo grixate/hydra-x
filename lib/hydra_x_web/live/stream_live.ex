@@ -156,7 +156,7 @@ defmodule HydraXWeb.StreamLive do
                     </div>
                     <div class="mt-1 text-xs text-[var(--hx-mute)]">
                       {item.type}
-                      <span :if={item[:status]}> ·    {item[:status]}</span>
+                      <span :if={item[:status]}> ·          {item[:status]}</span>
                       <span :if={item[:draft_node_count]}>
                         · {item[:draft_node_count]} draft nodes
                       </span>

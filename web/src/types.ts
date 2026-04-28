@@ -103,6 +103,11 @@ export type Citation = {
     content: string;
     ordinal: number;
   };
+  // Library spec §6.3 — inline `<cite node_type="..." node_id="...">` cites.
+  // When present, clicking the badge highlights/focuses the cited node on
+  // the graph via `GraphCommand.focus`.
+  node_type?: string;
+  node_id?: number;
 };
 
 export type ProductMessage = {
@@ -511,6 +516,11 @@ export type GraphDataNode = {
   source_reference_count?: number;
   // Present only for source / signal nodes.
   promoted_to_graph?: boolean | null;
+  // Library spec §3 — present only for `topic` nodes; drives visual size.
+  granularity?: "coarse" | "medium" | "fine" | null;
+  // Library spec §3 — present only for `source` nodes.
+  kind?: "document" | "url" | "web_capture" | "note" | null;
+  ingestion_status?: "pending" | "processed" | "failed" | "partial" | null;
   // Work-in-progress styling (Graph-Opt §10): draft / forming / proposed.
   wip?: boolean;
   wip_reason?: "board_draft" | "agent_proposed" | "agent_forming" | "user_draft" | null;
@@ -665,16 +675,9 @@ export type ProposalItemDecision = {
   edits?: Record<string, unknown> | null;
 };
 
-export type OnboardingState = "pending" | "in_progress" | "completed" | "skipped";
-
 export type OnboardingStatus = {
   project_id: number;
-  state: OnboardingState;
-  vision_set: boolean;
-  bets_count: number;
-  hint: string | null;
-  onboarded_at: string | null;
-  onboarding_skipped_at: string | null;
+  has_completed_first_session: boolean;
 };
 
 export type StreamTab = "activity" | "needs_you" | "blockers";

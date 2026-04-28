@@ -162,6 +162,75 @@ defmodule HydraXWeb.LibraryAPIController do
     end
   end
 
+  @doc """
+  Library spec §10 — extract a passage from a source as a first-class
+  `excerpt` node and link it via `has_excerpt`. Body fields:
+
+      passage_text       (required) — the excerpted text
+      position_anchor    (optional) — page / character offset / section
+      extraction_note    (optional) — annotation about why this excerpt matters
+      extracted_by       (optional) — "user" (default) or "agent"
+  """
+  def create_excerpt(conn, %{"project_id" => project_id, "id" => id} = params) do
+    project_id = parse_int(project_id)
+    source_id = parse_int(id)
+
+    passage_text = params["passage_text"] || ""
+    position_anchor = params["position_anchor"] || %{}
+    extraction_note = params["extraction_note"]
+    extracted_by = params["extracted_by"] || "user"
+
+    cond do
+      passage_text == "" ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: "passage_text is required"})
+
+      true ->
+        with {:ok, %GraphNode{} = source} <- Library.get(project_id, source_id),
+             {:ok, excerpt} <-
+               HydraX.Graph.Nodes.create_node(project_id, %{
+                 type_key: "excerpt",
+                 title: short_title(passage_text),
+                 body: passage_text,
+                 status: "active",
+                 attributes: %{
+                   "source_id" => source.id,
+                   "passage_text" => passage_text,
+                   "position_anchor" => position_anchor,
+                   "extracted_by" => extracted_by,
+                   "extraction_note" => extraction_note
+                 }
+               }),
+             {:ok, _edge} <-
+               HydraX.Graph.Relationships.create_relationship(source, excerpt, "has_excerpt",
+                 weight: 1.0
+               ) do
+          conn
+          |> put_status(:created)
+          |> json(%{
+            data: %{
+              id: excerpt.id,
+              source_id: source.id,
+              title: excerpt.title,
+              passage_text: passage_text
+            }
+          })
+        end
+    end
+  end
+
+  defp parse_int(v) when is_integer(v), do: v
+  defp parse_int(v) when is_binary(v), do: String.to_integer(v)
+
+  defp short_title(text) when is_binary(text) do
+    text
+    |> String.split(~r/\s+/, trim: true)
+    |> Enum.take(8)
+    |> Enum.join(" ")
+    |> String.slice(0, 80)
+  end
+
   # ---- source references ---------------------------------------------
 
   def for_node(conn, %{

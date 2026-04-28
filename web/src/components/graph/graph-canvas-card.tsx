@@ -31,23 +31,45 @@ type GraphCanvasCardProps = {
   actions: GraphCanvasCardActions;
 };
 
+// Constellation §1.3 / §4: the document-altitude card. Mirrors the visual
+// language of the ELK custom node (colored inset-border, type pill with
+// dot, ↑/↓ counts) but expands into a full evidence-card layout — headline
+// claim, evidence chain ribbon, action row.
+const TEAL_SOURCE_DOT = "#1D9E75";
+
 export function GraphCanvasCard({ node, sourceRefs, actions }: GraphCanvasCardProps) {
   const color = colorForNode(node);
   const sourceCount = sourceRefs.length || node.source_reference_count || 0;
+  const evidenceLabel =
+    sourceCount >= 10 ? "thick evidence" : sourceCount >= 3 ? "emerging evidence" : "thin evidence";
 
   return (
-    <Card className="w-[360px] gap-0 overflow-hidden rounded-lg border bg-card/95 py-0 shadow-2xl shadow-black/15 backdrop-blur">
-      <CardContent className="p-4">
+    <Card
+      className="w-[400px] gap-0 overflow-hidden rounded-lg border bg-card/95 py-0 shadow-2xl shadow-black/15 backdrop-blur"
+      // Mirror graph-custom-node.tsx — a 2px colored inset-border encodes
+      // the type family. Flag presence overlays an amber stripe on the
+      // leading edge.
+      style={{
+        boxShadow:
+          node.flag_count > 0
+            ? `inset 4px 0 0 0 #f59e0b, inset 0 0 0 2px ${color}, 0 16px 40px rgba(26,20,16,0.08)`
+            : `inset 0 0 0 2px ${color}, 0 16px 40px rgba(26,20,16,0.08)`,
+      }}
+    >
+      <CardContent className="px-5 py-4">
         <div className="flex items-center gap-2">
           <Badge
             variant="secondary"
-            className="h-5 rounded-full px-2 text-[10px] uppercase tracking-[0.08em]"
+            className="h-5 rounded-full px-2 text-[10px] font-medium uppercase tracking-[0.08em]"
           >
+            <span
+              className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full"
+              style={{ backgroundColor: color }}
+              aria-hidden="true"
+            />
             {node.node_type.replace(/_/g, " ")}
           </Badge>
-          <span className="text-xs text-muted-foreground">
-            {sourceCount >= 10 ? "thick evidence" : sourceCount >= 3 ? "emerging evidence" : "thin evidence"}
-          </span>
+          <span className="text-xs text-muted-foreground">{evidenceLabel}</span>
           <span className="ml-auto inline-flex items-center gap-1" aria-hidden="true">
             {Array.from({ length: 5 }).map((_, index) => (
               <span
@@ -59,7 +81,7 @@ export function GraphCanvasCard({ node, sourceRefs, actions }: GraphCanvasCardPr
           </span>
         </div>
 
-        <p className="mt-3 text-[15px] font-semibold leading-snug text-foreground">
+        <p className="mt-3 text-[16px] font-medium leading-[1.45] text-foreground">
           {node.title}
         </p>
 
@@ -69,14 +91,16 @@ export function GraphCanvasCard({ node, sourceRefs, actions }: GraphCanvasCardPr
           </p>
         ) : null}
 
-        <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-          <span className="inline-flex items-center gap-1">
-            <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: color }} />
+        <div className="mt-3 flex flex-wrap items-center gap-2.5 text-[11px] text-muted-foreground">
+          <span className="inline-flex items-center gap-1.5">
+            <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: TEAL_SOURCE_DOT }} />
             {sourceCount} source{sourceCount === 1 ? "" : "s"}
           </span>
-          <span>up {node.upstream_count}</span>
-          <span>down {node.downstream_count}</span>
-          <span>{relativeLabel(node.updated_at)}</span>
+          <span aria-hidden="true">·</span>
+          <span title="Upstream connections">↑{node.upstream_count}</span>
+          <span title="Downstream connections">↓{node.downstream_count}</span>
+          <span aria-hidden="true">·</span>
+          <span>updated {relativeLabel(node.updated_at)}</span>
           {node.flag_count > 0 ? (
             <span className="inline-flex items-center gap-1 text-amber-600">
               <ShieldAlert className="h-3 w-3" />

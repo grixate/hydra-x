@@ -45,6 +45,11 @@ export const NODE_COLORS: Record<string, string> = {
   source: FAMILY_COLORS.evidence,
   source_ref: FAMILY_COLORS.evidence,
   signal: FAMILY_COLORS.evidence,
+  excerpt: "#a8b3c9",
+  // Library entities (spec §5.2 — visual distinction)
+  topic: "#7c5cd1",
+  author: "#0e8a6c",
+  publication: "#7e6a4f",
   // Output
   requirement: FAMILY_COLORS.output,
   design_node: FAMILY_COLORS.output,
@@ -183,6 +188,22 @@ export const FILTERABLE_NODE_TYPES = [
   "learning",
   "constraint",
 ];
+
+// Library spec §5.1 — node types visible by default in the Library lens.
+// Authors/publications/excerpts are toggleable; sources + topics are the
+// primary structure.
+export const LIBRARY_FILTERABLE_NODE_TYPES = [
+  "source",
+  "topic",
+  "excerpt",
+  "author",
+  "publication",
+];
+
+// Library spec §5.1 — what's visible by default before the user touches
+// any filter chips. Excerpts/authors/publications start hidden; the user
+// toggles them on when relevant. Sources + topics carry the primary signal.
+export const LIBRARY_DEFAULT_VISIBLE_TYPES = ["source", "topic"];
 
 // ---- Motion tokens --------------------------------------------------
 // Spec §7: motion vocabulary with consistent timings across all surfaces.

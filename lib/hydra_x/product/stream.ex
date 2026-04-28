@@ -167,7 +167,8 @@ defmodule HydraX.Product.Stream do
 
   defp proposed_simulation_stream_items(project_id) do
     GraphNode
-    |> where([s],
+    |> where(
+      [s],
       s.project_id == ^project_id and s.type_key == "simulation" and
         s.status == "proposed"
     )

@@ -1,11 +1,12 @@
 defmodule HydraXWeb.AuthAPIController do
   use HydraXWeb, :controller
 
-  alias HydraX.Runtime
+  alias HydraX.Accounts
   alias HydraX.Security.LoginThrottle
   alias HydraXWeb.OperatorAuth
 
-  def login(conn, %{"password" => password}) when is_binary(password) do
+  def login(conn, %{"email" => email, "password" => password})
+      when is_binary(email) and is_binary(password) do
     ip = client_ip(conn)
     throttle = LoginThrottle.state(ip)
 
@@ -16,26 +17,28 @@ defmodule HydraXWeb.AuthAPIController do
         |> json(%{error: "rate_limited", retry_after: throttle.retry_after_seconds})
 
       true ->
-        case Runtime.authenticate_operator(password || "") do
-          :ok ->
-            LoginThrottle.clear_attempts(ip)
+        case Accounts.authenticate_user(email, password) do
+          {:ok, user} ->
+            if Accounts.operator?(user) do
+              LoginThrottle.clear_attempts(ip)
 
-            conn
-            |> OperatorAuth.log_in()
-            |> json(%{data: %{authenticated: true}})
+              conn
+              |> OperatorAuth.log_in(user)
+              |> json(%{data: %{authenticated: true}})
+            else
+              LoginThrottle.record_attempt(ip)
 
-          {:error, :not_configured} ->
-            # No password configured — auto-login
-            conn
-            |> OperatorAuth.log_in()
-            |> json(%{data: %{authenticated: true}})
+              conn
+              |> put_status(:forbidden)
+              |> json(%{error: "operator_required"})
+            end
 
           {:error, _} ->
             LoginThrottle.record_attempt(ip)
 
             conn
             |> put_status(:unauthorized)
-            |> json(%{error: "invalid_password"})
+            |> json(%{error: "invalid_credentials"})
         end
     end
   end
@@ -43,17 +46,17 @@ defmodule HydraXWeb.AuthAPIController do
   def login(conn, _params) do
     conn
     |> put_status(:bad_request)
-    |> json(%{error: "password_required"})
+    |> json(%{error: "email_and_password_required"})
   end
 
   def status(conn, _params) do
-    configured? = Runtime.operator_password_configured?()
-    authenticated? = OperatorAuth.session_state(conn).valid?
+    state = OperatorAuth.session_state(conn)
 
     json(conn, %{
       data: %{
-        password_configured: configured?,
-        authenticated: not configured? or authenticated?
+        operator_configured: Accounts.operator_user_exists?(),
+        authenticated: state.valid?,
+        user_id: state.user_id
       }
     })
   end

@@ -9,8 +9,6 @@ defmodule HydraXWeb.StreamLineageAPIController do
 
   use HydraXWeb, :controller
 
-  import Ecto.Query
-
   alias HydraX.Coherence.Contradiction
   alias HydraX.Product.Graph
   alias HydraX.Product.WhyProse

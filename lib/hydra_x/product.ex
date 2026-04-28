@@ -5,6 +5,7 @@ defmodule HydraX.Product do
 
   import Ecto.Query
 
+  alias HydraX.Accounts
   alias HydraX.Config
   alias HydraX.Embeddings
   alias HydraX.Ingest.Parser
@@ -28,6 +29,7 @@ defmodule HydraX.Product do
   alias HydraX.Product.SourceChunk
   alias HydraX.Product.TaskFeedback
   alias HydraX.Product.WorkspaceScaffold
+  alias HydraX.PretrainedProjects.ProductDevelopment
   alias HydraX.Repo
   alias HydraX.Runtime
   alias HydraX.Runtime.AgentProfile
@@ -38,6 +40,7 @@ defmodule HydraX.Product do
   @default_search_limit 5
   @source_search_tool HydraX.Product.Tools.SourceSearch
   @library_query_tool HydraX.Product.Tools.LibraryQuery
+  @library_gaps_tool HydraX.Product.Tools.LibraryGaps
   @insight_create_tool HydraX.Product.Tools.InsightCreate
   @insight_update_tool HydraX.Product.Tools.InsightUpdate
   @requirement_create_tool HydraX.Product.Tools.RequirementCreate
@@ -93,6 +96,19 @@ defmodule HydraX.Product do
     |> Repo.get!(id)
   end
 
+  @doc """
+  Mark the project's onboarding fork screen as past. Idempotent — safe
+  to call from any of the four scenario flows or from the skip path.
+  """
+  def mark_first_session_completed(%Project{has_completed_first_session: true} = project),
+    do: {:ok, project}
+
+  def mark_first_session_completed(%Project{} = project) do
+    project
+    |> Project.changeset(%{"has_completed_first_session" => true})
+    |> Repo.update()
+  end
+
   def project_counts(project_or_id) do
     project_id = project_id(project_or_id)
 
@@ -103,8 +119,8 @@ defmodule HydraX.Product do
       conversations: count_project_records(ProductConversation, project_id),
       decisions: count_type_key_nodes(project_id, "decision", :all),
       strategies: count_type_key_nodes(project_id, "strategy", :all),
-      design_nodes: count_project_records(DesignNode, project_id),
-      architecture_nodes: count_project_records(ArchitectureNode, project_id),
+      design_nodes: count_type_key_nodes(project_id, "design_node"),
+      architecture_nodes: count_type_key_nodes(project_id, "architecture_node"),
       tasks: count_type_key_nodes(project_id, "task", :all),
       learnings: count_type_key_nodes(project_id, "learning", :all),
       flags:
@@ -119,7 +135,33 @@ defmodule HydraX.Product do
   end
 
   def create_project(attrs) when is_map(attrs) do
-    attrs = normalize_project_attrs(attrs)
+    create_project_record(attrs)
+  end
+
+  def create_project_with_onboarding(attrs) when is_map(attrs) do
+    case create_project_record(attrs) do
+      {:ok, project} ->
+        onboarding =
+          case Onboarding.setup_project!(project) do
+            {:ok, %{session_id: sid, conversation_id: cid}} ->
+              %{onboarding_session_id: sid, onboarding_conversation_id: cid}
+
+            _ ->
+              %{}
+          end
+
+        {:ok, project, onboarding}
+
+      {:error, changeset} ->
+        {:error, changeset}
+    end
+  end
+
+  defp create_project_record(attrs) when is_map(attrs) do
+    attrs =
+      attrs
+      |> normalize_project_attrs()
+      |> put_default_workspace_id()
 
     Repo.transaction(fn ->
       researcher = provision_agent!(attrs, "researcher")
@@ -141,6 +183,7 @@ defmodule HydraX.Product do
       |> Repo.insert()
       |> case do
         {:ok, project} ->
+          :ok = ProductDevelopment.apply_to_project(project.id)
           provision_default_artifacts!(project)
           maybe_start_initiative_engine(project)
           Repo.preload(project, @agent_preloads)
@@ -149,23 +192,20 @@ defmodule HydraX.Product do
           Repo.rollback(changeset)
       end
     end)
-    |> case do
-      {:ok, project} ->
-        # Run onboarding setup outside the transaction
-        onboarding =
-          case Onboarding.setup_project!(project) do
-            {:ok, %{session_id: sid, conversation_id: cid}} ->
-              %{onboarding_session_id: sid, onboarding_conversation_id: cid}
+  end
 
-            _ ->
-              %{}
-          end
+  defp put_default_workspace_id(%{"workspace_id" => workspace_id} = attrs)
+       when is_binary(workspace_id) and workspace_id != "" do
+    attrs
+  end
 
-        {:ok, project, onboarding}
+  defp put_default_workspace_id(%{"workspace_id" => workspace_id} = attrs)
+       when not is_nil(workspace_id) do
+    attrs
+  end
 
-      {:error, changeset} ->
-        {:error, changeset}
-    end
+  defp put_default_workspace_id(attrs) do
+    Map.put(attrs, "workspace_id", Accounts.default_workspace_id())
   end
 
   def update_project(%Project{} = project, attrs) do
@@ -220,12 +260,14 @@ defmodule HydraX.Product do
     |> preload([:source_chunks])
     |> order_by([source], desc: source.inserted_at)
     |> Repo.all()
+    |> Enum.map(&hydrate_source_compat/1)
   end
 
   def get_source!(id) do
     from(n in GraphNode, where: n.id == ^id and n.type_key == "source")
     |> preload([:source_chunks])
     |> Repo.one!()
+    |> hydrate_source_compat()
   end
 
   def get_project_source!(project_or_id, id) do
@@ -236,6 +278,7 @@ defmodule HydraX.Product do
     )
     |> preload([:source_chunks])
     |> Repo.one!()
+    |> hydrate_source_compat()
   end
 
   def change_source(source \\ %GraphNode{type_key: "source"}, attrs \\ %{}) do
@@ -276,7 +319,7 @@ defmodule HydraX.Product do
         attributes: source_attributes(source_attrs)
       }
 
-      with {:ok, source} <- GraphNodes.create_node(project.id,node_attrs) do
+      with {:ok, source} <- GraphNodes.create_node(project.id, node_attrs) do
         ProductPubSub.broadcast_project_event(project.id, "source.created", source)
 
         ProductPubSub.broadcast_source_progress(source, "progress", %{
@@ -297,7 +340,7 @@ defmodule HydraX.Product do
               chunk_count: length(completed_source.source_chunks || [])
             })
 
-            {:ok, completed_source}
+            {:ok, hydrate_source_compat(completed_source)}
 
           {:error, %Ecto.Changeset{} = changeset} ->
             failed_source = mark_source_failed(source)
@@ -525,6 +568,7 @@ defmodule HydraX.Product do
     |> preload(^requirement_preloads())
     |> order_by([r], desc: r.updated_at)
     |> Repo.all()
+    |> Enum.map(&hydrate_requirement_compat/1)
   end
 
   def get_project_requirement!(project_or_id, requirement_id) do
@@ -537,6 +581,7 @@ defmodule HydraX.Product do
     )
     |> preload(^requirement_preloads())
     |> Repo.one!()
+    |> hydrate_requirement_compat()
   end
 
   def create_requirement(project_or_id, attrs) when is_map(attrs) do
@@ -571,13 +616,16 @@ defmodule HydraX.Product do
             }
 
             requirement =
-              case GraphNodes.create_node(project.id,node_attrs) do
+              case GraphNodes.create_node(project.id, node_attrs) do
                 {:ok, node} -> node
                 {:error, changeset} -> Repo.rollback(changeset)
               end
 
             persist_requirement_insights!(requirement, insights)
-            Repo.preload(requirement, requirement_preloads())
+
+            requirement
+            |> Repo.preload(requirement_preloads())
+            |> hydrate_requirement_compat()
           end)
           |> unwrap_transaction()
           |> maybe_broadcast_project_record("requirement.created")
@@ -643,7 +691,9 @@ defmodule HydraX.Product do
               persist_requirement_insights!(updated, insights)
             end
 
-            Repo.preload(updated, requirement_preloads())
+            updated
+            |> Repo.preload(requirement_preloads())
+            |> hydrate_requirement_compat()
           end)
           |> unwrap_transaction()
           |> maybe_broadcast_project_record("requirement.updated")
@@ -670,6 +720,18 @@ defmodule HydraX.Product do
         select: ri.insight_id
     )
   end
+
+  defp hydrate_requirement_compat(%GraphNode{type_key: "requirement"} = requirement) do
+    links = associated_list(requirement.linked_requirement_insights)
+
+    %{
+      requirement
+      | grounded: Map.get(requirement.attributes || %{}, "grounded", false),
+        requirement_insights: links
+    }
+  end
+
+  defp hydrate_requirement_compat(requirement), do: requirement
 
   # -------------------------------------------------------------------
   # Decisions
@@ -716,7 +778,7 @@ defmodule HydraX.Product do
       attributes: decision_attributes(attrs)
     }
 
-    GraphNodes.create_node(project_id,node_attrs)
+    GraphNodes.create_node(project_id, node_attrs)
     |> maybe_broadcast_project_record("decision.created")
     |> maybe_notify_coherence("decision", :created)
   end
@@ -809,7 +871,7 @@ defmodule HydraX.Product do
       attributes: attrs["metadata"] || %{}
     }
 
-    GraphNodes.create_node(project_id,node_attrs)
+    GraphNodes.create_node(project_id, node_attrs)
     |> maybe_broadcast_project_record("strategy.created")
     |> maybe_notify_coherence("strategy", :created)
   end
@@ -934,7 +996,7 @@ defmodule HydraX.Product do
       attributes: merged_attributes
     }
 
-    GraphNodes.create_node(project_id,node_attrs)
+    GraphNodes.create_node(project_id, node_attrs)
     |> maybe_broadcast_project_record(event)
   end
 
@@ -1035,7 +1097,7 @@ defmodule HydraX.Product do
       attributes: task_attributes
     }
 
-    GraphNodes.create_node(project_id,node_attrs)
+    GraphNodes.create_node(project_id, node_attrs)
     |> maybe_broadcast_project_record("task.created")
   end
 
@@ -1133,7 +1195,7 @@ defmodule HydraX.Product do
       attributes: learning_attributes
     }
 
-    GraphNodes.create_node(project_id,node_attrs)
+    GraphNodes.create_node(project_id, node_attrs)
     |> maybe_broadcast_project_record("learning.created")
   end
 
@@ -1360,7 +1422,7 @@ defmodule HydraX.Product do
       attributes: constraint_attributes(attrs)
     }
 
-    GraphNodes.create_node(project_id,node_attrs)
+    GraphNodes.create_node(project_id, node_attrs)
     |> maybe_broadcast_project_record("constraint.created")
   end
 
@@ -1436,7 +1498,7 @@ defmodule HydraX.Product do
     project_id = project_id(project_or_id)
     attrs = normalize_product_record_attrs(attrs)
 
-    GraphNodes.create_node(project_id,%{
+    GraphNodes.create_node(project_id, %{
       type_key: "routine",
       title: attrs["title"],
       body: attrs["description"],
@@ -1559,7 +1621,7 @@ defmodule HydraX.Product do
     project_id = project_id(project_or_id)
     attrs = normalize_product_record_attrs(attrs)
 
-    GraphNodes.create_node(project_id,%{
+    GraphNodes.create_node(project_id, %{
       type_key: "knowledge_entry",
       title: attrs["title"],
       body: attrs["content"],
@@ -2044,6 +2106,33 @@ defmodule HydraX.Product do
     #{constraint_section}
     #{knowledge_section}
     #{shared_memory_section}
+    #{hydra_meta_section()}
+    """
+  end
+
+  # Hydra-meta knowledge — shared across personas so any agent can field
+  # "what is Stream?", "what does approving a proposal do?", etc. without
+  # a dedicated onboarding agent. Keep this terse; it lives in every
+  # prompt and shouldn't bloat token use.
+  defp hydra_meta_section do
+    """
+
+    ## How Hydra works (orient the user when asked)
+    Hydra is a workspace where typed knowledge accumulates into a graph and a team of agents reasons over it. Four main surfaces:
+    - **Stream** — the project's activity feed. Agents post here when they propose, complete, or get stuck. The "Needs You" tab is the user's queue.
+    - **Board** — a freeform canvas for working out ideas before they become structured. Drag, sketch, connect; promote into the graph when ready.
+    - **Graph** — every typed node in the project (insights, decisions, requirements, evidence) and the relationships between them. Click any node to see what supports it and what it leads to.
+    - **Library** — the user's sources and reference material. Agents read these to ground reasoning, so anything an agent claims should be traceable back to a Library item.
+
+    Schema-change proposals: when an agent wants to add a new node type, relationship type, or flag type, it issues a `schema_change_proposal`. These appear inline in chat as approve/reject cards. Approving applies immediately to the project's schema; rejecting drops the proposal. Users can also propose schema changes directly.
+
+    Node types, relationships, and flags are project-scoped: each project owns its complete schema. The five base primitives (claim, evidence, artifact, activity, entity, agent_role) are shared, but the concrete types extending them differ per project.
+
+    Agents and tasks: a team of specialised agents (Researcher, Strategist, Architect, Designer, Memory) work on the project. Users can ask an agent to do a specific thing, or let it work autonomously — proposals it generates flow into the user's queue. New agents are added from the Agents view; existing ones can be configured there too.
+
+    Adding materials: drop files or paste links into the Library. Sources are chunked and embedded, then made available to all agents for grounded reasoning.
+
+    When the user asks how something works, give a short concrete answer drawing on the section above; don't hand them documentation links — there isn't one yet.
     """
   end
 
@@ -2095,7 +2184,7 @@ defmodule HydraX.Product do
   defp persona_prompt_context(project_id, "architect") do
     """
     Active requirements: #{count_type_key_nodes(project_id, "requirement")}
-    Architecture nodes: #{count_active_nodes(project_id, ArchitectureNode)}
+    Architecture nodes: #{count_active_nodes(project_id, "architecture_node")}
     Always link architecture decisions to the requirements they serve.
     """
   end
@@ -2103,7 +2192,7 @@ defmodule HydraX.Product do
   defp persona_prompt_context(project_id, "designer") do
     """
     Active requirements: #{count_type_key_nodes(project_id, "requirement")}
-    Design nodes: #{count_active_nodes(project_id, DesignNode)}
+    Design nodes: #{count_active_nodes(project_id, "design_node")}
     Check pattern_check before creating new interaction patterns.
     """
   end
@@ -2116,13 +2205,17 @@ defmodule HydraX.Product do
     - Decisions: #{count_type_key_nodes(project_id, "decision")}
     - Strategies: #{count_type_key_nodes(project_id, "strategy")}
     - Requirements: #{count_type_key_nodes(project_id, "requirement")}
-    - Architecture nodes: #{count_active_nodes(project_id, ArchitectureNode)}
-    - Design nodes: #{count_active_nodes(project_id, DesignNode)}
+    - Architecture nodes: #{count_active_nodes(project_id, "architecture_node")}
+    - Design nodes: #{count_active_nodes(project_id, "design_node")}
     Use graph_query and trail_trace to find information. Cite specific nodes in your answers.
     """
   end
 
   defp persona_prompt_context(_project_id, _persona), do: ""
+
+  defp count_active_nodes(project_id, type_key) when is_binary(type_key) do
+    count_type_key_nodes(project_id, type_key)
+  end
 
   defp count_active_nodes(project_id, schema) do
     schema
@@ -2145,6 +2238,7 @@ defmodule HydraX.Product do
     [
       @source_search_tool,
       @library_query_tool,
+      @library_gaps_tool,
       @insight_create_tool,
       @insight_update_tool,
       @artifact_create_tool,
@@ -2474,6 +2568,18 @@ defmodule HydraX.Product do
     base = attrs["metadata"] || %{}
 
     [
+      # Library-spec fields (canonical):
+      {"kind", attrs["kind"]},
+      {"mime_type", attrs["mime_type"]},
+      {"original_filename", attrs["original_filename"]},
+      {"original_url", attrs["original_url"]},
+      {"byte_size", attrs["byte_size"]},
+      {"ingestion_status", attrs["ingestion_status"]},
+      {"ingestion_summary", attrs["ingestion_summary"]},
+      {"ingestion_failures", attrs["ingestion_failures"]},
+      {"recency", attrs["recency"]},
+      {"language", attrs["language"]},
+      # Legacy/source-as-data fields:
       {"source_type", attrs["source_type"]},
       {"external_ref", attrs["external_ref"]},
       {"reviewed_at", attrs["reviewed_at"]},
@@ -2752,7 +2858,7 @@ defmodule HydraX.Product do
 
   defp requirement_preloads do
     [
-      requirement_insights: [insight: [insight_evidence: [source_chunk: [:source]]]]
+      linked_requirement_insights: [insight: [insight_evidence: [source_chunk: [:source]]]]
     ]
   end
 
@@ -2824,13 +2930,6 @@ defmodule HydraX.Product do
 
   defp maybe_filter_node_type(query, node_type) do
     where(query, [r], r.node_type == ^to_string(node_type))
-  end
-
-  defp maybe_filter_priority(query, nil), do: query
-  defp maybe_filter_priority(query, ""), do: query
-
-  defp maybe_filter_priority(query, priority) do
-    where(query, [r], r.priority == ^to_string(priority))
   end
 
   defp maybe_filter_learning_type(query, nil), do: query
@@ -3353,9 +3452,31 @@ defmodule HydraX.Product do
       |> Map.new(fn candidate -> {candidate.chunk.id, candidate.lexical_score} end)
 
     Enum.map(chunks, fn chunk ->
+      chunk =
+        if match?(%GraphNode{type_key: "source"}, chunk.source) do
+          %{chunk | source: hydrate_source_compat(chunk.source)}
+        else
+          chunk
+        end
+
       %{chunk: chunk, lexical_score: Map.get(lexical_scores, chunk.id, 0.0)}
     end)
   end
+
+  defp hydrate_source_compat(%GraphNode{type_key: "source"} = source) do
+    attrs = source.attributes || %{}
+
+    %{
+      source
+      | processing_status: source.status,
+        source_type: Map.get(attrs, "source_type"),
+        content: source.body,
+        external_ref: Map.get(attrs, "external_ref"),
+        metadata: attrs
+    }
+  end
+
+  defp hydrate_source_compat(source), do: source
 
   defp chunk_embedding(chunk) do
     case chunk.embedding do
@@ -3558,12 +3679,13 @@ defmodule HydraX.Product do
 
   defp render_source_export_lines(sources) do
     Enum.flat_map(sources, fn source ->
-      attrs = source.attributes || %{}
-      source_type = Map.get(attrs, "source_type")
-      chunks = source.source_chunks || []
+      attrs = Map.get(source, :attributes) || Map.get(source, :metadata) || %{}
+      source_type = Map.get(source, :source_type) || Map.get(attrs, "source_type")
+      chunks = Map.get(source, :source_chunks) || []
+      status = Map.get(source, :status) || Map.get(source, :processing_status)
 
       [
-        "- [#{source.id}] #{source.title} (#{source_type}) chunks=#{length(chunks)} status=#{source.status}"
+        "- [#{source.id}] #{source.title} (#{source_type}) chunks=#{length(chunks)} status=#{status}"
       ]
     end)
   end
@@ -3842,7 +3964,7 @@ defmodule HydraX.Product do
       attributes: artifact_attributes
     }
 
-    case GraphNodes.create_node(project_id,node_attrs) do
+    case GraphNodes.create_node(project_id, node_attrs) do
       {:ok, artifact} ->
         ProductPubSub.broadcast_project_event(project_id, "artifact.created", artifact)
         {:ok, artifact}

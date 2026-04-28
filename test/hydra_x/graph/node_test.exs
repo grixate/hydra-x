@@ -14,7 +14,7 @@ defmodule HydraX.Graph.NodeTest do
     {:ok, %{workspace: workspace}} =
       Accounts.create_user_with_workspace(%{"email" => email, "display_name" => "Node Tester"})
 
-    {:ok, project, _onboarding} =
+    {:ok, project} =
       Product.create_project(%{
         "name" => "Node Test Project",
         "description" => "t",

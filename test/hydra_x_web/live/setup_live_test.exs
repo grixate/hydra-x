@@ -5,7 +5,7 @@ defmodule HydraXWeb.SetupLiveTest do
   alias HydraX.Safety
   alias HydraXWeb.OperatorAuth
 
-  setup do
+  setup %{conn: conn} do
     backup_root =
       Path.join(System.tmp_dir!(), "hydra-x-live-backups-#{System.unique_integer([:positive])}")
 
@@ -25,14 +25,14 @@ defmodule HydraXWeb.SetupLiveTest do
       File.rm_rf(install_root)
     end)
 
-    :ok
+    {:ok, conn: register_and_log_in_operator(conn)}
   end
 
   test "setup page renders preview readiness report", %{conn: conn} do
     {:ok, _view, html} = live(conn, ~p"/setup")
 
     assert html =~ "Install preflight"
-    assert html =~ "Operator password configured"
+    assert html =~ "Operator account configured"
     assert html =~ "Public URL points beyond localhost"
     assert html =~ "Required blockers"
     assert html =~ "Next steps"
@@ -121,18 +121,14 @@ defmodule HydraXWeb.SetupLiveTest do
   test "setup page requires recent auth for sensitive actions when password is configured", %{
     conn: conn
   } do
-    assert {:ok, _secret} =
-             Runtime.save_operator_secret_password(%{
-               "password" => "hydra-password-123",
-               "password_confirmation" => "hydra-password-123"
-             })
-
+    user = create_operator_user!()
     now = System.system_time(:second)
 
     conn =
       conn
       |> init_test_session(%{})
       |> OperatorAuth.log_in(
+        user,
         authenticated_at: now,
         last_active_at: now,
         recent_auth_at: now - OperatorAuth.recent_auth_window_seconds() - 10

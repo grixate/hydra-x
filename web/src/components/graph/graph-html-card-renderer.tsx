@@ -1,10 +1,42 @@
+import { Component, type ErrorInfo, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 import type { Graph } from "@cosmos.gl/graph";
 import type { GraphDataNode, SourceReference } from "@/types";
 
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { GraphCanvasCard, type GraphCanvasCardActions } from "./graph-canvas-card";
 import type { CosmosGraphModel, GraphAltitude } from "./cosmos-graph-adapter";
+
+// Each card renders in its own React root (createRoot per pool entry),
+// detached from the app. An uncaught error inside the card would otherwise
+// propagate up to React's recovery path and unmount the *surface*, killing
+// the constellation and all chrome. The boundary below isolates failures to
+// the failing card.
+class CardErrorBoundary extends Component<
+  { children: ReactNode },
+  { hasError: boolean }
+> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.warn("[GraphCanvasCard] render error contained", error, info);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return null;
+    }
+    return this.props.children;
+  }
+}
 
 type TextureRecord = {
   element: HTMLDivElement;
@@ -23,6 +55,7 @@ type RenderScene = {
   selectedNodeId: string | null;
   hoveredNodeId: string | null;
   sourceRefs: SourceReference[];
+  labelIndices?: number[];
 };
 
 type WebGLWithHtml = WebGL2RenderingContext & {
@@ -36,8 +69,8 @@ type WebGLWithHtml = WebGL2RenderingContext & {
   ) => void;
 };
 
-const CARD_WIDTH = 360;
-const CARD_HEIGHT = 260;
+const CARD_WIDTH = 400;
+const CARD_HEIGHT = 280;
 const CARD_POOL_SIZE = 6;
 const LABEL_POOL_SIZE = 72;
 
@@ -199,8 +232,18 @@ export class GraphHtmlCardRenderer {
       record.element.style.display = "block";
       const nextKey = cardContentKey(node, scene.sourceRefs);
       if (record.contentKey !== nextKey) {
+        // The card pool's React roots are detached from the app tree, so
+        // they don't inherit the global TooltipProvider. Wrap each card
+        // root in its own provider — without this, every <Tooltip> inside
+        // GraphCanvasCard throws and crashes the surface.
+        // Also wrap in an error boundary so any future card-level error
+        // is contained to that card and never unmounts the GraphView.
         record.root?.render(
-          <GraphCanvasCard node={node} sourceRefs={scene.sourceRefs} actions={this.actions} />,
+          <CardErrorBoundary>
+            <TooltipProvider delayDuration={120}>
+              <GraphCanvasCard node={node} sourceRefs={scene.sourceRefs} actions={this.actions} />
+            </TooltipProvider>
+          </CardErrorBoundary>,
         );
         record.contentKey = nextKey;
         record.dirty = true;

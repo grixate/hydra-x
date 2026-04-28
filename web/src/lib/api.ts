@@ -105,6 +105,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   listProjects: () => request<Project[]>("/projects"),
+  getProject: (projectId: number) => request<Project>(`/projects/${projectId}`),
   createProject: (payload: {
     name: string;
     slug?: string;
@@ -261,6 +262,47 @@ export const api = {
       { method: "POST", body: form },
     );
   },
+  // Library spec §10 — paste-URL / note creation paths post the canonical
+  // spec-shape attributes (kind, original_url, etc.) rather than the legacy
+  // source_type vocabulary.
+  addLibrarySource: async (
+    projectId: number,
+    payload: {
+      title: string;
+      kind: "url" | "note" | "document" | "web_capture";
+      content?: string;
+      original_url?: string;
+      original_filename?: string;
+      mime_type?: string;
+      ingestion_status?: "pending" | "processed" | "failed" | "partial";
+    },
+  ) =>
+    request<Source>(`/projects/${projectId}/sources`, {
+      method: "POST",
+      body: JSON.stringify({ source: payload }),
+    }),
+  // Library spec §4.3 — re-trigger one preprocessing stage.
+  reprocessSourceStage: (projectId: number, sourceId: number, stage: string) =>
+    request<{ source_id: number; stage: string; queued: boolean }>(
+      `/projects/${projectId}/sources/${sourceId}/reprocess_stage`,
+      { method: "POST", body: JSON.stringify({ stage }) },
+    ),
+  // Library spec §10 — extract a passage from a source as a first-class
+  // `excerpt` node + `has_excerpt` edge.
+  createExcerpt: (
+    projectId: number,
+    sourceId: number,
+    payload: {
+      passage_text: string;
+      position_anchor?: Record<string, unknown>;
+      extraction_note?: string;
+      extracted_by?: "user" | "agent";
+    },
+  ) =>
+    request<{ id: number; source_id: number; title: string; passage_text: string }>(
+      `/projects/${projectId}/library/sources/${sourceId}/excerpts`,
+      { method: "POST", body: JSON.stringify(payload) },
+    ),
   listInsights: (projectId: number) => request<Insight[]>(`/projects/${projectId}/insights`),
   createInsight: (
     projectId: number,
@@ -715,21 +757,16 @@ export const api = {
   },
   getOnboarding: (projectId: number) =>
     request<OnboardingStatus>(`/projects/${projectId}/onboarding`),
-  startOnboarding: (projectId: number) =>
-    request<OnboardingStatus>(`/projects/${projectId}/onboarding/start`, {
+  completeOnboarding: (projectId: number) =>
+    request<OnboardingStatus>(`/projects/${projectId}/onboarding/complete`, {
       method: "POST",
       body: JSON.stringify({}),
     }),
-  skipOnboarding: (projectId: number) =>
-    request<OnboardingStatus>(`/projects/${projectId}/onboarding/skip`, {
-      method: "POST",
-      body: JSON.stringify({}),
-    }),
-  resetOnboarding: (projectId: number) =>
-    request<OnboardingStatus>(`/projects/${projectId}/onboarding/reset`, {
-      method: "POST",
-      body: JSON.stringify({}),
-    }),
+  applyPretrainedSchema: (projectId: number) =>
+    request<{ project_id: number; applied: string }>(
+      `/projects/${projectId}/onboarding/apply_pretrained`,
+      { method: "POST", body: JSON.stringify({}) },
+    ),
   // Decisions
   listDecisions: (projectId: number) =>
     request<Decision[]>(`/projects/${projectId}/decisions`),
@@ -842,6 +879,10 @@ export const api = {
   // Graph data (enriched — nodes, edges, flags, density)
   getGraphData: (projectId: number) =>
     request<GraphData>(`/projects/${projectId}/graph/data`),
+  // Library spec §5: same endpoint, restricted to Library node types and
+  // always including sources (Library sources are graph-resident).
+  getLibraryGraphData: (projectId: number) =>
+    request<GraphData>(`/projects/${projectId}/graph/data?lens=library`),
   // Graph edges (CRUD)
   createGraphEdge: (projectId: number, payload: {
     from_node_type: string;

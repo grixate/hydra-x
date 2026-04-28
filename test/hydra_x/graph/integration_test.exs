@@ -31,7 +31,7 @@ defmodule HydraX.Graph.IntegrationTest do
         "display_name" => "Integration Tester"
       })
 
-    {:ok, project, _onboarding} =
+    {:ok, project} =
       Product.create_project(%{
         "name" => "Integration Project",
         "description" => "substrate E2E",
@@ -144,7 +144,7 @@ defmodule HydraX.Graph.IntegrationTest do
         "display_name" => "Other Workspace"
       })
 
-    {:ok, other_project, _} =
+    {:ok, other_project} =
       Product.create_project(%{
         "name" => "Other",
         "description" => "t",
@@ -169,5 +169,66 @@ defmodule HydraX.Graph.IntegrationTest do
 
     assert {:error, :cross_project_relationship} =
              Relationships.create_relationship(a, b, "supports")
+  end
+
+  test "Library node + relationship types are seeded", %{project: project} do
+    # Spec §3: source/excerpt/topic/author/publication exist and are linkable.
+    {:ok, source} =
+      Nodes.create_node(project.id, %{
+        type_key: "source",
+        title: "A Paper on Acoustic Resonance",
+        status: "pending",
+        attributes: %{
+          "kind" => "document",
+          "mime_type" => "application/pdf",
+          "ingestion_status" => "pending"
+        }
+      })
+
+    {:ok, excerpt} =
+      Nodes.create_node(project.id, %{
+        type_key: "excerpt",
+        title: "Resonance peaks at 440Hz in the test cavity.",
+        status: "active",
+        attributes: %{
+          "source_id" => source.id,
+          "passage_text" => "Resonance peaks at 440Hz in the test cavity.",
+          "extracted_by" => "agent"
+        }
+      })
+
+    {:ok, topic} =
+      Nodes.create_node(project.id, %{
+        type_key: "topic",
+        title: "Acoustic Resonance",
+        status: "active",
+        attributes: %{
+          "granularity" => "medium",
+          "description" => "Frequency-coupled standing waves in cavities."
+        }
+      })
+
+    {:ok, author} =
+      Nodes.create_node(project.id, %{
+        type_key: "author",
+        title: "Helmholtz",
+        status: "active",
+        attributes: %{"display_name" => "Hermann von Helmholtz"}
+      })
+
+    {:ok, publication} =
+      Nodes.create_node(project.id, %{
+        type_key: "publication",
+        title: "Annalen der Physik",
+        status: "active",
+        attributes: %{"name" => "Annalen der Physik", "kind" => "journal"}
+      })
+
+    # All five new relationship types exercise valid endpoints.
+    {:ok, _} = Relationships.create_relationship(source, excerpt, "has_excerpt")
+    {:ok, _} = Relationships.create_relationship(source, topic, "is_about")
+    {:ok, _} = Relationships.create_relationship(excerpt, topic, "is_about")
+    {:ok, _} = Relationships.create_relationship(source, author, "authored_by")
+    {:ok, _} = Relationships.create_relationship(source, publication, "published_in")
   end
 end

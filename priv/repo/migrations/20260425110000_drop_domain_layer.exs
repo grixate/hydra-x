@@ -23,7 +23,12 @@ defmodule HydraX.Repo.Migrations.DropDomainLayer do
     execute "DELETE FROM flag_type_definitions"
 
     drop constraint(:node_type_definitions, "node_type_definitions_domain_id_fkey")
-    drop constraint(:relationship_type_definitions, "relationship_type_definitions_domain_id_fkey")
+
+    drop constraint(
+           :relationship_type_definitions,
+           "relationship_type_definitions_domain_id_fkey"
+         )
+
     drop constraint(:flag_type_definitions, "flag_type_definitions_domain_id_fkey")
     drop constraint(:schema_change_proposals, "schema_change_proposals_domain_id_fkey")
 

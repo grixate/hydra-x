@@ -25,7 +25,12 @@ defmodule HydraX.Product.Graph do
     "learning" => GraphNode,
     "constraint" => GraphNode,
     "routine" => GraphNode,
-    "knowledge_entry" => GraphNode
+    "knowledge_entry" => GraphNode,
+    # Library node types (spec §3):
+    "excerpt" => GraphNode,
+    "topic" => GraphNode,
+    "author" => GraphNode,
+    "publication" => GraphNode
   }
 
   @traversable_node_types Map.keys(@node_type_to_schema)

@@ -2,15 +2,18 @@ defmodule HydraXWeb.ProjectAPIControllerTest do
   use HydraXWeb.ConnCase
 
   alias HydraX.Product
-  alias HydraX.Runtime
-  alias HydraXWeb.OperatorAuth
 
-  test "GET /api/v1/projects requires operator auth when a password is configured", %{conn: conn} do
-    assert {:ok, _secret} =
-             Runtime.save_operator_secret_password(%{
-               "password" => "hydra-password-123",
-               "password_confirmation" => "hydra-password-123"
-             })
+  setup %{conn: conn} = context do
+    if context[:no_operator_login] do
+      {:ok, conn: conn}
+    else
+      {:ok, conn: register_and_log_in_operator(conn)}
+    end
+  end
+
+  @tag :no_operator_login
+  test "GET /api/v1/projects requires operator auth", %{conn: conn} do
+    create_operator_user!()
 
     conn = get(conn, ~p"/api/v1/projects")
 
@@ -18,16 +21,8 @@ defmodule HydraXWeb.ProjectAPIControllerTest do
   end
 
   test "POST /api/v1/projects provisions a project and returns agent metadata", %{conn: conn} do
-    assert {:ok, _secret} =
-             Runtime.save_operator_secret_password(%{
-               "password" => "hydra-password-123",
-               "password_confirmation" => "hydra-password-123"
-             })
-
     conn =
       conn
-      |> init_test_session(%{})
-      |> OperatorAuth.log_in()
       |> put_req_header("accept", "application/json")
       |> post(~p"/api/v1/projects", %{
         "project" => %{

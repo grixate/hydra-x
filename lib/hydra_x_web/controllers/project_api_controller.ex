@@ -26,7 +26,7 @@ defmodule HydraXWeb.ProjectAPIController do
   end
 
   def create(conn, %{"project" => params}) do
-    with {:ok, %Project{} = project, onboarding} <- Product.create_project(params) do
+    with {:ok, %Project{} = project, onboarding} <- Product.create_project_with_onboarding(params) do
       payload =
         project
         |> ProductPayload.project_json()
