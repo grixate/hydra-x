@@ -1,218 +1,151 @@
-import { useEffect, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
-import type { Artifact } from "@/lib/api";
-import { api } from "@/lib/api";
-import { Badge } from "@/components/ui/badge";
+import { useCallback, useEffect, useState } from "react";
+import { useParams, useSearchParams } from "react-router-dom";
+
+import { GraphView } from "@/components/graph/graph-view";
+import { LibraryEmptyOverlay } from "@/components/library/library-empty-overlay";
+import {
+  LibraryViewSelector,
+  type LibraryView,
+} from "@/components/library/library-view-selector";
+import { TopicBrowser } from "@/components/library/topic-browser";
+import { SourceList } from "@/components/sources/source-list";
 import { Skeleton } from "@/components/ui/skeleton";
-import { BookOpen, FileText, Paperclip } from "lucide-react";
-import { relativeLabel } from "@/lib/utils";
-import { motion } from "motion/react";
+import { api } from "@/lib/api";
+import type { Source } from "@/types";
 
-// Categorize artifact by its type
-type LibrarySection = "artifact" | "document" | "reference";
-
-const AGENT_ARTIFACT_TYPES = new Set([
-  "competitive_analysis",
-  "strategy_memo",
-  "project_summary",
-  "decision_log",
-  "design_language",
-]);
-
-const REFERENCE_TYPES = new Set(["reference"]);
-
-function sectionOf(a: Artifact): LibrarySection {
-  if (REFERENCE_TYPES.has(a.artifact_type)) return "reference";
-  if (AGENT_ARTIFACT_TYPES.has(a.artifact_type) || a.owner_persona) return "artifact";
-  return "document";
-}
-
-const TYPE_LABELS: Record<string, string> = {
-  competitive_analysis: "Competitive Analysis",
-  strategy_memo: "Strategy Memo",
-  project_summary: "Project Summary",
-  decision_log: "Decision Log",
-  design_language: "Design Language",
-  spec: "Spec",
-  campaign: "Campaign",
-  report: "Report",
-  brief: "Brief",
-  reference: "Reference",
-  custom: "Document",
-};
-
-function typeLabel(type: string) {
-  return TYPE_LABELS[type] ?? type.replace(/_/g, " ");
-}
+// Library spec §5 + §7 — graph view is the default Library surface. The
+// view selector lets users switch to a flat source list or a topic browser
+// without losing selection or filter state. Switches survive reload via the
+// `?view=` query param.
 
 export function LibraryPage() {
   const { projectId } = useParams<{ projectId: string }>();
-  const navigate = useNavigate();
   const pid = Number(projectId);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const view = (searchParams.get("view") as LibraryView | null) ?? "graph";
 
-  const [items, setItems] = useState<Artifact[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
+  const [sourceCount, setSourceCount] = useState<number | null>(null);
 
-  useEffect(() => {
+  const refreshCount = useCallback(async () => {
     if (!pid || isNaN(pid)) return;
-    setLoading(true);
-    api
-      .listArtifacts(pid, { status: "active" })
-      .then(setItems)
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    try {
+      const data = await api.getLibraryGraphData(pid);
+      const count = data.nodes.filter((n) => n.node_type === "source").length;
+      setSourceCount(count);
+    } catch {
+      setSourceCount(0);
+    }
   }, [pid]);
 
-  const filtered = search.trim()
-    ? items.filter((a) => a.title.toLowerCase().includes(search.toLowerCase()))
-    : items;
+  useEffect(() => {
+    void refreshCount();
+  }, [refreshCount]);
 
-  const agentArtifacts = filtered.filter((a) => sectionOf(a) === "artifact");
-  const documents = filtered.filter((a) => sectionOf(a) === "document");
-  const references = filtered.filter((a) => sectionOf(a) === "reference");
+  const setView = useCallback(
+    (next: LibraryView) => {
+      const params = new URLSearchParams(searchParams);
+      if (next === "graph") {
+        params.delete("view");
+      } else {
+        params.set("view", next);
+      }
+      setSearchParams(params, { replace: true });
+    },
+    [searchParams, setSearchParams],
+  );
 
-  if (loading) {
+  if (!pid || isNaN(pid)) {
     return (
-      <div className="mx-auto max-w-2xl space-y-4 px-4 py-6">
-        <Skeleton className="h-8 w-48" />
-        <Skeleton className="h-16 w-full" />
-        <Skeleton className="h-16 w-full" />
-        <Skeleton className="h-16 w-full" />
+      <div className="flex h-full items-center justify-center">
+        <p className="text-sm text-muted-foreground">No project selected.</p>
       </div>
     );
   }
 
-  const isEmpty = items.length === 0;
+  if (sourceCount === null) {
+    return (
+      <div className="flex h-full items-center justify-center">
+        <Skeleton className="h-96 w-96 rounded-xl" />
+      </div>
+    );
+  }
 
   return (
-    <div className="mx-auto max-w-2xl px-4 py-6">
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Library</h1>
-      </div>
-
-      {/* Search */}
-      {!isEmpty && (
-        <div className="mb-6">
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search library..."
-            className="w-full rounded-lg border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground/60 focus:outline-none focus:ring-1 focus:ring-ring"
-          />
+    <div className="relative h-full w-full">
+      {view === "graph" ? (
+        <>
+          <GraphView projectId={pid} lens="library" />
+          {/* Spec §5.4 — overlay collapses to a status pill at threshold. */}
+          <div className="pointer-events-none absolute right-4 top-20 z-30 flex flex-col items-end gap-2">
+            <LibraryEmptyOverlay
+              projectId={pid}
+              sourceCount={sourceCount}
+              onSourceAdded={refreshCount}
+            />
+          </div>
+        </>
+      ) : (
+        <div className="h-full overflow-y-auto px-4 py-6">
+          <div className="mx-auto max-w-4xl">
+            {view === "list" ? <ListPane projectId={pid} /> : null}
+            {view === "topics" ? (
+              <TopicBrowser
+                projectId={pid}
+                onFocusTopic={(topicGraphId) => {
+                  // Switch back to graph and let the focus param drive the
+                  // existing GraphView focus path.
+                  const params = new URLSearchParams(searchParams);
+                  params.delete("view");
+                  params.set("focus", topicGraphId);
+                  setSearchParams(params, { replace: true });
+                }}
+              />
+            ) : null}
+          </div>
         </div>
       )}
 
-      {/* Empty state */}
-      {isEmpty && (
-        <motion.div
-          initial={{ opacity: 0, scale: 0.97 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ duration: 0.4, delay: 0.1 }}
-          className="flex flex-col items-center justify-center py-24 text-center"
-        >
-          <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-muted">
-            <BookOpen className="h-5 w-5 text-muted-foreground" />
-          </div>
-          <p className="text-base font-medium text-foreground">Your library is empty</p>
-          <p className="mt-2 max-w-sm text-sm text-muted-foreground">
-            The library holds all documents and artifacts your agents produce — specs,
-            competitive analyses, strategy memos, and reports. Items will appear here
-            as your agents work.
-          </p>
-        </motion.div>
-      )}
-
-      {/* Agent Artifacts */}
-      {agentArtifacts.length > 0 && (
-        <LibrarySection
-          title="Agent artifacts"
-          icon={<BookOpen className="h-3.5 w-3.5" />}
-          items={agentArtifacts}
-          onNavigate={(id) => navigate(`/projects/${projectId}/library/${id}`)}
-        />
-      )}
-
-      {/* Documents */}
-      {documents.length > 0 && (
-        <LibrarySection
-          title="Documents"
-          icon={<FileText className="h-3.5 w-3.5" />}
-          items={documents}
-          onNavigate={(id) => navigate(`/projects/${projectId}/library/${id}`)}
-        />
-      )}
-
-      {/* Reference files */}
-      {references.length > 0 && (
-        <LibrarySection
-          title="Reference files"
-          icon={<Paperclip className="h-3.5 w-3.5" />}
-          items={references}
-          onNavigate={(id) => navigate(`/projects/${projectId}/library/${id}`)}
-        />
-      )}
-
-      {/* No results from search */}
-      {!isEmpty && filtered.length === 0 && search.trim() && (
-        <p className="py-12 text-center text-sm text-muted-foreground">
-          No items matching "{search}"
-        </p>
-      )}
+      {/* View selector — top-left. Sits above the graph but below other
+          chrome (smart views, filter chips). */}
+      <div className="pointer-events-none absolute left-4 top-4 z-30">
+        <LibraryViewSelector active={view} onChange={setView} />
+      </div>
     </div>
   );
 }
 
-function LibrarySection({
-  title,
-  icon,
-  items,
-  onNavigate,
-}: {
-  title: string;
-  icon: React.ReactNode;
-  items: Artifact[];
-  onNavigate: (id: number) => void;
-}) {
+function ListPane({ projectId }: { projectId: number }) {
+  const [sources, setSources] = useState<Source[] | null>(null);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .listLibraryRecent(projectId, 200)
+      .then((s) => {
+        if (!cancelled) setSources(s);
+      })
+      .catch(() => {
+        if (!cancelled) setSources([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
+
+  if (sources === null) {
+    return (
+      <div className="flex h-64 items-center justify-center">
+        <Skeleton className="h-48 w-full rounded-xl" />
+      </div>
+    );
+  }
+
   return (
-    <section className="mb-8">
-      <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-        {icon}
-        {title}
-      </div>
-      <div className="space-y-1">
-        {items.map((item, i) => (
-          <motion.button
-            key={item.id}
-            initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.2, delay: i * 0.03 }}
-            onClick={() => onNavigate(item.id)}
-            className="flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left transition-colors hover:bg-muted/50"
-          >
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-medium truncate">{item.title}</span>
-                {item.version > 1 && (
-                  <Badge variant="secondary" className="text-[9px] shrink-0">
-                    v{item.version}
-                  </Badge>
-                )}
-              </div>
-              <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
-                {item.owner_persona && (
-                  <span className="capitalize">by {item.owner_persona.replace("_", " ")}</span>
-                )}
-                {item.owner_persona && <span>&middot;</span>}
-                <span>{typeLabel(item.artifact_type)}</span>
-              </div>
-            </div>
-            <span className="shrink-0 text-xs text-muted-foreground">
-              {relativeLabel(item.updated_at)}
-            </span>
-          </motion.button>
-        ))}
-      </div>
-    </section>
+    <SourceList
+      sources={sources}
+      selectedSourceId={selectedId}
+      onSelectSource={setSelectedId}
+    />
   );
 }

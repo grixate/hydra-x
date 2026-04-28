@@ -586,7 +586,8 @@ defmodule HydraX.Product.Library do
       {node_type, node_id, relationship} =
         cond do
           edge.from_node_type in ["source", "signal"] ->
-            {edge.to_node_type, edge.to_node_id, edge_kind_to_relationship(edge.type_key, :outgoing)}
+            {edge.to_node_type, edge.to_node_id,
+             edge_kind_to_relationship(edge.type_key, :outgoing)}
 
           edge.to_node_type in ["source", "signal"] ->
             {edge.from_node_type, edge.from_node_id,
