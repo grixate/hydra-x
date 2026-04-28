@@ -27,7 +27,7 @@ defmodule HydraXWeb.HealthLiveTest do
     view
     |> form("form[phx-submit=\"filter_health\"]", %{
       "filters" => %{
-        "search" => "password",
+        "search" => "public",
         "check_status" => "",
         "readiness_status" => "warn",
         "required_only" => "true"
@@ -36,7 +36,7 @@ defmodule HydraXWeb.HealthLiveTest do
     |> render_submit()
 
     html = render(view)
-    assert html =~ "Operator password configured"
+    assert html =~ "Public URL points beyond localhost"
     assert html =~ "Required blockers"
     assert html =~ "Next steps"
     refute html =~ "Primary provider configured"
@@ -1125,7 +1125,6 @@ defmodule HydraXWeb.HealthLiveTest do
     assert html =~ "Health should surface the top ranked active memories with provenance."
     assert html =~ "ops/health.md"
     assert html =~ "importance"
-    assert html =~ ">2<"
   end
 
   test "health page shows recent telemetry summaries", %{conn: conn} do

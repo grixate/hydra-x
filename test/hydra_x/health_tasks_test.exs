@@ -31,7 +31,7 @@ defmodule HydraX.HealthTasksTest do
     assert output =~ "required_warn="
     assert output =~ "recommended_warn="
     assert output =~ "next_step="
-    assert output =~ "Operator password configured"
+    assert output =~ "Operator account configured"
     refute output =~ "Primary provider configured"
   end
 end

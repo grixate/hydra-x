@@ -210,10 +210,28 @@ defmodule HydraX.PretrainedProjects.ProductDevelopment do
         display_name: "Source",
         description: "A grounded piece of evidence — a document, web page, citation.",
         extends: "evidence",
-        status_vocabulary: ~w(pending processing completed failed),
+        status_vocabulary: ~w(pending processing completed failed partial processed),
         attribute_schema: %{
           "type" => "object",
           "properties" => %{
+            # Library-spec fields (canonical):
+            "kind" => %{
+              "type" => "string",
+              "enum" => ["document", "url", "web_capture", "note"]
+            },
+            "mime_type" => %{"type" => "string"},
+            "original_filename" => %{"type" => "string"},
+            "original_url" => %{"type" => "string"},
+            "byte_size" => %{"type" => "integer"},
+            "ingestion_status" => %{
+              "type" => "string",
+              "enum" => ["pending", "processed", "failed", "partial"]
+            },
+            "ingestion_summary" => %{"type" => "string"},
+            "ingestion_failures" => %{"type" => "array"},
+            "recency" => %{"type" => "string"},
+            "language" => %{"type" => "string"},
+            # Legacy/source-as-data fields (preserved for backwards compatibility):
             "source_type" => %{"type" => "string"},
             "external_ref" => %{"type" => "string"},
             "reviewed_at" => %{"type" => "string"},
@@ -223,6 +241,84 @@ defmodule HydraX.PretrainedProjects.ProductDevelopment do
         },
         icon: "hero-book-open",
         color_token: "--color-accent-teal"
+      },
+      %{
+        type_key: "excerpt",
+        display_name: "Excerpt",
+        description: "A specific passage extracted from a source, citable in claims.",
+        extends: "evidence",
+        status_vocabulary: ~w(active archived),
+        attribute_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "source_id" => %{"type" => "integer"},
+            "passage_text" => %{"type" => "string"},
+            "position_anchor" => %{"type" => "object"},
+            "extracted_by" => %{
+              "type" => "string",
+              "enum" => ["user", "agent"]
+            },
+            "extraction_note" => %{"type" => "string"}
+          }
+        },
+        icon: "hero-bookmark",
+        color_token: "--color-accent-teal"
+      },
+      %{
+        type_key: "topic",
+        display_name: "Topic",
+        description: "A concept or theme the corpus covers.",
+        extends: "entity",
+        status_vocabulary: ~w(active archived),
+        attribute_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "granularity" => %{
+              "type" => "string",
+              "enum" => ["coarse", "medium", "fine"]
+            },
+            "description" => %{"type" => "string"},
+            "aliases" => %{"type" => "array"}
+          }
+        },
+        icon: "hero-tag",
+        color_token: "--color-accent-violet"
+      },
+      %{
+        type_key: "author",
+        display_name: "Author",
+        description: "A person who produced one or more sources.",
+        extends: "entity",
+        status_vocabulary: ~w(active archived),
+        attribute_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "display_name" => %{"type" => "string"},
+            "disambiguator" => %{"type" => "string"},
+            "external_identifiers" => %{"type" => "object"}
+          }
+        },
+        icon: "hero-user",
+        color_token: "--color-accent-cyan"
+      },
+      %{
+        type_key: "publication",
+        display_name: "Publication",
+        description: "A journal, conference, magazine, blog, or news outlet.",
+        extends: "entity",
+        status_vocabulary: ~w(active archived),
+        attribute_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "name" => %{"type" => "string"},
+            "kind" => %{
+              "type" => "string",
+              "enum" => ~w(journal conference book magazine blog news report other)
+            }
+          }
+        },
+        icon: "hero-newspaper",
+        color_token: "--color-accent-stone"
       },
       %{
         type_key: "agent_task",
@@ -274,8 +370,7 @@ defmodule HydraX.PretrainedProjects.ProductDevelopment do
           "properties" => %{
             "learning_type" => %{
               "type" => "string",
-              "enum" =>
-                ~w(retrospective post_mortem usage_data experiment_result)
+              "enum" => ~w(retrospective post_mortem usage_data experiment_result)
             }
           }
         },
@@ -285,7 +380,8 @@ defmodule HydraX.PretrainedProjects.ProductDevelopment do
       %{
         type_key: "knowledge_entry",
         display_name: "Knowledge Entry",
-        description: "A reference piece of project knowledge (design system, conventions, domain docs).",
+        description:
+          "A reference piece of project knowledge (design system, conventions, domain docs).",
         extends: "evidence",
         status_vocabulary: ~w(active pending_review archived),
         attribute_schema: %{
@@ -431,6 +527,36 @@ defmodule HydraX.PretrainedProjects.ProductDevelopment do
         display_name: "Constrains",
         description: "A constraint binds the shape of another node.",
         extends: "contradicts"
+      },
+      %{
+        type_key: "is_about",
+        display_name: "Is About",
+        description: "A source or excerpt is about a topic. Weight encodes prominence.",
+        extends: "references"
+      },
+      %{
+        type_key: "cites",
+        display_name: "Cites",
+        description: "A source cites another source (citation network).",
+        extends: "references"
+      },
+      %{
+        type_key: "has_excerpt",
+        display_name: "Has Excerpt",
+        description: "A source produces an excerpt.",
+        extends: "produces"
+      },
+      %{
+        type_key: "authored_by",
+        display_name: "Authored By",
+        description: "A source was authored by a person.",
+        extends: "references"
+      },
+      %{
+        type_key: "published_in",
+        display_name: "Published In",
+        description: "A source was published in a journal, conference, blog, etc.",
+        extends: "references"
       }
     ]
   end

@@ -1,6 +1,10 @@
 defmodule HydraXWeb.PageControllerTest do
   use HydraXWeb.ConnCase
 
+  setup %{conn: conn} do
+    {:ok, conn: register_and_log_in_operator(conn)}
+  end
+
   test "GET /", %{conn: conn} do
     conn = get(conn, ~p"/")
     body = html_response(conn, 200)

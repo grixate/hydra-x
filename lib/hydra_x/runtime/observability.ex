@@ -7,6 +7,7 @@ defmodule HydraX.Runtime.Observability do
 
   alias HydraX.Cluster
   alias HydraX.Config
+  alias HydraX.Accounts.User
   alias HydraX.Memory
   alias HydraX.Security.Secrets
   alias HydraX.Security.LoginThrottle
@@ -18,7 +19,6 @@ defmodule HydraX.Runtime.Observability do
     AgentProfile,
     DiscordConfig,
     Helpers,
-    OperatorSecret,
     ProviderConfig,
     SlackConfig,
     TelegramConfig
@@ -86,7 +86,6 @@ defmodule HydraX.Runtime.Observability do
         status:
           cond do
             not operator.configured -> :warn
-            operator.password_stale? -> :warn
             operator.recent_login_failure_count > 0 -> :warn
             operator.recent_session_expiry_count > 0 -> :warn
             true -> :ok
@@ -504,13 +503,19 @@ defmodule HydraX.Runtime.Observability do
     auth_events = Safety.list_events(category: "auth", limit: 40)
     audit = operator_auth_audit(auth_events)
 
-    case Repo.get_by(OperatorSecret, scope: "control_plane") do
+    case Repo.one(
+           from u in User,
+             where: not is_nil(u.operator_at),
+             order_by: [asc: u.operator_at],
+             limit: 1
+         ) do
       nil ->
         %{
           configured: false,
+          operator_email: nil,
+          operator_at: nil,
           last_rotated_at: nil,
           password_age_days: nil,
-          password_stale?: false,
           login_max_attempts: LoginThrottle.max_attempts(),
           login_window_seconds: LoginThrottle.window_seconds(),
           blocked_login_ips: LoginThrottle.summary().blocked_ips,
@@ -520,14 +525,13 @@ defmodule HydraX.Runtime.Observability do
         }
         |> Map.merge(audit)
 
-      secret ->
-        age_days = password_age_days(secret.last_rotated_at)
-
+      user ->
         %{
           configured: true,
-          last_rotated_at: secret.last_rotated_at,
-          password_age_days: age_days,
-          password_stale?: age_days >= 90,
+          operator_email: user.email,
+          operator_at: user.operator_at,
+          last_rotated_at: user.operator_at,
+          password_age_days: operator_age_days(user.operator_at),
           login_max_attempts: LoginThrottle.max_attempts(),
           login_window_seconds: LoginThrottle.window_seconds(),
           blocked_login_ips: LoginThrottle.summary().blocked_ips,
@@ -537,6 +541,12 @@ defmodule HydraX.Runtime.Observability do
         }
         |> Map.merge(audit)
     end
+  end
+
+  defp operator_age_days(nil), do: nil
+
+  defp operator_age_days(%DateTime{} = operator_at) do
+    DateTime.diff(DateTime.utc_now(), operator_at, :day)
   end
 
   def tool_status do
@@ -704,40 +714,26 @@ defmodule HydraX.Runtime.Observability do
 
     items = [
       %{
-        id: "operator_password",
-        label: "Operator password configured",
+        id: "operator_account",
+        label: "Operator account configured",
         required: true,
-        status: if(operator_password_configured?(), do: :ok, else: :warn),
+        status: if(operator_account_configured?(), do: :ok, else: :warn),
         detail:
-          if(operator_password_configured?(),
-            do: "control plane requires login",
-            else: "set a password on /setup before exposing the node"
+          if(operator_account_configured?(),
+            do: "control plane requires a local operator account",
+            else: "create the first operator account before exposing the node"
           )
       },
       %{
-        id: "operator_rotation",
-        label: "Operator password rotated recently",
+        id: "operator_registration",
+        label: "Operator registration is closed",
         required: false,
-        status:
-          cond do
-            not operator.configured -> :warn
-            operator.password_stale? -> :warn
-            true -> :ok
-          end,
+        status: if(operator.configured, do: :ok, else: :warn),
         detail:
-          cond do
-            not operator.configured ->
-              "set and rotate the control-plane password before public preview"
-
-            operator.password_age_days == 0 ->
-              "rotated today"
-
-            operator.password_age_days ->
-              "#{operator.password_age_days} days since last rotation"
-
-            true ->
-              "rotation timestamp unavailable"
-          end
+          if(operator.configured,
+            do: "public registration is closed; new users join by invitation",
+            else: "first operator registration remains open"
+          )
       },
       %{
         id: "operator_auth_flow",
@@ -1040,19 +1036,8 @@ defmodule HydraX.Runtime.Observability do
 
   # -- Private helpers --
 
-  defp operator_password_configured? do
-    not is_nil(Repo.get_by(OperatorSecret, scope: "control_plane"))
-  end
-
-  defp password_age_days(nil), do: nil
-
-  defp password_age_days(rotated_at) do
-    rotated_at
-    |> DateTime.diff(DateTime.utc_now(), :second)
-    |> Kernel.*(-1)
-    |> Kernel./(86_400)
-    |> floor()
-    |> max(0)
+  defp operator_account_configured? do
+    Repo.exists?(from u in User, where: not is_nil(u.operator_at))
   end
 
   defp do_budget_status(agent) do
@@ -1437,23 +1422,12 @@ defmodule HydraX.Runtime.Observability do
   defp operator_detail(operator) do
     base =
       case operator do
-        %{
-          configured: true,
-          last_rotated_at: rotated_at,
-          password_stale?: true,
-          password_age_days: age
-        }
-        when not is_nil(rotated_at) ->
-          "operator password set; rotated #{Calendar.strftime(rotated_at, "%Y-%m-%d %H:%M UTC")}; age #{age} days; recent-auth window #{div(operator.recent_auth_window_seconds, 60)}m"
-
-        %{configured: true, last_rotated_at: rotated_at} when not is_nil(rotated_at) ->
-          "operator password set; rotated #{Calendar.strftime(rotated_at, "%Y-%m-%d %H:%M UTC")}; recent-auth window #{div(operator.recent_auth_window_seconds, 60)}m"
-
-        %{configured: true} ->
-          "operator password set; recent-auth window #{div(operator.recent_auth_window_seconds, 60)}m"
+        %{configured: true, operator_email: email, operator_at: operator_at}
+        when not is_nil(operator_at) ->
+          "local operator #{email}; created #{Calendar.strftime(operator_at, "%Y-%m-%d %H:%M UTC")}; recent-auth window #{div(operator.recent_auth_window_seconds, 60)}m"
 
         _ ->
-          "control plane open until operator password is set"
+          "control plane awaits first local operator registration"
       end
 
     audit =

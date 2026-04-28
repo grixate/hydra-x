@@ -874,8 +874,8 @@ defmodule HydraX.Report do
 
     """
     - Configured: #{yes_no(operator.configured)}
-    - Last rotated at: #{format_datetime(operator.last_rotated_at)}
-    - Password age: #{operator.password_age_days || "n/a"}
+    - Operator email: #{operator.operator_email || "n/a"}
+    - Operator created at: #{format_datetime(operator.operator_at)}
     - Session policy: max #{div(operator.session_max_age_seconds, 3600)}h, idle #{div(operator.idle_timeout_seconds, 60)}m, recent auth #{div(operator.recent_auth_window_seconds, 60)}m
     - Login throttle: #{operator.login_max_attempts} attempts per #{operator.login_window_seconds}s
     - Blocked IPs: #{operator.blocked_login_ips}

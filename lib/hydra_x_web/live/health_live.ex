@@ -787,13 +787,13 @@ defmodule HydraXWeb.HealthLive do
             </div>
             <p class="mt-3 text-sm text-[var(--hx-mute)]">
               {if @operator_status.configured,
-                do: "Operator password is configured",
-                else: "Control plane is open until a password is set"}
+                do: "Operator account is configured",
+                else: "Control plane is open until an operator account is created"}
             </p>
           </article>
           <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
             <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
-              Rotation
+              Created
             </div>
             <p class="mt-3 text-sm text-[var(--hx-mute)]">
               {if @operator_status.last_rotated_at,
@@ -803,7 +803,7 @@ defmodule HydraXWeb.HealthLive do
           </article>
           <article class="rounded-2xl border border-white/10 bg-black/10 px-4 py-4">
             <div class="font-mono text-xs uppercase tracking-[0.18em] text-[var(--hx-mute)]">
-              Password age
+              Account age
             </div>
             <p class="mt-3 text-sm text-[var(--hx-mute)]">
               {if @operator_status.password_age_days != nil,

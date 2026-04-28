@@ -3,6 +3,10 @@ defmodule HydraXWeb.RequirementAPIControllerTest do
 
   alias HydraX.Product
 
+  setup %{conn: conn} do
+    {:ok, conn: register_and_log_in_operator(conn)}
+  end
+
   test "POST /api/v1/projects/:project_id/requirements creates grounded requirements from insights",
        %{conn: conn} do
     {:ok, project} = Product.create_project(%{"name" => "Requirement API"})

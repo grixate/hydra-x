@@ -76,7 +76,7 @@ defmodule HydraX.Product.SimulationBridge do
       })
 
     {:ok, sim_node} =
-      GraphNodes.create_node(project_id,%{
+      GraphNodes.create_node(project_id, %{
         type_key: "simulation",
         title: Map.get(metadata, "title") || simulation_title(scenario_summary),
         body: scenario_summary,
@@ -130,7 +130,7 @@ defmodule HydraX.Product.SimulationBridge do
     }
 
     {:ok, sim_node} =
-      GraphNodes.create_node(project_id,%{
+      GraphNodes.create_node(project_id, %{
         type_key: "simulation",
         title: title,
         status: "proposed",

@@ -1110,7 +1110,12 @@ defmodule HydraXWeb.AgentsLiveTest do
     html = render(view)
     assert html =~ "Compaction policy updated"
     assert html =~ "Soft 5"
-    assert Runtime.compaction_policy(agent.id) == %{soft: 5, medium: 9, hard: 13}
+
+    assert Map.take(Runtime.compaction_policy(agent.id), [:soft, :medium, :hard]) == %{
+             soft: 5,
+             medium: 9,
+             hard: 13
+           }
   end
 
   test "agents page can save and reset an agent-specific tool policy override", %{conn: conn} do

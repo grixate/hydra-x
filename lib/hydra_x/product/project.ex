@@ -2,6 +2,7 @@ defmodule HydraX.Product.Project do
   use Ecto.Schema
   import Ecto.Changeset
 
+  alias HydraX.Accounts
   alias HydraX.Runtime.AgentProfile
 
   @statuses ~w(active archived)
@@ -50,6 +51,7 @@ defmodule HydraX.Product.Project do
       :memory_agent_id,
       :coder_agent_id
     ])
+    |> maybe_put_default_workspace_id()
     |> validate_required([:name, :slug, :status, :researcher_agent_id, :strategist_agent_id])
     |> validate_format(:slug, ~r/^[a-z0-9\-]+$/)
     |> validate_inclusion(:status, @statuses)
@@ -60,5 +62,13 @@ defmodule HydraX.Product.Project do
     |> foreign_key_constraint(:architect_agent_id)
     |> foreign_key_constraint(:designer_agent_id)
     |> foreign_key_constraint(:memory_agent_id)
+  end
+
+  defp maybe_put_default_workspace_id(changeset) do
+    if get_field(changeset, :workspace_id) do
+      changeset
+    else
+      put_change(changeset, :workspace_id, Accounts.default_workspace_id())
+    end
   end
 end
