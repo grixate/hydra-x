@@ -558,12 +558,16 @@ function PaneChipsAndInput({
 }) {
   const [prefill, setPrefill] = useState<string>("");
   const graphCtx = useGraphChatContext();
-  const isGraph = surface === "graph" && !!graphCtx;
+  // Library spec §6.2 — Library surface gets the same bidirectional graph
+  // coupling as the project Graph surface (selection narrows scope, answer
+  // highlights graph). Both lenses publish through the same module-singleton
+  // GraphChatProvider, so wiring them identically here is safe.
+  const couplesGraph = (surface === "graph" || surface === "library") && !!graphCtx;
 
   return (
     <div className="relative">
       <UniversalInput
-        surface={isGraph ? "graph" : "stream"}
+        surface={couplesGraph ? "graph" : "stream"}
         projectId={projectId}
         initialValue={prefill}
         onSubmit={(text, ag) => {
@@ -572,10 +576,10 @@ function PaneChipsAndInput({
         }}
         currentAgent={agent}
         onAgentChange={onAgentChange}
-        selectedNodes={isGraph ? graphCtx!.contextNodes : undefined}
-        previewNode={isGraph ? graphCtx!.previewNode : undefined}
-        onClearSelection={isGraph ? graphCtx!.onClearContext : undefined}
-        onRemoveNode={isGraph ? graphCtx!.onRemoveContext : undefined}
+        selectedNodes={couplesGraph ? graphCtx!.contextNodes : undefined}
+        previewNode={couplesGraph ? graphCtx!.previewNode : undefined}
+        onClearSelection={couplesGraph ? graphCtx!.onClearContext : undefined}
+        onRemoveNode={couplesGraph ? graphCtx!.onRemoveContext : undefined}
         docked
       />
     </div>

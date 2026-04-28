@@ -16,11 +16,20 @@ const LABELS: Record<string, string> = {
   task: "task",
   learning: "learning",
   constraint: "constraint",
+  // Library spec §5.1
+  topic: "topic",
+  excerpt: "excerpt",
+  author: "author",
+  publication: "publication",
 };
 
 interface GraphFilterChipsProps {
   visibleTypes: Set<string>;
   onToggle: (type: string) => void;
+  // Library spec §5.1: optional override of the chip set so the Library
+  // lens can show topic/author/publication chips instead of the project
+  // ones.
+  filterableTypes?: readonly string[];
 }
 
 interface GraphSearchButtonProps {
@@ -30,10 +39,11 @@ interface GraphSearchButtonProps {
 export function GraphFilterChips({
   visibleTypes,
   onToggle,
+  filterableTypes = FILTERABLE_NODE_TYPES,
 }: GraphFilterChipsProps) {
   return (
     <div className="flex items-center gap-1 pointer-events-auto">
-      {FILTERABLE_NODE_TYPES.map((type) => {
+      {filterableTypes.map((type) => {
         const active = visibleTypes.has(type);
         return (
           <button

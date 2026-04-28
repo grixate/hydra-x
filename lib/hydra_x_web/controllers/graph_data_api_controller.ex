@@ -11,12 +11,33 @@ defmodule HydraXWeb.GraphDataAPIController do
   def show(conn, %{"project_id" => project_id}) do
     project_id = parse_int(project_id)
 
-    # Source-as-Data (spec §3): exclude non-promoted sources by default.
-    # `?include_sources=all` opts back in for debugging.
-    include_sources_mode = conn.params["include_sources"] || "promoted"
+    # Constellation §0 / Library spec §2: there is one graph. The project
+    # lens shows the canonical graph (claims, decisions, requirements,
+    # sources, …); the Library lens (`lens=library`) is a filtered view
+    # that drops the project-graph types and includes Library structural
+    # nodes (topics, authors, publications, excerpts).
+    lens = conn.params["lens"]
+
+    library_types = ~w(source topic author publication excerpt)
+
+    # Library-only structural types — they belong to the Library lens, not
+    # the project Graph (where they would just be noise around the claim
+    # graph). Sources are NOT in this list — they're shared.
+    library_only_types = ~w(topic author publication excerpt)
+
+    # `signal` is a legacy alias for `source` (Graph.base_query_for/1
+    # rewrites it to `where type_key = "source"`), so iterating both
+    # would return the 12 source records twice. Skip the alias.
+    legacy_aliases = ~w(signal)
+
+    visible_types =
+      cond do
+        lens == "library" -> library_types
+        true -> Graph.node_types() -- (library_only_types ++ legacy_aliases)
+      end
 
     nodes =
-      Enum.flat_map(Graph.node_types(), fn type ->
+      Enum.flat_map(visible_types, fn type ->
         case Graph.base_query_for(type) do
           nil ->
             []
@@ -26,24 +47,12 @@ defmodule HydraXWeb.GraphDataAPIController do
               base =
                 query
                 |> where([r], r.project_id == ^project_id)
-
-              base =
-                if type in ["source", "signal"] and include_sources_mode != "all" do
-                  base
-                  |> where([r], r.promoted_to_graph == true)
-                  |> where([r], is_nil(r.archived_at))
-                else
-                  base
-                end
+                |> where([r], is_nil(r.archived_at))
 
               base
               |> HydraX.Repo.all()
               |> Enum.map(fn record ->
-                promoted? =
-                  cond do
-                    type in ["source", "signal"] -> Map.get(record, :promoted_to_graph, false)
-                    true -> nil
-                  end
+                attrs = Map.get(record, :attributes) || %{}
 
                 %{
                   id: "#{type}-#{record.id}",
@@ -52,7 +61,20 @@ defmodule HydraXWeb.GraphDataAPIController do
                   title: Map.get(record, :title, ""),
                   status: Map.get(record, :status, "") || "active",
                   body: String.slice(Map.get(record, :body, "") || "", 0, 200),
-                  promoted_to_graph: promoted?,
+                  # Legacy field — kept for back-compat; Constellation no
+                  # longer gates source visibility on it.
+                  promoted_to_graph:
+                    if(type in ["source", "signal"],
+                      do: Map.get(attrs, "promoted_to_graph", true),
+                      else: nil
+                    ),
+                  # Library spec §3 — surface attribute fields needed by
+                  # the frontend visual hierarchy (granularity drives
+                  # topic-node size; kind/ingestion_status drive source
+                  # affordances).
+                  granularity: Map.get(attrs, "granularity"),
+                  kind: Map.get(attrs, "kind"),
+                  ingestion_status: Map.get(attrs, "ingestion_status"),
                   inserted_at: Map.get(record, :inserted_at),
                   updated_at: Map.get(record, :updated_at)
                 }
@@ -146,7 +168,7 @@ defmodule HydraXWeb.GraphDataAPIController do
         flags: flags,
         density: density,
         meta: %{
-          include_sources: include_sources_mode,
+          lens: lens || "project",
           total_source_references: Enum.sum(Map.values(reference_counts))
         }
       }

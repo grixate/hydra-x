@@ -20,6 +20,12 @@ defmodule HydraX.Graph.Node do
     field :body, :string
     field :attributes, :map, default: %{}
     field :status, :string
+    field :grounded, :boolean, virtual: true
+    field :processing_status, :string, virtual: true
+    field :source_type, :string, virtual: true
+    field :content, :string, virtual: true
+    field :external_ref, :string, virtual: true
+    field :metadata, :map, virtual: true
     field :importance, :float
     field :confidence, :float
     field :scope, :string, default: "project"
