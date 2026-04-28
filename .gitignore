@@ -36,6 +36,9 @@ npm-debug.log
 /assets/node_modules/
 /web/node_modules/
 
+# TypeScript incremental build artifacts
+*.tsbuildinfo
+
 # Database files
 *.db
 *.db-*
