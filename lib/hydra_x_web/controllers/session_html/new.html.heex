@@ -35,13 +35,22 @@
         <Layouts.theme_toggle />
       </div>
 
-      <p :if={@expired_reason} class="mt-4 rounded-lg border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-xs text-amber-100">
+      <p
+        :if={@expired_reason}
+        class="mt-4 rounded-lg border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-xs text-amber-100"
+      >
         Previous session expired due to {@expired_reason}.
       </p>
-      <p :if={@error} class="mt-4 rounded-lg border border-red-300/20 bg-red-300/10 px-3 py-2 text-sm text-red-100">
+      <p
+        :if={@error}
+        class="mt-4 rounded-lg border border-red-300/20 bg-red-300/10 px-3 py-2 text-sm text-red-100"
+      >
         {@error}
       </p>
-      <p :if={!@operator_exists?} class="mt-4 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-[var(--hx-mute)]">
+      <p
+        :if={!@operator_exists?}
+        class="mt-4 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-[var(--hx-mute)]"
+      >
         No operator exists yet. Create the first account to claim this instance.
       </p>
 
@@ -63,7 +72,11 @@
         <.link navigate={~p"/password-reset"} class="transition hover:text-white">
           Forgot password?
         </.link>
-        <.link :if={!@operator_exists?} navigate={~p"/register"} class="transition hover:text-white">
+        <.link
+          :if={!@operator_exists?}
+          navigate={~p"/register"}
+          class="transition hover:text-white"
+        >
           Create first operator
         </.link>
       </div>

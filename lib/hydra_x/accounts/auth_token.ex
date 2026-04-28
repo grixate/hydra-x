@@ -10,7 +10,7 @@ defmodule HydraX.Accounts.AuthToken do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
-  @contexts ~w(magic_link session invitation)
+  @contexts ~w(magic_link password_reset session invitation)
 
   schema "auth_tokens" do
     field :email, :string

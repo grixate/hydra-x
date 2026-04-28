@@ -124,6 +124,7 @@ defmodule HydraXWeb.Router do
     pipe_through [:api, :user_session]
 
     post "/user_auth/register", UserAuthAPIController, :register
+    post "/user_auth/dev_login", UserAuthAPIController, :dev_login
     post "/user_auth/login", UserAuthAPIController, :login
     get "/user_auth/me", UserAuthAPIController, :me
     post "/user_auth/logout", UserAuthAPIController, :logout
@@ -148,6 +149,11 @@ defmodule HydraXWeb.Router do
     delete "/projects/:project_id/sources/:id", SourceAPIController, :delete
     post "/projects/:project_id/sources/:id/analyze", SourceAPIController, :analyze
 
+    # Library spec §4.3 — re-run a single preprocessing stage on a partial-status source.
+    post "/projects/:project_id/sources/:id/reprocess_stage",
+         SourceAPIController,
+         :reprocess_stage
+
     # Source-as-Data (Cycle 3) — Library API + promotion lifecycle
     get "/projects/:project_id/library/search", LibraryAPIController, :search
     get "/projects/:project_id/library/recent", LibraryAPIController, :recent
@@ -160,6 +166,12 @@ defmodule HydraXWeb.Router do
     get "/projects/:project_id/library/sources/:id/referenced_by",
         LibraryAPIController,
         :referenced_by
+
+    # Library spec §10 — extract a passage from a source as a first-class
+    # `excerpt` node + `has_excerpt` edge.
+    post "/projects/:project_id/library/sources/:id/excerpts",
+         LibraryAPIController,
+         :create_excerpt
 
     post "/projects/:project_id/library/sources/:id/promote", LibraryAPIController, :promote
     post "/projects/:project_id/library/sources/:id/demote", LibraryAPIController, :demote
@@ -252,7 +264,10 @@ defmodule HydraXWeb.Router do
     # the frontend.
     get "/projects/:project_id/onboarding", OnboardingAPIController, :show
     post "/projects/:project_id/onboarding/complete", OnboardingAPIController, :mark_completed
-    post "/projects/:project_id/onboarding/apply_pretrained", OnboardingAPIController, :apply_pretrained
+
+    post "/projects/:project_id/onboarding/apply_pretrained",
+         OnboardingAPIController,
+         :apply_pretrained
 
     # Coherence contradictions (Cycle 2 hero)
     get "/projects/:project_id/contradictions", ContradictionAPIController, :index

@@ -8,6 +8,7 @@ defmodule HydraXWeb.OperatorAuth do
   alias Phoenix.LiveView
   alias HydraX.Accounts
   alias HydraX.Runtime.Helpers
+  alias HydraXWeb.DevAuth
   alias HydraXWeb.Plugs.UserAuth
 
   @session_ts_key :operator_authenticated_at
@@ -84,7 +85,7 @@ defmodule HydraXWeb.OperatorAuth do
     |> configure_session(renew: true)
     |> put_session(@session_ts_key, authenticated_at)
     |> put_session(@session_active_key, last_active_at)
-      |> put_session(@session_recent_auth_key, recent_auth_at)
+    |> put_session(@session_recent_auth_key, recent_auth_at)
   end
 
   def log_in(conn, %HydraX.Accounts.User{} = user) do
@@ -116,7 +117,7 @@ defmodule HydraXWeb.OperatorAuth do
     last_active_at = session_value(conn_or_session, @session_active_key)
     recent_auth_at = session_value(conn_or_session, @session_recent_auth_key)
 
-    %{
+    state = %{
       authenticated?: authenticated?,
       operator?: operator?,
       user: user,
@@ -124,12 +125,19 @@ defmodule HydraXWeb.OperatorAuth do
       authenticated_at: authenticated_at,
       last_active_at: last_active_at,
       recent_auth_at: recent_auth_at,
-      valid?: authenticated? and operator? and not session_expired?(authenticated_at, last_active_at),
+      valid?:
+        authenticated? and operator? and not session_expired?(authenticated_at, last_active_at),
       recent_auth_valid?: authenticated? and recent_auth_valid?(recent_auth_at),
       session_expires_at: expires_at(authenticated_at, session_max_age_seconds()),
       idle_expires_at: expires_at(last_active_at, idle_timeout_seconds()),
       recent_auth_expires_at: expires_at(recent_auth_at, recent_auth_window_seconds())
     }
+
+    if state.valid? or not DevAuth.enabled?() do
+      state
+    else
+      dev_session_state(state)
+    end
   end
 
   def on_mount(:require_authenticated_operator, _params, session, socket) do
@@ -156,6 +164,28 @@ defmodule HydraXWeb.OperatorAuth do
 
   defp session_valid?(conn) do
     session_state(conn).valid?
+  end
+
+  defp dev_session_state(state) do
+    user = DevAuth.operator_user!()
+    now = System.system_time(:second)
+
+    %{
+      state
+      | authenticated?: true,
+        operator?: true,
+        user: user,
+        user_id: user.id,
+        authenticated_at: state.authenticated_at || now,
+        last_active_at: state.last_active_at || now,
+        recent_auth_at: state.recent_auth_at || now,
+        valid?: true,
+        recent_auth_valid?: true,
+        session_expires_at: expires_at(state.authenticated_at || now, session_max_age_seconds()),
+        idle_expires_at: expires_at(state.last_active_at || now, idle_timeout_seconds()),
+        recent_auth_expires_at:
+          expires_at(state.recent_auth_at || now, recent_auth_window_seconds())
+    }
   end
 
   defp session_expired?(nil, _), do: true

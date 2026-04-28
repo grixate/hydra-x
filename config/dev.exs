@@ -71,6 +71,13 @@ config :hydra_x, HydraXWeb.Endpoint,
 
 # Enable dev routes for dashboard and mailbox
 config :hydra_x, dev_routes: true
+config :hydra_x, :env, :dev
+
+# Local development should stay frictionless while production uses real auth.
+# Set HYDRA_X_DEV_AUTH_BYPASS=false to exercise the full login flow in dev.
+config :hydra_x,
+       :dev_auth_bypass,
+       System.get_env("HYDRA_X_DEV_AUTH_BYPASS", "true") not in ["false", "0", "no"]
 
 # Do not include metadata nor timestamps in development logs
 config :logger, :default_formatter, format: "[$level] $message\n"

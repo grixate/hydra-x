@@ -16,15 +16,19 @@ defmodule HydraXWeb.Plugs.UserAuth do
   @session_key :hydra_user_id
 
   alias HydraX.Accounts
+  alias HydraXWeb.DevAuth
 
   def init(opts), do: opts
 
   def call(conn, _opts) do
     conn = fetch_session(conn)
+    assign_current_user(conn)
+  end
 
+  def assign_current_user(conn) do
     case get_session(conn, @session_key) do
       nil ->
-        assign(conn, :current_user, nil)
+        assign(conn, :current_user, dev_user_or_nil())
 
       id when is_binary(id) ->
         case Accounts.get_user(id) do
@@ -49,7 +53,8 @@ defmodule HydraXWeb.Plugs.UserAuth do
   @doc "Tear down the user session."
   def clear_user_session(conn) do
     conn
-    |> configure_session(drop: true)
+    |> configure_session(renew: true)
+    |> delete_session(@session_key)
   end
 
   @doc """
@@ -68,5 +73,33 @@ defmodule HydraXWeb.Plugs.UserAuth do
         |> send_resp(401, Jason.encode!(%{error: "authentication_required"}))
         |> halt()
     end
+  end
+
+  def require_operator(conn, _opts) do
+    case conn.assigns[:current_user] do
+      %HydraX.Accounts.User{} = user ->
+        if Accounts.operator?(user) do
+          conn
+        else
+          conn
+          |> put_status(:forbidden)
+          |> put_resp_content_type("application/json")
+          |> send_resp(403, Jason.encode!(%{error: "operator_required"}))
+          |> halt()
+        end
+
+      _ ->
+        conn
+        |> put_status(:unauthorized)
+        |> put_resp_content_type("application/json")
+        |> send_resp(401, Jason.encode!(%{error: "authentication_required"}))
+        |> halt()
+    end
+  end
+
+  def session_key, do: @session_key
+
+  defp dev_user_or_nil do
+    if DevAuth.enabled?(), do: DevAuth.operator_user!()
   end
 end

@@ -4,13 +4,12 @@ defmodule HydraXWeb.Plugs.OperatorAPIAuth do
   import Plug.Conn
   import Phoenix.Controller
 
-  alias HydraX.Runtime
   alias HydraXWeb.OperatorAuth
 
   def init(opts), do: opts
 
   def call(conn, _opts) do
-    if Runtime.operator_password_configured?() and not OperatorAuth.session_state(conn).valid? do
+    if not OperatorAuth.session_state(conn).valid? do
       conn
       |> put_status(:unauthorized)
       |> json(%{error: "operator_auth_required"})
